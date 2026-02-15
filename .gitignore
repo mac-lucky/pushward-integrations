@@ -1,0 +1,14 @@
+# Binaries
+pushward-github
+*.exe
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Config with secrets
+config.yml
+
+# OS
+.DS_Store

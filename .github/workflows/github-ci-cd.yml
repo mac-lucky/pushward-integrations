@@ -1,0 +1,29 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  ci-cd:
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      app_name: "pushward-github"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-github"
+      dockerhub_image: "maclucky/pushward-github"
+      push_to_dockerhub: false
+      push_on_main: true
+      main_branch: "main"
+      build_context: "./github"
+      dockerfile_path: "./github/Dockerfile"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit
