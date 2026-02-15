@@ -24,6 +24,7 @@ jobs:
       main_branch: "main"
       build_context: "./github"
       dockerfile_path: "./github/Dockerfile"
+      go_module_path: "./github"
       enable_container_tests: false
       enable_kubernetes_tests: false
     secrets: inherit
