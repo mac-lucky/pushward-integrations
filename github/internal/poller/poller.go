@@ -16,18 +16,26 @@ type Poller struct {
 	gh  *ghclient.Client
 	pw  *pushward.Client
 
-	tracked *trackedRun
+	tracked map[string]*trackedRun
 }
 
 func New(cfg *config.Config, gh *ghclient.Client, pw *pushward.Client) *Poller {
-	return &Poller{cfg: cfg, gh: gh, pw: pw}
+	return &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+	}
 }
 
 func (p *Poller) Run(ctx context.Context) error {
 	for {
 		interval := p.cfg.Polling.IdleInterval
-		if p.tracked != nil {
-			interval = p.cfg.Polling.ActiveInterval
+		for _, t := range p.tracked {
+			if t.EndedAt == nil {
+				interval = p.cfg.Polling.ActiveInterval
+				break
+			}
 		}
 
 		select {
@@ -46,14 +54,21 @@ func (p *Poller) Run(ctx context.Context) error {
 }
 
 func (p *Poller) poll(ctx context.Context) error {
-	if p.tracked != nil {
-		return p.pollActive(ctx)
+	p.cleanup(ctx)
+
+	if err := p.pollIdle(ctx); err != nil {
+		return err
 	}
-	return p.pollIdle(ctx)
+	return p.pollActive(ctx)
 }
 
 func (p *Poller) pollIdle(ctx context.Context) error {
 	for _, repo := range p.cfg.GitHub.Repos {
+		// Skip repos that already have an active entry
+		if t, ok := p.tracked[repo]; ok && t.EndedAt == nil {
+			continue
+		}
+
 		runs, err := p.gh.GetInProgressRuns(ctx, repo)
 		if err != nil {
 			slog.Error("failed to get runs", "repo", repo, "error", err)
@@ -71,19 +86,29 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			}
 		}
 
-		slog.Info("workflow found", "repo", repo, "run_id", run.ID, "name", run.Name, "branch", run.HeadBranch)
-		p.tracked = &trackedRun{
+		repoShort := repoName(repo)
+		slug := fmt.Sprintf("gh-%s", repoShort)
+
+		slog.Info("workflow found", "repo", repo, "run_id", run.ID, "name", run.Name, "branch", run.HeadBranch, "slug", slug)
+
+		// Create the activity in PushWard
+		if err := p.pw.CreateActivity(ctx, slug, fmt.Sprintf("GitHub: %s", repoShort), p.cfg.PushWard.Priority); err != nil {
+			slog.Error("failed to create activity", "slug", slug, "error", err)
+			continue
+		}
+
+		p.tracked[repo] = &trackedRun{
 			Repo:       repo,
 			RunID:      run.ID,
 			Name:       run.Name,
 			Branch:     run.HeadBranch,
+			Slug:       slug,
 			StartedAt:  run.CreatedAt,
 			LastUpdate: time.Now(),
 		}
 
 		// Send initial ONGOING (triggers push-to-start)
-		repoShort := repoName(repo)
-		return p.pw.UpdateActivity(ctx, p.cfg.PushWard.ActivitySlug, pushward.UpdateRequest{
+		if err := p.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 			State: "ONGOING",
 			Content: pushward.Content{
 				Template:    "github",
@@ -95,109 +120,137 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 				CurrentStep: intPtr(0),
 				TotalSteps:  intPtr(1),
 			},
-		})
+		}); err != nil {
+			slog.Error("failed to send initial update", "slug", slug, "error", err)
+		}
 	}
 	return nil
 }
 
 func (p *Poller) pollActive(ctx context.Context) error {
-	// Check for stale tracked workflow (30min timeout)
-	if time.Since(p.tracked.LastUpdate) > 30*time.Minute {
-		slog.Warn("tracked workflow stale, ending", "run_id", p.tracked.RunID)
-		return p.endWorkflow(ctx, "Timed out", "orange")
-	}
+	for repo, t := range p.tracked {
+		if t.EndedAt != nil {
+			continue
+		}
 
-	jobs, err := p.gh.GetJobs(ctx, p.tracked.Repo, p.tracked.RunID)
-	if err != nil {
-		return fmt.Errorf("getting jobs: %w", err)
-	}
+		// Check for stale tracked workflow (30min timeout)
+		if time.Since(t.LastUpdate) > 30*time.Minute {
+			slog.Warn("tracked workflow stale, ending", "run_id", t.RunID, "slug", t.Slug)
+			p.endWorkflow(ctx, t, "Timed out", "orange")
+			continue
+		}
 
-	totalJobs := len(jobs)
-	if totalJobs == 0 {
-		return nil
-	}
+		jobs, err := p.gh.GetJobs(ctx, t.Repo, t.RunID)
+		if err != nil {
+			slog.Error("getting jobs", "repo", repo, "error", err)
+			continue
+		}
 
-	completedJobs := 0
-	var currentJobName string
-	currentJobIndex := 0
-	allCompleted := true
-	anyFailed := false
+		totalJobs := len(jobs)
+		if totalJobs == 0 {
+			continue
+		}
 
-	for i, job := range jobs {
-		switch job.Status {
-		case "completed":
-			completedJobs++
-			if job.Conclusion == "failure" || job.Conclusion == "cancelled" {
-				anyFailed = true
+		completedJobs := 0
+		var currentJobName string
+		currentJobIndex := 0
+		allCompleted := true
+		anyFailed := false
+
+		for i, job := range jobs {
+			switch job.Status {
+			case "completed":
+				completedJobs++
+				if job.Conclusion == "failure" || job.Conclusion == "cancelled" {
+					anyFailed = true
+				}
+			case "in_progress":
+				if currentJobName == "" {
+					currentJobName = job.Name
+					currentJobIndex = i + 1
+				}
+				allCompleted = false
+			default: // queued
+				allCompleted = false
 			}
-		case "in_progress":
-			if currentJobName == "" {
-				currentJobName = job.Name
-				currentJobIndex = i + 1
+		}
+
+		if currentJobName == "" && !allCompleted {
+			currentJobName = "Queued"
+			currentJobIndex = completedJobs
+		}
+
+		t.LastUpdate = time.Now()
+		repoShort := repoName(t.Repo)
+
+		if allCompleted {
+			conclusion := "Success"
+			color := "green"
+			if anyFailed {
+				conclusion = "Failed"
+				color = "red"
 			}
-			allCompleted = false
-		default: // queued
-			allCompleted = false
+			slog.Info("workflow completed", "run_id", t.RunID, "slug", t.Slug, "conclusion", conclusion)
+			p.endWorkflow(ctx, t, conclusion, color)
+			continue
+		}
+
+		progress := float64(completedJobs) / float64(totalJobs)
+
+		if err := p.pw.UpdateActivity(ctx, t.Slug, pushward.UpdateRequest{
+			State: "ONGOING",
+			Content: pushward.Content{
+				Template:    "github",
+				Progress:    progress,
+				State:       currentJobName,
+				Icon:        "arrow.triangle.branch",
+				Subtitle:    fmt.Sprintf("%s / %s", repoShort, t.Name),
+				AccentColor: "green",
+				CurrentStep: intPtr(currentJobIndex),
+				TotalSteps:  intPtr(totalJobs),
+			},
+		}); err != nil {
+			slog.Error("failed to update activity", "slug", t.Slug, "error", err)
 		}
 	}
-
-	if currentJobName == "" && !allCompleted {
-		currentJobName = "Queued"
-		currentJobIndex = completedJobs
-	}
-
-	p.tracked.LastUpdate = time.Now()
-	repoShort := repoName(p.tracked.Repo)
-
-	if allCompleted {
-		conclusion := "Success"
-		color := "green"
-		if anyFailed {
-			conclusion = "Failed"
-			color = "red"
-		}
-		slog.Info("workflow completed", "run_id", p.tracked.RunID, "conclusion", conclusion)
-		return p.endWorkflow(ctx, conclusion, color)
-	}
-
-	progress := float64(completedJobs) / float64(totalJobs)
-
-	return p.pw.UpdateActivity(ctx, p.cfg.PushWard.ActivitySlug, pushward.UpdateRequest{
-		State: "ONGOING",
-		Content: pushward.Content{
-			Template:    "github",
-			Progress:    progress,
-			State:       currentJobName,
-			Icon:        "arrow.triangle.branch",
-			Subtitle:    fmt.Sprintf("%s / %s", repoShort, p.tracked.Name),
-			AccentColor: "green",
-			CurrentStep: intPtr(currentJobIndex),
-			TotalSteps:  intPtr(totalJobs),
-		},
-	})
+	return nil
 }
 
-func (p *Poller) endWorkflow(ctx context.Context, state, color string) error {
-	total := 1
-	if p.tracked != nil {
-		// Best effort: use last known total
-	}
-	repoShort := repoName(p.tracked.Repo)
-	err := p.pw.UpdateActivity(ctx, p.cfg.PushWard.ActivitySlug, pushward.UpdateRequest{
+func (p *Poller) endWorkflow(ctx context.Context, t *trackedRun, state, color string) {
+	repoShort := repoName(t.Repo)
+	if err := p.pw.UpdateActivity(ctx, t.Slug, pushward.UpdateRequest{
 		State: "ENDED",
 		Content: pushward.Content{
 			Template:    "github",
 			Progress:    1.0,
 			State:       state,
 			Icon:        "arrow.triangle.branch",
-			Subtitle:    fmt.Sprintf("%s / %s", repoShort, p.tracked.Name),
+			Subtitle:    fmt.Sprintf("%s / %s", repoShort, t.Name),
 			AccentColor: color,
-			CurrentStep: intPtr(total),
-			TotalSteps:  intPtr(total),
+			CurrentStep: intPtr(1),
+			TotalSteps:  intPtr(1),
 		},
-	})
-	p.tracked = nil
-	return err
+	}); err != nil {
+		slog.Error("failed to end activity", "slug", t.Slug, "error", err)
+	}
+	now := time.Now()
+	t.EndedAt = &now
+}
+
+func (p *Poller) cleanup(ctx context.Context) {
+	for repo, t := range p.tracked {
+		if t.EndedAt == nil {
+			continue
+		}
+		if time.Since(*t.EndedAt) < p.cfg.PushWard.CleanupDelay {
+			continue
+		}
+		slog.Info("cleaning up activity", "slug", t.Slug, "repo", repo)
+		if err := p.pw.DeleteActivity(ctx, t.Slug); err != nil {
+			slog.Error("failed to delete activity", "slug", t.Slug, "error", err)
+		}
+		delete(p.tracked, repo)
+	}
 }
 
 func intPtr(v int) *int {
