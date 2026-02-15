@@ -7,6 +7,8 @@ type trackedRun struct {
 	RunID      int64
 	Name       string
 	Branch     string
+	Slug       string
 	StartedAt  time.Time
 	LastUpdate time.Time
+	EndedAt    *time.Time
 }

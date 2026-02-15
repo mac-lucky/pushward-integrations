@@ -21,9 +21,10 @@ type GitHubConfig struct {
 }
 
 type PushWardConfig struct {
-	URL          string `yaml:"url"`
-	APIKey       string `yaml:"api_key"`
-	ActivitySlug string `yaml:"activity_slug"`
+	URL          string        `yaml:"url"`
+	APIKey       string        `yaml:"api_key"`
+	Priority     int           `yaml:"priority"`
+	CleanupDelay time.Duration `yaml:"cleanup_delay"`
 }
 
 type PollingConfig struct {
@@ -33,6 +34,10 @@ type PollingConfig struct {
 
 func Load(path string) (*Config, error) {
 	cfg := &Config{
+		PushWard: PushWardConfig{
+			Priority:     1,
+			CleanupDelay: 15 * time.Minute,
+		},
 		Polling: PollingConfig{
 			IdleInterval:   60 * time.Second,
 			ActiveInterval: 5 * time.Second,
@@ -62,8 +67,19 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("PUSHWARD_API_KEY"); v != "" {
 		cfg.PushWard.APIKey = v
 	}
-	if v := os.Getenv("PUSHWARD_ACTIVITY_SLUG"); v != "" {
-		cfg.PushWard.ActivitySlug = v
+	if v := os.Getenv("PUSHWARD_PRIORITY"); v != "" {
+		var p int
+		if _, err := fmt.Sscanf(v, "%d", &p); err != nil {
+			return nil, fmt.Errorf("parsing PUSHWARD_PRIORITY: %w", err)
+		}
+		cfg.PushWard.Priority = p
+	}
+	if v := os.Getenv("PUSHWARD_CLEANUP_DELAY"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PUSHWARD_CLEANUP_DELAY: %w", err)
+		}
+		cfg.PushWard.CleanupDelay = d
 	}
 	if v := os.Getenv("PUSHWARD_POLL_IDLE"); v != "" {
 		d, err := time.ParseDuration(v)
@@ -93,8 +109,8 @@ func Load(path string) (*Config, error) {
 	if cfg.PushWard.APIKey == "" {
 		return nil, fmt.Errorf("pushward.api_key is required (set PUSHWARD_API_KEY)")
 	}
-	if cfg.PushWard.ActivitySlug == "" {
-		return nil, fmt.Errorf("pushward.activity_slug is required (set PUSHWARD_ACTIVITY_SLUG)")
+	if cfg.PushWard.Priority < 0 || cfg.PushWard.Priority > 10 {
+		return nil, fmt.Errorf("pushward.priority must be 0-10 (got %d)", cfg.PushWard.Priority)
 	}
 
 	return cfg, nil
