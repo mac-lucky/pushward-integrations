@@ -1,5 +1,6 @@
 # Binaries
-pushward-github
+/pushward-github
+/github/pushward-github
 *.exe
 
 # IDE
