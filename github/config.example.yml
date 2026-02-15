@@ -1,0 +1,13 @@
+github:
+  token: ""           # or set PUSHWARD_GITHUB_TOKEN
+  repos:
+    - "mac-lucky/pushward-server"
+
+pushward:
+  url: ""             # or set PUSHWARD_URL (e.g. https://pushward.macluckylab.com)
+  api_key: ""         # or set PUSHWARD_API_KEY (hlk_ integration key)
+  activity_slug: ""   # or set PUSHWARD_ACTIVITY_SLUG
+
+polling:
+  idle_interval: 60s  # or set PUSHWARD_POLL_IDLE
+  active_interval: 5s # or set PUSHWARD_POLL_ACTIVE
