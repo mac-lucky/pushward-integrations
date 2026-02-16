@@ -48,6 +48,19 @@ func New(cfg *config.Config, sab *sabnzbd.Client, pw *pushward.Client) *Tracker 
 	return &Tracker{cfg: cfg, sab: sab, pw: pw}
 }
 
+// Cleanup ends any stale activity left over from a previous run (e.g. crash).
+func (t *Tracker) Cleanup(ctx context.Context) {
+	req := pushward.UpdateRequest{
+		State:   "ENDED",
+		Content: pushward.Content{Template: "generic", Progress: 0, State: "Dismissed"},
+	}
+	if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
+		slog.Info("no stale activity to clean up")
+		return
+	}
+	slog.Info("cleaned up stale activity from previous run")
+}
+
 // Wait blocks until all active tracking goroutines finish.
 func (t *Tracker) Wait() {
 	t.wg.Wait()
@@ -204,6 +217,7 @@ func (t *Tracker) waitForQueueActive(ctx context.Context, maxPolls int) bool {
 // trackDownloads polls the queue until it goes idle. Returns total MB seen.
 func (t *Tracker) trackDownloads(ctx context.Context) float64 {
 	var totalMB float64
+	startTime := time.Now()
 	slog.Info("tracking downloads")
 
 	for {
@@ -219,7 +233,7 @@ func (t *Tracker) trackDownloads(ctx context.Context) float64 {
 			totalMB = queueMB
 		}
 
-		if !t.sendDownloadProgress(ctx, queue) {
+		if !t.sendDownloadProgress(ctx, queue, startTime) {
 			break
 		}
 		time.Sleep(t.cfg.Polling.Interval)
@@ -255,7 +269,7 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 	return elapsed
 }
 
-func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue) bool {
+func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue, startTime time.Time) bool {
 	status := queue.Status
 	mbLeft, _ := strconv.ParseFloat(queue.MBLeft, 64)
 	mbTotal, _ := strconv.ParseFloat(queue.MB, 64)
@@ -290,6 +304,13 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 	remainingSeconds := parseTimeLeft(queue.TimeLeft)
 
 	stateStr := fmt.Sprintf("%.1f MB/s", speedMB)
+	elapsed := time.Since(startTime).Seconds()
+	downloaded := mbTotal - mbLeft
+	if elapsed > 2 && downloaded > 0 {
+		avgMB := downloaded / elapsed
+		stateStr += fmt.Sprintf(" · avg %.0f", avgMB)
+	}
+
 	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", remainingSeconds, subtitle, "ONGOING")
 	return true
 }
