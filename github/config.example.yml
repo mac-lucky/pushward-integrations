@@ -1,12 +1,12 @@
 github:
   token: ""           # or set PUSHWARD_GITHUB_TOKEN
-  repos:
-    - "mac-lucky/pushward-server"
+  owner: "mac-lucky"  # or set PUSHWARD_GITHUB_OWNER — auto-discovers all repos
+  repos:              # or set PUSHWARD_GITHUB_REPOS — optional when owner is set
+    # - "other-org/some-repo"  # add repos outside owner if needed
 
 pushward:
   url: ""             # or set PUSHWARD_URL (e.g. https://pushward.macluckylab.com)
   api_key: ""         # or set PUSHWARD_API_KEY (hlk_ integration key)
-  activity_slug: ""   # or set PUSHWARD_ACTIVITY_SLUG
 
 polling:
   idle_interval: 60s  # or set PUSHWARD_POLL_IDLE

@@ -8,7 +8,7 @@ Polls the GitHub Actions API for in-progress workflow runs and sends real-time u
 
 - A running PushWard server
 - A PushWard activity and integration key (`hlk_` prefix)
-- A GitHub personal access token with `actions:read` scope
+- A GitHub personal access token with `actions:read` scope (add `repo` for private repos)
 - The PushWard iOS app subscribed to the activity
 
 ## Configuration
@@ -18,12 +18,14 @@ All settings can be provided via YAML config file or environment variables. Envi
 | Env Variable | Config Key | Description | Required |
 |---|---|---|---|
 | `PUSHWARD_GITHUB_TOKEN` | `github.token` | GitHub PAT with `actions:read` | Yes |
-| `PUSHWARD_GITHUB_REPOS` | `github.repos` | Comma-separated `owner/repo` list | Yes |
+| `PUSHWARD_GITHUB_OWNER` | `github.owner` | GitHub username — auto-discovers all repos | No* |
+| `PUSHWARD_GITHUB_REPOS` | `github.repos` | Comma-separated `owner/repo` list | No* |
 | `PUSHWARD_URL` | `pushward.url` | PushWard server URL | Yes |
 | `PUSHWARD_API_KEY` | `pushward.api_key` | PushWard integration key (`hlk_`) | Yes |
-| `PUSHWARD_ACTIVITY_SLUG` | `pushward.activity_slug` | Activity slug to update | Yes |
 | `PUSHWARD_POLL_IDLE` | `polling.idle_interval` | Poll interval when idle (default: 60s) | No |
 | `PUSHWARD_POLL_ACTIVE` | `polling.active_interval` | Poll interval when active (default: 5s) | No |
+
+\* At least one of `PUSHWARD_GITHUB_OWNER` or `PUSHWARD_GITHUB_REPOS` is required. When `owner` is set, all non-archived repos are discovered automatically. `repos` can be used alongside `owner` to add repos from other orgs.
 
 ## Docker Compose
 
@@ -35,16 +37,16 @@ services:
       - ./config.yml:/config/config.yml:ro
     environment:
       - PUSHWARD_GITHUB_TOKEN=ghp_xxxxxxxxxxxx
+      - PUSHWARD_GITHUB_OWNER=mac-lucky
       - PUSHWARD_URL=https://pushward.macluckylab.com
       - PUSHWARD_API_KEY=hlk_xxxxxxxxxxxx
-      - PUSHWARD_ACTIVITY_SLUG=github-ci
-      - PUSHWARD_GITHUB_REPOS=mac-lucky/pushward-server
 ```
 
 ## How It Works
 
-1. **Idle**: Polls each configured repo every 60s for in-progress workflow runs
-2. **Workflow found**: Sends `ONGOING` update (triggers push-to-start Live Activity on iOS)
-3. **Active polling**: Every 5s, fetches jobs for the tracked run and updates progress
-4. **Completed**: Sends `ENDED` update with success (green) or failure (red) status
-5. **Back to idle**: Resumes polling for new workflows
+1. **Startup**: If `owner` is set, discovers all repos via GitHub API (refreshes every 5 min)
+2. **Idle**: Polls each repo every 60s for in-progress workflow runs
+3. **Workflow found**: Creates a PushWard activity and sends `ONGOING` update (triggers push-to-start Live Activity on iOS)
+4. **Active polling**: Every 5s, fetches jobs for the tracked run and updates progress
+5. **Completed**: Sends `ENDED` update with success (green) or failure (red) status
+6. **Cleanup**: After configurable delay (default 15m), deletes the activity

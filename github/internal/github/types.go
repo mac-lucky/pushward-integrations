@@ -30,3 +30,9 @@ type Job struct {
 	Conclusion string `json:"conclusion"` // success, failure, cancelled, skipped, null
 	StartedAt  string `json:"started_at"`
 }
+
+type Repository struct {
+	FullName string `json:"full_name"` // owner/repo
+	Archived bool   `json:"archived"`
+	Disabled bool   `json:"disabled"`
+}
