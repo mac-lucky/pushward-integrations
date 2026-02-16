@@ -61,6 +61,40 @@ func (t *Tracker) Cleanup(ctx context.Context) {
 	slog.Info("cleaned up stale activity from previous run")
 }
 
+// ResumeIfActive checks SABnzbd for in-progress downloads or post-processing
+// and starts tracking if found. Returns true if tracking was resumed.
+func (t *Tracker) ResumeIfActive() bool {
+	ctx := context.Background()
+
+	queue, err := t.sab.GetQueue(ctx)
+	if err != nil {
+		slog.Warn("failed to check SABnzbd queue on startup", "error", err)
+		return false
+	}
+
+	mb, _ := strconv.ParseFloat(queue.MB, 64)
+	if queue.Status != "Idle" && mb > 0 {
+		slog.Info("active download found on startup, resuming tracking", "status", queue.Status, "total_mb", mb)
+		t.mu.Lock()
+		t.active = true
+		t.mu.Unlock()
+		t.launchTracker(true)
+		return true
+	}
+
+	ppStatus, _ := t.getPPStatus(ctx)
+	if ppStatus != "" {
+		slog.Info("active post-processing found on startup, resuming tracking", "status", ppStatus)
+		t.mu.Lock()
+		t.active = true
+		t.mu.Unlock()
+		t.launchTracker(true)
+		return true
+	}
+
+	return false
+}
+
 // Wait blocks until all active tracking goroutines finish.
 func (t *Tracker) Wait() {
 	t.wg.Wait()
@@ -85,6 +119,13 @@ func (t *Tracker) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 	t.mu.Unlock()
 
 	slog.Info("webhook received, starting tracker")
+	t.launchTracker(false)
+
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, `{"status":"tracking_started"}`)
+}
+
+func (t *Tracker) launchTracker(resumed bool) {
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
@@ -93,11 +134,8 @@ func (t *Tracker) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 			t.active = false
 			t.mu.Unlock()
 		}()
-		t.track()
+		t.track(resumed)
 	}()
-
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintln(w, `{"status":"tracking_started"}`)
 }
 
 func (t *Tracker) send(ctx context.Context, progress float64, state, icon string, remainingSeconds *int, subtitle string, activityState string) {
@@ -126,7 +164,7 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon string
 	}
 }
 
-func (t *Tracker) track() {
+func (t *Tracker) track(resumed bool) {
 	ctx := context.Background()
 
 	// Ensure activity exists
@@ -187,12 +225,16 @@ func (t *Tracker) track() {
 	if len(subtitle) > 30 {
 		subtitle = subtitle[:30]
 	}
-	t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ONGOING")
-
-	slog.Info("waiting before ending activity", "cleanup_delay", t.cfg.PushWard.CleanupDelay)
-	time.Sleep(t.cfg.PushWard.CleanupDelay)
-	t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ENDED")
-	slog.Info("tracking complete")
+	if resumed {
+		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ENDED")
+		slog.Info("tracking complete (resumed, skipping cleanup delay)")
+	} else {
+		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ONGOING")
+		slog.Info("waiting before ending activity", "cleanup_delay", t.cfg.PushWard.CleanupDelay)
+		time.Sleep(t.cfg.PushWard.CleanupDelay)
+		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ENDED")
+		slog.Info("tracking complete")
+	}
 }
 
 // waitForQueueActive polls the queue for up to maxPolls iterations waiting for
