@@ -5,10 +5,19 @@ type QueueResponse struct {
 }
 
 type Queue struct {
+	Status   string      `json:"status"`
+	MBLeft   string      `json:"mbleft"`
+	MB       string      `json:"mb"`
+	KBPerSec string      `json:"kbpersec"`
+	TimeLeft string      `json:"timeleft"`
+	Slots    []QueueSlot `json:"slots"`
+}
+
+type QueueSlot struct {
+	Filename string `json:"filename"`
 	Status   string `json:"status"`
-	MBLeft   string `json:"mbleft"`
 	MB       string `json:"mb"`
-	KBPerSec string `json:"kbpersec"`
+	MBLeft   string `json:"mbleft"`
 	TimeLeft string `json:"timeleft"`
 }
 
@@ -22,4 +31,5 @@ type History struct {
 
 type HistorySlot struct {
 	Status string `json:"status"`
+	Name   string `json:"name"`
 }

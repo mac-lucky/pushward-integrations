@@ -80,7 +80,7 @@ func (t *Tracker) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 			t.active = false
 			t.mu.Unlock()
 		}()
-		t.track(r.Context())
+		t.track()
 	}()
 
 	w.WriteHeader(http.StatusOK)
@@ -113,8 +113,7 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon string
 	}
 }
 
-func (t *Tracker) track(webhookCtx context.Context) {
-	// Use a background context so tracking continues after the HTTP request completes.
+func (t *Tracker) track() {
 	ctx := context.Background()
 
 	// Ensure activity exists
@@ -124,12 +123,69 @@ func (t *Tracker) track(webhookCtx context.Context) {
 	}
 
 	// Phase 1: Wait for SABnzbd to start downloading
-	slog.Info("phase 1: waiting for download to start")
+	slog.Info("waiting for download to start")
 	t.send(ctx, 0.0, "Starting...", "arrow.down.circle", nil, "", "ONGOING")
 
+	if !t.waitForQueueActive(ctx, 60) {
+		slog.Warn("SABnzbd never started downloading, giving up")
+		t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", nil, "", "ENDED")
+		return
+	}
+
+	startTime := time.Now()
 	var totalMB float64
-	started := false
-	for i := 0; i < 60; i++ {
+	var totalPPElapsed time.Duration
+
+	// Main loop: download → post-processing → check for more
+	for {
+		// Download phase
+		roundMB := t.trackDownloads(ctx)
+		totalMB += roundMB
+
+		// Post-processing phase
+		ppDuration := t.trackPostProcessing(ctx)
+		totalPPElapsed += ppDuration
+
+		// Check if queue has more downloads
+		if !t.waitForQueueActive(ctx, 10) {
+			break
+		}
+		slog.Info("more downloads in queue, continuing")
+	}
+
+	totalElapsed := int(time.Since(startTime).Seconds())
+	downloadElapsed := totalElapsed - int(totalPPElapsed.Seconds())
+	ppSecs := int(totalPPElapsed.Seconds())
+
+	// Summary
+	avgSpeed := float64(0)
+	if downloadElapsed > 0 {
+		avgSpeed = totalMB / float64(downloadElapsed)
+	}
+
+	subtitle := fmt.Sprintf("%s in %s", formatSize(totalMB), formatDuration(totalElapsed))
+	if ppSecs > 1 {
+		subtitle += fmt.Sprintf(" · PP: %s", formatDuration(ppSecs))
+	} else {
+		subtitle += fmt.Sprintf(" · %.0f MB/s", avgSpeed)
+	}
+	slog.Info("complete", "total_mb", totalMB, "elapsed", totalElapsed, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed)
+
+	if len(subtitle) > 30 {
+		subtitle = subtitle[:30]
+	}
+	t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ONGOING")
+
+	slog.Info("waiting before ending activity", "cleanup_delay", t.cfg.PushWard.CleanupDelay)
+	time.Sleep(t.cfg.PushWard.CleanupDelay)
+	t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ENDED")
+	slog.Info("tracking complete")
+}
+
+// waitForQueueActive polls the queue for up to maxPolls iterations waiting for
+// an active download. Returns true if the queue became active.
+func (t *Tracker) waitForQueueActive(ctx context.Context, maxPolls int) bool {
+	for i := 0; i < maxPolls; i++ {
 		queue, err := t.sab.GetQueue(ctx)
 		if err != nil {
 			slog.Warn("failed to fetch queue", "error", err)
@@ -138,23 +194,18 @@ func (t *Tracker) track(webhookCtx context.Context) {
 		}
 		mb, _ := strconv.ParseFloat(queue.MB, 64)
 		if queue.Status != "Idle" && mb > 0 {
-			totalMB = mb
-			started = true
-			break
+			return true
 		}
 		time.Sleep(t.cfg.Polling.Interval)
 	}
+	return false
+}
 
-	if !started {
-		slog.Warn("SABnzbd never started downloading, giving up")
-		t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", nil, "", "ENDED")
-		return
-	}
+// trackDownloads polls the queue until it goes idle. Returns total MB seen.
+func (t *Tracker) trackDownloads(ctx context.Context) float64 {
+	var totalMB float64
+	slog.Info("tracking downloads")
 
-	startTime := time.Now()
-
-	// Phase 2: Track downloading
-	slog.Info("phase 2: tracking download", "total_mb", totalMB)
 	for {
 		queue, err := t.sab.GetQueue(ctx)
 		if err != nil {
@@ -174,15 +225,19 @@ func (t *Tracker) track(webhookCtx context.Context) {
 		time.Sleep(t.cfg.Polling.Interval)
 	}
 
-	downloadElapsed := int(time.Since(startTime).Seconds())
+	slog.Info("downloads finished", "total_mb", totalMB)
+	return totalMB
+}
 
-	// Phase 3: Track post-processing
-	slog.Info("phase 3: tracking post-processing")
+// trackPostProcessing polls history for active PP statuses and sends updates.
+// Returns total post-processing duration.
+func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
+	slog.Info("tracking post-processing")
 	t.send(ctx, 1.0, "Unpacking...", "archivebox", nil, "", "ONGOING")
 	ppStart := time.Now()
 
 	for {
-		ppStatus := t.getPPStatus(ctx)
+		ppStatus, ppName := t.getPPStatus(ctx)
 		if ppStatus == "" {
 			break
 		}
@@ -190,36 +245,14 @@ func (t *Tracker) track(webhookCtx context.Context) {
 		if icon == "" {
 			icon = "archivebox"
 		}
-		t.send(ctx, 1.0, ppStatus+"...", icon, nil, "", "ONGOING")
+		subtitle := truncate(ppName, 30)
+		t.send(ctx, 1.0, ppStatus+"...", icon, nil, subtitle, "ONGOING")
 		time.Sleep(t.cfg.Polling.Interval)
 	}
 
-	ppElapsed := int(time.Since(ppStart).Seconds())
-	totalElapsed := int(time.Since(startTime).Seconds())
-
-	// Phase 4: Summary
-	avgSpeed := float64(0)
-	if downloadElapsed > 0 {
-		avgSpeed = totalMB / float64(downloadElapsed)
-	}
-	summary := fmt.Sprintf("%s in %s", formatSize(totalMB), formatDuration(totalElapsed))
-	subtitle := summary
-	if ppElapsed > 1 {
-		subtitle += fmt.Sprintf(" · Unpack: %s", formatDuration(ppElapsed))
-	} else {
-		subtitle += fmt.Sprintf(" · Avg: %.0f MB/s", avgSpeed)
-	}
-
-	slog.Info("phase 4: complete", "summary", summary)
-	if len(subtitle) > 30 {
-		subtitle = subtitle[:30]
-	}
-	t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ONGOING")
-
-	slog.Info("waiting before ending activity", "cleanup_delay", t.cfg.PushWard.CleanupDelay)
-	time.Sleep(t.cfg.PushWard.CleanupDelay)
-	t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, "", "ENDED")
-	slog.Info("tracking complete")
+	elapsed := time.Since(ppStart)
+	slog.Info("post-processing finished", "elapsed", elapsed)
+	return elapsed
 }
 
 func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue) bool {
@@ -238,40 +271,68 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 		progress = (mbTotal - mbLeft) / mbTotal
 	}
 
+	// Build subtitle from current slot filename
+	subtitle := formatSize(mbLeft)
+	if len(queue.Slots) > 0 {
+		name := queue.Slots[0].Filename
+		if len(queue.Slots) > 1 {
+			subtitle = fmt.Sprintf("%s +%d more", truncate(name, 18), len(queue.Slots)-1)
+		} else {
+			subtitle = truncate(name, 30)
+		}
+	}
+
 	if status == "Paused" {
-		t.send(ctx, progress, "Paused", "pause.circle.fill", nil, formatSize(mbLeft), "ONGOING")
+		t.send(ctx, progress, "Paused", "pause.circle.fill", nil, subtitle, "ONGOING")
 		return true
 	}
 
-	var remainingSeconds *int
-	parts := strings.Split(queue.TimeLeft, ":")
-	if len(parts) == 3 {
-		h, err1 := strconv.Atoi(parts[0])
-		m, err2 := strconv.Atoi(parts[1])
-		s, err3 := strconv.Atoi(parts[2])
-		if err1 == nil && err2 == nil && err3 == nil {
-			total := h*3600 + m*60 + s
-			remainingSeconds = &total
-		}
-	}
+	remainingSeconds := parseTimeLeft(queue.TimeLeft)
 
 	stateStr := fmt.Sprintf("%.1f MB/s", speedMB)
-	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", remainingSeconds, formatSize(mbLeft), "ONGOING")
+	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", remainingSeconds, subtitle, "ONGOING")
 	return true
 }
 
-func (t *Tracker) getPPStatus(ctx context.Context) string {
+// getPPStatus checks history for active post-processing jobs.
+// Returns the status and name, or empty strings if none found.
+func (t *Tracker) getPPStatus(ctx context.Context) (string, string) {
 	history, err := t.sab.GetHistory(ctx, 5)
 	if err != nil {
 		slog.Warn("failed to fetch history", "error", err)
-		return ""
+		return "", ""
 	}
 	for _, slot := range history.Slots {
 		if ppStatuses[slot.Status] {
-			return slot.Status
+			return slot.Status, slot.Name
 		}
 	}
-	return ""
+	return "", ""
+}
+
+func parseTimeLeft(timeleft string) *int {
+	parts := strings.Split(timeleft, ":")
+	if len(parts) != 3 {
+		return nil
+	}
+	h, err1 := strconv.Atoi(parts[0])
+	m, err2 := strconv.Atoi(parts[1])
+	s, err3 := strconv.Atoi(parts[2])
+	if err1 != nil || err2 != nil || err3 != nil {
+		return nil
+	}
+	total := h*3600 + m*60 + s
+	return &total
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	if maxLen <= 3 {
+		return s[:maxLen]
+	}
+	return s[:maxLen-3] + "..."
 }
 
 func formatDuration(seconds int) string {
