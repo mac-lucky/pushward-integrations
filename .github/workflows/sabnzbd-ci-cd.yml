@@ -1,11 +1,13 @@
-name: CI/CD
+name: CI/CD SABnzbd
 
 on:
   push:
     branches: [main]
     tags: ['v*']
+    paths: ['sabnzbd/**', '.github/workflows/sabnzbd-ci-cd.yml']
   pull_request:
     branches: [main]
+    paths: ['sabnzbd/**', '.github/workflows/sabnzbd-ci-cd.yml']
   workflow_dispatch:
 
 jobs:
