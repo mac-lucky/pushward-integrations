@@ -48,7 +48,9 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	t.Cleanup(ctx)
+	if !t.ResumeIfActive() {
+		t.Cleanup(ctx)
+	}
 
 	go func() {
 		slog.Info("starting pushward-sabnzbd", "address", cfg.Server.Address, "priority", cfg.PushWard.Priority, "cleanup_delay", cfg.PushWard.CleanupDelay)
