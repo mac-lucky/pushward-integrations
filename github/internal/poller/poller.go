@@ -111,7 +111,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		if err := p.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 			State: "ONGOING",
 			Content: pushward.Content{
-				Template:    "github",
+				Template:    "pipeline",
 				Progress:    0.0,
 				State:       "Starting...",
 				Icon:        "arrow.triangle.branch",
@@ -200,7 +200,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		if err := p.pw.UpdateActivity(ctx, t.Slug, pushward.UpdateRequest{
 			State: "ONGOING",
 			Content: pushward.Content{
-				Template:    "github",
+				Template:    "pipeline",
 				Progress:    progress,
 				State:       currentJobName,
 				Icon:        "arrow.triangle.branch",
