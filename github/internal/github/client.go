@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 )
+
+const maxRetries = 3
 
 type Client struct {
 	httpClient *http.Client
@@ -23,6 +26,45 @@ func NewClient(token string) *Client {
 	}
 }
 
+func (c *Client) doWithRetry(ctx context.Context, url, operation string) (*http.Response, error) {
+	var lastErr error
+	for attempt := range maxRetries {
+		if attempt > 0 {
+			backoff := time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt-1)), float64(30*time.Second)))
+			slog.Warn("retrying GitHub API call", "operation", operation, "attempt", attempt+1, "backoff", backoff)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		c.setHeaders(req)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			lastErr = fmt.Errorf("%s: %w", operation, err)
+			continue
+		}
+
+		c.checkRateLimit(resp)
+
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			return resp, nil
+		}
+		resp.Body.Close()
+		lastErr = fmt.Errorf("unexpected status %d for %s", resp.StatusCode, url)
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return nil, lastErr
+		}
+	}
+	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
 func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]WorkflowRun, error) {
 	parts := strings.SplitN(repo, "/", 2)
 	if len(parts) != 2 {
@@ -30,23 +72,12 @@ func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]Workflow
 	}
 
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs?status=in_progress&per_page=5", parts[0], parts[1])
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+
+	resp, err := c.doWithRetry(ctx, url, "requesting workflow runs")
 	if err != nil {
 		return nil, err
 	}
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("requesting workflow runs: %w", err)
-	}
 	defer resp.Body.Close()
-
-	c.checkRateLimit(resp)
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d for %s", resp.StatusCode, url)
-	}
 
 	var result WorkflowRunsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -62,23 +93,12 @@ func (c *Client) GetJobs(ctx context.Context, repo string, runID int64) ([]Job, 
 	}
 
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d/jobs", parts[0], parts[1], runID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+
+	resp, err := c.doWithRetry(ctx, url, "requesting jobs")
 	if err != nil {
 		return nil, err
 	}
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("requesting jobs: %w", err)
-	}
 	defer resp.Body.Close()
-
-	c.checkRateLimit(resp)
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("unexpected status %d for %s", resp.StatusCode, url)
-	}
 
 	var result JobsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -93,28 +113,19 @@ func (c *Client) ListRepos(ctx context.Context, owner string) ([]string, error) 
 
 	for {
 		url := fmt.Sprintf("https://api.github.com/users/%s/repos?per_page=100&page=%d&type=owner", owner, page)
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+
+		resp, err := c.doWithRetry(ctx, url, "listing repos")
 		if err != nil {
 			return nil, err
-		}
-		c.setHeaders(req)
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("listing repos: %w", err)
-		}
-		defer resp.Body.Close()
-
-		c.checkRateLimit(resp)
-
-		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("unexpected status %d listing repos for %s", resp.StatusCode, owner)
 		}
 
 		var repos []Repository
 		if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
+			resp.Body.Close()
 			return nil, fmt.Errorf("decoding repos: %w", err)
 		}
+		resp.Body.Close()
+
 		if len(repos) == 0 {
 			break
 		}
