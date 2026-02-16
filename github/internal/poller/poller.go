@@ -16,8 +16,12 @@ type Poller struct {
 	gh  *ghclient.Client
 	pw  *pushward.Client
 
-	tracked map[string]*trackedRun
+	tracked     map[string]*trackedRun
+	repos       []string
+	lastRefresh time.Time
 }
+
+const repoRefreshInterval = 5 * time.Minute
 
 func New(cfg *config.Config, gh *ghclient.Client, pw *pushward.Client) *Poller {
 	return &Poller{
@@ -25,10 +29,15 @@ func New(cfg *config.Config, gh *ghclient.Client, pw *pushward.Client) *Poller {
 		gh:      gh,
 		pw:      pw,
 		tracked: make(map[string]*trackedRun),
+		repos:   cfg.GitHub.Repos,
 	}
 }
 
 func (p *Poller) Run(ctx context.Context) error {
+	if err := p.refreshRepos(ctx); err != nil {
+		return fmt.Errorf("initial repo discovery: %w", err)
+	}
+
 	for {
 		interval := p.cfg.Polling.IdleInterval
 		for _, t := range p.tracked {
@@ -44,6 +53,10 @@ func (p *Poller) Run(ctx context.Context) error {
 		case <-time.After(interval):
 		}
 
+		if err := p.refreshRepos(ctx); err != nil {
+			slog.Error("repo refresh failed", "error", err)
+		}
+
 		if err := p.poll(ctx); err != nil {
 			if ctx.Err() != nil {
 				return nil
@@ -51,6 +64,43 @@ func (p *Poller) Run(ctx context.Context) error {
 			slog.Error("poll error", "error", err)
 		}
 	}
+}
+
+func (p *Poller) refreshRepos(ctx context.Context) error {
+	if p.cfg.GitHub.Owner == "" {
+		return nil
+	}
+	if !p.lastRefresh.IsZero() && time.Since(p.lastRefresh) < repoRefreshInterval {
+		return nil
+	}
+
+	discovered, err := p.gh.ListRepos(ctx, p.cfg.GitHub.Owner)
+	if err != nil {
+		return err
+	}
+
+	// Merge: discovered repos + any explicitly configured repos
+	seen := make(map[string]bool, len(discovered)+len(p.cfg.GitHub.Repos))
+	var merged []string
+	for _, r := range discovered {
+		if !seen[r] {
+			seen[r] = true
+			merged = append(merged, r)
+		}
+	}
+	for _, r := range p.cfg.GitHub.Repos {
+		if !seen[r] {
+			seen[r] = true
+			merged = append(merged, r)
+		}
+	}
+
+	if len(merged) != len(p.repos) {
+		slog.Info("repo list updated", "count", len(merged))
+	}
+	p.repos = merged
+	p.lastRefresh = time.Now()
+	return nil
 }
 
 func (p *Poller) poll(ctx context.Context) error {
@@ -63,7 +113,7 @@ func (p *Poller) poll(ctx context.Context) error {
 }
 
 func (p *Poller) pollIdle(ctx context.Context) error {
-	for _, repo := range p.cfg.GitHub.Repos {
+	for _, repo := range p.repos {
 		// Skip repos that already have an active entry
 		if t, ok := p.tracked[repo]; ok && t.EndedAt == nil {
 			continue

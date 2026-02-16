@@ -35,7 +35,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	slog.Info("starting pushward-github", "repos", cfg.GitHub.Repos, "priority", cfg.PushWard.Priority, "cleanup_delay", cfg.PushWard.CleanupDelay)
+	slog.Info("starting pushward-github", "owner", cfg.GitHub.Owner, "repos", cfg.GitHub.Repos, "priority", cfg.PushWard.Priority, "cleanup_delay", cfg.PushWard.CleanupDelay)
 	if err := p.Run(ctx); err != nil && ctx.Err() == nil {
 		slog.Error("poller exited with error", "error", err)
 		os.Exit(1)

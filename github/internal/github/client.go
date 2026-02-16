@@ -87,6 +87,53 @@ func (c *Client) GetJobs(ctx context.Context, repo string, runID int64) ([]Job, 
 	return result.Jobs, nil
 }
 
+func (c *Client) ListRepos(ctx context.Context, owner string) ([]string, error) {
+	var all []string
+	page := 1
+
+	for {
+		url := fmt.Sprintf("https://api.github.com/users/%s/repos?per_page=100&page=%d&type=owner", owner, page)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return nil, err
+		}
+		c.setHeaders(req)
+
+		resp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("listing repos: %w", err)
+		}
+		defer resp.Body.Close()
+
+		c.checkRateLimit(resp)
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("unexpected status %d listing repos for %s", resp.StatusCode, owner)
+		}
+
+		var repos []Repository
+		if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
+			return nil, fmt.Errorf("decoding repos: %w", err)
+		}
+		if len(repos) == 0 {
+			break
+		}
+
+		for _, r := range repos {
+			if !r.Archived && !r.Disabled {
+				all = append(all, r.FullName)
+			}
+		}
+
+		if len(repos) < 100 {
+			break
+		}
+		page++
+	}
+
+	return all, nil
+}
+
 func (c *Client) setHeaders(req *http.Request) {
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	req.Header.Set("Accept", "application/vnd.github+json")

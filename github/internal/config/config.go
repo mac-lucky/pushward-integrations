@@ -17,6 +17,7 @@ type Config struct {
 
 type GitHubConfig struct {
 	Token string   `yaml:"token"`
+	Owner string   `yaml:"owner"`
 	Repos []string `yaml:"repos"`
 }
 
@@ -57,6 +58,9 @@ func Load(path string) (*Config, error) {
 	// Environment variable overrides
 	if v := os.Getenv("PUSHWARD_GITHUB_TOKEN"); v != "" {
 		cfg.GitHub.Token = v
+	}
+	if v := os.Getenv("PUSHWARD_GITHUB_OWNER"); v != "" {
+		cfg.GitHub.Owner = v
 	}
 	if v := os.Getenv("PUSHWARD_GITHUB_REPOS"); v != "" {
 		cfg.GitHub.Repos = strings.Split(v, ",")
@@ -100,8 +104,8 @@ func Load(path string) (*Config, error) {
 	if cfg.GitHub.Token == "" {
 		return nil, fmt.Errorf("github.token is required (set PUSHWARD_GITHUB_TOKEN)")
 	}
-	if len(cfg.GitHub.Repos) == 0 {
-		return nil, fmt.Errorf("github.repos is required (set PUSHWARD_GITHUB_REPOS)")
+	if len(cfg.GitHub.Repos) == 0 && cfg.GitHub.Owner == "" {
+		return nil, fmt.Errorf("github.repos or github.owner is required (set PUSHWARD_GITHUB_REPOS or PUSHWARD_GITHUB_OWNER)")
 	}
 	if cfg.PushWard.URL == "" {
 		return nil, fmt.Errorf("pushward.url is required (set PUSHWARD_URL)")
