@@ -1,6 +1,8 @@
 # Binaries
 /pushward-github
 /github/pushward-github
+/pushward-sabnzbd
+/sabnzbd/pushward-sabnzbd
 *.exe
 
 # IDE

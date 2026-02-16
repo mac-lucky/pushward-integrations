@@ -1,0 +1,30 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  ci-cd:
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      app_name: "pushward-sabnzbd"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-sabnzbd"
+      dockerhub_image: "maclucky/pushward-sabnzbd"
+      push_to_dockerhub: false
+      push_on_main: true
+      main_branch: "main"
+      build_context: "./sabnzbd"
+      dockerfile_path: "./sabnzbd/Dockerfile"
+      go_module_path: "./sabnzbd"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit

@@ -1,0 +1,15 @@
+server:
+  address: ":8090"
+
+sabnzbd:
+  url: ""               # or set PUSHWARD_SABNZBD_URL
+  api_key: ""           # or set PUSHWARD_SABNZBD_API_KEY
+
+pushward:
+  url: ""               # or set PUSHWARD_URL (e.g. https://pushward.macluckylab.com)
+  api_key: ""           # or set PUSHWARD_API_KEY (hlk_ integration key)
+  priority: 1
+  cleanup_delay: 15m
+
+polling:
+  interval: 5s          # or set PUSHWARD_POLL_INTERVAL
