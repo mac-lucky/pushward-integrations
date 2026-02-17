@@ -214,12 +214,7 @@ func (t *Tracker) track(resumed bool) {
 		avgSpeed = totalMB / float64(downloadElapsed)
 	}
 
-	subtitle := fmt.Sprintf("%s in %s", formatSize(totalMB), formatDuration(totalElapsed))
-	if ppSecs > 1 {
-		subtitle += fmt.Sprintf(" · PP: %s", formatDuration(ppSecs))
-	} else {
-		subtitle += fmt.Sprintf(" · %.0f MB/s", avgSpeed)
-	}
+	subtitle := fmt.Sprintf("%s in %s · %.0f MB/s", formatSize(totalMB), formatDuration(totalElapsed), avgSpeed)
 	slog.Info("complete", "total_mb", totalMB, "elapsed", totalElapsed, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed)
 
 	if len(subtitle) > 30 {
