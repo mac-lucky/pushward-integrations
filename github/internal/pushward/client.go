@@ -71,7 +71,7 @@ func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequ
 			return fmt.Errorf("creating request: %w", err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Token "+c.apiKey)
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
@@ -119,7 +119,7 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 			return fmt.Errorf("creating request: %w", err)
 		}
 		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Token "+c.apiKey)
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
@@ -160,7 +160,7 @@ func (c *Client) DeleteActivity(ctx context.Context, slug string) error {
 		if err != nil {
 			return fmt.Errorf("creating request: %w", err)
 		}
-		httpReq.Header.Set("Authorization", "Token "+c.apiKey)
+		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
