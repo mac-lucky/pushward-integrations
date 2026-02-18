@@ -132,14 +132,16 @@ func TestFiringSingleAlert(t *testing.T) {
 		t.Fatalf("expected 2 API calls (create + update), got %d", len(recorded))
 	}
 
+	expectedSlug := slugForAlertname("HighCPUUsage")
+
 	// First call: POST /activities (create)
 	if recorded[0].Method != "POST" || recorded[0].Path != "/activities" {
 		t.Errorf("expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
 	}
 	var createReq pushward.CreateActivityRequest
 	unmarshalBody(t, recorded[0].Body, &createReq)
-	if createReq.Slug != "grafana-abc123def456" {
-		t.Errorf("expected slug grafana-abc123def456, got %s", createReq.Slug)
+	if createReq.Slug != expectedSlug {
+		t.Errorf("expected slug %s, got %s", expectedSlug, createReq.Slug)
 	}
 	if createReq.Name != "HighCPUUsage" {
 		t.Errorf("expected name HighCPUUsage, got %s", createReq.Name)
@@ -149,8 +151,9 @@ func TestFiringSingleAlert(t *testing.T) {
 	}
 
 	// Second call: PATCH /activity/<slug> (update)
-	if recorded[1].Method != "PATCH" || recorded[1].Path != "/activity/grafana-abc123def456" {
-		t.Errorf("expected PATCH /activity/grafana-abc123def456, got %s %s", recorded[1].Method, recorded[1].Path)
+	expectedPatchPath := "/activity/" + expectedSlug
+	if recorded[1].Method != "PATCH" || recorded[1].Path != expectedPatchPath {
+		t.Errorf("expected PATCH %s, got %s %s", expectedPatchPath, recorded[1].Method, recorded[1].Path)
 	}
 	var updateReq pushward.UpdateRequest
 	unmarshalBody(t, recorded[1].Body, &updateReq)
@@ -193,13 +196,20 @@ func TestResolvedAlert(t *testing.T) {
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
-	// Pre-populate the handler with an active alert so resolved has something to work with
-	h.activeAlerts["grafana-f1e2d3c4b5a6"] = &activeAlert{
-		slug:    "grafana-f1e2d3c4b5a6",
-		firedAt: time.Date(2026, 2, 18, 10, 0, 0, 0, time.UTC).Unix(),
-		staleTimer: time.AfterFunc(24*time.Hour, func() {
-			// no-op for test
-		}),
+	// Pre-populate the handler with an active alert group so resolved has something to work with
+	h.alertGroups["DiskSpaceLow"] = &alertGroup{
+		slug:      slugForAlertname("DiskSpaceLow"),
+		alertname: "DiskSpaceLow",
+		instances: map[string]*instanceInfo{
+			"f1e2d3c4b5a6": {
+				severity:     "warning",
+				firedAt:      time.Date(2026, 2, 18, 10, 0, 0, 0, time.UTC).Unix(),
+				subtitle:     "Grafana · nas:9100",
+				generatorURL: "https://grafana.example.com/alerting/grafana/f1e2d3c4b5a6/view",
+				secondaryURL: "https://grafana.example.com/d/disk-dashboard/disk",
+			},
+		},
+		staleTimer: time.AfterFunc(24*time.Hour, func() {}),
 	}
 
 	payload := `{
@@ -249,8 +259,9 @@ func TestResolvedAlert(t *testing.T) {
 		t.Fatalf("expected 1 API call (update only), got %d", len(recorded))
 	}
 
-	if recorded[0].Method != "PATCH" || recorded[0].Path != "/activity/grafana-f1e2d3c4b5a6" {
-		t.Errorf("expected PATCH /activity/grafana-f1e2d3c4b5a6, got %s %s", recorded[0].Method, recorded[0].Path)
+	expectedPath := "/activity/" + slugForAlertname("DiskSpaceLow")
+	if recorded[0].Method != "PATCH" || recorded[0].Path != expectedPath {
+		t.Errorf("expected PATCH %s, got %s %s", expectedPath, recorded[0].Method, recorded[0].Path)
 	}
 	var updateReq pushward.UpdateRequest
 	unmarshalBody(t, recorded[0].Body, &updateReq)
@@ -442,13 +453,14 @@ func TestRefiringAlert_SkipsCreate(t *testing.T) {
 	}
 }
 
-func TestMultipleAlertsInSinglePayload(t *testing.T) {
+func TestMultipleAlertsInSinglePayload_GroupedByAlertname(t *testing.T) {
 	srv, calls, mu := mockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
-	// Grafana can send multiple alerts in a single webhook (grouped alerts)
+	// Grafana sends multiple instances of "HighCPU" in one webhook.
+	// The handler should group them into a single activity.
 	payload := `{
 		"receiver": "pushward",
 		"status": "firing",
@@ -513,25 +525,155 @@ func TestMultipleAlertsInSinglePayload(t *testing.T) {
 	}
 
 	recorded := getCalls(calls, mu)
-	// Alert 1 (firing): create + update = 2
-	// Alert 2 (firing): create + update = 2
-	// Alert 3 (resolved): update only = 1
-	// Total = 5
-	if len(recorded) != 5 {
-		t.Fatalf("expected 5 API calls, got %d", len(recorded))
+	// Alert 111 (firing, first): create group + update = 2 (shows 1 instance)
+	// Alert 222 (firing, second): group exists, update = 1 (shows 2 instances)
+	// Alert 333 (resolved): never tracked as firing → skipped
+	// Total = 3
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 API calls (create, update×2), got %d", len(recorded))
 	}
 
-	// Verify distinct slugs
-	slugsSeen := map[string]bool{}
-	for _, c := range recorded {
-		if c.Method == "POST" {
-			var cr pushward.CreateActivityRequest
-			unmarshalBody(t, c.Body, &cr)
-			slugsSeen[cr.Slug] = true
-		}
+	expectedSlug := slugForAlertname("HighCPU")
+
+	// First: POST create
+	if recorded[0].Method != "POST" || recorded[0].Path != "/activities" {
+		t.Errorf("expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
 	}
-	if !slugsSeen["grafana-111111111111"] || !slugsSeen["grafana-222222222222"] {
-		t.Errorf("expected two distinct slugs for firing alerts, got %v", slugsSeen)
+	var cr pushward.CreateActivityRequest
+	unmarshalBody(t, recorded[0].Body, &cr)
+	if cr.Slug != expectedSlug {
+		t.Errorf("expected slug %s, got %s", expectedSlug, cr.Slug)
+	}
+	if cr.Name != "HighCPU" {
+		t.Errorf("expected name HighCPU, got %s", cr.Name)
+	}
+
+	// Second: PATCH with 1 instance (web-1, critical)
+	var update1 pushward.UpdateRequest
+	unmarshalBody(t, recorded[1].Body, &update1)
+	if update1.State != "ONGOING" {
+		t.Errorf("expected ONGOING, got %s", update1.State)
+	}
+	if update1.Content.Severity != "critical" {
+		t.Errorf("expected critical severity, got %s", update1.Content.Severity)
+	}
+	if update1.Content.State != "CPU > 95% on web-1" {
+		t.Errorf("expected single-instance summary, got %s", update1.Content.State)
+	}
+
+	// Third: PATCH with 2 instances (worst = critical from web-1)
+	var update2 pushward.UpdateRequest
+	unmarshalBody(t, recorded[2].Body, &update2)
+	if update2.State != "ONGOING" {
+		t.Errorf("expected ONGOING, got %s", update2.State)
+	}
+	if update2.Content.State != "2 instances firing" {
+		t.Errorf("expected '2 instances firing', got %s", update2.Content.State)
+	}
+	if update2.Content.Severity != "critical" {
+		t.Errorf("expected worst severity (critical) for 2-instance update, got %s", update2.Content.Severity)
+	}
+}
+
+func TestPartialResolve_ActivityContinues(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Pre-seed 2 firing instances of the same alert
+	h.alertGroups["NodeDown"] = &alertGroup{
+		slug:      slugForAlertname("NodeDown"),
+		alertname: "NodeDown",
+		instances: map[string]*instanceInfo{
+			"fp-aaa": {severity: "critical", summary: "node-1 down", subtitle: "Grafana · node-1:9100"},
+			"fp-bbb": {severity: "warning", summary: "node-2 down", subtitle: "Grafana · node-2:9100"},
+		},
+		staleTimer: time.AfterFunc(24*time.Hour, func() {}),
+	}
+
+	// Resolve one instance
+	resolvePayload := `{
+		"status": "resolved",
+		"alerts": [{
+			"status": "resolved",
+			"labels": {"alertname": "NodeDown", "severity": "critical", "instance": "node-1:9100"},
+			"annotations": {"summary": "node-1 recovered"},
+			"startsAt": "2026-02-18T12:00:00Z",
+			"endsAt": "2026-02-18T12:30:00Z",
+			"generatorURL": "",
+			"dashboardURL": "",
+			"panelURL": "",
+			"fingerprint": "fp-aaa"
+		}]
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(resolvePayload))
+	w := httptest.NewRecorder()
+	h.HandleWebhook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := getCalls(calls, mu)
+	// Partial resolve → ONGOING update with remaining instance (no ENDED)
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 API call (ONGOING update), got %d", len(recorded))
+	}
+	var updateReq pushward.UpdateRequest
+	unmarshalBody(t, recorded[0].Body, &updateReq)
+	if updateReq.State != "ONGOING" {
+		t.Errorf("expected ONGOING after partial resolve, got %s", updateReq.State)
+	}
+	// Remaining instance is "fp-bbb" (warning)
+	if updateReq.Content.State != "node-2 down" {
+		t.Errorf("expected remaining instance summary, got %s", updateReq.Content.State)
+	}
+
+	// Verify the group still has 1 instance
+	h.mu.Lock()
+	group := h.alertGroups["NodeDown"]
+	remaining := len(group.instances)
+	h.mu.Unlock()
+	if remaining != 1 {
+		t.Errorf("expected 1 remaining instance, got %d", remaining)
+	}
+}
+
+func TestResolvedForUntrackedAlert_Skipped(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Resolve an alert that was never tracked (e.g. bridge restarted)
+	payload := `{
+		"status": "resolved",
+		"alerts": [{
+			"status": "resolved",
+			"labels": {"alertname": "UnknownAlert", "severity": "warning"},
+			"annotations": {"summary": "recovered"},
+			"startsAt": "2026-02-18T12:00:00Z",
+			"endsAt": "2026-02-18T12:05:00Z",
+			"generatorURL": "",
+			"dashboardURL": "",
+			"panelURL": "",
+			"fingerprint": "unknown00001"
+		}]
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	w := httptest.NewRecorder()
+	h.HandleWebhook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := getCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Errorf("expected 0 API calls for untracked resolved alert, got %d", len(recorded))
 	}
 }
 
@@ -848,40 +990,6 @@ func TestNoURLs(t *testing.T) {
 	}
 }
 
-func TestSlugTruncation_ShortFingerprint(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
-	cfg := testConfig()
-	client := pushward.NewClient(srv.URL, "hlk_test")
-	h := New(client, cfg)
-
-	// Fingerprint shorter than 12 chars
-	payload := `{
-		"status": "firing",
-		"alerts": [{
-			"status": "firing",
-			"labels": {"alertname": "Test"},
-			"annotations": {},
-			"startsAt": "2026-02-18T12:00:00Z",
-			"endsAt": "0001-01-01T00:00:00Z",
-			"generatorURL": "",
-			"dashboardURL": "",
-			"panelURL": "",
-			"fingerprint": "short"
-		}]
-	}`
-
-	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
-	w := httptest.NewRecorder()
-	h.HandleWebhook(w, req)
-
-	recorded := getCalls(calls, mu)
-	var createReq pushward.CreateActivityRequest
-	unmarshalBody(t, recorded[0].Body, &createReq)
-	if createReq.Slug != "grafana-short" {
-		t.Errorf("expected slug grafana-short, got %s", createReq.Slug)
-	}
-}
-
 func TestCustomSeverityLabel(t *testing.T) {
 	srv, calls, mu := mockPushWardServer(t)
 	cfg := testConfig()
@@ -1027,13 +1135,13 @@ func TestCleanupTimerScheduledOnResolved(t *testing.T) {
 	// Wait for cleanup timer
 	time.Sleep(150 * time.Millisecond)
 
-	// Verify alert was cleaned up
+	// Verify alert group was cleaned up
 	h.mu.Lock()
-	_, exists := h.activeAlerts["grafana-cleanup12345"]
+	_, exists := h.alertGroups["TestCleanup"]
 	h.mu.Unlock()
 
 	if exists {
-		t.Error("expected alert to be cleaned up after timer, but it still exists")
+		t.Error("expected alert group to be cleaned up after timer, but it still exists")
 	}
 }
 
@@ -1166,10 +1274,11 @@ func TestRealisticGrafanaPayload_PrometheusAlertmanager(t *testing.T) {
 		t.Fatalf("expected 2 calls, got %d", len(recorded))
 	}
 
+	expectedSlug := slugForAlertname("KubePodNotReady")
 	var createReq pushward.CreateActivityRequest
 	unmarshalBody(t, recorded[0].Body, &createReq)
-	if createReq.Slug != "grafana-e4f5a6b7c8d9" {
-		t.Errorf("slug: expected grafana-e4f5a6b7c8d9, got %s", createReq.Slug)
+	if createReq.Slug != expectedSlug {
+		t.Errorf("slug: expected %s, got %s", expectedSlug, createReq.Slug)
 	}
 	if createReq.Name != "KubePodNotReady" {
 		t.Errorf("name: expected KubePodNotReady, got %s", createReq.Name)
@@ -1192,16 +1301,26 @@ func TestRealisticGrafanaPayload_PrometheusAlertmanager(t *testing.T) {
 }
 
 func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
-	// Multiple alerts grouped by alertname, some firing and some resolved
+	// Multiple instances of TargetDown grouped together.
+	// One pre-existing instance (resolved0000) is already tracked.
+	// Two new instances fire, and the pre-existing one resolves.
 	srv, calls, mu := mockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
-	// Pre-seed a tracked alert that will be resolved
-	h.activeAlerts["grafana-resolved0000"] = &activeAlert{
-		slug:    "grafana-resolved0000",
-		firedAt: time.Date(2026, 2, 18, 7, 0, 0, 0, time.UTC).Unix(),
+	// Pre-seed a tracked alert instance that will be resolved in this webhook
+	h.alertGroups["TargetDown"] = &alertGroup{
+		slug:      slugForAlertname("TargetDown"),
+		alertname: "TargetDown",
+		instances: map[string]*instanceInfo{
+			"resolved0000": {
+				severity: "warning",
+				summary:  "node-exporter target was down",
+				subtitle: "Grafana · node-exporter:9100",
+				firedAt:  time.Date(2026, 2, 18, 7, 0, 0, 0, time.UTC).Unix(),
+			},
+		},
 		staleTimer: time.AfterFunc(24*time.Hour, func() {}),
 	}
 
@@ -1280,23 +1399,29 @@ func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
 	}
 
 	recorded := getCalls(calls, mu)
-	// firing00000a: create + update = 2
-	// firing00000b: create + update = 2
-	// resolved0000: update only = 1
-	// Total = 5
-	if len(recorded) != 5 {
-		t.Fatalf("expected 5 API calls, got %d", len(recorded))
+	// firing00000a: group exists, add instance → update (2 instances) = 1 PATCH
+	// firing00000b: group exists, add instance → update (3 instances) = 1 PATCH
+	// resolved0000: tracked, remove → 2 remaining → update ONGOING = 1 PATCH
+	// Total = 3 (no POST since group was pre-seeded)
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 API calls, got %d", len(recorded))
 	}
 
-	// Verify the resolved call is ENDED
-	lastCall := recorded[4]
-	if lastCall.Method != "PATCH" {
-		t.Errorf("last call should be PATCH, got %s", lastCall.Method)
+	// All calls should be PATCH (no POST since group was pre-seeded)
+	for i, c := range recorded {
+		if c.Method != "PATCH" {
+			t.Errorf("call %d: expected PATCH, got %s", i, c.Method)
+		}
 	}
-	var endReq pushward.UpdateRequest
-	unmarshalBody(t, lastCall.Body, &endReq)
-	if endReq.State != "ENDED" {
-		t.Errorf("resolved alert should be ENDED, got %s", endReq.State)
+
+	// Last call: partial resolve → still ONGOING with 2 remaining instances
+	var lastReq pushward.UpdateRequest
+	unmarshalBody(t, recorded[2].Body, &lastReq)
+	if lastReq.State != "ONGOING" {
+		t.Errorf("expected ONGOING after partial resolve, got %s", lastReq.State)
+	}
+	if lastReq.Content.State != "2 instances firing" {
+		t.Errorf("expected '2 instances firing', got %s", lastReq.Content.State)
 	}
 }
 
@@ -1343,7 +1468,7 @@ func TestResolvedCancelsCleanupOnRefire(t *testing.T) {
 	h := New(client, cfg)
 
 	fingerprint := "refire123456"
-	slug := "grafana-refire123456"
+	alertname := "FlapAlert"
 
 	makePayload := func(status string) string {
 		return `{
@@ -1380,12 +1505,12 @@ func TestResolvedCancelsCleanupOnRefire(t *testing.T) {
 	// Wait longer than cleanup delay
 	time.Sleep(200 * time.Millisecond)
 
-	// Alert should still exist (cleanup was cancelled by re-fire)
+	// Alert group should still exist (cleanup was cancelled by re-fire)
 	h.mu.Lock()
-	_, exists := h.activeAlerts[slug]
+	_, exists := h.alertGroups[alertname]
 	h.mu.Unlock()
 
 	if !exists {
-		t.Error("expected alert to survive re-fire (cleanup should have been cancelled)")
+		t.Error("expected alert group to survive re-fire (cleanup should have been cancelled)")
 	}
 }
