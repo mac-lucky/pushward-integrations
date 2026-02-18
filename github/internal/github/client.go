@@ -3,7 +3,9 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
@@ -14,6 +16,8 @@ import (
 
 const maxRetries = 3
 
+const requestTimeout = 10 * time.Second
+
 type Client struct {
 	httpClient *http.Client
 	token      string
@@ -21,12 +25,12 @@ type Client struct {
 
 func NewClient(token string) *Client {
 	return &Client{
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		httpClient: &http.Client{},
 		token:      token,
 	}
 }
 
-func (c *Client) doWithRetry(ctx context.Context, url, operation string) (*http.Response, error) {
+func (c *Client) doWithRetry(ctx context.Context, url, operation string) ([]byte, error) {
 	var lastErr error
 	for attempt := range maxRetries {
 		if attempt > 0 {
@@ -39,30 +43,64 @@ func (c *Client) doWithRetry(ctx context.Context, url, operation string) (*http.
 			}
 		}
 
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
+		body, err := c.doRequest(reqCtx, url)
+		cancel()
 		if err != nil {
-			return nil, err
-		}
-		c.setHeaders(req)
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
+			// Don't retry client errors (4xx).
+			var ce *clientError
+			if errors.As(err, &ce) {
+				return nil, fmt.Errorf("%s: %w", operation, err)
+			}
 			lastErr = fmt.Errorf("%s: %w", operation, err)
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
 			continue
 		}
-
-		c.checkRateLimit(resp)
-
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return resp, nil
-		}
-		resp.Body.Close()
-		lastErr = fmt.Errorf("unexpected status %d for %s", resp.StatusCode, url)
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			return nil, lastErr
-		}
+		return body, nil
 	}
 	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+// doRequest executes a single HTTP request and returns the response body.
+// Non-retryable client errors (4xx) are returned wrapped in clientError.
+func (c *Client) doRequest(ctx context.Context, url string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	c.checkRateLimit(resp)
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return body, nil
+	}
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		return nil, &clientError{status: resp.StatusCode, url: url}
+	}
+	return nil, fmt.Errorf("unexpected status %d for %s", resp.StatusCode, url)
+}
+
+type clientError struct {
+	status int
+	url    string
+}
+
+func (e *clientError) Error() string {
+	return fmt.Sprintf("client error %d for %s", e.status, e.url)
 }
 
 func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]WorkflowRun, error) {
@@ -73,14 +111,13 @@ func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]Workflow
 
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs?status=in_progress&per_page=5", parts[0], parts[1])
 
-	resp, err := c.doWithRetry(ctx, url, "requesting workflow runs")
+	body, err := c.doWithRetry(ctx, url, "requesting workflow runs")
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
 	var result WorkflowRunsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("decoding workflow runs: %w", err)
 	}
 	return result.WorkflowRuns, nil
@@ -94,14 +131,13 @@ func (c *Client) GetJobs(ctx context.Context, repo string, runID int64) ([]Job, 
 
 	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d/jobs", parts[0], parts[1], runID)
 
-	resp, err := c.doWithRetry(ctx, url, "requesting jobs")
+	body, err := c.doWithRetry(ctx, url, "requesting jobs")
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
 	var result JobsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("decoding jobs: %w", err)
 	}
 	return result.Jobs, nil
@@ -114,17 +150,15 @@ func (c *Client) ListRepos(ctx context.Context, owner string) ([]string, error) 
 	for {
 		url := fmt.Sprintf("https://api.github.com/users/%s/repos?per_page=100&page=%d&type=owner", owner, page)
 
-		resp, err := c.doWithRetry(ctx, url, "listing repos")
+		body, err := c.doWithRetry(ctx, url, "listing repos")
 		if err != nil {
 			return nil, err
 		}
 
 		var repos []Repository
-		if err := json.NewDecoder(resp.Body).Decode(&repos); err != nil {
-			resp.Body.Close()
+		if err := json.Unmarshal(body, &repos); err != nil {
 			return nil, fmt.Errorf("decoding repos: %w", err)
 		}
-		resp.Body.Close()
 
 		if len(repos) == 0 {
 			break
