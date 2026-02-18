@@ -271,7 +271,7 @@ func (p *Poller) endWorkflow(ctx context.Context, t *trackedRun, state, color st
 	if err := p.pw.UpdateActivity(ctx, t.Slug, pushward.UpdateRequest{
 		State: "ENDED",
 		Content: pushward.Content{
-			Template:    "github",
+			Template:    "pipeline",
 			Progress:    1.0,
 			State:       state,
 			Icon:        "arrow.triangle.branch",
