@@ -51,7 +51,7 @@ services:
     environment:
       - PUSHWARD_SABNZBD_URL=https://sabnzbd.example.com/api
       - PUSHWARD_SABNZBD_API_KEY=your_sabnzbd_api_key
-      - PUSHWARD_URL=https://pushward.macluckylab.com
+      - PUSHWARD_URL=https://api.pushward.app
       - PUSHWARD_API_KEY=hlk_xxxxxxxxxxxx
 ```
 

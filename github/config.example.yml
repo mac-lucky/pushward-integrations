@@ -5,7 +5,7 @@ github:
     # - "other-org/some-repo"  # add repos outside owner if needed
 
 pushward:
-  url: ""             # or set PUSHWARD_URL (e.g. https://pushward.macluckylab.com)
+  url: ""             # or set PUSHWARD_URL (e.g. https://api.pushward.app)
   api_key: ""         # or set PUSHWARD_API_KEY (hlk_ integration key)
 
 polling:
