@@ -1,0 +1,14 @@
+server:
+  address: ":8090"
+
+grafana:
+  severity_label: "severity"
+  default_severity: "warning"
+  default_icon: "exclamationmark.triangle.fill"
+
+pushward:
+  url: "http://pushward-server:8080"
+  api_key: ""
+  priority: 5
+  cleanup_delay: 5m
+  stale_timeout: 24h
