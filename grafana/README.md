@@ -48,7 +48,7 @@ services:
     volumes:
       - ./config.yml:/config/config.yml:ro
     environment:
-      - PUSHWARD_URL=https://pushward.macluckylab.com
+      - PUSHWARD_URL=https://api.pushward.app
       - PUSHWARD_API_KEY=hlk_xxxxxxxxxxxx
 ```
 
