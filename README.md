@@ -64,6 +64,13 @@ Run locally with a config file:
 ./pushward-sabnzbd -config sabnzbd/config.example.yml
 ```
 
+Build Docker images:
+
+```bash
+docker build -f github/Dockerfile -t pushward-github ./github
+docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd ./sabnzbd
+```
+
 ## CI/CD
 
 Each integration has its own GitHub Actions workflow with path filters so only the changed integration gets built:
@@ -71,4 +78,4 @@ Each integration has its own GitHub Actions workflow with path filters so only t
 - `.github/workflows/github-ci-cd.yml` -- triggers on `github/**` changes
 - `.github/workflows/sabnzbd-ci-cd.yml` -- triggers on `sabnzbd/**` changes
 
-Both use the shared `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml` workflow. On push to main or tags (`v*`), Docker images are built and pushed to GHCR.
+Both use the shared `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml` workflow. Triggers: push to `main`, tags (`v*`), pull requests to `main`, and manual `workflow_dispatch`. Docker images are built and pushed to GHCR on push to main or tags.
