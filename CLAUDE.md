@@ -80,7 +80,7 @@ Polls GitHub Actions API for in-progress workflow runs and maps CI/CD pipeline p
 
 ### Activity slug format
 
-`gh-<repo-name>` (e.g. `gh-pushward-server`). Uses the `pipeline` content template for ONGOING updates and `github` template for the ENDED state.
+`gh-<repo-name>` (e.g. `gh-pushward-server`). Uses the `pipeline` content template for all states.
 
 ## pushward-sabnzbd
 
