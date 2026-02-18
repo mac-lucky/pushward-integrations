@@ -3,6 +3,8 @@
 /github/pushward-github
 /pushward-sabnzbd
 /sabnzbd/pushward-sabnzbd
+/pushward-grafana
+/grafana/pushward-grafana
 *.exe
 
 # IDE
