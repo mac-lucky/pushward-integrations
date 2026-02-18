@@ -38,7 +38,7 @@ services:
     environment:
       - PUSHWARD_GITHUB_TOKEN=ghp_xxxxxxxxxxxx
       - PUSHWARD_GITHUB_OWNER=mac-lucky
-      - PUSHWARD_URL=https://pushward.macluckylab.com
+      - PUSHWARD_URL=https://api.pushward.app
       - PUSHWARD_API_KEY=hlk_xxxxxxxxxxxx
 ```
 

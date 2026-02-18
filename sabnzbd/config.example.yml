@@ -6,7 +6,7 @@ sabnzbd:
   api_key: ""           # or set PUSHWARD_SABNZBD_API_KEY
 
 pushward:
-  url: ""               # or set PUSHWARD_URL (e.g. https://pushward.macluckylab.com)
+  url: ""               # or set PUSHWARD_URL (e.g. https://api.pushward.app)
   api_key: ""           # or set PUSHWARD_API_KEY (hlk_ integration key)
   priority: 1
   cleanup_delay: 15m

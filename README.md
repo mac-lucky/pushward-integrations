@@ -16,7 +16,7 @@ All integrations require these PushWard connection settings (via environment var
 
 | Env Variable | Description |
 |---|---|
-| `PUSHWARD_URL` | PushWard server URL (e.g. `https://pushward.macluckylab.com`) |
+| `PUSHWARD_URL` | PushWard server URL (e.g. `https://api.pushward.app`) |
 | `PUSHWARD_API_KEY` | PushWard integration key (`hlk_` prefix) |
 
 See each integration's README for the full list of configuration options.
