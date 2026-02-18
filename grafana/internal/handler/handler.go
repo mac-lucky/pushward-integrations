@@ -78,11 +78,17 @@ func (h *Handler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 
 		icon := h.iconForSeverity(severity)
 
+		generatorURL := alert.GeneratorURL
+		secondaryURL := alert.PanelURL
+		if secondaryURL == "" {
+			secondaryURL = alert.DashboardURL
+		}
+
 		switch alert.Status {
 		case "firing":
-			h.handleFiring(ctx, slug, alertname, summary, subtitle, icon, severity, firedAt)
+			h.handleFiring(ctx, slug, alertname, summary, subtitle, icon, severity, firedAt, generatorURL, secondaryURL)
 		case "resolved":
-			h.handleResolved(ctx, slug, summary, subtitle, icon, severity, firedAt)
+			h.handleResolved(ctx, slug, summary, subtitle, icon, severity, firedAt, generatorURL, secondaryURL)
 		default:
 			slog.Warn("unknown alert status", "status", alert.Status, "fingerprint", fingerprint)
 		}
@@ -92,7 +98,7 @@ func (h *Handler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handleFiring(ctx context.Context, slug, alertname, summary, subtitle, icon, severity string, firedAt int64) {
+func (h *Handler) handleFiring(ctx context.Context, slug, alertname, summary, subtitle, icon, severity string, firedAt int64, generatorURL, secondaryURL string) {
 	h.mu.Lock()
 	existing := h.activeAlerts[slug]
 	h.mu.Unlock()
@@ -109,14 +115,16 @@ func (h *Handler) handleFiring(ctx context.Context, slug, alertname, summary, su
 	req := pushward.UpdateRequest{
 		State: "ONGOING",
 		Content: pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       summary,
-			Icon:        icon,
-			Subtitle:    subtitle,
-			AccentColor: h.colorForSeverity(severity),
-			Severity:    severity,
-			FiredAt:     firedAtPtr,
+			Template:     "alert",
+			Progress:     1.0,
+			State:        summary,
+			Icon:         icon,
+			Subtitle:     subtitle,
+			AccentColor:  h.colorForSeverity(severity),
+			Severity:     severity,
+			FiredAt:      firedAtPtr,
+			URL:          generatorURL,
+			SecondaryURL: secondaryURL,
 		},
 	}
 
@@ -153,19 +161,21 @@ func (h *Handler) handleFiring(ctx context.Context, slug, alertname, summary, su
 	h.mu.Unlock()
 }
 
-func (h *Handler) handleResolved(ctx context.Context, slug, summary, subtitle, icon, severity string, firedAt int64) {
+func (h *Handler) handleResolved(ctx context.Context, slug, summary, subtitle, icon, severity string, firedAt int64, generatorURL, secondaryURL string) {
 	firedAtPtr := &firedAt
 	req := pushward.UpdateRequest{
 		State: "ENDED",
 		Content: pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       summary,
-			Icon:        "checkmark.circle.fill",
-			Subtitle:    subtitle,
-			AccentColor: "#34C759",
-			Severity:    severity,
-			FiredAt:     firedAtPtr,
+			Template:     "alert",
+			Progress:     1.0,
+			State:        summary,
+			Icon:         "checkmark.circle.fill",
+			Subtitle:     subtitle,
+			AccentColor:  "#34C759",
+			Severity:     severity,
+			FiredAt:      firedAtPtr,
+			URL:          generatorURL,
+			SecondaryURL: secondaryURL,
 		},
 	}
 
