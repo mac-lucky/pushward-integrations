@@ -5,9 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"math"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -126,11 +128,16 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 			lastErr = fmt.Errorf("sending create activity: %w", err)
 			continue
 		}
-		resp.Body.Close()
 
 		if resp.StatusCode == http.StatusConflict {
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if strings.Contains(string(body), "limit") {
+				return fmt.Errorf("activity limit reached")
+			}
 			return nil // Already exists, OK
 		}
+		resp.Body.Close()
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return nil
 		}
