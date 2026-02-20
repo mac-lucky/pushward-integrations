@@ -11,15 +11,21 @@ pushward-docker is a Go workspace containing integration bridges that connect ex
 ```bash
 # Build from repo root (Go workspace)
 go build ./github/cmd/pushward-github
+go build ./grafana/cmd/pushward-grafana
 go build ./sabnzbd/cmd/pushward-sabnzbd
+go build ./argocd/cmd/pushward-argocd
 
 # Run locally
 ./pushward-github -config github/config.example.yml
+./pushward-grafana -config grafana/config.example.yml
 ./pushward-sabnzbd -config sabnzbd/config.example.yml
+./pushward-argocd -config argocd/config.example.yml
 
 # Build Docker images
 docker build -f github/Dockerfile -t pushward-github ./github
+docker build -f grafana/Dockerfile -t pushward-grafana ./grafana
 docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd ./sabnzbd
+docker build -f argocd/Dockerfile -t pushward-argocd ./argocd
 ```
 
 There is no Makefile or dedicated lint config. CI uses `golangci-lint` via the shared reusable workflow.
@@ -28,11 +34,11 @@ There is no Makefile or dedicated lint config. CI uses `golangci-lint` via the s
 
 ### Go workspace
 
-`go.work` (Go 1.25) declares two modules: `./github` and `./sabnzbd`. Each module is self-contained with its own `go.mod`, `Dockerfile`, and CI workflow. The only shared dependency is `gopkg.in/yaml.v3`.
+`go.work` (Go 1.25) declares four modules: `./github`, `./grafana`, `./sabnzbd`, and `./argocd`. Each module is self-contained with its own `go.mod`, `Dockerfile`, and CI workflow. The only shared dependency is `gopkg.in/yaml.v3`.
 
 ### Common patterns
 
-Both integrations follow the same internal structure:
+All integrations follow the same internal structure:
 
 - **`cmd/<name>/main.go`** -- entry point: loads config, creates API clients, runs the main loop with graceful shutdown (SIGINT/SIGTERM)
 - **`internal/config/`** -- YAML config with environment variable overrides (env vars take precedence)
@@ -41,7 +47,7 @@ Both integrations follow the same internal structure:
 
 ### PushWard API integration
 
-Both integrations authenticate via `Authorization: Bearer hlk_...` (integration key). The activity lifecycle is:
+All integrations authenticate via `Authorization: Bearer hlk_...` (integration key). The activity lifecycle is:
 
 1. `POST /activities` -- create activity (slug, name, priority)
 2. `PATCH /activity/{slug}` -- update with state (`ONGOING`/`ENDED`) and content (template, progress, icon, subtitle, etc.)
@@ -123,26 +129,101 @@ Exposes a webhook endpoint that SABnzbd calls when NZBs are added. Tracks downlo
 
 Fixed slug: `sabnzbd`. Uses the `generic` content template.
 
+## pushward-grafana
+
+Receives Grafana alert webhooks, groups alerts by `alertname`, and creates/updates/ends Live Activities based on alert lifecycle.
+
+### Key files
+
+| File | Purpose |
+|---|---|
+| `grafana/cmd/pushward-grafana/main.go` | Entry point: HTTP server (`:8090`), webhook handler, graceful shutdown |
+| `grafana/internal/config/config.go` | Grafana + PushWard config with `PUSHWARD_*` env overrides |
+| `grafana/internal/grafana/types.go` | Grafana webhook payload types |
+| `grafana/internal/handler/handler.go` | Alert grouping by alertname, firing/resolved lifecycle, stale/cleanup timers |
+| `grafana/internal/handler/handler_test.go` | Full test coverage |
+| `grafana/internal/pushward/client.go` | PushWard API client (create/update/delete with retry) |
+| `grafana/config.example.yml` | Example configuration |
+
+### Behavior
+
+- Groups multiple instances of the same alert rule into one Live Activity
+- Worst severity (critical > warning > info) determines icon/color
+- Stale timeout: 24h (force-ends stale alerts)
+- Cleanup delay: 5m
+
+### Activity slug format
+
+`grafana-<sha256(alertname)[:6]>`. Uses the `alert` content template.
+
+## pushward-argocd
+
+Receives ArgoCD sync webhooks (via argocd-notifications) and maps sync progress to a 3-step pipeline Live Activity: **Syncing -> Rolling Out -> Deployed**.
+
+### Key files
+
+| File | Purpose |
+|---|---|
+| `argocd/cmd/pushward-argocd/main.go` | Entry point: HTTP server (`:8090`), webhook handler, graceful shutdown |
+| `argocd/internal/config/config.go` | ArgoCD + PushWard config with `PUSHWARD_*` env overrides |
+| `argocd/internal/argocd/types.go` | ArgoCD webhook payload type |
+| `argocd/internal/handler/handler.go` | Core state machine: event routing, app tracking, stale/cleanup timers |
+| `argocd/internal/handler/handler_test.go` | Full test coverage |
+| `argocd/internal/pushward/client.go` | PushWard API client (create/update/delete with retry) |
+| `argocd/config.example.yml` | Example configuration with argocd-notifications setup |
+
+### Sync lifecycle
+
+| ArgoCD Event | Step | State Text | PushWard State |
+|---|---|---|---|
+| `sync-running` | 1/3 | Syncing... | ONGOING |
+| `sync-succeeded` | 2/3 | Rolling out... | ONGOING |
+| `deployed` | 3/3 | Deployed | ENDED |
+| `sync-failed` | current | Sync Failed | ENDED |
+| `health-degraded` | current | Degraded | ENDED |
+
+### Behavior
+
+- Tracks apps independently by name, keyed on revision
+- New revision during an active sync resets tracking and creates a new activity
+- Untracked events (bridge restart) are handled gracefully: creates activity and proceeds
+- Stale timeout: 30m (syncs shouldn't take longer)
+- Cleanup delay: 5m
+- Webhook secret: optional `X-Webhook-Secret` header validation
+
+### Activity slug format
+
+`argocd-<sanitized-app-name>` (e.g. `argocd-pushward-server`). Uses the `pipeline` content template.
+
+### Endpoints
+
+| Method | Path | Description |
+|---|---|---|
+| POST | `/webhook` | Receive argocd-notifications webhook |
+| GET | `/health` | Health check (returns `ok`) |
+
 ## CI/CD
 
 Each integration has a separate GitHub Actions workflow with path filters:
 
 - `.github/workflows/github-ci-cd.yml` -- triggers on `github/**` changes
+- `.github/workflows/grafana-ci-cd.yml` -- triggers on `grafana/**` changes
 - `.github/workflows/sabnzbd-ci-cd.yml` -- triggers on `sabnzbd/**` changes
+- `.github/workflows/argocd-ci-cd.yml` -- triggers on `argocd/**` changes
 
-Both use `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml`. Triggers: push to `main`, tags (`v*`), pull requests to `main`, and manual `workflow_dispatch`. Docker images are built and pushed to GHCR (`ghcr.io/mac-lucky/pushward-github`, `ghcr.io/mac-lucky/pushward-sabnzbd`) on push to main or tags.
+All use `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml`. Triggers: push to `main`, tags (`v*`), pull requests to `main`, and manual `workflow_dispatch`. Docker images are built and pushed to GHCR (`ghcr.io/mac-lucky/pushward-{github,grafana,sabnzbd,argocd}`) on push to main or tags.
 
 ## Docker
 
-Both Dockerfiles use multi-stage builds: `golang:1.25-alpine` builder, `alpine:3.23` runtime. Binaries are statically compiled (`CGO_ENABLED=0`, stripped with `-ldflags="-s -w"`). Runtime runs as non-root `appuser` (UID 1000). Default config path in containers: `/config/config.yml`.
+All Dockerfiles use multi-stage builds: `golang:1.25-alpine` builder, `alpine:3.23` runtime. Binaries are statically compiled (`CGO_ENABLED=0`, stripped with `-ldflags="-s -w"`). Runtime runs as non-root `appuser` (UID 1000). Default config path in containers: `/config/config.yml`.
 
-The SABnzbd Dockerfile exposes port 8090. The GitHub Dockerfile does not expose any ports (polling-only, no HTTP server).
+Grafana, SABnzbd, and ArgoCD Dockerfiles expose port 8090. The GitHub Dockerfile does not expose any ports (polling-only, no HTTP server).
 
 ## Configuration
 
 All settings support YAML config file (`-config` flag, default `config.yml`) and environment variable overrides. Env vars always take precedence.
 
-### Common env vars (both integrations)
+### Common env vars (all integrations)
 
 | Variable | Description |
 |---|---|
@@ -169,3 +250,11 @@ All settings support YAML config file (`-config` flag, default `config.yml`) and
 | `PUSHWARD_SABNZBD_API_KEY` | SABnzbd API key |
 | `PUSHWARD_SERVER_ADDRESS` | HTTP listen address (default: `:8090`) |
 | `PUSHWARD_POLL_INTERVAL` | Poll interval during tracking (default: 1s) |
+
+### ArgoCD-specific env vars
+
+| Variable | Description |
+|---|---|
+| `PUSHWARD_ARGOCD_WEBHOOK_SECRET` | Optional webhook secret for request validation |
+| `PUSHWARD_SERVER_ADDRESS` | HTTP listen address (default: `:8090`) |
+| `PUSHWARD_STALE_TIMEOUT` | Stale sync timeout (default: 30m) |
