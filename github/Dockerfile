@@ -20,6 +20,8 @@ RUN adduser -D -u 1000 appuser
 
 COPY --from=builder /pushward-github /pushward-github
 
+ENV PUSHWARD_URL="https://api.pushward.app"
+
 USER appuser
 
 ENTRYPOINT ["/pushward-github"]
