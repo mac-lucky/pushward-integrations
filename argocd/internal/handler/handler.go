@@ -19,10 +19,11 @@ import (
 const totalSteps = 3
 
 type Handler struct {
-	client *pushward.Client
-	config *config.Config
-	mu     sync.Mutex
-	apps   map[string]*trackedApp // keyed by app name
+	client        *pushward.Client
+	config        *config.Config
+	mu            sync.Mutex
+	apps          map[string]*trackedApp  // keyed by app name
+	recentDeploys map[string]*time.Timer // untracked deploys awaiting a matching sync-succeeded
 }
 
 type trackedApp struct {
@@ -39,9 +40,10 @@ type trackedApp struct {
 
 func New(client *pushward.Client, cfg *config.Config) *Handler {
 	return &Handler{
-		client: client,
-		config: cfg,
-		apps:   make(map[string]*trackedApp),
+		client:        client,
+		config:        cfg,
+		apps:          make(map[string]*trackedApp),
+		recentDeploys: make(map[string]*time.Timer),
 	}
 }
 
@@ -118,6 +120,12 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 	slug := slugForApp(p.App)
 
 	h.mu.Lock()
+	// Clear any recent-deploy marker — a new sync makes it irrelevant
+	if t, ok := h.recentDeploys[p.App]; ok {
+		t.Stop()
+		delete(h.recentDeploys, p.App)
+	}
+
 	app, exists := h.apps[p.App]
 	needsCreate := !exists || (p.Revision != "" && app.revision != p.Revision)
 
@@ -236,6 +244,15 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 		// Untracked (bridge restart)
 		gracePeriod := h.config.PushWard.SyncGracePeriod
 		if gracePeriod > 0 {
+			// If deployed already arrived (out-of-order events), this is a no-op
+			if t, ok := h.recentDeploys[p.App]; ok {
+				t.Stop()
+				delete(h.recentDeploys, p.App)
+				h.mu.Unlock()
+				slog.Info("skipped no-op sync (deployed arrived first)", "slug", slug, "app", p.App)
+				return
+			}
+
 			// Start grace period at step 2 — if deployed comes quickly, skip
 			app = &trackedApp{
 				slug:    slug,
@@ -336,9 +353,18 @@ func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) 
 	if !exists {
 		// Untracked deployed
 		if h.config.PushWard.SyncGracePeriod > 0 {
-			// With grace period, untracked deployed is always noise — skip
+			// Record the deploy so a subsequent sync-succeeded can detect
+			// that this was a no-op (deployed arrived before sync-succeeded).
+			if t, ok := h.recentDeploys[p.App]; ok {
+				t.Stop()
+			}
+			h.recentDeploys[p.App] = time.AfterFunc(h.config.PushWard.SyncGracePeriod*2, func() {
+				h.mu.Lock()
+				delete(h.recentDeploys, p.App)
+				h.mu.Unlock()
+			})
 			h.mu.Unlock()
-			slog.Info("skipped untracked deployed", "slug", slug, "app", p.App)
+			slog.Info("recorded untracked deployed", "slug", slug, "app", p.App)
 			return
 		}
 
