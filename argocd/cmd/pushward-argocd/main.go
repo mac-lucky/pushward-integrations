@@ -48,7 +48,7 @@ func main() {
 	defer cancel()
 
 	go func() {
-		slog.Info("starting pushward-argocd", "address", cfg.Server.Address, "priority", cfg.PushWard.Priority, "cleanup_delay", cfg.PushWard.CleanupDelay, "stale_timeout", cfg.PushWard.StaleTimeout)
+		slog.Info("starting pushward-argocd", "address", cfg.Server.Address, "priority", cfg.PushWard.Priority, "cleanup_delay", cfg.PushWard.CleanupDelay, "stale_timeout", cfg.PushWard.StaleTimeout, "sync_grace_period", cfg.PushWard.SyncGracePeriod)
 		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("server error", "error", err)
 			os.Exit(1)

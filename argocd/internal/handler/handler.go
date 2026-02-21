@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -30,6 +31,8 @@ type trackedApp struct {
 	revision     string
 	repoURL      string
 	step         int
+	pending      bool        // true while in sync grace period (activity not yet created)
+	graceTimer   *time.Timer // fires when grace period expires
 	cleanupTimer *time.Timer
 	staleTimer   *time.Timer
 }
@@ -121,6 +124,9 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 	if needsCreate {
 		if exists {
 			// New revision on existing app — reset tracking
+			if app.graceTimer != nil {
+				app.graceTimer.Stop()
+			}
 			if app.cleanupTimer != nil {
 				app.cleanupTimer.Stop()
 			}
@@ -129,11 +135,11 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 			}
 		}
 		app = &trackedApp{
-			slug:     slug,
-			appName:  p.App,
+			slug:    slug,
+			appName: p.App,
 			revision: p.Revision,
-			repoURL:  p.RepoURL,
-			step:     1,
+			repoURL: p.RepoURL,
+			step:    1,
 		}
 		h.apps[p.App] = app
 	} else {
@@ -149,6 +155,22 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 		app.cleanupTimer.Stop()
 		app.cleanupTimer = nil
 	}
+
+	// Grace period: defer activity creation for new or still-pending syncs
+	gracePeriod := h.config.PushWard.SyncGracePeriod
+	if gracePeriod > 0 && (needsCreate || app.pending) {
+		app.pending = true
+		if app.graceTimer != nil {
+			app.graceTimer.Stop()
+		}
+		app.graceTimer = time.AfterFunc(gracePeriod, func() {
+			h.graceExpired(p.App)
+		})
+		h.mu.Unlock()
+		slog.Info("sync started (grace period)", "slug", slug, "app", p.App, "grace", gracePeriod)
+		return
+	}
+
 	h.mu.Unlock()
 
 	if needsCreate {
@@ -201,14 +223,44 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 
 	h.mu.Lock()
 	app, exists := h.apps[p.App]
+
+	// Tracked and still in grace period — just advance step, don't touch PushWard
+	if exists && app.pending {
+		app.step = 2
+		h.mu.Unlock()
+		slog.Info("sync succeeded (grace period)", "slug", slug, "app", p.App)
+		return
+	}
+
 	if !exists {
-		// Untracked (bridge restart) — create and send step 2
+		// Untracked (bridge restart)
+		gracePeriod := h.config.PushWard.SyncGracePeriod
+		if gracePeriod > 0 {
+			// Start grace period at step 2 — if deployed comes quickly, skip
+			app = &trackedApp{
+				slug:    slug,
+				appName: p.App,
+				revision: p.Revision,
+				repoURL: p.RepoURL,
+				step:    2,
+				pending: true,
+			}
+			app.graceTimer = time.AfterFunc(gracePeriod, func() {
+				h.graceExpired(p.App)
+			})
+			h.apps[p.App] = app
+			h.mu.Unlock()
+			slog.Info("sync succeeded (untracked, grace period)", "slug", slug, "app", p.App)
+			return
+		}
+
+		// No grace period — create and send step 2 (original behavior)
 		app = &trackedApp{
-			slug:     slug,
-			appName:  p.App,
+			slug:    slug,
+			appName: p.App,
 			revision: p.Revision,
-			repoURL:  p.RepoURL,
-			step:     2,
+			repoURL: p.RepoURL,
+			step:    2,
 		}
 		h.apps[p.App] = app
 		h.mu.Unlock()
@@ -269,14 +321,34 @@ func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) 
 
 	h.mu.Lock()
 	app, exists := h.apps[p.App]
+
+	// Completed during grace period — no-op sync, skip entirely
+	if exists && app.pending {
+		if app.graceTimer != nil {
+			app.graceTimer.Stop()
+		}
+		delete(h.apps, p.App)
+		h.mu.Unlock()
+		slog.Info("skipped no-op sync", "slug", slug, "app", p.App)
+		return
+	}
+
 	if !exists {
-		// Untracked — create and immediately end
+		// Untracked deployed
+		if h.config.PushWard.SyncGracePeriod > 0 {
+			// With grace period, untracked deployed is always noise — skip
+			h.mu.Unlock()
+			slog.Info("skipped untracked deployed", "slug", slug, "app", p.App)
+			return
+		}
+
+		// No grace period — create and immediately end (original behavior)
 		app = &trackedApp{
-			slug:     slug,
-			appName:  p.App,
+			slug:    slug,
+			appName: p.App,
 			revision: p.Revision,
-			repoURL:  p.RepoURL,
-			step:     3,
+			repoURL: p.RepoURL,
+			step:    3,
 		}
 		h.apps[p.App] = app
 		h.mu.Unlock()
@@ -338,25 +410,35 @@ func (h *Handler) handleSyncFailed(ctx context.Context, p *argocd.WebhookPayload
 	h.mu.Lock()
 	app, exists := h.apps[p.App]
 	currentStep := 1
+	wasPending := false
 	if exists {
 		currentStep = app.step
+		wasPending = app.pending
+		if app.pending {
+			if app.graceTimer != nil {
+				app.graceTimer.Stop()
+				app.graceTimer = nil
+			}
+			app.pending = false
+		}
 		if app.staleTimer != nil {
 			app.staleTimer.Stop()
 			app.staleTimer = nil
 		}
 	} else {
 		app = &trackedApp{
-			slug:     slug,
-			appName:  p.App,
+			slug:    slug,
+			appName: p.App,
 			revision: p.Revision,
-			repoURL:  p.RepoURL,
-			step:     1,
+			repoURL: p.RepoURL,
+			step:    1,
 		}
 		h.apps[p.App] = app
 	}
 	h.mu.Unlock()
 
-	if !exists {
+	// Create activity if untracked or was pending (activity never created on PushWard)
+	if !exists || wasPending {
 		if err := h.client.CreateActivity(ctx, slug, p.App, h.config.PushWard.Priority); err != nil {
 			slog.Error("failed to create activity", "slug", slug, "error", err)
 			h.mu.Lock()
@@ -364,7 +446,7 @@ func (h *Handler) handleSyncFailed(ctx context.Context, p *argocd.WebhookPayload
 			h.mu.Unlock()
 			return
 		}
-		slog.Info("created activity (untracked sync-failed)", "slug", slug, "app", p.App)
+		slog.Info("created activity (sync-failed)", "slug", slug, "app", p.App)
 	}
 
 	total := totalSteps
@@ -406,25 +488,35 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 	h.mu.Lock()
 	app, exists := h.apps[p.App]
 	currentStep := 1
+	wasPending := false
 	if exists {
 		currentStep = app.step
+		wasPending = app.pending
+		if app.pending {
+			if app.graceTimer != nil {
+				app.graceTimer.Stop()
+				app.graceTimer = nil
+			}
+			app.pending = false
+		}
 		if app.staleTimer != nil {
 			app.staleTimer.Stop()
 			app.staleTimer = nil
 		}
 	} else {
 		app = &trackedApp{
-			slug:     slug,
-			appName:  p.App,
+			slug:    slug,
+			appName: p.App,
 			revision: p.Revision,
-			repoURL:  p.RepoURL,
-			step:     1,
+			repoURL: p.RepoURL,
+			step:    1,
 		}
 		h.apps[p.App] = app
 	}
 	h.mu.Unlock()
 
-	if !exists {
+	// Create activity if untracked or was pending (activity never created on PushWard)
+	if !exists || wasPending {
 		if err := h.client.CreateActivity(ctx, slug, p.App, h.config.PushWard.Priority); err != nil {
 			slog.Error("failed to create activity", "slug", slug, "error", err)
 			h.mu.Lock()
@@ -432,7 +524,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 			h.mu.Unlock()
 			return
 		}
-		slog.Info("created activity (untracked health-degraded)", "slug", slug, "app", p.App)
+		slog.Info("created activity (health-degraded)", "slug", slug, "app", p.App)
 	}
 
 	total := totalSteps
@@ -463,6 +555,78 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 	if a, ok := h.apps[p.App]; ok {
 		a.cleanupTimer = time.AfterFunc(h.config.PushWard.CleanupDelay, func() {
 			h.cleanup(p.App)
+		})
+	}
+	h.mu.Unlock()
+}
+
+// graceExpired is called when the sync grace period expires. It creates
+// the activity and sends an update for whatever step the sync is currently at.
+func (h *Handler) graceExpired(appName string) {
+	h.mu.Lock()
+	app, ok := h.apps[appName]
+	if !ok || !app.pending {
+		h.mu.Unlock()
+		return
+	}
+	app.pending = false
+	app.graceTimer = nil
+	slug := app.slug
+	step := app.step
+	revision := app.revision
+	repoURL := app.repoURL
+	h.mu.Unlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := h.client.CreateActivity(ctx, slug, appName, h.config.PushWard.Priority); err != nil {
+		slog.Error("failed to create activity", "slug", slug, "error", err)
+		h.mu.Lock()
+		delete(h.apps, appName)
+		h.mu.Unlock()
+		return
+	}
+	slog.Info("created activity (grace expired)", "slug", slug, "app", appName, "step", step)
+
+	var state string
+	switch step {
+	case 1:
+		state = "Syncing..."
+	case 2:
+		state = "Rolling out..."
+	default:
+		state = fmt.Sprintf("Step %d", step)
+	}
+
+	total := totalSteps
+	url, secondaryURL := h.contentURLs(appName, repoURL, revision)
+	req := pushward.UpdateRequest{
+		State: "ONGOING",
+		Content: pushward.Content{
+			Template:     "pipeline",
+			Progress:     float64(step) / float64(total),
+			State:        state,
+			Icon:         "arrow.triangle.2.circlepath",
+			Subtitle:     "ArgoCD \u00b7 " + appName,
+			AccentColor:  "#007AFF",
+			CurrentStep:  &step,
+			TotalSteps:   &total,
+			URL:          url,
+			SecondaryURL: secondaryURL,
+		},
+	}
+
+	if err := h.client.UpdateActivity(ctx, slug, req); err != nil {
+		slog.Error("failed to update activity", "slug", slug, "error", err)
+		return
+	}
+	slog.Info("updated activity", "slug", slug, "step", fmt.Sprintf("%d/%d", step, total), "state", state)
+
+	h.mu.Lock()
+	if a, ok := h.apps[appName]; ok {
+		a.staleTimer = time.AfterFunc(h.config.PushWard.StaleTimeout, func() {
+			h.forceEnd(appName)
 		})
 	}
 	h.mu.Unlock()

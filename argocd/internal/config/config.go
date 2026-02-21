@@ -24,11 +24,12 @@ type ArgoCDConfig struct {
 }
 
 type PushWardConfig struct {
-	URL          string        `yaml:"url"`
-	APIKey       string        `yaml:"api_key"`
-	Priority     int           `yaml:"priority"`
-	CleanupDelay time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout time.Duration `yaml:"stale_timeout"`
+	URL             string        `yaml:"url"`
+	APIKey          string        `yaml:"api_key"`
+	Priority        int           `yaml:"priority"`
+	CleanupDelay    time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout    time.Duration `yaml:"stale_timeout"`
+	SyncGracePeriod time.Duration `yaml:"sync_grace_period"`
 }
 
 func Load(path string) (*Config, error) {
@@ -37,9 +38,10 @@ func Load(path string) (*Config, error) {
 			Address: ":8090",
 		},
 		PushWard: PushWardConfig{
-			Priority:     3,
-			CleanupDelay: 5 * time.Minute,
-			StaleTimeout: 30 * time.Minute,
+			Priority:        3,
+			CleanupDelay:    5 * time.Minute,
+			StaleTimeout:    30 * time.Minute,
+			SyncGracePeriod: 10 * time.Second,
 		},
 	}
 
@@ -89,6 +91,13 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("parsing PUSHWARD_STALE_TIMEOUT: %w", err)
 		}
 		cfg.PushWard.StaleTimeout = d
+	}
+	if v := os.Getenv("PUSHWARD_SYNC_GRACE_PERIOD"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PUSHWARD_SYNC_GRACE_PERIOD: %w", err)
+		}
+		cfg.PushWard.SyncGracePeriod = d
 	}
 
 	// Validation

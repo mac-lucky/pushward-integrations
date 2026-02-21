@@ -45,9 +45,10 @@ func mockPushWardServer(t *testing.T) (*httptest.Server, *[]apiCall, *sync.Mutex
 func testConfig() *config.Config {
 	return &config.Config{
 		PushWard: config.PushWardConfig{
-			Priority:     3,
-			CleanupDelay: 1 * time.Hour,
-			StaleTimeout: 30 * time.Minute,
+			Priority:        3,
+			CleanupDelay:    1 * time.Hour,
+			StaleTimeout:    30 * time.Minute,
+			SyncGracePeriod: 0, // disabled for existing tests
 		},
 	}
 }
@@ -844,5 +845,232 @@ func TestSyncFailed_AtStep2_PreservesStep(t *testing.T) {
 
 	if failReq.Content.CurrentStep == nil || *failReq.Content.CurrentStep != 2 {
 		t.Errorf("expected step 2 preserved on failure, got %v", failReq.Content.CurrentStep)
+	}
+}
+
+// --- Grace period tests ---
+
+func TestGracePeriod_FastSync_Skipped(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Full sync cycle within grace period — should be skipped as no-op
+	sendWebhook(t, h, `{"app":"fast-app","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"fast-app","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"fast-app","event":"deployed","revision":"r1"}`)
+
+	// Wait for grace timer to fire (it shouldn't since it was cancelled)
+	time.Sleep(200 * time.Millisecond)
+
+	recorded := getCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 API calls for fast no-op sync, got %d", len(recorded))
+	}
+
+	h.mu.Lock()
+	_, exists := h.apps["fast-app"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected fast-app to be cleaned up from map")
+	}
+}
+
+func TestGracePeriod_SlowSync_Created(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	cfg.PushWard.SyncGracePeriod = 50 * time.Millisecond
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	sendWebhook(t, h, `{"app":"slow-app","event":"sync-running","revision":"r1"}`)
+
+	// No API calls yet (in grace period)
+	recorded := getCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 API calls during grace, got %d", len(recorded))
+	}
+
+	// Wait for grace to expire
+	time.Sleep(150 * time.Millisecond)
+
+	recorded = getCalls(calls, mu)
+	// create + step1 update = 2
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 API calls after grace expired, got %d", len(recorded))
+	}
+	if recorded[0].Method != "POST" {
+		t.Errorf("expected POST create, got %s", recorded[0].Method)
+	}
+
+	var update pushward.UpdateRequest
+	unmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.State != "Syncing..." {
+		t.Errorf("expected 'Syncing...', got %s", update.Content.State)
+	}
+
+	// Complete the sync normally
+	sendWebhook(t, h, `{"app":"slow-app","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"slow-app","event":"deployed","revision":"r1"}`)
+
+	recorded = getCalls(calls, mu)
+	// create + step1 + step2 + deployed = 4
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 API calls total, got %d", len(recorded))
+	}
+}
+
+func TestGracePeriod_SyncSucceededDuringGrace_ExpiresAtStep2(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	sendWebhook(t, h, `{"app":"step2-app","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"step2-app","event":"sync-succeeded","revision":"r1"}`)
+
+	// Grace expires with step at 2
+	time.Sleep(200 * time.Millisecond)
+
+	recorded := getCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 API calls, got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	unmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.State != "Rolling out..." {
+		t.Errorf("expected 'Rolling out...', got %s", update.Content.State)
+	}
+	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 2 {
+		t.Errorf("expected step 2, got %v", update.Content.CurrentStep)
+	}
+}
+
+func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	cfg.PushWard.SyncGracePeriod = 5 * time.Second // long grace to prove bypass
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	sendWebhook(t, h, `{"app":"fail-app","event":"sync-running","revision":"r1"}`)
+
+	// No API calls yet (in grace period)
+	recorded := getCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 API calls during grace, got %d", len(recorded))
+	}
+
+	// Sync fails — should bypass grace and create immediately
+	sendWebhook(t, h, `{"app":"fail-app","event":"sync-failed","revision":"r1"}`)
+
+	recorded = getCalls(calls, mu)
+	// create + ENDED = 2
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 API calls after sync-failed, got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	unmarshalBody(t, recorded[1].Body, &update)
+	if update.State != "ENDED" {
+		t.Errorf("expected ENDED, got %s", update.State)
+	}
+	if update.Content.State != "Sync Failed" {
+		t.Errorf("expected 'Sync Failed', got %s", update.Content.State)
+	}
+}
+
+func TestGracePeriod_HealthDegraded_BypassesGrace(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	cfg.PushWard.SyncGracePeriod = 5 * time.Second
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	sendWebhook(t, h, `{"app":"deg-app","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"deg-app","event":"health-degraded","revision":"r1"}`)
+
+	recorded := getCalls(calls, mu)
+	// create + ENDED = 2
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 API calls, got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	unmarshalBody(t, recorded[1].Body, &update)
+	if update.State != "ENDED" {
+		t.Errorf("expected ENDED, got %s", update.State)
+	}
+	if update.Content.State != "Degraded" {
+		t.Errorf("expected 'Degraded', got %s", update.Content.State)
+	}
+}
+
+func TestGracePeriod_UntrackedDeployed_Skipped(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Untracked deployed with grace period enabled — skip entirely
+	sendWebhook(t, h, `{"app":"already-done","event":"deployed","revision":"r1"}`)
+
+	time.Sleep(200 * time.Millisecond)
+
+	recorded := getCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 API calls for untracked deployed, got %d", len(recorded))
+	}
+}
+
+func TestGracePeriod_UntrackedSyncSucceeded_ThenDeployed_Skipped(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Untracked sync-succeeded starts grace, then deployed during grace — skip
+	sendWebhook(t, h, `{"app":"untracked-app","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"untracked-app","event":"deployed","revision":"r1"}`)
+
+	time.Sleep(200 * time.Millisecond)
+
+	recorded := getCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 API calls, got %d", len(recorded))
+	}
+}
+
+func TestGracePeriod_UntrackedSyncSucceeded_GraceExpires(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	cfg.PushWard.SyncGracePeriod = 50 * time.Millisecond
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Untracked sync-succeeded with grace — if no deployed arrives, create at step 2
+	sendWebhook(t, h, `{"app":"untracked-rolling","event":"sync-succeeded","revision":"r1"}`)
+
+	time.Sleep(150 * time.Millisecond)
+
+	recorded := getCalls(calls, mu)
+	// create + step2 update = 2
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 API calls, got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	unmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.State != "Rolling out..." {
+		t.Errorf("expected 'Rolling out...', got %s", update.Content.State)
+	}
+	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 2 {
+		t.Errorf("expected step 2, got %v", update.Content.CurrentStep)
 	}
 }
