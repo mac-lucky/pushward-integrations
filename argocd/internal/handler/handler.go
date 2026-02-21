@@ -28,6 +28,7 @@ type trackedApp struct {
 	slug         string
 	appName      string
 	revision     string
+	repoURL      string
 	step         int
 	cleanupTimer *time.Timer
 	staleTimer   *time.Timer
@@ -39,6 +40,18 @@ func New(client *pushward.Client, cfg *config.Config) *Handler {
 		config: cfg,
 		apps:   make(map[string]*trackedApp),
 	}
+}
+
+// contentURLs returns the url and secondary_url fields for a given app and payload.
+func (h *Handler) contentURLs(appName, repoURL, revision string) (string, string) {
+	var url, secondaryURL string
+	if h.config.ArgoCD.URL != "" {
+		url = h.config.ArgoCD.URL + "/applications/argocd/" + appName
+	}
+	if repoURL != "" && revision != "" {
+		secondaryURL = strings.TrimSuffix(repoURL, ".git") + "/commit/" + revision
+	}
+	return url, secondaryURL
 }
 
 var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
@@ -119,6 +132,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 			slug:     slug,
 			appName:  p.App,
 			revision: p.Revision,
+			repoURL:  p.RepoURL,
 			step:     1,
 		}
 		h.apps[p.App] = app
@@ -150,17 +164,20 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 
 	step := 1
 	total := totalSteps
+	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	req := pushward.UpdateRequest{
 		State: "ONGOING",
 		Content: pushward.Content{
-			Template:    "pipeline",
-			Progress:    float64(step) / float64(total),
-			State:       "Syncing...",
-			Icon:        "arrow.triangle.2.circlepath",
-			Subtitle:    "ArgoCD \u00b7 " + p.App,
-			AccentColor: "#007AFF",
-			CurrentStep: &step,
-			TotalSteps:  &total,
+			Template:     "pipeline",
+			Progress:     float64(step) / float64(total),
+			State:        "Syncing...",
+			Icon:         "arrow.triangle.2.circlepath",
+			Subtitle:     "ArgoCD \u00b7 " + p.App,
+			AccentColor:  "#007AFF",
+			CurrentStep:  &step,
+			TotalSteps:   &total,
+			URL:          url,
+			SecondaryURL: secondaryURL,
 		},
 	}
 
@@ -190,6 +207,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 			slug:     slug,
 			appName:  p.App,
 			revision: p.Revision,
+			repoURL:  p.RepoURL,
 			step:     2,
 		}
 		h.apps[p.App] = app
@@ -214,17 +232,20 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 
 	step := 2
 	total := totalSteps
+	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	req := pushward.UpdateRequest{
 		State: "ONGOING",
 		Content: pushward.Content{
-			Template:    "pipeline",
-			Progress:    float64(step) / float64(total),
-			State:       "Rolling out...",
-			Icon:        "arrow.triangle.2.circlepath",
-			Subtitle:    "ArgoCD \u00b7 " + p.App,
-			AccentColor: "#007AFF",
-			CurrentStep: &step,
-			TotalSteps:  &total,
+			Template:     "pipeline",
+			Progress:     float64(step) / float64(total),
+			State:        "Rolling out...",
+			Icon:         "arrow.triangle.2.circlepath",
+			Subtitle:     "ArgoCD \u00b7 " + p.App,
+			AccentColor:  "#007AFF",
+			CurrentStep:  &step,
+			TotalSteps:   &total,
+			URL:          url,
+			SecondaryURL: secondaryURL,
 		},
 	}
 
@@ -254,6 +275,7 @@ func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) 
 			slug:     slug,
 			appName:  p.App,
 			revision: p.Revision,
+			repoURL:  p.RepoURL,
 			step:     3,
 		}
 		h.apps[p.App] = app
@@ -278,17 +300,20 @@ func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) 
 
 	step := 3
 	total := totalSteps
+	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	req := pushward.UpdateRequest{
 		State: "ENDED",
 		Content: pushward.Content{
-			Template:    "pipeline",
-			Progress:    1.0,
-			State:       "Deployed",
-			Icon:        "checkmark.circle.fill",
-			Subtitle:    "ArgoCD \u00b7 " + p.App,
-			AccentColor: "#34C759",
-			CurrentStep: &step,
-			TotalSteps:  &total,
+			Template:     "pipeline",
+			Progress:     1.0,
+			State:        "Deployed",
+			Icon:         "checkmark.circle.fill",
+			Subtitle:     "ArgoCD \u00b7 " + p.App,
+			AccentColor:  "#34C759",
+			CurrentStep:  &step,
+			TotalSteps:   &total,
+			URL:          url,
+			SecondaryURL: secondaryURL,
 		},
 	}
 
@@ -324,6 +349,7 @@ func (h *Handler) handleSyncFailed(ctx context.Context, p *argocd.WebhookPayload
 			slug:     slug,
 			appName:  p.App,
 			revision: p.Revision,
+			repoURL:  p.RepoURL,
 			step:     1,
 		}
 		h.apps[p.App] = app
@@ -342,17 +368,20 @@ func (h *Handler) handleSyncFailed(ctx context.Context, p *argocd.WebhookPayload
 	}
 
 	total := totalSteps
+	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	req := pushward.UpdateRequest{
 		State: "ENDED",
 		Content: pushward.Content{
-			Template:    "pipeline",
-			Progress:    float64(currentStep) / float64(total),
-			State:       "Sync Failed",
-			Icon:        "xmark.circle.fill",
-			Subtitle:    "ArgoCD \u00b7 " + p.App,
-			AccentColor: "#FF3B30",
-			CurrentStep: &currentStep,
-			TotalSteps:  &total,
+			Template:     "pipeline",
+			Progress:     float64(currentStep) / float64(total),
+			State:        "Sync Failed",
+			Icon:         "xmark.circle.fill",
+			Subtitle:     "ArgoCD \u00b7 " + p.App,
+			AccentColor:  "#FF3B30",
+			CurrentStep:  &currentStep,
+			TotalSteps:   &total,
+			URL:          url,
+			SecondaryURL: secondaryURL,
 		},
 	}
 
@@ -388,6 +417,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 			slug:     slug,
 			appName:  p.App,
 			revision: p.Revision,
+			repoURL:  p.RepoURL,
 			step:     1,
 		}
 		h.apps[p.App] = app
@@ -406,17 +436,20 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 	}
 
 	total := totalSteps
+	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	req := pushward.UpdateRequest{
 		State: "ENDED",
 		Content: pushward.Content{
-			Template:    "pipeline",
-			Progress:    float64(currentStep) / float64(total),
-			State:       "Degraded",
-			Icon:        "exclamationmark.triangle.fill",
-			Subtitle:    "ArgoCD \u00b7 " + p.App,
-			AccentColor: "#FF9500",
-			CurrentStep: &currentStep,
-			TotalSteps:  &total,
+			Template:     "pipeline",
+			Progress:     float64(currentStep) / float64(total),
+			State:        "Degraded",
+			Icon:         "exclamationmark.triangle.fill",
+			Subtitle:     "ArgoCD \u00b7 " + p.App,
+			AccentColor:  "#FF9500",
+			CurrentStep:  &currentStep,
+			TotalSteps:   &total,
+			URL:          url,
+			SecondaryURL: secondaryURL,
 		},
 	}
 
@@ -444,6 +477,8 @@ func (h *Handler) forceEnd(appName string) {
 	}
 	slug := app.slug
 	currentStep := app.step
+	repoURL := app.repoURL
+	revision := app.revision
 	h.mu.Unlock()
 
 	slog.Warn("force-ending stale sync", "slug", slug, "app", appName)
@@ -451,17 +486,20 @@ func (h *Handler) forceEnd(appName string) {
 	defer cancel()
 
 	total := totalSteps
+	url, secondaryURL := h.contentURLs(appName, repoURL, revision)
 	req := pushward.UpdateRequest{
 		State: "ENDED",
 		Content: pushward.Content{
-			Template:    "pipeline",
-			Progress:    float64(currentStep) / float64(total),
-			State:       "Stale sync (auto-ended)",
-			Icon:        "clock.badge.xmark",
-			Subtitle:    "ArgoCD \u00b7 " + appName,
-			AccentColor: "#8E8E93",
-			CurrentStep: &currentStep,
-			TotalSteps:  &total,
+			Template:     "pipeline",
+			Progress:     float64(currentStep) / float64(total),
+			State:        "Stale sync (auto-ended)",
+			Icon:         "clock.badge.xmark",
+			Subtitle:     "ArgoCD \u00b7 " + appName,
+			AccentColor:  "#8E8E93",
+			CurrentStep:  &currentStep,
+			TotalSteps:   &total,
+			URL:          url,
+			SecondaryURL: secondaryURL,
 		},
 	}
 	if err := h.client.UpdateActivity(ctx, slug, req); err != nil {

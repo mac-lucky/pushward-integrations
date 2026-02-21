@@ -8,6 +8,7 @@ type trackedRun struct {
 	Name       string
 	Branch     string
 	Slug       string
+	HTMLURL    string
 	StartedAt  time.Time
 	LastUpdate time.Time
 	EndedAt    *time.Time

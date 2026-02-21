@@ -20,6 +20,7 @@ type ServerConfig struct {
 
 type ArgoCDConfig struct {
 	WebhookSecret string `yaml:"webhook_secret"`
+	URL           string `yaml:"url"`
 }
 
 type PushWardConfig struct {
@@ -58,6 +59,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("PUSHWARD_ARGOCD_WEBHOOK_SECRET"); v != "" {
 		cfg.ArgoCD.WebhookSecret = v
+	}
+	if v := os.Getenv("PUSHWARD_ARGOCD_URL"); v != "" {
+		cfg.ArgoCD.URL = v
 	}
 	if v := os.Getenv("PUSHWARD_URL"); v != "" {
 		cfg.PushWard.URL = v
