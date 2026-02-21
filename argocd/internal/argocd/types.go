@@ -10,4 +10,5 @@ type WebhookPayload struct {
 	OperationPhase string `json:"operation_phase"`
 	Revision       string `json:"revision"`
 	Message        string `json:"message"`
+	RepoURL        string `json:"repo_url"`
 }

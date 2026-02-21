@@ -153,6 +153,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			Name:       run.Name,
 			Branch:     run.HeadBranch,
 			Slug:       slug,
+			HTMLURL:    run.HTMLURL,
 			StartedAt:  run.CreatedAt,
 			LastUpdate: time.Now(),
 		}
@@ -161,14 +162,16 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		if err := p.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 			State: "ONGOING",
 			Content: pushward.Content{
-				Template:    "pipeline",
-				Progress:    0.0,
-				State:       "Starting...",
-				Icon:        "arrow.triangle.branch",
-				Subtitle:    fmt.Sprintf("%s / %s", repoShort, run.Name),
-				AccentColor: "green",
-				CurrentStep: intPtr(0),
-				TotalSteps:  intPtr(1),
+				Template:     "pipeline",
+				Progress:     0.0,
+				State:        "Starting...",
+				Icon:         "arrow.triangle.branch",
+				Subtitle:     fmt.Sprintf("%s / %s", repoShort, run.Name),
+				AccentColor:  "green",
+				CurrentStep:  intPtr(0),
+				TotalSteps:   intPtr(1),
+				URL:          run.HTMLURL,
+				SecondaryURL: fmt.Sprintf("https://github.com/%s", repo),
 			},
 		}); err != nil {
 			slog.Error("failed to send initial update", "slug", slug, "error", err)
@@ -250,14 +253,16 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		if err := p.pw.UpdateActivity(ctx, t.Slug, pushward.UpdateRequest{
 			State: "ONGOING",
 			Content: pushward.Content{
-				Template:    "pipeline",
-				Progress:    progress,
-				State:       currentJobName,
-				Icon:        "arrow.triangle.branch",
-				Subtitle:    fmt.Sprintf("%s / %s", repoShort, t.Name),
-				AccentColor: "green",
-				CurrentStep: intPtr(currentJobIndex),
-				TotalSteps:  intPtr(totalJobs),
+				Template:     "pipeline",
+				Progress:     progress,
+				State:        currentJobName,
+				Icon:         "arrow.triangle.branch",
+				Subtitle:     fmt.Sprintf("%s / %s", repoShort, t.Name),
+				AccentColor:  "green",
+				CurrentStep:  intPtr(currentJobIndex),
+				TotalSteps:   intPtr(totalJobs),
+				URL:          t.HTMLURL,
+				SecondaryURL: fmt.Sprintf("https://github.com/%s", t.Repo),
 			},
 		}); err != nil {
 			slog.Error("failed to update activity", "slug", t.Slug, "error", err)
@@ -271,14 +276,16 @@ func (p *Poller) endWorkflow(ctx context.Context, t *trackedRun, state, color st
 	if err := p.pw.UpdateActivity(ctx, t.Slug, pushward.UpdateRequest{
 		State: "ENDED",
 		Content: pushward.Content{
-			Template:    "pipeline",
-			Progress:    1.0,
-			State:       state,
-			Icon:        "arrow.triangle.branch",
-			Subtitle:    fmt.Sprintf("%s / %s", repoShort, t.Name),
-			AccentColor: color,
-			CurrentStep: intPtr(1),
-			TotalSteps:  intPtr(1),
+			Template:     "pipeline",
+			Progress:     1.0,
+			State:        state,
+			Icon:         "arrow.triangle.branch",
+			Subtitle:     fmt.Sprintf("%s / %s", repoShort, t.Name),
+			AccentColor:  color,
+			CurrentStep:  intPtr(1),
+			TotalSteps:   intPtr(1),
+			URL:          t.HTMLURL,
+			SecondaryURL: fmt.Sprintf("https://github.com/%s", t.Repo),
 		},
 	}); err != nil {
 		slog.Error("failed to end activity", "slug", t.Slug, "error", err)
