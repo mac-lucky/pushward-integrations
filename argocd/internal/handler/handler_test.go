@@ -1010,14 +1010,14 @@ func TestGracePeriod_HealthDegraded_BypassesGrace(t *testing.T) {
 	}
 }
 
-func TestGracePeriod_UntrackedDeployed_Skipped(t *testing.T) {
+func TestGracePeriod_UntrackedDeployed_Recorded(t *testing.T) {
 	srv, calls, mu := mockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
-	// Untracked deployed with grace period enabled — skip entirely
+	// Untracked deployed with grace period — recorded but no API calls
 	sendWebhook(t, h, `{"app":"already-done","event":"deployed","revision":"r1"}`)
 
 	time.Sleep(200 * time.Millisecond)
@@ -1025,6 +1025,34 @@ func TestGracePeriod_UntrackedDeployed_Skipped(t *testing.T) {
 	recorded := getCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Fatalf("expected 0 API calls for untracked deployed, got %d", len(recorded))
+	}
+}
+
+func TestGracePeriod_DeployedBeforeSyncSucceeded_Skipped(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// deployed arrives before sync-succeeded (out-of-order from ArgoCD notifications)
+	sendWebhook(t, h, `{"app":"ooo-app","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"ooo-app","event":"sync-succeeded","revision":"r1"}`)
+
+	// Wait for grace timer (should NOT fire — the sync was detected as no-op)
+	time.Sleep(200 * time.Millisecond)
+
+	recorded := getCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 API calls for out-of-order deployed+sync-succeeded, got %d", len(recorded))
+	}
+
+	// App should not be tracked
+	h.mu.Lock()
+	_, exists := h.apps["ooo-app"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to not be tracked after no-op skip")
 	}
 }
 
