@@ -186,7 +186,8 @@ Receives ArgoCD sync webhooks (via argocd-notifications) and maps sync progress 
 
 - Tracks apps independently by name, keyed on revision
 - New revision during an active sync resets tracking and creates a new activity
-- Untracked events (bridge restart) are handled gracefully: creates activity and proceeds
+- **Sync grace period** (default 10s): defers activity creation until the sync takes longer than the grace window. Syncs that complete within the window (no-op auto-syncs) are silently skipped. Errors (`sync-failed`, `health-degraded`) always bypass the grace period and create immediately.
+- Untracked events (bridge restart): `deployed` is skipped (noise), `sync-succeeded` enters grace period, errors always create immediately
 - Stale timeout: 30m (syncs shouldn't take longer)
 - Cleanup delay: 5m
 - Webhook secret: optional `X-Webhook-Secret` header validation
@@ -258,3 +259,4 @@ All settings support YAML config file (`-config` flag, default `config.yml`) and
 | `PUSHWARD_ARGOCD_WEBHOOK_SECRET` | Optional webhook secret for request validation |
 | `PUSHWARD_SERVER_ADDRESS` | HTTP listen address (default: `:8090`) |
 | `PUSHWARD_STALE_TIMEOUT` | Stale sync timeout (default: 30m) |
+| `PUSHWARD_SYNC_GRACE_PERIOD` | Skip no-op syncs completing within this window (default: 10s, 0 to disable) |
