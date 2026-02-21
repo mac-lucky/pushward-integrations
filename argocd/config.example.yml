@@ -3,6 +3,7 @@ server:
 
 argocd:
   webhook_secret: ""    # optional: match X-Webhook-Secret header from argocd-notifications
+  url: ""               # ArgoCD UI base URL (e.g. https://argocd.example.com) — populates "View" button on Live Activity
 
 pushward:
   url: "http://pushward-server:8080"

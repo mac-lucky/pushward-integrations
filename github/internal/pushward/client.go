@@ -39,14 +39,16 @@ type UpdateRequest struct {
 }
 
 type Content struct {
-	Template    string  `json:"template"`
-	Progress    float64 `json:"progress"`
-	State       string  `json:"state,omitempty"`
-	Icon        string  `json:"icon,omitempty"`
-	Subtitle    string  `json:"subtitle,omitempty"`
-	AccentColor string  `json:"accent_color,omitempty"`
-	CurrentStep *int    `json:"current_step,omitempty"`
-	TotalSteps  *int    `json:"total_steps,omitempty"`
+	Template     string  `json:"template"`
+	Progress     float64 `json:"progress"`
+	State        string  `json:"state,omitempty"`
+	Icon         string  `json:"icon,omitempty"`
+	Subtitle     string  `json:"subtitle,omitempty"`
+	AccentColor  string  `json:"accent_color,omitempty"`
+	CurrentStep  *int    `json:"current_step,omitempty"`
+	TotalSteps   *int    `json:"total_steps,omitempty"`
+	URL          string  `json:"url,omitempty"`
+	SecondaryURL string  `json:"secondary_url,omitempty"`
 }
 
 func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequest) error {
