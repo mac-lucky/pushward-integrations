@@ -49,6 +49,8 @@ func testConfig() *config.Config {
 			CleanupDelay:    1 * time.Hour,
 			StaleTimeout:    30 * time.Minute,
 			SyncGracePeriod: 0, // disabled for existing tests
+			EndDelay:        10 * time.Millisecond,
+			EndDisplayTime:  10 * time.Millisecond,
 		},
 	}
 }
@@ -189,7 +191,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 		t.Errorf("expected current_step 2, got %v", update2.Content.CurrentStep)
 	}
 
-	// Step 3: deployed
+	// Step 3: deployed (schedules async two-phase end)
 	w = sendWebhook(t, h, `{
 		"app": "pushward-server",
 		"project": "default",
@@ -203,30 +205,45 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 		t.Fatalf("deployed: expected 200, got %d", w.Code)
 	}
 
+	// Wait for two-phase end (EndDelay + EndDisplayTime)
+	time.Sleep(100 * time.Millisecond)
+
 	recorded = getCalls(calls, mu)
-	if len(recorded) != 4 {
-		t.Fatalf("deployed: expected 4 calls, got %d", len(recorded))
+	// create + step1 + step2 + phase1(ONGOING) + phase2(ENDED) = 5
+	if len(recorded) != 5 {
+		t.Fatalf("deployed: expected 5 calls, got %d", len(recorded))
 	}
 
-	var update3 pushward.UpdateRequest
-	unmarshalBody(t, recorded[3].Body, &update3)
-	if update3.State != "ENDED" {
-		t.Errorf("expected ENDED, got %s", update3.State)
+	// Phase 1: ONGOING with "Deployed" content
+	var phase1 pushward.UpdateRequest
+	unmarshalBody(t, recorded[3].Body, &phase1)
+	if phase1.State != "ONGOING" {
+		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
-	if update3.Content.State != "Deployed" {
-		t.Errorf("expected state 'Deployed', got %s", update3.Content.State)
+	if phase1.Content.State != "Deployed" {
+		t.Errorf("expected state 'Deployed', got %s", phase1.Content.State)
 	}
-	if update3.Content.Icon != "checkmark.circle.fill" {
-		t.Errorf("expected checkmark icon, got %s", update3.Content.Icon)
+
+	// Phase 2: ENDED with "Deployed" content
+	var phase2 pushward.UpdateRequest
+	unmarshalBody(t, recorded[4].Body, &phase2)
+	if phase2.State != "ENDED" {
+		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
-	if update3.Content.AccentColor != "#34C759" {
-		t.Errorf("expected green color, got %s", update3.Content.AccentColor)
+	if phase2.Content.State != "Deployed" {
+		t.Errorf("expected state 'Deployed', got %s", phase2.Content.State)
 	}
-	if update3.Content.CurrentStep == nil || *update3.Content.CurrentStep != 3 {
-		t.Errorf("expected current_step 3, got %v", update3.Content.CurrentStep)
+	if phase2.Content.Icon != "checkmark.circle.fill" {
+		t.Errorf("expected checkmark icon, got %s", phase2.Content.Icon)
 	}
-	if update3.Content.Progress != 1.0 {
-		t.Errorf("expected progress 1.0, got %f", update3.Content.Progress)
+	if phase2.Content.AccentColor != "#34C759" {
+		t.Errorf("expected green color, got %s", phase2.Content.AccentColor)
+	}
+	if phase2.Content.CurrentStep == nil || *phase2.Content.CurrentStep != 3 {
+		t.Errorf("expected current_step 3, got %v", phase2.Content.CurrentStep)
+	}
+	if phase2.Content.Progress != 1.0 {
+		t.Errorf("expected progress 1.0, got %f", phase2.Content.Progress)
 	}
 }
 
@@ -247,14 +264,17 @@ func TestSyncRunning_ThenSyncFailed(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
 	recorded := getCalls(calls, mu)
-	// create + step1 + sync-failed ENDED = 3
-	if len(recorded) != 3 {
-		t.Fatalf("expected 3 calls, got %d", len(recorded))
+	// create + step1 + phase1(ONGOING) + phase2(ENDED) = 4
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 calls, got %d", len(recorded))
 	}
 
 	var failReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[2].Body, &failReq)
+	unmarshalBody(t, recorded[3].Body, &failReq)
 	if failReq.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", failReq.State)
 	}
@@ -289,14 +309,17 @@ func TestSyncSucceeded_ThenHealthDegraded(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
 	recorded := getCalls(calls, mu)
-	// create + step1 + step2 + degraded = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	// create + step1 + step2 + phase1(ONGOING) + phase2(ENDED) = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 calls, got %d", len(recorded))
 	}
 
 	var degradedReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[3].Body, &degradedReq)
+	unmarshalBody(t, recorded[4].Body, &degradedReq)
 	if degradedReq.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", degradedReq.State)
 	}
@@ -359,17 +382,20 @@ func TestUntracked_Deployed(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
 	recorded := getCalls(calls, mu)
-	// create + ENDED = 2
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	// create + phase1(ONGOING) + phase2(ENDED) = 3
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(recorded))
 	}
 	if recorded[0].Method != "POST" {
 		t.Errorf("expected POST create, got %s", recorded[0].Method)
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &update)
+	unmarshalBody(t, recorded[2].Body, &update)
 	if update.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
@@ -389,17 +415,20 @@ func TestUntracked_SyncFailed(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
 	recorded := getCalls(calls, mu)
-	// create + ENDED = 2
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	// create + phase1(ONGOING) + phase2(ENDED) = 3
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(recorded))
 	}
 	if recorded[0].Method != "POST" {
 		t.Errorf("expected POST create, got %s", recorded[0].Method)
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &update)
+	unmarshalBody(t, recorded[2].Body, &update)
 	if update.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
@@ -419,13 +448,17 @@ func TestUntracked_HealthDegraded(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
 	recorded := getCalls(calls, mu)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	// create + phase1(ONGOING) + phase2(ENDED) = 3
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &update)
+	unmarshalBody(t, recorded[2].Body, &update)
 	if update.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
@@ -636,29 +669,29 @@ func TestStaleTimer_ForceEnds(t *testing.T) {
 
 	sendWebhook(t, h, `{"app":"stale-app","event":"sync-running","revision":"r1"}`)
 
-	// Wait for stale timer + cleanup
-	time.Sleep(200 * time.Millisecond)
+	// Wait for stale timer + two-phase end + cleanup
+	time.Sleep(300 * time.Millisecond)
 
 	recorded := getCalls(calls, mu)
-	// create + step1 + force-end + delete = 4
-	if len(recorded) < 3 {
-		t.Fatalf("expected at least 3 calls (create, update, force-end), got %d", len(recorded))
+	// create + step1 + phase1(ONGOING stale) + phase2(ENDED stale) + delete = 5
+	if len(recorded) < 4 {
+		t.Fatalf("expected at least 4 calls (create, update, phase1, phase2), got %d", len(recorded))
 	}
 
-	// Find the force-end call
+	// Find the force-end ENDED call (phase 2)
 	var forceEndReq pushward.UpdateRequest
 	for _, c := range recorded {
 		if c.Method == "PATCH" {
 			var req pushward.UpdateRequest
 			unmarshalBody(t, c.Body, &req)
-			if req.Content.State == "Stale sync (auto-ended)" {
+			if req.State == "ENDED" && req.Content.State == "Stale sync (auto-ended)" {
 				forceEndReq = req
 				break
 			}
 		}
 	}
 	if forceEndReq.State != "ENDED" {
-		t.Error("expected a force-end PATCH with state 'Stale sync (auto-ended)'")
+		t.Error("expected a force-end PATCH with state ENDED and 'Stale sync (auto-ended)'")
 	}
 	if forceEndReq.Content.Icon != "clock.badge.xmark" {
 		t.Errorf("expected stale icon, got %s", forceEndReq.Content.Icon)
@@ -680,8 +713,8 @@ func TestCleanupTimer_DeletesActivity(t *testing.T) {
 	sendWebhook(t, h, `{"app":"cleanup-app","event":"sync-running","revision":"r1"}`)
 	sendWebhook(t, h, `{"app":"cleanup-app","event":"deployed","revision":"r1"}`)
 
-	// Wait for cleanup
-	time.Sleep(150 * time.Millisecond)
+	// Wait for two-phase end (EndDelay + EndDisplayTime) + cleanup
+	time.Sleep(250 * time.Millisecond)
 
 	recorded := getCalls(calls, mu)
 	// create + step1 + deployed(ENDED) + delete = 4
@@ -750,15 +783,18 @@ func TestMultipleApps_Independent(t *testing.T) {
 	// App 2: sync-running
 	sendWebhook(t, h, `{"app":"app-two","event":"sync-running","revision":"r2"}`)
 
-	// App 1: deployed
+	// App 1: deployed (schedules async two-phase end)
 	sendWebhook(t, h, `{"app":"app-one","event":"deployed","revision":"r1"}`)
 
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
 	recorded := getCalls(calls, mu)
-	// app-one: create + step1 + deployed = 3
+	// app-one: create + step1 + phase1(ONGOING) + phase2(ENDED) = 4
 	// app-two: create + step1 = 2
-	// Total = 5
-	if len(recorded) != 5 {
-		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	// Total = 6
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
 
 	// Verify app-two is still tracked
@@ -838,6 +874,9 @@ func TestSyncFailed_AtStep2_PreservesStep(t *testing.T) {
 	// Fail after sync-succeeded (step 2)
 	sendWebhook(t, h, `{"app":"my-app","event":"sync-failed","revision":"r1"}`)
 
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
 	recorded := getCalls(calls, mu)
 	lastCall := recorded[len(recorded)-1]
 	var failReq pushward.UpdateRequest
@@ -915,10 +954,13 @@ func TestGracePeriod_SlowSync_Created(t *testing.T) {
 	sendWebhook(t, h, `{"app":"slow-app","event":"sync-succeeded","revision":"r1"}`)
 	sendWebhook(t, h, `{"app":"slow-app","event":"deployed","revision":"r1"}`)
 
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
 	recorded = getCalls(calls, mu)
-	// create + step1 + step2 + deployed = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 API calls total, got %d", len(recorded))
+	// create + step1 + step2 + phase1(ONGOING) + phase2(ENDED) = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 API calls total, got %d", len(recorded))
 	}
 }
 
@@ -968,14 +1010,17 @@ func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
 	// Sync fails — should bypass grace and create immediately
 	sendWebhook(t, h, `{"app":"fail-app","event":"sync-failed","revision":"r1"}`)
 
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
 	recorded = getCalls(calls, mu)
-	// create + ENDED = 2
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 API calls after sync-failed, got %d", len(recorded))
+	// create + phase1(ONGOING) + phase2(ENDED) = 3
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 API calls after sync-failed, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &update)
+	unmarshalBody(t, recorded[2].Body, &update)
 	if update.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
@@ -994,14 +1039,17 @@ func TestGracePeriod_HealthDegraded_BypassesGrace(t *testing.T) {
 	sendWebhook(t, h, `{"app":"deg-app","event":"sync-running","revision":"r1"}`)
 	sendWebhook(t, h, `{"app":"deg-app","event":"health-degraded","revision":"r1"}`)
 
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
 	recorded := getCalls(calls, mu)
-	// create + ENDED = 2
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 API calls, got %d", len(recorded))
+	// create + phase1(ONGOING) + phase2(ENDED) = 3
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 API calls, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &update)
+	unmarshalBody(t, recorded[2].Body, &update)
 	if update.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}

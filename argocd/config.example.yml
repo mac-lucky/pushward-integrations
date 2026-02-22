@@ -12,6 +12,8 @@ pushward:
   cleanup_delay: 5m
   stale_timeout: 30m       # syncs shouldn't take this long
   sync_grace_period: 10s   # skip no-op syncs that complete within this window (0 to disable)
+  end_delay: 5s            # wait for push-update token before showing final state
+  end_display_time: 4s     # show final state in Dynamic Island before dismissal
 
 # --- argocd-notifications configuration ---
 #
