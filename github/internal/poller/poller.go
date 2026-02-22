@@ -38,6 +38,14 @@ func (p *Poller) Run(ctx context.Context) error {
 		return fmt.Errorf("initial repo discovery: %w", err)
 	}
 
+	// First check immediately on startup.
+	if err := p.poll(ctx); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		slog.Error("initial poll error", "error", err)
+	}
+
 	for {
 		interval := p.cfg.Polling.IdleInterval
 		for _, t := range p.tracked {
