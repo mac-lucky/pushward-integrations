@@ -148,7 +148,7 @@ func (c *Client) ListRepos(ctx context.Context, owner string) ([]string, error) 
 	page := 1
 
 	for {
-		url := fmt.Sprintf("https://api.github.com/users/%s/repos?per_page=100&page=%d&type=owner", owner, page)
+		url := fmt.Sprintf("https://api.github.com/user/repos?per_page=100&page=%d&affiliation=owner", page)
 
 		body, err := c.doWithRetry(ctx, url, "listing repos")
 		if err != nil {
