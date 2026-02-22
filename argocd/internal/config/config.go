@@ -30,6 +30,8 @@ type PushWardConfig struct {
 	CleanupDelay    time.Duration `yaml:"cleanup_delay"`
 	StaleTimeout    time.Duration `yaml:"stale_timeout"`
 	SyncGracePeriod time.Duration `yaml:"sync_grace_period"`
+	EndDelay        time.Duration `yaml:"end_delay"`
+	EndDisplayTime  time.Duration `yaml:"end_display_time"`
 }
 
 func Load(path string) (*Config, error) {
@@ -42,6 +44,8 @@ func Load(path string) (*Config, error) {
 			CleanupDelay:    5 * time.Minute,
 			StaleTimeout:    30 * time.Minute,
 			SyncGracePeriod: 10 * time.Second,
+			EndDelay:        5 * time.Second,
+			EndDisplayTime:  4 * time.Second,
 		},
 	}
 
@@ -98,6 +102,20 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("parsing PUSHWARD_SYNC_GRACE_PERIOD: %w", err)
 		}
 		cfg.PushWard.SyncGracePeriod = d
+	}
+	if v := os.Getenv("PUSHWARD_END_DELAY"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PUSHWARD_END_DELAY: %w", err)
+		}
+		cfg.PushWard.EndDelay = d
+	}
+	if v := os.Getenv("PUSHWARD_END_DISPLAY_TIME"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PUSHWARD_END_DISPLAY_TIME: %w", err)
+		}
+		cfg.PushWard.EndDisplayTime = d
 	}
 
 	// Validation
