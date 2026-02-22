@@ -1150,3 +1150,31 @@ func TestGracePeriod_UntrackedSyncSucceeded_GraceExpires(t *testing.T) {
 		t.Errorf("expected step 2, got %v", update.Content.CurrentStep)
 	}
 }
+
+func TestGracePeriod_DeployedThenSyncSucceededThenSyncRunning_Skipped(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Out-of-order: deployed first, then sync-succeeded, then sync-running arrives late
+	sendWebhook(t, h, `{"app":"late-app","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"late-app","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"late-app","event":"sync-running","revision":"r1"}`)
+
+	// Wait for any grace timer to fire
+	time.Sleep(300 * time.Millisecond)
+
+	recorded := getCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 API calls for late sync-running after deploy, got %d", len(recorded))
+	}
+
+	h.mu.Lock()
+	_, exists := h.apps["late-app"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to not be tracked after skipped late sync-running")
+	}
+}

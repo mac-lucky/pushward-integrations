@@ -121,10 +121,14 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 	slug := slugForApp(p.App)
 
 	h.mu.Lock()
-	// Clear any recent-deploy marker — a new sync makes it irrelevant
+	// If a recent-deploy marker exists, the sync already completed and this
+	// sync-running arrived out of order — skip it entirely.
 	if t, ok := h.recentDeploys[p.App]; ok {
 		t.Stop()
 		delete(h.recentDeploys, p.App)
+		h.mu.Unlock()
+		slog.Info("skipped late sync-running (already deployed)", "slug", slug, "app", p.App)
+		return
 	}
 
 	app, exists := h.apps[p.App]
@@ -252,10 +256,9 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 		// Untracked (bridge restart)
 		gracePeriod := h.config.PushWard.SyncGracePeriod
 		if gracePeriod > 0 {
-			// If deployed already arrived (out-of-order events), this is a no-op
-			if t, ok := h.recentDeploys[p.App]; ok {
-				t.Stop()
-				delete(h.recentDeploys, p.App)
+			// If deployed already arrived (out-of-order events), this is a no-op.
+			// Leave the marker in place so a late sync-running also detects it.
+			if _, ok := h.recentDeploys[p.App]; ok {
 				h.mu.Unlock()
 				slog.Info("skipped no-op sync (deployed arrived first)", "slug", slug, "app", p.App)
 				return
