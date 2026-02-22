@@ -57,8 +57,6 @@ func (p *Poller) Run(ctx context.Context) error {
 			slog.Error("repo refresh failed", "error", err)
 		}
 
-		slog.Info("poll tick", "repos", len(p.repos), "tracked", len(p.tracked))
-
 		if err := p.poll(ctx); err != nil {
 			if ctx.Err() != nil {
 				return nil
