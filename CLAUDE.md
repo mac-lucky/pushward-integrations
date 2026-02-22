@@ -30,6 +30,22 @@ docker build -f argocd/Dockerfile -t pushward-argocd ./argocd
 
 There is no Makefile or dedicated lint config. CI uses `golangci-lint` via the shared reusable workflow.
 
+### Testing
+
+Only grafana and argocd have unit tests; github and sabnzbd have none.
+
+```bash
+# Run tests for a specific integration (from repo root)
+go test ./grafana/internal/handler/ -v -count=1
+go test ./argocd/internal/handler/ -v -count=1
+
+# With race detector (matches CI flags)
+go test ./grafana/internal/handler/ -race -count=1 -v
+go test ./argocd/internal/handler/ -race -count=1 -v
+```
+
+Both test files share the same infrastructure pattern: `mockPushWardServer(t)` starts an `httptest.Server` recording all requests as `apiCall{Method, Path, Body}`, `testConfig()` returns a config with short timers (e.g. `EndDelay: 10ms`), and `sendWebhook(t, h, payload)` POSTs JSON to the handler. Tests use `time.Sleep()` to wait for timer-driven async operations.
+
 ## Architecture
 
 ### Go workspace
@@ -42,8 +58,22 @@ All integrations follow the same internal structure:
 
 - **`cmd/<name>/main.go`** -- entry point: loads config, creates API clients, runs the main loop with graceful shutdown (SIGINT/SIGTERM)
 - **`internal/config/`** -- YAML config with environment variable overrides (env vars take precedence)
-- **`internal/pushward/`** -- PushWard API client: `CreateActivity`, `UpdateActivity`, `DeleteActivity` with exponential backoff retry (up to 5 attempts). Each integration has its own copy with slightly different `Content` fields (e.g. sabnzbd adds `RemainingTime`)
+- **`internal/pushward/`** -- PushWard API client: `CreateActivity`, `UpdateActivity`, `DeleteActivity` with exponential backoff retry (up to 5 attempts). Each integration has its own copy with different `Content` fields per template (see below)
 - **`internal/<service>/`** -- external service API client
+
+All integrations use `log/slog` with JSON output to stdout. PushWard clients use `http.Client{Timeout: 10s}` and handle `409 Conflict` specially: "activity limit reached" errors are propagated, but "already exists" conflicts are treated as success.
+
+### Content field divergences
+
+Each integration's `Content` struct is tailored to its content template:
+
+| Field | `pipeline` (github, argocd) | `alert` (grafana) | `generic` (sabnzbd) |
+|---|---|---|---|
+| Template, Progress, State, Icon, Subtitle, AccentColor | yes | yes | yes |
+| CurrentStep, TotalSteps | yes | -- | -- |
+| URL, SecondaryURL | yes | -- | -- |
+| Severity, FiredAt | -- | yes | -- |
+| RemainingTime | -- | -- | yes |
 
 ### PushWard API integration
 
@@ -187,10 +217,12 @@ Receives ArgoCD sync webhooks (via argocd-notifications) and maps sync progress 
 - Tracks apps independently by name, keyed on revision
 - New revision during an active sync resets tracking and creates a new activity
 - **Sync grace period** (default 10s): defers activity creation until the sync takes longer than the grace window. Syncs that complete within the window (no-op auto-syncs) are silently skipped. Errors (`sync-failed`, `health-degraded`) always bypass the grace period and create immediately.
+- **Recent deploys tracking**: `deployed` events from untracked apps are recorded in `recentDeploys` (expires after `2 * SyncGracePeriod`). A subsequent `sync-running` checks this map and skips if it finds an entry (out-of-order event detection after bridge restart).
 - Untracked events (bridge restart): `deployed` is skipped (noise), `sync-succeeded` enters grace period, errors always create immediately
+- **Two-phase end**: `scheduleEnd()` sends `ONGOING` with final content first (after `EndDelay`, default 5s) to ensure iOS receives it via push-update token, then sends `ENDED` (after `EndDisplayTime`, default 4s) to dismiss, then `DELETE` after `CleanupDelay` (5m).
 - Stale timeout: 30m (syncs shouldn't take longer)
-- Cleanup delay: 5m
 - Webhook secret: optional `X-Webhook-Secret` header validation
+- **ArgoCD URL**: if configured, activities include a "View in ArgoCD" link (`<url>/applications/argocd/<app>`) and a commit link (`repo_url/commit/<revision>`)
 
 ### Activity slug format
 
@@ -230,8 +262,8 @@ All settings support YAML config file (`-config` flag, default `config.yml`) and
 |---|---|
 | `PUSHWARD_URL` | PushWard server URL |
 | `PUSHWARD_API_KEY` | Integration key (`hlk_` prefix) |
-| `PUSHWARD_PRIORITY` | Activity priority 0-10 (default: 1) |
-| `PUSHWARD_CLEANUP_DELAY` | Delay before cleanup after ENDED (default: 15m) |
+| `PUSHWARD_PRIORITY` | Activity priority 0-10 (defaults: github=1, sabnzbd=1, argocd=3, grafana=5) |
+| `PUSHWARD_CLEANUP_DELAY` | Delay before DELETE after ENDED (defaults: github/sabnzbd=15m, grafana/argocd=5m) |
 
 ### GitHub-specific env vars
 
@@ -252,11 +284,24 @@ All settings support YAML config file (`-config` flag, default `config.yml`) and
 | `PUSHWARD_SERVER_ADDRESS` | HTTP listen address (default: `:8090`) |
 | `PUSHWARD_POLL_INTERVAL` | Poll interval during tracking (default: 1s) |
 
+### Grafana-specific env vars
+
+| Variable | Description |
+|---|---|
+| `PUSHWARD_SERVER_ADDRESS` | HTTP listen address (default: `:8090`) |
+| `PUSHWARD_STALE_TIMEOUT` | Stale alert timeout (default: 24h) |
+| `PUSHWARD_GRAFANA_SEVERITY_LABEL` | Alert label name to read severity from (default: `severity`) |
+| `PUSHWARD_GRAFANA_DEFAULT_SEVERITY` | Fallback severity when label is missing (default: `warning`) |
+| `PUSHWARD_GRAFANA_DEFAULT_ICON` | Fallback icon (default: `exclamationmark.triangle.fill`) |
+
 ### ArgoCD-specific env vars
 
 | Variable | Description |
 |---|---|
 | `PUSHWARD_ARGOCD_WEBHOOK_SECRET` | Optional webhook secret for request validation |
+| `PUSHWARD_ARGOCD_URL` | ArgoCD UI base URL; enables "View in ArgoCD" link on activities |
 | `PUSHWARD_SERVER_ADDRESS` | HTTP listen address (default: `:8090`) |
 | `PUSHWARD_STALE_TIMEOUT` | Stale sync timeout (default: 30m) |
 | `PUSHWARD_SYNC_GRACE_PERIOD` | Skip no-op syncs completing within this window (default: 10s, 0 to disable) |
+| `PUSHWARD_END_DELAY` | Wait before Phase 1 ONGOING in two-phase end (default: 5s) |
+| `PUSHWARD_END_DISPLAY_TIME` | Display time before ENDED in two-phase end (default: 4s) |
