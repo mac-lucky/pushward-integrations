@@ -36,6 +36,7 @@ type trackedApp struct {
 	graceTimer   *time.Timer // fires when grace period expires
 	cleanupTimer *time.Timer
 	staleTimer   *time.Timer
+	endTimer     *time.Timer
 }
 
 func New(client *pushward.Client, cfg *config.Config) *Handler {
@@ -141,6 +142,9 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 			if app.staleTimer != nil {
 				app.staleTimer.Stop()
 			}
+			if app.endTimer != nil {
+				app.endTimer.Stop()
+			}
 		}
 		app = &trackedApp{
 			slug:    slug,
@@ -162,6 +166,10 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 	if app.cleanupTimer != nil {
 		app.cleanupTimer.Stop()
 		app.cleanupTimer = nil
+	}
+	if app.endTimer != nil {
+		app.endTimer.Stop()
+		app.endTimer = nil
 	}
 
 	// Grace period: defer activity creation for new or still-pending syncs
@@ -399,35 +407,21 @@ func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) 
 	step := 3
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
-	req := pushward.UpdateRequest{
-		State: "ENDED",
-		Content: pushward.Content{
-			Template:     "pipeline",
-			Progress:     1.0,
-			State:        "Deployed",
-			Icon:         "checkmark.circle.fill",
-			Subtitle:     "ArgoCD \u00b7 " + p.App,
-			AccentColor:  "#34C759",
-			CurrentStep:  &step,
-			TotalSteps:   &total,
-			URL:          url,
-			SecondaryURL: secondaryURL,
-		},
+	content := pushward.Content{
+		Template:     "pipeline",
+		Progress:     1.0,
+		State:        "Deployed",
+		Icon:         "checkmark.circle.fill",
+		Subtitle:     "ArgoCD \u00b7 " + p.App,
+		AccentColor:  "#34C759",
+		CurrentStep:  &step,
+		TotalSteps:   &total,
+		URL:          url,
+		SecondaryURL: secondaryURL,
 	}
 
-	if err := h.client.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err)
-		return
-	}
-	slog.Info("ended activity", "slug", slug, "state", "Deployed")
-
-	h.mu.Lock()
-	if a, ok := h.apps[p.App]; ok {
-		a.cleanupTimer = time.AfterFunc(h.config.PushWard.CleanupDelay, func() {
-			h.cleanup(p.App)
-		})
-	}
-	h.mu.Unlock()
+	h.scheduleEnd(p.App, content)
+	slog.Info("scheduled end", "slug", slug, "state", "Deployed")
 }
 
 func (h *Handler) handleSyncFailed(ctx context.Context, p *argocd.WebhookPayload) {
@@ -477,35 +471,21 @@ func (h *Handler) handleSyncFailed(ctx context.Context, p *argocd.WebhookPayload
 
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
-	req := pushward.UpdateRequest{
-		State: "ENDED",
-		Content: pushward.Content{
-			Template:     "pipeline",
-			Progress:     float64(currentStep) / float64(total),
-			State:        "Sync Failed",
-			Icon:         "xmark.circle.fill",
-			Subtitle:     "ArgoCD \u00b7 " + p.App,
-			AccentColor:  "#FF3B30",
-			CurrentStep:  &currentStep,
-			TotalSteps:   &total,
-			URL:          url,
-			SecondaryURL: secondaryURL,
-		},
+	content := pushward.Content{
+		Template:     "pipeline",
+		Progress:     float64(currentStep) / float64(total),
+		State:        "Sync Failed",
+		Icon:         "xmark.circle.fill",
+		Subtitle:     "ArgoCD \u00b7 " + p.App,
+		AccentColor:  "#FF3B30",
+		CurrentStep:  &currentStep,
+		TotalSteps:   &total,
+		URL:          url,
+		SecondaryURL: secondaryURL,
 	}
 
-	if err := h.client.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err)
-		return
-	}
-	slog.Info("ended activity", "slug", slug, "state", "Sync Failed")
-
-	h.mu.Lock()
-	if a, ok := h.apps[p.App]; ok {
-		a.cleanupTimer = time.AfterFunc(h.config.PushWard.CleanupDelay, func() {
-			h.cleanup(p.App)
-		})
-	}
-	h.mu.Unlock()
+	h.scheduleEnd(p.App, content)
+	slog.Info("scheduled end", "slug", slug, "state", "Sync Failed")
 }
 
 func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPayload) {
@@ -555,35 +535,21 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
-	req := pushward.UpdateRequest{
-		State: "ENDED",
-		Content: pushward.Content{
-			Template:     "pipeline",
-			Progress:     float64(currentStep) / float64(total),
-			State:        "Degraded",
-			Icon:         "exclamationmark.triangle.fill",
-			Subtitle:     "ArgoCD \u00b7 " + p.App,
-			AccentColor:  "#FF9500",
-			CurrentStep:  &currentStep,
-			TotalSteps:   &total,
-			URL:          url,
-			SecondaryURL: secondaryURL,
-		},
+	content := pushward.Content{
+		Template:     "pipeline",
+		Progress:     float64(currentStep) / float64(total),
+		State:        "Degraded",
+		Icon:         "exclamationmark.triangle.fill",
+		Subtitle:     "ArgoCD \u00b7 " + p.App,
+		AccentColor:  "#FF9500",
+		CurrentStep:  &currentStep,
+		TotalSteps:   &total,
+		URL:          url,
+		SecondaryURL: secondaryURL,
 	}
 
-	if err := h.client.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err)
-		return
-	}
-	slog.Info("ended activity", "slug", slug, "state", "Degraded")
-
-	h.mu.Lock()
-	if a, ok := h.apps[p.App]; ok {
-		a.cleanupTimer = time.AfterFunc(h.config.PushWard.CleanupDelay, func() {
-			h.cleanup(p.App)
-		})
-	}
-	h.mu.Unlock()
+	h.scheduleEnd(p.App, content)
+	slog.Info("scheduled end", "slug", slug, "state", "Degraded")
 }
 
 // graceExpired is called when the sync grace period expires. It creates
@@ -658,6 +624,64 @@ func (h *Handler) graceExpired(appName string) {
 	h.mu.Unlock()
 }
 
+// scheduleEnd schedules a two-phase end for an activity:
+//   - Phase 1 (after EndDelay): ONGOING update with final content (visible in Dynamic Island)
+//   - Phase 2 (EndDisplayTime later): ENDED with same content (dismisses Live Activity)
+//
+// This gives iOS time to register the push-update token after push-to-start,
+// and ensures the Dynamic Island shows the final state before dismissal.
+func (h *Handler) scheduleEnd(appName string, content pushward.Content) {
+	h.mu.Lock()
+	app, ok := h.apps[appName]
+	if !ok {
+		h.mu.Unlock()
+		return
+	}
+	slug := app.slug
+	endDelay := h.config.PushWard.EndDelay
+	displayTime := h.config.PushWard.EndDisplayTime
+	cleanupDelay := h.config.PushWard.CleanupDelay
+	app.endTimer = time.AfterFunc(endDelay, func() {
+		// Phase 1: ONGOING with final content
+		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+		ongoingReq := pushward.UpdateRequest{
+			State:   "ONGOING",
+			Content: content,
+		}
+		if err := h.client.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
+			slog.Error("failed to update activity (end phase 1)", "slug", slug, "error", err)
+		} else {
+			slog.Info("updated activity", "slug", slug, "state", content.State)
+		}
+		cancel1()
+
+		time.Sleep(displayTime)
+
+		// Phase 2: ENDED with same content
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel2()
+		endedReq := pushward.UpdateRequest{
+			State:   "ENDED",
+			Content: content,
+		}
+		if err := h.client.UpdateActivity(ctx2, slug, endedReq); err != nil {
+			slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
+		} else {
+			slog.Info("ended activity", "slug", slug, "state", content.State)
+		}
+
+		// Schedule cleanup after ENDED
+		h.mu.Lock()
+		if a, ok := h.apps[appName]; ok {
+			a.cleanupTimer = time.AfterFunc(cleanupDelay, func() {
+				h.cleanup(appName)
+			})
+		}
+		h.mu.Unlock()
+	})
+	h.mu.Unlock()
+}
+
 func (h *Handler) forceEnd(appName string) {
 	h.mu.Lock()
 	app, ok := h.apps[appName]
@@ -672,37 +696,23 @@ func (h *Handler) forceEnd(appName string) {
 	h.mu.Unlock()
 
 	slog.Warn("force-ending stale sync", "slug", slug, "app", appName)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(appName, repoURL, revision)
-	req := pushward.UpdateRequest{
-		State: "ENDED",
-		Content: pushward.Content{
-			Template:     "pipeline",
-			Progress:     float64(currentStep) / float64(total),
-			State:        "Stale sync (auto-ended)",
-			Icon:         "clock.badge.xmark",
-			Subtitle:     "ArgoCD \u00b7 " + appName,
-			AccentColor:  "#8E8E93",
-			CurrentStep:  &currentStep,
-			TotalSteps:   &total,
-			URL:          url,
-			SecondaryURL: secondaryURL,
-		},
-	}
-	if err := h.client.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to force-end activity", "slug", slug, "error", err)
+	content := pushward.Content{
+		Template:     "pipeline",
+		Progress:     float64(currentStep) / float64(total),
+		State:        "Stale sync (auto-ended)",
+		Icon:         "clock.badge.xmark",
+		Subtitle:     "ArgoCD \u00b7 " + appName,
+		AccentColor:  "#8E8E93",
+		CurrentStep:  &currentStep,
+		TotalSteps:   &total,
+		URL:          url,
+		SecondaryURL: secondaryURL,
 	}
 
-	h.mu.Lock()
-	if a, ok := h.apps[appName]; ok {
-		a.cleanupTimer = time.AfterFunc(h.config.PushWard.CleanupDelay, func() {
-			h.cleanup(appName)
-		})
-	}
-	h.mu.Unlock()
+	h.scheduleEnd(appName, content)
 }
 
 func (h *Handler) cleanup(appName string) {
