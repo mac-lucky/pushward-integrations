@@ -1,62 +1,18 @@
 package poller
 
 import (
-	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/mac-lucky/pushward-docker/github/internal/config"
-	"github.com/mac-lucky/pushward-docker/github/internal/pushward"
+	sharedconfig "github.com/mac-lucky/pushward-docker/shared/config"
+	"github.com/mac-lucky/pushward-docker/shared/pushward"
+	"github.com/mac-lucky/pushward-docker/shared/testutil"
 )
-
-type apiCall struct {
-	Method string
-	Path   string
-	Body   json.RawMessage
-}
-
-func mockPushWardServer(t *testing.T) (*httptest.Server, *[]apiCall, *sync.Mutex) {
-	t.Helper()
-	var calls []apiCall
-	var mu sync.Mutex
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		calls = append(calls, apiCall{
-			Method: r.Method,
-			Path:   r.URL.Path,
-			Body:   json.RawMessage(body),
-		})
-		mu.Unlock()
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &calls, &mu
-}
-
-func getCalls(calls *[]apiCall, mu *sync.Mutex) []apiCall {
-	mu.Lock()
-	defer mu.Unlock()
-	result := make([]apiCall, len(*calls))
-	copy(result, *calls)
-	return result
-}
-
-func unmarshalBody(t *testing.T, raw json.RawMessage, v any) {
-	t.Helper()
-	if err := json.Unmarshal(raw, v); err != nil {
-		t.Fatalf("failed to unmarshal body: %v (body: %s)", err, string(raw))
-	}
-}
 
 func testConfig() *config.Config {
 	return &config.Config{
-		PushWard: config.PushWardConfig{
+		PushWard: sharedconfig.PushWardConfig{
 			Priority:       1,
 			CleanupDelay:   15 * time.Minute,
 			StaleTimeout:   30 * time.Minute,
@@ -70,7 +26,7 @@ func testConfig() *config.Config {
 }
 
 func TestScheduleEnd_TwoPhaseSuccess(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 
@@ -105,7 +61,7 @@ func TestScheduleEnd_TwoPhaseSuccess(t *testing.T) {
 	// Wait for both phases to complete
 	time.Sleep(100 * time.Millisecond)
 
-	got := getCalls(calls, mu)
+	got := testutil.GetCalls(calls, mu)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 API calls, got %d", len(got))
 	}
@@ -118,7 +74,7 @@ func TestScheduleEnd_TwoPhaseSuccess(t *testing.T) {
 		t.Errorf("phase 1: expected /activity/gh-repo, got %s", got[0].Path)
 	}
 	var req1 pushward.UpdateRequest
-	unmarshalBody(t, got[0].Body, &req1)
+	testutil.UnmarshalBody(t, got[0].Body, &req1)
 	if req1.State != "ONGOING" {
 		t.Errorf("phase 1: expected ONGOING, got %s", req1.State)
 	}
@@ -131,7 +87,7 @@ func TestScheduleEnd_TwoPhaseSuccess(t *testing.T) {
 		t.Errorf("phase 2: expected PATCH, got %s", got[1].Method)
 	}
 	var req2 pushward.UpdateRequest
-	unmarshalBody(t, got[1].Body, &req2)
+	testutil.UnmarshalBody(t, got[1].Body, &req2)
 	if req2.State != "ENDED" {
 		t.Errorf("phase 2: expected ENDED, got %s", req2.State)
 	}
@@ -148,7 +104,7 @@ func TestScheduleEnd_TwoPhaseSuccess(t *testing.T) {
 }
 
 func TestScheduleEnd_TwoPhaseFailed(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 
@@ -181,13 +137,13 @@ func TestScheduleEnd_TwoPhaseFailed(t *testing.T) {
 	p.scheduleEnd("owner/repo", content)
 	time.Sleep(100 * time.Millisecond)
 
-	got := getCalls(calls, mu)
+	got := testutil.GetCalls(calls, mu)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 API calls, got %d", len(got))
 	}
 
 	var req1 pushward.UpdateRequest
-	unmarshalBody(t, got[0].Body, &req1)
+	testutil.UnmarshalBody(t, got[0].Body, &req1)
 	if req1.State != "ONGOING" {
 		t.Errorf("phase 1: expected ONGOING, got %s", req1.State)
 	}
@@ -196,7 +152,7 @@ func TestScheduleEnd_TwoPhaseFailed(t *testing.T) {
 	}
 
 	var req2 pushward.UpdateRequest
-	unmarshalBody(t, got[1].Body, &req2)
+	testutil.UnmarshalBody(t, got[1].Body, &req2)
 	if req2.State != "ENDED" {
 		t.Errorf("phase 2: expected ENDED, got %s", req2.State)
 	}
@@ -206,7 +162,7 @@ func TestScheduleEnd_TwoPhaseFailed(t *testing.T) {
 }
 
 func TestScheduleEnd_CancelledByNewRun(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	// Use longer delays so we can cancel before they fire
 	cfg.PushWard.EndDelay = 500 * time.Millisecond
@@ -251,7 +207,7 @@ func TestScheduleEnd_CancelledByNewRun(t *testing.T) {
 	// Wait long enough for the original timer to have fired if not cancelled
 	time.Sleep(200 * time.Millisecond)
 
-	got := getCalls(calls, mu)
+	got := testutil.GetCalls(calls, mu)
 	if len(got) != 0 {
 		t.Fatalf("expected 0 API calls after cancellation, got %d", len(got))
 	}
@@ -269,7 +225,7 @@ func TestScheduleEnd_CancelledByNewRun(t *testing.T) {
 }
 
 func TestScheduleEnd_ContentPreserved(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 
@@ -302,14 +258,14 @@ func TestScheduleEnd_ContentPreserved(t *testing.T) {
 	p.scheduleEnd("owner/repo", content)
 	time.Sleep(100 * time.Millisecond)
 
-	got := getCalls(calls, mu)
+	got := testutil.GetCalls(calls, mu)
 	if len(got) != 2 {
 		t.Fatalf("expected 2 API calls, got %d", len(got))
 	}
 
 	var req1, req2 pushward.UpdateRequest
-	unmarshalBody(t, got[0].Body, &req1)
-	unmarshalBody(t, got[1].Body, &req2)
+	testutil.UnmarshalBody(t, got[0].Body, &req1)
+	testutil.UnmarshalBody(t, got[1].Body, &req2)
 
 	// Verify content fields are identical between Phase 1 and Phase 2
 	if req1.Content.Template != req2.Content.Template {

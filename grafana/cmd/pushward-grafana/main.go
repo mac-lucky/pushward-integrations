@@ -2,17 +2,16 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/mac-lucky/pushward-docker/grafana/internal/config"
 	"github.com/mac-lucky/pushward-docker/grafana/internal/handler"
-	"github.com/mac-lucky/pushward-docker/grafana/internal/pushward"
+	"github.com/mac-lucky/pushward-docker/shared/pushward"
+	"github.com/mac-lucky/pushward-docker/shared/server"
 )
 
 func main() {
@@ -31,35 +30,16 @@ func main() {
 	pw := pushward.NewClient(cfg.PushWard.URL, cfg.PushWard.APIKey)
 	h := handler.New(pw, cfg)
 
-	mux := http.NewServeMux()
+	mux := server.NewMux()
 	mux.HandleFunc("/webhook", h.HandleWebhook)
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
-
-	srv := &http.Server{
-		Addr:    cfg.Server.Address,
-		Handler: mux,
-	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	go func() {
-		slog.Info("starting pushward-grafana", "address", cfg.Server.Address, "priority", cfg.PushWard.Priority, "cleanup_delay", cfg.PushWard.CleanupDelay, "stale_timeout", cfg.PushWard.StaleTimeout)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("server error", "error", err)
-			os.Exit(1)
-		}
-	}()
-
-	<-ctx.Done()
-	slog.Info("shutting down server")
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5)
-	defer shutdownCancel()
-	srv.Shutdown(shutdownCtx)
-
+	slog.Info("starting pushward-grafana", "address", cfg.Server.Address, "priority", cfg.PushWard.Priority, "cleanup_delay", cfg.PushWard.CleanupDelay, "stale_timeout", cfg.PushWard.StaleTimeout)
+	if err := server.ListenAndServe(ctx, cfg.Server.Address, mux); err != nil {
+		slog.Error("server error", "error", err)
+		os.Exit(1)
+	}
 	slog.Info("shutdown complete")
 }

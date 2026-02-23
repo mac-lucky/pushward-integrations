@@ -3,11 +3,16 @@ ARG GO_VERSION=1.25
 FROM golang:${GO_VERSION}-alpine AS builder
 
 WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
 
-COPY . .
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /pushward-argocd ./cmd/pushward-argocd
+# Copy module files for layer caching
+COPY shared/go.mod shared/go.sum ./shared/
+COPY argocd/go.mod argocd/go.sum ./argocd/
+RUN cd argocd && go mod download
+
+# Copy source
+COPY shared/ ./shared/
+COPY argocd/ ./argocd/
+RUN cd argocd && CGO_ENABLED=0 go build -ldflags="-s -w" -o /pushward-argocd ./cmd/pushward-argocd
 
 FROM alpine:3.23
 

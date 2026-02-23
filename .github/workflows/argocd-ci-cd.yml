@@ -4,10 +4,10 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    paths: ['argocd/**', '.github/workflows/argocd-ci-cd.yml']
+    paths: ['argocd/**', 'shared/**', '.github/workflows/argocd-ci-cd.yml']
   pull_request:
     branches: [main]
-    paths: ['argocd/**', '.github/workflows/argocd-ci-cd.yml']
+    paths: ['argocd/**', 'shared/**', '.github/workflows/argocd-ci-cd.yml']
   workflow_dispatch:
 
 jobs:
@@ -24,7 +24,7 @@ jobs:
       push_to_dockerhub: false
       push_on_main: true
       main_branch: "main"
-      build_context: "./argocd"
+      build_context: "."
       dockerfile_path: "./argocd/Dockerfile"
       go_module_path: "./argocd"
       enable_go_tests: true

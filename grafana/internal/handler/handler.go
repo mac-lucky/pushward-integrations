@@ -12,7 +12,7 @@ import (
 
 	"github.com/mac-lucky/pushward-docker/grafana/internal/config"
 	"github.com/mac-lucky/pushward-docker/grafana/internal/grafana"
-	"github.com/mac-lucky/pushward-docker/grafana/internal/pushward"
+	"github.com/mac-lucky/pushward-docker/shared/pushward"
 )
 
 type Handler struct {
