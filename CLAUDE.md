@@ -77,11 +77,11 @@ Each integration's `Content` struct is tailored to its content template:
 
 ### PushWard API integration
 
-All integrations authenticate via `Authorization: Bearer hlk_...` (integration key). The activity lifecycle is:
+All integrations authenticate via `Authorization: Bearer hlk_...` (integration key with `activity:manage` scope). The activity lifecycle is:
 
-1. `POST /activities` -- create activity (slug, name, priority)
+1. `POST /activities` -- create activity (slug, name, priority, ended_ttl, stale_ttl)
 2. `PATCH /activity/{slug}` -- update with state (`ONGOING`/`ENDED`) and content (template, progress, icon, subtitle, etc.)
-3. `DELETE /activities/{slug}` -- cleanup after delay
+3. Server auto-deletes after `ended_ttl` expires; `DELETE /activities/{slug}` retained on client but no longer called by bridges
 
 Activity states drive push behavior on the server side:
 - First `ONGOING` update triggers push-to-start (Live Activity appears on device)
@@ -117,6 +117,7 @@ Polls GitHub Actions API for in-progress workflow runs and maps CI/CD pipeline p
 ### Activity slug format
 
 `gh-<repo-name>` (e.g. `gh-pushward-server`). Uses the `pipeline` content template for all states.
+Recommended `activity_slugs` prefix for integration key: `gh-*`
 
 ## pushward-sabnzbd
 
@@ -158,6 +159,7 @@ Exposes a webhook endpoint that SABnzbd calls when NZBs are added. Tracks downlo
 ### Activity slug
 
 Fixed slug: `sabnzbd`. Uses the `generic` content template.
+Recommended `activity_slugs` for integration key: `sabnzbd` (exact match)
 
 ## pushward-grafana
 
@@ -185,6 +187,7 @@ Receives Grafana alert webhooks, groups alerts by `alertname`, and creates/updat
 ### Activity slug format
 
 `grafana-<sha256(alertname)[:6]>`. Uses the `alert` content template.
+Recommended `activity_slugs` prefix for integration key: `grafana-*`
 
 ## pushward-argocd
 
@@ -227,6 +230,7 @@ Receives ArgoCD sync webhooks (via argocd-notifications) and maps sync progress 
 ### Activity slug format
 
 `argocd-<sanitized-app-name>` (e.g. `argocd-pushward-server`). Uses the `pipeline` content template.
+Recommended `activity_slugs` prefix for integration key: `argocd-*`
 
 ### Endpoints
 
@@ -261,9 +265,9 @@ All settings support YAML config file (`-config` flag, default `config.yml`) and
 | Variable | Description |
 |---|---|
 | `PUSHWARD_URL` | PushWard server URL |
-| `PUSHWARD_API_KEY` | Integration key (`hlk_` prefix) |
+| `PUSHWARD_API_KEY` | Integration key (`hlk_` prefix, requires `activity:manage` scope) |
 | `PUSHWARD_PRIORITY` | Activity priority 0-10 (defaults: github=1, sabnzbd=1, argocd=3, grafana=5) |
-| `PUSHWARD_CLEANUP_DELAY` | Delay before DELETE after ENDED (defaults: github/sabnzbd=15m, grafana/argocd=5m) |
+| `PUSHWARD_CLEANUP_DELAY` | Now used as `ended_ttl` value passed to server on activity creation (defaults: github/sabnzbd=15m, grafana/argocd=5m) |
 
 ### GitHub-specific env vars
 
