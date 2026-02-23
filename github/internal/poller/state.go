@@ -11,5 +11,4 @@ type trackedRun struct {
 	HTMLURL    string
 	StartedAt  time.Time
 	LastUpdate time.Time
-	EndedAt    *time.Time
 }

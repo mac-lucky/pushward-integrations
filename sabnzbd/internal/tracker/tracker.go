@@ -168,7 +168,8 @@ func (t *Tracker) track(resumed bool) {
 	ctx := context.Background()
 
 	// Ensure activity exists
-	if err := t.pw.CreateActivity(ctx, slug, "SABnzbd", t.cfg.PushWard.Priority); err != nil {
+	endedTTL := int(t.cfg.PushWard.CleanupDelay.Seconds())
+	if err := t.pw.CreateActivity(ctx, slug, "SABnzbd", t.cfg.PushWard.Priority, endedTTL, 0); err != nil {
 		slog.Error("failed to create activity", "error", err)
 		return
 	}

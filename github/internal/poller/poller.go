@@ -48,11 +48,8 @@ func (p *Poller) Run(ctx context.Context) error {
 
 	for {
 		interval := p.cfg.Polling.IdleInterval
-		for _, t := range p.tracked {
-			if t.EndedAt == nil {
-				interval = p.cfg.Polling.ActiveInterval
-				break
-			}
+		if len(p.tracked) > 0 {
+			interval = p.cfg.Polling.ActiveInterval
 		}
 
 		select {
@@ -112,8 +109,6 @@ func (p *Poller) refreshRepos(ctx context.Context) error {
 }
 
 func (p *Poller) poll(ctx context.Context) error {
-	p.cleanup(ctx)
-
 	if err := p.pollIdle(ctx); err != nil {
 		return err
 	}
@@ -123,7 +118,7 @@ func (p *Poller) poll(ctx context.Context) error {
 func (p *Poller) pollIdle(ctx context.Context) error {
 	for _, repo := range p.repos {
 		// Skip repos that already have an active entry
-		if t, ok := p.tracked[repo]; ok && t.EndedAt == nil {
+		if _, ok := p.tracked[repo]; ok {
 			continue
 		}
 
@@ -150,7 +145,9 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		slog.Info("workflow found", "repo", repo, "run_id", run.ID, "name", run.Name, "branch", run.HeadBranch, "slug", slug)
 
 		// Create the activity in PushWard
-		if err := p.pw.CreateActivity(ctx, slug, fmt.Sprintf("GitHub: %s", repoShort), p.cfg.PushWard.Priority); err != nil {
+		endedTTL := int(p.cfg.PushWard.CleanupDelay.Seconds())
+		staleTTL := int(p.cfg.PushWard.StaleTimeout.Seconds())
+		if err := p.pw.CreateActivity(ctx, slug, fmt.Sprintf("GitHub: %s", repoShort), p.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create activity", "slug", slug, "error", err)
 			continue
 		}
@@ -190,17 +187,6 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 
 func (p *Poller) pollActive(ctx context.Context) error {
 	for repo, t := range p.tracked {
-		if t.EndedAt != nil {
-			continue
-		}
-
-		// Check for stale tracked workflow (30min timeout)
-		if time.Since(t.LastUpdate) > 30*time.Minute {
-			slog.Warn("tracked workflow stale, ending", "run_id", t.RunID, "slug", t.Slug)
-			p.endWorkflow(ctx, t, "Timed out", "orange")
-			continue
-		}
-
 		jobs, err := p.gh.GetJobs(ctx, t.Repo, t.RunID)
 		if err != nil {
 			slog.Error("getting jobs", "repo", repo, "error", err)
@@ -298,24 +284,8 @@ func (p *Poller) endWorkflow(ctx context.Context, t *trackedRun, state, color st
 	}); err != nil {
 		slog.Error("failed to end activity", "slug", t.Slug, "error", err)
 	}
-	now := time.Now()
-	t.EndedAt = &now
-}
-
-func (p *Poller) cleanup(ctx context.Context) {
-	for repo, t := range p.tracked {
-		if t.EndedAt == nil {
-			continue
-		}
-		if time.Since(*t.EndedAt) < p.cfg.PushWard.CleanupDelay {
-			continue
-		}
-		slog.Info("cleaning up activity", "slug", t.Slug, "repo", repo)
-		if err := p.pw.DeleteActivity(ctx, t.Slug); err != nil {
-			slog.Error("failed to delete activity", "slug", t.Slug, "error", err)
-		}
-		delete(p.tracked, repo)
-	}
+	// Server handles cleanup via ended_ttl — just remove from local map
+	delete(p.tracked, t.Repo)
 }
 
 func intPtr(v int) *int {

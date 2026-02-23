@@ -31,6 +31,8 @@ type CreateActivityRequest struct {
 	Slug     string `json:"slug"`
 	Name     string `json:"name"`
 	Priority int    `json:"priority"`
+	EndedTTL int    `json:"ended_ttl,omitempty"`
+	StaleTTL int    `json:"stale_ttl,omitempty"`
 }
 
 type UpdateRequest struct {
@@ -95,11 +97,13 @@ func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequ
 	return fmt.Errorf("max retries exceeded: %w", lastErr)
 }
 
-func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority int) error {
+func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority, endedTTL, staleTTL int) error {
 	body, err := json.Marshal(CreateActivityRequest{
 		Slug:     slug,
 		Name:     name,
 		Priority: priority,
+		EndedTTL: endedTTL,
+		StaleTTL: staleTTL,
 	})
 	if err != nil {
 		return fmt.Errorf("marshaling create activity: %w", err)
