@@ -22,11 +22,13 @@ type GitHubConfig struct {
 }
 
 type PushWardConfig struct {
-	URL          string        `yaml:"url"`
-	APIKey       string        `yaml:"api_key"`
-	Priority     int           `yaml:"priority"`
-	CleanupDelay time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout time.Duration `yaml:"stale_timeout"`
+	URL            string        `yaml:"url"`
+	APIKey         string        `yaml:"api_key"`
+	Priority       int           `yaml:"priority"`
+	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout   time.Duration `yaml:"stale_timeout"`
+	EndDelay       time.Duration `yaml:"end_delay"`
+	EndDisplayTime time.Duration `yaml:"end_display_time"`
 }
 
 type PollingConfig struct {
@@ -36,9 +38,11 @@ type PollingConfig struct {
 func Load(path string) (*Config, error) {
 	cfg := &Config{
 		PushWard: PushWardConfig{
-			Priority:     1,
-			CleanupDelay: 15 * time.Minute,
-			StaleTimeout: 30 * time.Minute,
+			Priority:       1,
+			CleanupDelay:   15 * time.Minute,
+			StaleTimeout:   30 * time.Minute,
+			EndDelay:       5 * time.Second,
+			EndDisplayTime: 4 * time.Second,
 		},
 		Polling: PollingConfig{
 			IdleInterval: 60 * time.Second,
@@ -91,6 +95,20 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("parsing PUSHWARD_STALE_TIMEOUT: %w", err)
 		}
 		cfg.PushWard.StaleTimeout = d
+	}
+	if v := os.Getenv("PUSHWARD_END_DELAY"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PUSHWARD_END_DELAY: %w", err)
+		}
+		cfg.PushWard.EndDelay = d
+	}
+	if v := os.Getenv("PUSHWARD_END_DISPLAY_TIME"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PUSHWARD_END_DISPLAY_TIME: %w", err)
+		}
+		cfg.PushWard.EndDisplayTime = d
 	}
 	if v := os.Getenv("PUSHWARD_POLL_IDLE"); v != "" {
 		d, err := time.ParseDuration(v)
