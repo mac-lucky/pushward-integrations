@@ -484,6 +484,35 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 	}
 	h.mu.Unlock()
 
+	// Transient degradation during rolling update (step 2, tracked, not pending):
+	// show warning on Dynamic Island but keep the activity alive so deployed can complete it.
+	if exists && !wasPending && currentStep == 2 {
+		step := 2
+		total := totalSteps
+		url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
+		req := pushward.UpdateRequest{
+			State: "ONGOING",
+			Content: pushward.Content{
+				Template:     "pipeline",
+				Progress:     float64(step) / float64(total),
+				State:        "Degraded",
+				Icon:         "exclamationmark.triangle.fill",
+				Subtitle:     "ArgoCD \u00b7 " + p.App,
+				AccentColor:  "#FF9500",
+				CurrentStep:  &step,
+				TotalSteps:   &total,
+				URL:          url,
+				SecondaryURL: secondaryURL,
+			},
+		}
+		if err := h.client.UpdateActivity(ctx, slug, req); err != nil {
+			slog.Error("failed to update activity", "slug", slug, "error", err)
+			return
+		}
+		slog.Info("updated activity (transient degraded)", "slug", slug, "step", "2/3", "state", "Degraded")
+		return
+	}
+
 	// Create activity if untracked or was pending (activity never created on PushWard)
 	if !exists || wasPending {
 		endedTTL := int(h.config.PushWard.CleanupDelay.Seconds())
