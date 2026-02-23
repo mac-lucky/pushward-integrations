@@ -32,19 +32,21 @@ There is no Makefile or dedicated lint config. CI uses `golangci-lint` via the s
 
 ### Testing
 
-Only grafana and argocd have unit tests; github and sabnzbd have none.
+Only grafana, argocd, and github have unit tests; sabnzbd has none.
 
 ```bash
 # Run tests for a specific integration (from repo root)
+go test ./github/internal/poller/ -v -count=1
 go test ./grafana/internal/handler/ -v -count=1
 go test ./argocd/internal/handler/ -v -count=1
 
 # With race detector (matches CI flags)
+go test ./github/internal/poller/ -race -count=1 -v
 go test ./grafana/internal/handler/ -race -count=1 -v
 go test ./argocd/internal/handler/ -race -count=1 -v
 ```
 
-Both test files share the same infrastructure pattern: `mockPushWardServer(t)` starts an `httptest.Server` recording all requests as `apiCall{Method, Path, Body}`, `testConfig()` returns a config with short timers (e.g. `EndDelay: 10ms`), and `sendWebhook(t, h, payload)` POSTs JSON to the handler. Tests use `time.Sleep()` to wait for timer-driven async operations.
+All test files share the same infrastructure pattern: `mockPushWardServer(t)` starts an `httptest.Server` recording all requests as `apiCall{Method, Path, Body}`, `testConfig()` returns a config with short timers (e.g. `EndDelay: 10ms`), and `sendWebhook(t, h, payload)` POSTs JSON to the handler. Tests use `time.Sleep()` to wait for timer-driven async operations.
 
 ## Architecture
 
@@ -278,6 +280,8 @@ All settings support YAML config file (`-config` flag, default `config.yml`) and
 | `PUSHWARD_GITHUB_REPOS` | Comma-separated `owner/repo` list |
 | `PUSHWARD_POLL_IDLE` | Idle poll interval (default: 60s) |
 | `PUSHWARD_POLL_ACTIVE` | Active poll interval (default: 5s) |
+| `PUSHWARD_END_DELAY` | Wait before Phase 1 ONGOING in two-phase end (default: 5s) |
+| `PUSHWARD_END_DISPLAY_TIME` | Display time before ENDED in two-phase end (default: 4s) |
 
 ### SABnzbd-specific env vars
 

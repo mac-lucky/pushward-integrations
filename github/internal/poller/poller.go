@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/mac-lucky/pushward-docker/github/internal/config"
@@ -16,6 +17,7 @@ type Poller struct {
 	gh  *ghclient.Client
 	pw  *pushward.Client
 
+	mu          sync.Mutex
 	tracked     map[string]*trackedRun
 	repos       []string
 	lastRefresh time.Time
@@ -34,6 +36,16 @@ func New(cfg *config.Config, gh *ghclient.Client, pw *pushward.Client) *Poller {
 }
 
 func (p *Poller) Run(ctx context.Context) error {
+	defer func() {
+		p.mu.Lock()
+		for _, t := range p.tracked {
+			if t.endTimer != nil {
+				t.endTimer.Stop()
+			}
+		}
+		p.mu.Unlock()
+	}()
+
 	if err := p.refreshRepos(ctx); err != nil {
 		return fmt.Errorf("initial repo discovery: %w", err)
 	}
@@ -112,10 +124,20 @@ func (p *Poller) poll(ctx context.Context) error {
 
 func (p *Poller) pollIdle(ctx context.Context) error {
 	for _, repo := range p.repos {
-		// Skip repos that already have an active entry
-		if _, ok := p.tracked[repo]; ok {
+		// Skip repos that already have an active entry (no pending end)
+		p.mu.Lock()
+		existing, ok := p.tracked[repo]
+		if ok && existing.endTimer == nil {
+			p.mu.Unlock()
 			continue
 		}
+		// If existing entry has a pending end timer, cancel it and allow new run
+		if ok && existing.endTimer != nil {
+			existing.endTimer.Stop()
+			delete(p.tracked, repo)
+			slog.Info("cancelled pending end for new workflow", "repo", repo, "slug", existing.Slug)
+		}
+		p.mu.Unlock()
 
 		runs, err := p.gh.GetInProgressRuns(ctx, repo)
 		if err != nil {
@@ -147,6 +169,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			continue
 		}
 
+		p.mu.Lock()
 		p.tracked[repo] = &trackedRun{
 			Repo:       repo,
 			RunID:      run.ID,
@@ -157,6 +180,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			StartedAt:  run.CreatedAt,
 			LastUpdate: time.Now(),
 		}
+		p.mu.Unlock()
 
 		// Send initial ONGOING (triggers push-to-start)
 		if err := p.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
@@ -181,8 +205,30 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 }
 
 func (p *Poller) pollActive(ctx context.Context) error {
-	for repo, t := range p.tracked {
-		jobs, err := p.gh.GetJobs(ctx, t.Repo, t.RunID)
+	// Snapshot tracked keys under lock to avoid holding mutex across network calls
+	p.mu.Lock()
+	repos := make([]string, 0, len(p.tracked))
+	for repo := range p.tracked {
+		repos = append(repos, repo)
+	}
+	p.mu.Unlock()
+
+	for _, repo := range repos {
+		p.mu.Lock()
+		t, ok := p.tracked[repo]
+		if !ok || t.endTimer != nil {
+			p.mu.Unlock()
+			continue
+		}
+		// Copy values needed for network calls
+		tRepo := t.Repo
+		tRunID := t.RunID
+		tSlug := t.Slug
+		tName := t.Name
+		tHTMLURL := t.HTMLURL
+		p.mu.Unlock()
+
+		jobs, err := p.gh.GetJobs(ctx, tRepo, tRunID)
 		if err != nil {
 			slog.Error("getting jobs", "repo", repo, "error", err)
 			continue
@@ -222,8 +268,13 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			currentJobIndex = completedJobs
 		}
 
-		t.LastUpdate = time.Now()
-		repoShort := repoName(t.Repo)
+		p.mu.Lock()
+		if tt, ok := p.tracked[repo]; ok {
+			tt.LastUpdate = time.Now()
+		}
+		p.mu.Unlock()
+
+		repoShort := repoName(tRepo)
 
 		if allCompleted {
 			conclusion := "Success"
@@ -232,55 +283,99 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				conclusion = "Failed"
 				color = "red"
 			}
-			slog.Info("workflow completed", "run_id", t.RunID, "slug", t.Slug, "conclusion", conclusion)
-			p.endWorkflow(ctx, t, conclusion, color)
+			slog.Info("workflow completed", "run_id", tRunID, "slug", tSlug, "conclusion", conclusion)
+			p.scheduleEnd(repo, pushward.Content{
+				Template:     "pipeline",
+				Progress:     1.0,
+				State:        conclusion,
+				Icon:         "arrow.triangle.branch",
+				Subtitle:     fmt.Sprintf("%s / %s", repoShort, tName),
+				AccentColor:  color,
+				CurrentStep:  intPtr(totalJobs),
+				TotalSteps:   intPtr(totalJobs),
+				URL:          tHTMLURL,
+				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
+			})
 			continue
 		}
 
 		progress := float64(completedJobs) / float64(totalJobs)
 
-		if err := p.pw.UpdateActivity(ctx, t.Slug, pushward.UpdateRequest{
+		if err := p.pw.UpdateActivity(ctx, tSlug, pushward.UpdateRequest{
 			State: "ONGOING",
 			Content: pushward.Content{
 				Template:     "pipeline",
 				Progress:     progress,
 				State:        currentJobName,
 				Icon:         "arrow.triangle.branch",
-				Subtitle:     fmt.Sprintf("%s / %s", repoShort, t.Name),
+				Subtitle:     fmt.Sprintf("%s / %s", repoShort, tName),
 				AccentColor:  "green",
 				CurrentStep:  intPtr(currentJobIndex),
 				TotalSteps:   intPtr(totalJobs),
-				URL:          t.HTMLURL,
-				SecondaryURL: fmt.Sprintf("https://github.com/%s", t.Repo),
+				URL:          tHTMLURL,
+				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
 			},
 		}); err != nil {
-			slog.Error("failed to update activity", "slug", t.Slug, "error", err)
+			slog.Error("failed to update activity", "slug", tSlug, "error", err)
 		}
 	}
 	return nil
 }
 
-func (p *Poller) endWorkflow(ctx context.Context, t *trackedRun, state, color string) {
-	repoShort := repoName(t.Repo)
-	if err := p.pw.UpdateActivity(ctx, t.Slug, pushward.UpdateRequest{
-		State: "ENDED",
-		Content: pushward.Content{
-			Template:     "pipeline",
-			Progress:     1.0,
-			State:        state,
-			Icon:         "arrow.triangle.branch",
-			Subtitle:     fmt.Sprintf("%s / %s", repoShort, t.Name),
-			AccentColor:  color,
-			CurrentStep:  intPtr(1),
-			TotalSteps:   intPtr(1),
-			URL:          t.HTMLURL,
-			SecondaryURL: fmt.Sprintf("https://github.com/%s", t.Repo),
-		},
-	}); err != nil {
-		slog.Error("failed to end activity", "slug", t.Slug, "error", err)
+// scheduleEnd schedules a two-phase end for an activity:
+//   - Phase 1 (after EndDelay): ONGOING update with final content (visible in Dynamic Island)
+//   - Phase 2 (EndDisplayTime later): ENDED with same content (dismisses Live Activity)
+//
+// This gives iOS time to register the push-update token after push-to-start,
+// and ensures the Dynamic Island shows the final state before dismissal.
+func (p *Poller) scheduleEnd(repo string, content pushward.Content) {
+	p.mu.Lock()
+	t, ok := p.tracked[repo]
+	if !ok {
+		p.mu.Unlock()
+		return
 	}
-	// Server handles cleanup via ended_ttl — just remove from local map
-	delete(p.tracked, t.Repo)
+	slug := t.Slug
+	runID := t.RunID
+	endDelay := p.cfg.PushWard.EndDelay
+	displayTime := p.cfg.PushWard.EndDisplayTime
+	t.endTimer = time.AfterFunc(endDelay, func() {
+		// Phase 1: ONGOING with final content
+		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+		ongoingReq := pushward.UpdateRequest{
+			State:   "ONGOING",
+			Content: content,
+		}
+		if err := p.pw.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
+			slog.Error("failed to update activity (end phase 1)", "slug", slug, "error", err)
+		} else {
+			slog.Info("updated activity", "slug", slug, "state", content.State)
+		}
+		cancel1()
+
+		time.Sleep(displayTime)
+
+		// Phase 2: ENDED with same content
+		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel2()
+		endedReq := pushward.UpdateRequest{
+			State:   "ENDED",
+			Content: content,
+		}
+		if err := p.pw.UpdateActivity(ctx2, slug, endedReq); err != nil {
+			slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
+		} else {
+			slog.Info("ended activity", "slug", slug, "state", content.State)
+		}
+
+		// Server handles cleanup via ended_ttl — just remove from local map
+		p.mu.Lock()
+		if current, ok := p.tracked[repo]; ok && current.RunID == runID {
+			delete(p.tracked, repo)
+		}
+		p.mu.Unlock()
+	})
+	p.mu.Unlock()
 }
 
 func intPtr(v int) *int {
