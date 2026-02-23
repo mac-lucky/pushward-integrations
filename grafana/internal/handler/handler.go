@@ -24,11 +24,9 @@ type Handler struct {
 
 // alertGroup tracks all firing instances of a single alert rule as one activity.
 type alertGroup struct {
-	slug         string
-	alertname    string
-	instances    map[string]*instanceInfo // fingerprint -> info
-	cleanupTimer *time.Timer
-	staleTimer   *time.Timer
+	slug      string
+	alertname string
+	instances map[string]*instanceInfo // fingerprint -> info
 }
 
 type instanceInfo struct {
@@ -137,18 +135,12 @@ func (h *Handler) handleFiring(ctx context.Context, alertname, fingerprint strin
 		h.alertGroups[alertname] = group
 	}
 	group.instances[fingerprint] = info
-	if group.cleanupTimer != nil {
-		group.cleanupTimer.Stop()
-		group.cleanupTimer = nil
-	}
-	if group.staleTimer != nil {
-		group.staleTimer.Stop()
-		group.staleTimer = nil
-	}
 	h.mu.Unlock()
 
 	if isNew {
-		if err := h.client.CreateActivity(ctx, slug, alertname, h.config.PushWard.Priority); err != nil {
+		endedTTL := int(h.config.PushWard.CleanupDelay.Seconds())
+		staleTTL := int(h.config.PushWard.StaleTimeout.Seconds())
+		if err := h.client.CreateActivity(ctx, slug, alertname, h.config.PushWard.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create activity", "slug", slug, "error", err)
 			h.mu.Lock()
 			delete(h.alertGroups, alertname)
@@ -167,14 +159,6 @@ func (h *Handler) handleFiring(ctx context.Context, alertname, fingerprint strin
 		return
 	}
 	slog.Info("updated activity", "slug", slug, "state", "ONGOING", "severity", req.Content.Severity)
-
-	h.mu.Lock()
-	if g, ok := h.alertGroups[alertname]; ok {
-		g.staleTimer = time.AfterFunc(h.config.PushWard.StaleTimeout, func() {
-			h.forceEnd(alertname)
-		})
-	}
-	h.mu.Unlock()
 }
 
 func (h *Handler) handleResolved(ctx context.Context, alertname, fingerprint string, info *instanceInfo) {
@@ -194,10 +178,6 @@ func (h *Handler) handleResolved(ctx context.Context, alertname, fingerprint str
 
 	var req pushward.UpdateRequest
 	if remaining == 0 {
-		if group.staleTimer != nil {
-			group.staleTimer.Stop()
-			group.staleTimer = nil
-		}
 		req = buildEndUpdate(info)
 	} else {
 		req = h.buildOngoingUpdate(group)
@@ -211,12 +191,9 @@ func (h *Handler) handleResolved(ctx context.Context, alertname, fingerprint str
 
 	if remaining == 0 {
 		slog.Info("ended activity", "slug", slug, "state", "ENDED")
+		// Server handles cleanup via ended_ttl — just remove from local map
 		h.mu.Lock()
-		if g, ok := h.alertGroups[alertname]; ok {
-			g.cleanupTimer = time.AfterFunc(h.config.PushWard.CleanupDelay, func() {
-				h.cleanup(alertname)
-			})
-		}
+		delete(h.alertGroups, alertname)
 		h.mu.Unlock()
 	} else {
 		slog.Info("updated activity after partial resolve", "slug", slug, "remaining", remaining)
@@ -294,63 +271,6 @@ func (h *Handler) worstInstance(group *alertGroup) *instanceInfo {
 		}
 	}
 	return worst
-}
-
-func (h *Handler) forceEnd(alertname string) {
-	h.mu.Lock()
-	group, ok := h.alertGroups[alertname]
-	if !ok {
-		h.mu.Unlock()
-		return
-	}
-	slug := group.slug
-	h.mu.Unlock()
-
-	slog.Warn("force-ending stale alert", "slug", slug, "alertname", alertname)
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	req := pushward.UpdateRequest{
-		State: "ENDED",
-		Content: pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       "Stale alert (auto-ended)",
-			Icon:        "clock.badge.xmark",
-			AccentColor: "#8E8E93",
-		},
-	}
-	if err := h.client.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to force-end activity", "slug", slug, "error", err)
-	}
-
-	time.AfterFunc(h.config.PushWard.CleanupDelay, func() {
-		h.cleanup(alertname)
-	})
-}
-
-func (h *Handler) cleanup(alertname string) {
-	h.mu.Lock()
-	group, ok := h.alertGroups[alertname]
-	if !ok {
-		h.mu.Unlock()
-		return
-	}
-	slug := group.slug
-	h.mu.Unlock()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := h.client.DeleteActivity(ctx, slug); err != nil {
-		slog.Error("failed to delete activity", "slug", slug, "error", err)
-		return
-	}
-	slog.Info("deleted activity", "slug", slug)
-
-	h.mu.Lock()
-	delete(h.alertGroups, alertname)
-	h.mu.Unlock()
 }
 
 func (h *Handler) iconForSeverity(severity string) string {

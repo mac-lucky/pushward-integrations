@@ -26,6 +26,7 @@ type PushWardConfig struct {
 	APIKey       string        `yaml:"api_key"`
 	Priority     int           `yaml:"priority"`
 	CleanupDelay time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout time.Duration `yaml:"stale_timeout"`
 }
 
 type PollingConfig struct {
@@ -38,6 +39,7 @@ func Load(path string) (*Config, error) {
 		PushWard: PushWardConfig{
 			Priority:     1,
 			CleanupDelay: 15 * time.Minute,
+			StaleTimeout: 30 * time.Minute,
 		},
 		Polling: PollingConfig{
 			IdleInterval:   60 * time.Second,
@@ -84,6 +86,13 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("parsing PUSHWARD_CLEANUP_DELAY: %w", err)
 		}
 		cfg.PushWard.CleanupDelay = d
+	}
+	if v := os.Getenv("PUSHWARD_STALE_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PUSHWARD_STALE_TIMEOUT: %w", err)
+		}
+		cfg.PushWard.StaleTimeout = d
 	}
 	if v := os.Getenv("PUSHWARD_POLL_IDLE"); v != "" {
 		d, err := time.ParseDuration(v)

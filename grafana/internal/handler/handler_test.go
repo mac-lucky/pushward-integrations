@@ -209,7 +209,6 @@ func TestResolvedAlert(t *testing.T) {
 				secondaryURL: "https://grafana.example.com/d/disk-dashboard/disk",
 			},
 		},
-		staleTimer: time.AfterFunc(24*time.Hour, func() {}),
 	}
 
 	payload := `{
@@ -589,7 +588,6 @@ func TestPartialResolve_ActivityContinues(t *testing.T) {
 			"fp-aaa": {severity: "critical", summary: "node-1 down", subtitle: "Grafana · node-1:9100"},
 			"fp-bbb": {severity: "warning", summary: "node-2 down", subtitle: "Grafana · node-2:9100"},
 		},
-		staleTimer: time.AfterFunc(24*time.Hour, func() {}),
 	}
 
 	// Resolve one instance
@@ -1085,10 +1083,9 @@ func TestEmptyAlertsArray(t *testing.T) {
 	}
 }
 
-func TestCleanupTimerScheduledOnResolved(t *testing.T) {
-	srv, _, _ := mockPushWardServer(t)
+func TestResolvedRemovesFromMap(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.CleanupDelay = 50 * time.Millisecond // Short delay for test
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -1132,24 +1129,27 @@ func TestCleanupTimerScheduledOnResolved(t *testing.T) {
 	w = httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	// Wait for cleanup timer
-	time.Sleep(150 * time.Millisecond)
-
-	// Verify alert group was cleaned up
+	// Alert group should be removed immediately after ENDED (server handles cleanup via ended_ttl)
 	h.mu.Lock()
 	_, exists := h.alertGroups["TestCleanup"]
 	h.mu.Unlock()
 
 	if exists {
-		t.Error("expected alert group to be cleaned up after timer, but it still exists")
+		t.Error("expected alert group to be removed from map immediately after ENDED")
+	}
+
+	// Verify no DELETE calls — server handles cleanup via ended_ttl
+	recorded := getCalls(calls, mu)
+	for _, c := range recorded {
+		if c.Method == "DELETE" {
+			t.Error("unexpected DELETE call — server handles cleanup via ended_ttl")
+		}
 	}
 }
 
-func TestStaleTimerForceEnds(t *testing.T) {
+func TestCreateActivity_IncludesTTLValues(t *testing.T) {
 	srv, calls, mu := mockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.StaleTimeout = 50 * time.Millisecond  // Short stale timeout for test
-	cfg.PushWard.CleanupDelay = 50 * time.Millisecond  // Short cleanup delay
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -1157,14 +1157,14 @@ func TestStaleTimerForceEnds(t *testing.T) {
 		"status": "firing",
 		"alerts": [{
 			"status": "firing",
-			"labels": {"alertname": "StaleAlert", "severity": "info"},
-			"annotations": {"summary": "This will go stale"},
+			"labels": {"alertname": "TTLAlert", "severity": "info"},
+			"annotations": {"summary": "Test TTL values"},
 			"startsAt": "2026-02-18T12:00:00Z",
 			"endsAt": "0001-01-01T00:00:00Z",
 			"generatorURL": "",
 			"dashboardURL": "",
 			"panelURL": "",
-			"fingerprint": "stale1234567"
+			"fingerprint": "ttl123456789"
 		}]
 	}`
 
@@ -1172,32 +1172,22 @@ func TestStaleTimerForceEnds(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	// Wait for stale timer + cleanup
-	time.Sleep(200 * time.Millisecond)
-
 	recorded := getCalls(calls, mu)
-	// create + update (firing) + update (force-end) + delete (cleanup)
-	if len(recorded) < 3 {
-		t.Fatalf("expected at least 3 calls (create, update, force-end), got %d", len(recorded))
+	if len(recorded) < 1 {
+		t.Fatalf("expected at least 1 call, got %d", len(recorded))
 	}
 
-	// Find the force-end call
-	var forceEndReq pushward.UpdateRequest
-	for _, c := range recorded {
-		if c.Method == "PATCH" {
-			var req pushward.UpdateRequest
-			unmarshalBody(t, c.Body, &req)
-			if req.Content.State == "Stale alert (auto-ended)" {
-				forceEndReq = req
-				break
-			}
-		}
+	var createReq pushward.CreateActivityRequest
+	unmarshalBody(t, recorded[0].Body, &createReq)
+
+	expectedEndedTTL := int(cfg.PushWard.CleanupDelay.Seconds())
+	expectedStaleTTL := int(cfg.PushWard.StaleTimeout.Seconds())
+
+	if createReq.EndedTTL != expectedEndedTTL {
+		t.Errorf("expected ended_ttl %d, got %d", expectedEndedTTL, createReq.EndedTTL)
 	}
-	if forceEndReq.State != "ENDED" {
-		t.Error("expected a force-end PATCH with state 'Stale alert (auto-ended)'")
-	}
-	if forceEndReq.Content.Icon != "clock.badge.xmark" {
-		t.Errorf("expected stale icon clock.badge.xmark, got %s", forceEndReq.Content.Icon)
+	if createReq.StaleTTL != expectedStaleTTL {
+		t.Errorf("expected stale_ttl %d, got %d", expectedStaleTTL, createReq.StaleTTL)
 	}
 }
 
@@ -1321,7 +1311,6 @@ func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
 				firedAt:  time.Date(2026, 2, 18, 7, 0, 0, 0, time.UTC).Unix(),
 			},
 		},
-		staleTimer: time.AfterFunc(24*time.Hour, func() {}),
 	}
 
 	payload := `{
@@ -1460,10 +1449,9 @@ func TestUnknownAlertStatus_Ignored(t *testing.T) {
 	}
 }
 
-func TestResolvedCancelsCleanupOnRefire(t *testing.T) {
-	srv, _, _ := mockPushWardServer(t)
+func TestRefireAfterResolve_CreatesNewGroup(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.CleanupDelay = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -1492,25 +1480,35 @@ func TestResolvedCancelsCleanupOnRefire(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	// Resolve (starts cleanup timer)
+	// Resolve (removes from map immediately)
 	req = httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(makePayload("resolved")))
 	w = httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	// Immediately re-fire (should cancel cleanup timer)
+	// Re-fire (creates new group since the old one was removed)
 	req = httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(makePayload("firing")))
 	w = httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	// Wait longer than cleanup delay
-	time.Sleep(200 * time.Millisecond)
-
-	// Alert group should still exist (cleanup was cancelled by re-fire)
+	// Alert group should exist (re-fire created a new group)
 	h.mu.Lock()
 	_, exists := h.alertGroups[alertname]
 	h.mu.Unlock()
 
 	if !exists {
-		t.Error("expected alert group to survive re-fire (cleanup should have been cancelled)")
+		t.Error("expected alert group to exist after re-fire")
+	}
+
+	recorded := getCalls(calls, mu)
+	// First fire: create + update = 2
+	// Resolve: update (ENDED) = 1
+	// Re-fire: create (new group) + update = 2
+	// Total = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 API calls, got %d", len(recorded))
+	}
+	// Verify the re-fire created a new activity
+	if recorded[3].Method != "POST" {
+		t.Errorf("expected POST (new create) for re-fire, got %s", recorded[3].Method)
 	}
 }

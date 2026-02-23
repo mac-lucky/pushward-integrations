@@ -659,113 +659,91 @@ func TestMissingEvent(t *testing.T) {
 
 // --- Test: Stale timer ---
 
-func TestStaleTimer_ForceEnds(t *testing.T) {
+func TestCreateActivity_IncludesTTLValues(t *testing.T) {
 	srv, calls, mu := mockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.StaleTimeout = 50 * time.Millisecond
-	cfg.PushWard.CleanupDelay = 50 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
-	sendWebhook(t, h, `{"app":"stale-app","event":"sync-running","revision":"r1"}`)
-
-	// Wait for stale timer + two-phase end + cleanup
-	time.Sleep(300 * time.Millisecond)
+	sendWebhook(t, h, `{"app":"ttl-app","event":"sync-running","revision":"r1"}`)
 
 	recorded := getCalls(calls, mu)
-	// create + step1 + phase1(ONGOING stale) + phase2(ENDED stale) + delete = 5
-	if len(recorded) < 4 {
-		t.Fatalf("expected at least 4 calls (create, update, phase1, phase2), got %d", len(recorded))
+	if len(recorded) < 1 {
+		t.Fatalf("expected at least 1 call, got %d", len(recorded))
 	}
 
-	// Find the force-end ENDED call (phase 2)
-	var forceEndReq pushward.UpdateRequest
-	for _, c := range recorded {
-		if c.Method == "PATCH" {
-			var req pushward.UpdateRequest
-			unmarshalBody(t, c.Body, &req)
-			if req.State == "ENDED" && req.Content.State == "Stale sync (auto-ended)" {
-				forceEndReq = req
-				break
-			}
-		}
+	var createReq pushward.CreateActivityRequest
+	unmarshalBody(t, recorded[0].Body, &createReq)
+
+	expectedEndedTTL := int(cfg.PushWard.CleanupDelay.Seconds())
+	expectedStaleTTL := int(cfg.PushWard.StaleTimeout.Seconds())
+
+	if createReq.EndedTTL != expectedEndedTTL {
+		t.Errorf("expected ended_ttl %d, got %d", expectedEndedTTL, createReq.EndedTTL)
 	}
-	if forceEndReq.State != "ENDED" {
-		t.Error("expected a force-end PATCH with state ENDED and 'Stale sync (auto-ended)'")
-	}
-	if forceEndReq.Content.Icon != "clock.badge.xmark" {
-		t.Errorf("expected stale icon, got %s", forceEndReq.Content.Icon)
-	}
-	if forceEndReq.Content.AccentColor != "#8E8E93" {
-		t.Errorf("expected gray color, got %s", forceEndReq.Content.AccentColor)
+	if createReq.StaleTTL != expectedStaleTTL {
+		t.Errorf("expected stale_ttl %d, got %d", expectedStaleTTL, createReq.StaleTTL)
 	}
 }
 
 // --- Test: Cleanup timer ---
 
-func TestCleanupTimer_DeletesActivity(t *testing.T) {
+func TestCleanupAfterEnd_RemovesFromMap(t *testing.T) {
 	srv, calls, mu := mockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.CleanupDelay = 50 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
 	sendWebhook(t, h, `{"app":"cleanup-app","event":"sync-running","revision":"r1"}`)
 	sendWebhook(t, h, `{"app":"cleanup-app","event":"deployed","revision":"r1"}`)
 
-	// Wait for two-phase end (EndDelay + EndDisplayTime) + cleanup
-	time.Sleep(250 * time.Millisecond)
+	// Wait for two-phase end (EndDelay + EndDisplayTime)
+	time.Sleep(100 * time.Millisecond)
 
 	recorded := getCalls(calls, mu)
-	// create + step1 + deployed(ENDED) + delete = 4
-	found := false
+	// create + step1 + phase1(ONGOING) + phase2(ENDED) = 4
+	// No DELETE call — server handles cleanup via ended_ttl
 	for _, c := range recorded {
 		if c.Method == "DELETE" {
-			found = true
-			expectedPath := "/activities/argocd-cleanup-app"
-			if c.Path != expectedPath {
-				t.Errorf("expected DELETE %s, got %s", expectedPath, c.Path)
-			}
+			t.Error("unexpected DELETE call — server handles cleanup via ended_ttl")
 		}
 	}
-	if !found {
-		t.Error("expected a DELETE call for cleanup")
-	}
 
-	// App should be removed from tracked map
+	// App should be removed from tracked map immediately after ENDED
 	h.mu.Lock()
 	_, exists := h.apps["cleanup-app"]
 	h.mu.Unlock()
 	if exists {
-		t.Error("expected app to be cleaned up from map")
+		t.Error("expected app to be removed from map after ENDED")
 	}
 }
 
 // --- Test: New sync cancels pending cleanup ---
 
-func TestNewSync_CancelsPendingCleanup(t *testing.T) {
+func TestNewSync_CancelsPendingEnd(t *testing.T) {
 	srv, _, _ := mockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.CleanupDelay = 100 * time.Millisecond
+	cfg.PushWard.EndDelay = 100 * time.Millisecond
+	cfg.PushWard.EndDisplayTime = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
-	// Sync and deploy (starts cleanup timer)
+	// Sync and deploy (starts endTimer)
 	sendWebhook(t, h, `{"app":"flap-app","event":"sync-running","revision":"rev1"}`)
 	sendWebhook(t, h, `{"app":"flap-app","event":"deployed","revision":"rev1"}`)
 
-	// Immediately start new sync (should cancel cleanup)
+	// Immediately start new sync (should cancel endTimer via new revision reset)
 	sendWebhook(t, h, `{"app":"flap-app","event":"sync-running","revision":"rev2"}`)
 
-	// Wait longer than cleanup delay
-	time.Sleep(200 * time.Millisecond)
+	// Wait longer than end delay + display time
+	time.Sleep(300 * time.Millisecond)
 
-	// App should still exist (cleanup was cancelled)
+	// App should still exist (endTimer was cancelled by new sync)
 	h.mu.Lock()
 	_, exists := h.apps["flap-app"]
 	h.mu.Unlock()
 	if !exists {
-		t.Error("expected app to survive re-sync (cleanup should have been cancelled)")
+		t.Error("expected app to survive re-sync (endTimer should have been cancelled)")
 	}
 }
 
@@ -800,16 +778,13 @@ func TestMultipleApps_Independent(t *testing.T) {
 	// Verify app-two is still tracked
 	h.mu.Lock()
 	_, app2Exists := h.apps["app-two"]
-	app1, app1Exists := h.apps["app-one"]
+	_, app1Exists := h.apps["app-one"]
 	h.mu.Unlock()
 	if !app2Exists {
 		t.Error("expected app-two to still be tracked")
 	}
-	if !app1Exists {
-		t.Error("expected app-one to still exist (cleanup timer pending)")
-	}
-	if app1.step != 3 {
-		t.Errorf("expected app-one at step 3, got %d", app1.step)
+	if app1Exists {
+		t.Error("expected app-one to be removed from map after ENDED")
 	}
 }
 
