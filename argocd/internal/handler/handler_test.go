@@ -295,7 +295,7 @@ func TestSyncRunning_ThenSyncFailed(t *testing.T) {
 
 // --- Test: Health degraded after sync succeeded ---
 
-func TestSyncSucceeded_ThenHealthDegraded(t *testing.T) {
+func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 	srv, calls, mu := mockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -309,19 +309,17 @@ func TestSyncSucceeded_ThenHealthDegraded(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
 	recorded := getCalls(calls, mu)
-	// create + step1 + step2 + phase1(ONGOING) + phase2(ENDED) = 5
-	if len(recorded) != 5 {
-		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	// create + step1 + step2 + degraded(ONGOING) = 4
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 calls after degraded, got %d", len(recorded))
 	}
 
+	// Degraded should be ONGOING (transient warning), not ENDED
 	var degradedReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[4].Body, &degradedReq)
-	if degradedReq.State != "ENDED" {
-		t.Errorf("expected ENDED, got %s", degradedReq.State)
+	unmarshalBody(t, recorded[3].Body, &degradedReq)
+	if degradedReq.State != "ONGOING" {
+		t.Errorf("expected ONGOING (transient warning), got %s", degradedReq.State)
 	}
 	if degradedReq.Content.State != "Degraded" {
 		t.Errorf("expected 'Degraded', got %s", degradedReq.Content.State)
@@ -332,9 +330,46 @@ func TestSyncSucceeded_ThenHealthDegraded(t *testing.T) {
 	if degradedReq.Content.AccentColor != "#FF9500" {
 		t.Errorf("expected orange color, got %s", degradedReq.Content.AccentColor)
 	}
-	// Was at step 2, should end at step 2
 	if degradedReq.Content.CurrentStep == nil || *degradedReq.Content.CurrentStep != 2 {
 		t.Errorf("expected current_step 2, got %v", degradedReq.Content.CurrentStep)
+	}
+
+	// App should still be tracked
+	h.mu.Lock()
+	_, exists := h.apps["web-app"]
+	h.mu.Unlock()
+	if !exists {
+		t.Fatal("expected app to still be tracked after transient degraded")
+	}
+
+	// deployed arrives — should recover to 100% Deployed
+	w = sendWebhook(t, h, `{"app":"web-app","event":"deployed","revision":"rev1"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("deployed: expected 200, got %d", w.Code)
+	}
+
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
+	recorded = getCalls(calls, mu)
+	// create + step1 + step2 + degraded(ONGOING) + phase1(ONGOING Deployed) + phase2(ENDED Deployed) = 6
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls total, got %d", len(recorded))
+	}
+
+	var phase2 pushward.UpdateRequest
+	unmarshalBody(t, recorded[5].Body, &phase2)
+	if phase2.State != "ENDED" {
+		t.Errorf("expected ENDED, got %s", phase2.State)
+	}
+	if phase2.Content.State != "Deployed" {
+		t.Errorf("expected 'Deployed', got %s", phase2.Content.State)
+	}
+	if phase2.Content.CurrentStep == nil || *phase2.Content.CurrentStep != 3 {
+		t.Errorf("expected current_step 3, got %v", phase2.Content.CurrentStep)
+	}
+	if phase2.Content.Progress != 1.0 {
+		t.Errorf("expected progress 1.0, got %f", phase2.Content.Progress)
 	}
 }
 
@@ -1123,6 +1158,108 @@ func TestGracePeriod_UntrackedSyncSucceeded_GraceExpires(t *testing.T) {
 	}
 	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 2 {
 		t.Errorf("expected step 2, got %v", update.Content.CurrentStep)
+	}
+}
+
+func TestHealthDegraded_AtStep1_StillEnds(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// sync-running (step 1) → health-degraded: should end immediately (not transient)
+	sendWebhook(t, h, `{"app":"step1-app","event":"sync-running","revision":"rev1"}`)
+	sendWebhook(t, h, `{"app":"step1-app","event":"health-degraded","revision":"rev1"}`)
+
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
+	recorded := getCalls(calls, mu)
+	// create + step1 + phase1(ONGOING Degraded) + phase2(ENDED Degraded) = 4
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	}
+
+	var endReq pushward.UpdateRequest
+	unmarshalBody(t, recorded[3].Body, &endReq)
+	if endReq.State != "ENDED" {
+		t.Errorf("expected ENDED, got %s", endReq.State)
+	}
+	if endReq.Content.State != "Degraded" {
+		t.Errorf("expected 'Degraded', got %s", endReq.Content.State)
+	}
+	if endReq.Content.CurrentStep == nil || *endReq.Content.CurrentStep != 1 {
+		t.Errorf("expected current_step 1, got %v", endReq.Content.CurrentStep)
+	}
+
+	// App should be removed from tracking
+	h.mu.Lock()
+	_, exists := h.apps["step1-app"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to be removed from map after ENDED")
+	}
+}
+
+func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	sendWebhook(t, h, `{"app":"multi-deg","event":"sync-running","revision":"rev1"}`)
+	sendWebhook(t, h, `{"app":"multi-deg","event":"sync-succeeded","revision":"rev1"}`)
+
+	// Two degraded events at step 2 — both should be transient ONGOING warnings
+	sendWebhook(t, h, `{"app":"multi-deg","event":"health-degraded","revision":"rev1"}`)
+	sendWebhook(t, h, `{"app":"multi-deg","event":"health-degraded","revision":"rev1"}`)
+
+	recorded := getCalls(calls, mu)
+	// create + step1 + step2 + degraded1(ONGOING) + degraded2(ONGOING) = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 calls after two degraded, got %d", len(recorded))
+	}
+
+	// Both should be ONGOING
+	for _, idx := range []int{3, 4} {
+		var req pushward.UpdateRequest
+		unmarshalBody(t, recorded[idx].Body, &req)
+		if req.State != "ONGOING" {
+			t.Errorf("call %d: expected ONGOING, got %s", idx, req.State)
+		}
+		if req.Content.State != "Degraded" {
+			t.Errorf("call %d: expected 'Degraded', got %s", idx, req.Content.State)
+		}
+	}
+
+	// App should still be tracked
+	h.mu.Lock()
+	_, exists := h.apps["multi-deg"]
+	h.mu.Unlock()
+	if !exists {
+		t.Fatal("expected app to still be tracked after multiple transient degraded")
+	}
+
+	// deployed recovers to 100%
+	sendWebhook(t, h, `{"app":"multi-deg","event":"deployed","revision":"rev1"}`)
+	time.Sleep(100 * time.Millisecond)
+
+	recorded = getCalls(calls, mu)
+	// +phase1(ONGOING Deployed) + phase2(ENDED Deployed) = 7
+	if len(recorded) != 7 {
+		t.Fatalf("expected 7 calls total, got %d", len(recorded))
+	}
+
+	var endReq pushward.UpdateRequest
+	unmarshalBody(t, recorded[6].Body, &endReq)
+	if endReq.State != "ENDED" {
+		t.Errorf("expected ENDED, got %s", endReq.State)
+	}
+	if endReq.Content.State != "Deployed" {
+		t.Errorf("expected 'Deployed', got %s", endReq.Content.State)
+	}
+	if endReq.Content.CurrentStep == nil || *endReq.Content.CurrentStep != 3 {
+		t.Errorf("expected current_step 3, got %v", endReq.Content.CurrentStep)
 	}
 }
 
