@@ -2,18 +2,17 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"log/slog"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/config"
-	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/pushward"
 	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/sabnzbd"
 	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/tracker"
+	"github.com/mac-lucky/pushward-docker/shared/pushward"
+	"github.com/mac-lucky/pushward-docker/shared/server"
 )
 
 func main() {
@@ -33,17 +32,8 @@ func main() {
 	pw := pushward.NewClient(cfg.PushWard.URL, cfg.PushWard.APIKey)
 	t := tracker.New(cfg, sab, pw)
 
-	mux := http.NewServeMux()
+	mux := server.NewMux()
 	mux.HandleFunc("/webhook", t.HandleWebhook)
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("ok"))
-	})
-
-	srv := &http.Server{
-		Addr:    cfg.Server.Address,
-		Handler: mux,
-	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -52,20 +42,11 @@ func main() {
 		t.Cleanup(ctx)
 	}
 
-	go func() {
-		slog.Info("starting pushward-sabnzbd", "address", cfg.Server.Address, "priority", cfg.PushWard.Priority, "cleanup_delay", cfg.PushWard.CleanupDelay)
-		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			slog.Error("server error", "error", err)
-			os.Exit(1)
-		}
-	}()
-
-	<-ctx.Done()
-	slog.Info("shutting down server")
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5)
-	defer shutdownCancel()
-	srv.Shutdown(shutdownCtx)
+	slog.Info("starting pushward-sabnzbd", "address", cfg.Server.Address, "priority", cfg.PushWard.Priority, "cleanup_delay", cfg.PushWard.CleanupDelay)
+	if err := server.ListenAndServe(ctx, cfg.Server.Address, mux); err != nil {
+		slog.Error("server error", "error", err)
+		os.Exit(1)
+	}
 
 	slog.Info("waiting for active tracking to finish")
 	t.Wait()

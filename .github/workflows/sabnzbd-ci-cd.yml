@@ -4,10 +4,10 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    paths: ['sabnzbd/**', '.github/workflows/sabnzbd-ci-cd.yml']
+    paths: ['sabnzbd/**', 'shared/**', '.github/workflows/sabnzbd-ci-cd.yml']
   pull_request:
     branches: [main]
-    paths: ['sabnzbd/**', '.github/workflows/sabnzbd-ci-cd.yml']
+    paths: ['sabnzbd/**', 'shared/**', '.github/workflows/sabnzbd-ci-cd.yml']
   workflow_dispatch:
 
 jobs:
@@ -24,7 +24,7 @@ jobs:
       push_to_dockerhub: false
       push_on_main: true
       main_branch: "main"
-      build_context: "./sabnzbd"
+      build_context: "."
       dockerfile_path: "./sabnzbd/Dockerfile"
       go_module_path: "./sabnzbd"
       enable_container_tests: false

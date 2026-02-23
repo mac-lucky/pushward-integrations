@@ -21,11 +21,11 @@ go build ./argocd/cmd/pushward-argocd
 ./pushward-sabnzbd -config sabnzbd/config.example.yml
 ./pushward-argocd -config argocd/config.example.yml
 
-# Build Docker images
-docker build -f github/Dockerfile -t pushward-github ./github
-docker build -f grafana/Dockerfile -t pushward-grafana ./grafana
-docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd ./sabnzbd
-docker build -f argocd/Dockerfile -t pushward-argocd ./argocd
+# Build Docker images (context is repo root for shared/ access)
+docker build -f github/Dockerfile -t pushward-github .
+docker build -f grafana/Dockerfile -t pushward-grafana .
+docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd .
+docker build -f argocd/Dockerfile -t pushward-argocd .
 ```
 
 There is no Makefile or dedicated lint config. CI uses `golangci-lint` via the shared reusable workflow.
@@ -46,28 +46,33 @@ go test ./grafana/internal/handler/ -race -count=1 -v
 go test ./argocd/internal/handler/ -race -count=1 -v
 ```
 
-All test files share the same infrastructure pattern: `mockPushWardServer(t)` starts an `httptest.Server` recording all requests as `apiCall{Method, Path, Body}`, `testConfig()` returns a config with short timers (e.g. `EndDelay: 10ms`), and `sendWebhook(t, h, payload)` POSTs JSON to the handler. Tests use `time.Sleep()` to wait for timer-driven async operations.
+All test files use shared test infrastructure from `shared/testutil`: `testutil.MockPushWardServer(t)` starts an `httptest.Server` recording all requests as `testutil.APICall{Method, Path, Body}`, `testutil.GetCalls()` retrieves recorded calls, and `testutil.UnmarshalBody()` decodes request bodies. Each test file has a local `testConfig()` returning a config with short timers (e.g. `EndDelay: 10ms`). Tests use `time.Sleep()` to wait for timer-driven async operations.
 
 ## Architecture
 
 ### Go workspace
 
-`go.work` (Go 1.25) declares four modules: `./github`, `./grafana`, `./sabnzbd`, and `./argocd`. Each module is self-contained with its own `go.mod`, `Dockerfile`, and CI workflow. The only shared dependency is `gopkg.in/yaml.v3`.
+`go.work` (Go 1.25) declares five modules: `./shared`, `./github`, `./grafana`, `./sabnzbd`, and `./argocd`. The `shared/` module contains the PushWard API client, common config types, HTTP server boilerplate, and test utilities. Each integration imports `shared/` and adds only integration-specific logic.
 
 ### Common patterns
 
 All integrations follow the same internal structure:
 
-- **`cmd/<name>/main.go`** -- entry point: loads config, creates API clients, runs the main loop with graceful shutdown (SIGINT/SIGTERM)
-- **`internal/config/`** -- YAML config with environment variable overrides (env vars take precedence)
-- **`internal/pushward/`** -- PushWard API client: `CreateActivity`, `UpdateActivity`, `DeleteActivity` with exponential backoff retry (up to 5 attempts). Each integration has its own copy with different `Content` fields per template (see below)
+- **`cmd/<name>/main.go`** -- entry point: loads config, creates API clients, runs the main loop with graceful shutdown (SIGINT/SIGTERM) via `shared/server`
+- **`internal/config/`** -- YAML config with environment variable overrides (env vars take precedence); embeds `sharedconfig.PushWardConfig` and `sharedconfig.ServerConfig`
 - **`internal/<service>/`** -- external service API client
 
-All integrations use `log/slog` with JSON output to stdout. PushWard clients use `http.Client{Timeout: 10s}` and handle `409 Conflict` specially: "activity limit reached" errors are propagated, but "already exists" conflicts are treated as success.
+The `shared/` module provides:
+- **`shared/pushward/`** -- PushWard API client: `CreateActivity`, `UpdateActivity`, `DeleteActivity` with exponential backoff retry (up to 5 attempts). Uses a superset `Content` struct with `omitempty` so unused fields don't appear in JSON.
+- **`shared/config/`** -- Common `PushWardConfig` and `ServerConfig` types, `LoadYAML()`, `ApplyEnvOverrides()`, `Validate()`
+- **`shared/server/`** -- `NewMux()` (registers `/health`), `ListenAndServe()` (graceful shutdown with `5*time.Second` timeout)
+- **`shared/testutil/`** -- `MockPushWardServer`, `GetCalls`, `UnmarshalBody` for integration tests
 
-### Content field divergences
+All integrations use `log/slog` with JSON output to stdout. The PushWard client uses `http.Client{Timeout: 10s}` and handles `409 Conflict` specially: "activity limit reached" errors are propagated, but "already exists" conflicts are treated as success.
 
-Each integration's `Content` struct is tailored to its content template:
+### Content fields
+
+The shared `Content` struct is a superset of all template fields. Each integration uses only the relevant subset (unused fields are omitted via `omitempty`):
 
 | Field | `pipeline` (github, argocd) | `alert` (grafana) | `generic` (sabnzbd) |
 |---|---|---|---|
@@ -104,7 +109,6 @@ Polls GitHub Actions API for in-progress workflow runs and maps CI/CD pipeline p
 | `github/internal/github/types.go` | GitHub API response types (WorkflowRun, Job, Repository) |
 | `github/internal/poller/poller.go` | Main poll loop: idle/active intervals, workflow tracking, cleanup |
 | `github/internal/poller/state.go` | `trackedRun` struct (repo, run ID, slug, timestamps) |
-| `github/internal/pushward/client.go` | PushWard API client (create/update/delete with retry) |
 | `github/config.example.yml` | Example configuration |
 
 ### Polling behavior
@@ -134,7 +138,6 @@ Exposes a webhook endpoint that SABnzbd calls when NZBs are added. Tracks downlo
 | `sabnzbd/internal/sabnzbd/client.go` | SABnzbd API client: `GetQueue`, `GetHistory` |
 | `sabnzbd/internal/sabnzbd/types.go` | SABnzbd API response types (Queue, QueueSlot, History) |
 | `sabnzbd/internal/tracker/tracker.go` | Core logic: webhook handler, download/PP tracking loop |
-| `sabnzbd/internal/pushward/client.go` | PushWard API client (create/update/delete with retry) |
 | `sabnzbd/config.example.yml` | Example configuration |
 
 ### Tracking flow
@@ -176,7 +179,6 @@ Receives Grafana alert webhooks, groups alerts by `alertname`, and creates/updat
 | `grafana/internal/grafana/types.go` | Grafana webhook payload types |
 | `grafana/internal/handler/handler.go` | Alert grouping by alertname, firing/resolved lifecycle, stale/cleanup timers |
 | `grafana/internal/handler/handler_test.go` | Full test coverage |
-| `grafana/internal/pushward/client.go` | PushWard API client (create/update/delete with retry) |
 | `grafana/config.example.yml` | Example configuration |
 
 ### Behavior
@@ -204,7 +206,6 @@ Receives ArgoCD sync webhooks (via argocd-notifications) and maps sync progress 
 | `argocd/internal/argocd/types.go` | ArgoCD webhook payload type |
 | `argocd/internal/handler/handler.go` | Core state machine: event routing, app tracking, stale/cleanup timers |
 | `argocd/internal/handler/handler_test.go` | Full test coverage |
-| `argocd/internal/pushward/client.go` | PushWard API client (create/update/delete with retry) |
 | `argocd/config.example.yml` | Example configuration with argocd-notifications setup |
 
 ### Sync lifecycle
@@ -245,16 +246,16 @@ Recommended `activity_slugs` prefix for integration key: `argocd-*`
 
 Each integration has a separate GitHub Actions workflow with path filters:
 
-- `.github/workflows/github-ci-cd.yml` -- triggers on `github/**` changes
-- `.github/workflows/grafana-ci-cd.yml` -- triggers on `grafana/**` changes
-- `.github/workflows/sabnzbd-ci-cd.yml` -- triggers on `sabnzbd/**` changes
-- `.github/workflows/argocd-ci-cd.yml` -- triggers on `argocd/**` changes
+- `.github/workflows/github-ci-cd.yml` -- triggers on `github/**` and `shared/**` changes
+- `.github/workflows/grafana-ci-cd.yml` -- triggers on `grafana/**` and `shared/**` changes
+- `.github/workflows/sabnzbd-ci-cd.yml` -- triggers on `sabnzbd/**` and `shared/**` changes
+- `.github/workflows/argocd-ci-cd.yml` -- triggers on `argocd/**` and `shared/**` changes
 
 All use `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml`. Triggers: push to `main`, tags (`v*`), pull requests to `main`, and manual `workflow_dispatch`. Docker images are built and pushed to GHCR (`ghcr.io/mac-lucky/pushward-{github,grafana,sabnzbd,argocd}`) on push to main or tags.
 
 ## Docker
 
-All Dockerfiles use multi-stage builds: `golang:1.25-alpine` builder, `alpine:3.23` runtime. Binaries are statically compiled (`CGO_ENABLED=0`, stripped with `-ldflags="-s -w"`). Runtime runs as non-root `appuser` (UID 1000). Default config path in containers: `/config/config.yml`.
+All Dockerfiles use multi-stage builds: `golang:1.25-alpine` builder, `alpine:3.23` runtime. Build context is the repo root (`.`) so that both `shared/` and the integration source are accessible. Binaries are statically compiled (`CGO_ENABLED=0`, stripped with `-ldflags="-s -w"`). Runtime runs as non-root `appuser` (UID 1000). Default config path in containers: `/config/config.yml`.
 
 Grafana, SABnzbd, and ArgoCD Dockerfiles expose port 8090. The GitHub Dockerfile does not expose any ports (polling-only, no HTTP server).
 

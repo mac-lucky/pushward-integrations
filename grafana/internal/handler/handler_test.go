@@ -2,46 +2,17 @@ package handler
 
 import (
 	"bytes"
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/mac-lucky/pushward-docker/grafana/internal/config"
-	"github.com/mac-lucky/pushward-docker/grafana/internal/pushward"
+	sharedconfig "github.com/mac-lucky/pushward-docker/shared/config"
+	"github.com/mac-lucky/pushward-docker/shared/pushward"
+	"github.com/mac-lucky/pushward-docker/shared/testutil"
 )
-
-// apiCall records a PushWard API call made by the handler.
-type apiCall struct {
-	Method string
-	Path   string
-	Body   json.RawMessage
-}
-
-// mockPushWardServer starts an httptest server that records all requests.
-func mockPushWardServer(t *testing.T) (*httptest.Server, *[]apiCall, *sync.Mutex) {
-	t.Helper()
-	var calls []apiCall
-	var mu sync.Mutex
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		calls = append(calls, apiCall{
-			Method: r.Method,
-			Path:   r.URL.Path,
-			Body:   json.RawMessage(body),
-		})
-		mu.Unlock()
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &calls, &mu
-}
 
 func testConfig() *config.Config {
 	return &config.Config{
@@ -50,27 +21,11 @@ func testConfig() *config.Config {
 			DefaultSeverity: "warning",
 			DefaultIcon:     "exclamationmark.triangle.fill",
 		},
-		PushWard: config.PushWardConfig{
+		PushWard: sharedconfig.PushWardConfig{
 			Priority:     5,
 			CleanupDelay: 1 * time.Hour,
 			StaleTimeout: 24 * time.Hour,
 		},
-	}
-}
-
-func getCalls(calls *[]apiCall, mu *sync.Mutex) []apiCall {
-	mu.Lock()
-	defer mu.Unlock()
-	result := make([]apiCall, len(*calls))
-	copy(result, *calls)
-	return result
-}
-
-// unmarshalBody decodes the JSON body of a recorded API call.
-func unmarshalBody(t *testing.T, raw json.RawMessage, v any) {
-	t.Helper()
-	if err := json.Unmarshal(raw, v); err != nil {
-		t.Fatalf("failed to unmarshal body: %v (body: %s)", err, string(raw))
 	}
 }
 
@@ -80,7 +35,7 @@ func unmarshalBody(t *testing.T, raw json.RawMessage, v any) {
 // https://grafana.com/docs/grafana/latest/alerting/configure-notifications/manage-contact-points/integrations/webhook-notifier/
 
 func TestFiringSingleAlert(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -127,7 +82,7 @@ func TestFiringSingleAlert(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 2 {
 		t.Fatalf("expected 2 API calls (create + update), got %d", len(recorded))
 	}
@@ -139,7 +94,7 @@ func TestFiringSingleAlert(t *testing.T) {
 		t.Errorf("expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
 	}
 	var createReq pushward.CreateActivityRequest
-	unmarshalBody(t, recorded[0].Body, &createReq)
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
 	if createReq.Slug != expectedSlug {
 		t.Errorf("expected slug %s, got %s", expectedSlug, createReq.Slug)
 	}
@@ -156,7 +111,7 @@ func TestFiringSingleAlert(t *testing.T) {
 		t.Errorf("expected PATCH %s, got %s %s", expectedPatchPath, recorded[1].Method, recorded[1].Path)
 	}
 	var updateReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &updateReq)
+	testutil.UnmarshalBody(t, recorded[1].Body, &updateReq)
 	if updateReq.State != "ONGOING" {
 		t.Errorf("expected state ONGOING, got %s", updateReq.State)
 	}
@@ -191,7 +146,7 @@ func TestFiringSingleAlert(t *testing.T) {
 }
 
 func TestResolvedAlert(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -252,7 +207,7 @@ func TestResolvedAlert(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// Resolved → single PATCH (no create)
 	if len(recorded) != 1 {
 		t.Fatalf("expected 1 API call (update only), got %d", len(recorded))
@@ -263,7 +218,7 @@ func TestResolvedAlert(t *testing.T) {
 		t.Errorf("expected PATCH %s, got %s %s", expectedPath, recorded[0].Method, recorded[0].Path)
 	}
 	var updateReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[0].Body, &updateReq)
+	testutil.UnmarshalBody(t, recorded[0].Body, &updateReq)
 	if updateReq.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", updateReq.State)
 	}
@@ -280,7 +235,7 @@ func TestResolvedAlert(t *testing.T) {
 }
 
 func TestFiringThenResolved_FullLifecycle(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -321,7 +276,7 @@ func TestFiringThenResolved_FullLifecycle(t *testing.T) {
 		t.Fatalf("firing: expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 2 {
 		t.Fatalf("firing: expected 2 calls, got %d", len(recorded))
 	}
@@ -361,14 +316,14 @@ func TestFiringThenResolved_FullLifecycle(t *testing.T) {
 		t.Fatalf("resolved: expected 200, got %d", w.Code)
 	}
 
-	recorded = getCalls(calls, mu)
+	recorded = testutil.GetCalls(calls, mu)
 	// firing: create + update, resolved: update → 3 total
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 total API calls, got %d", len(recorded))
 	}
 
 	var endReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[2].Body, &endReq)
+	testutil.UnmarshalBody(t, recorded[2].Body, &endReq)
 	if endReq.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", endReq.State)
 	}
@@ -378,7 +333,7 @@ func TestFiringThenResolved_FullLifecycle(t *testing.T) {
 }
 
 func TestRefiringAlert_SkipsCreate(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -429,7 +384,7 @@ func TestRefiringAlert_SkipsCreate(t *testing.T) {
 		t.Fatalf("refire: expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// first: create + update, second: update only → 3 total
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 calls (create, update, update), got %d", len(recorded))
@@ -446,14 +401,14 @@ func TestRefiringAlert_SkipsCreate(t *testing.T) {
 
 	// Verify the re-fire updated the summary
 	var updateReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[2].Body, &updateReq)
+	testutil.UnmarshalBody(t, recorded[2].Body, &updateReq)
 	if updateReq.Content.State != "Memory above 90% (escalating)" {
 		t.Errorf("expected updated summary, got %s", updateReq.Content.State)
 	}
 }
 
 func TestMultipleAlertsInSinglePayload_GroupedByAlertname(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -523,11 +478,7 @@ func TestMultipleAlertsInSinglePayload_GroupedByAlertname(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
-	// Alert 111 (firing, first): create group + update = 2 (shows 1 instance)
-	// Alert 222 (firing, second): group exists, update = 1 (shows 2 instances)
-	// Alert 333 (resolved): never tracked as firing → skipped
-	// Total = 3
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 API calls (create, update×2), got %d", len(recorded))
 	}
@@ -539,7 +490,7 @@ func TestMultipleAlertsInSinglePayload_GroupedByAlertname(t *testing.T) {
 		t.Errorf("expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
 	}
 	var cr pushward.CreateActivityRequest
-	unmarshalBody(t, recorded[0].Body, &cr)
+	testutil.UnmarshalBody(t, recorded[0].Body, &cr)
 	if cr.Slug != expectedSlug {
 		t.Errorf("expected slug %s, got %s", expectedSlug, cr.Slug)
 	}
@@ -549,7 +500,7 @@ func TestMultipleAlertsInSinglePayload_GroupedByAlertname(t *testing.T) {
 
 	// Second: PATCH with 1 instance (web-1, critical)
 	var update1 pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &update1)
+	testutil.UnmarshalBody(t, recorded[1].Body, &update1)
 	if update1.State != "ONGOING" {
 		t.Errorf("expected ONGOING, got %s", update1.State)
 	}
@@ -562,7 +513,7 @@ func TestMultipleAlertsInSinglePayload_GroupedByAlertname(t *testing.T) {
 
 	// Third: PATCH with 2 instances (worst = critical from web-1)
 	var update2 pushward.UpdateRequest
-	unmarshalBody(t, recorded[2].Body, &update2)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update2)
 	if update2.State != "ONGOING" {
 		t.Errorf("expected ONGOING, got %s", update2.State)
 	}
@@ -575,7 +526,7 @@ func TestMultipleAlertsInSinglePayload_GroupedByAlertname(t *testing.T) {
 }
 
 func TestPartialResolve_ActivityContinues(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -614,13 +565,13 @@ func TestPartialResolve_ActivityContinues(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// Partial resolve → ONGOING update with remaining instance (no ENDED)
 	if len(recorded) != 1 {
 		t.Fatalf("expected 1 API call (ONGOING update), got %d", len(recorded))
 	}
 	var updateReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[0].Body, &updateReq)
+	testutil.UnmarshalBody(t, recorded[0].Body, &updateReq)
 	if updateReq.State != "ONGOING" {
 		t.Errorf("expected ONGOING after partial resolve, got %s", updateReq.State)
 	}
@@ -640,7 +591,7 @@ func TestPartialResolve_ActivityContinues(t *testing.T) {
 }
 
 func TestResolvedForUntrackedAlert_Skipped(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -669,7 +620,7 @@ func TestResolvedForUntrackedAlert_Skipped(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Errorf("expected 0 API calls for untracked resolved alert, got %d", len(recorded))
 	}
@@ -710,7 +661,7 @@ func TestSeverityMapping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			srv, calls, mu := mockPushWardServer(t)
+			srv, calls, mu := testutil.MockPushWardServer(t)
 			cfg := testConfig()
 			client := pushward.NewClient(srv.URL, "hlk_test")
 			h := New(client, cfg)
@@ -737,13 +688,13 @@ func TestSeverityMapping(t *testing.T) {
 			w := httptest.NewRecorder()
 			h.HandleWebhook(w, req)
 
-			recorded := getCalls(calls, mu)
+			recorded := testutil.GetCalls(calls, mu)
 			if len(recorded) < 2 {
 				t.Fatalf("expected at least 2 calls, got %d", len(recorded))
 			}
 
 			var updateReq pushward.UpdateRequest
-			unmarshalBody(t, recorded[1].Body, &updateReq)
+			testutil.UnmarshalBody(t, recorded[1].Body, &updateReq)
 			if updateReq.Content.Icon != tt.expectedIcon {
 				t.Errorf("icon: expected %s, got %s", tt.expectedIcon, updateReq.Content.Icon)
 			}
@@ -755,7 +706,7 @@ func TestSeverityMapping(t *testing.T) {
 }
 
 func TestMissingSeverityLabel_UsesDefault(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -782,13 +733,13 @@ func TestMissingSeverityLabel_UsesDefault(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) < 2 {
 		t.Fatalf("expected at least 2 calls, got %d", len(recorded))
 	}
 
 	var updateReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &updateReq)
+	testutil.UnmarshalBody(t, recorded[1].Body, &updateReq)
 
 	// Default severity is "warning" → icon = default icon, color = #FF9500
 	if updateReq.Content.Severity != "warning" {
@@ -800,7 +751,7 @@ func TestMissingSeverityLabel_UsesDefault(t *testing.T) {
 }
 
 func TestMissingAlertname_FallbackDefault(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -827,20 +778,20 @@ func TestMissingAlertname_FallbackDefault(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) < 1 {
 		t.Fatalf("expected at least 1 call, got %d", len(recorded))
 	}
 
 	var createReq pushward.CreateActivityRequest
-	unmarshalBody(t, recorded[0].Body, &createReq)
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
 	if createReq.Name != "Grafana Alert" {
 		t.Errorf("expected fallback name 'Grafana Alert', got %s", createReq.Name)
 	}
 }
 
 func TestNoInstanceLabel_SubtitleIsPlainGrafana(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -867,20 +818,20 @@ func TestNoInstanceLabel_SubtitleIsPlainGrafana(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) < 2 {
 		t.Fatalf("expected at least 2 calls, got %d", len(recorded))
 	}
 
 	var updateReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &updateReq)
+	testutil.UnmarshalBody(t, recorded[1].Body, &updateReq)
 	if updateReq.Content.Subtitle != "Grafana" {
 		t.Errorf("expected plain 'Grafana' subtitle without instance, got %s", updateReq.Content.Subtitle)
 	}
 }
 
 func TestURLFallback_PanelURL_Over_DashboardURL(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -905,9 +856,9 @@ func TestURLFallback_PanelURL_Over_DashboardURL(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	var updateReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &updateReq)
+	testutil.UnmarshalBody(t, recorded[1].Body, &updateReq)
 
 	if updateReq.Content.URL != "https://grafana.example.com/alerting/1/view" {
 		t.Errorf("expected generatorURL as URL, got %s", updateReq.Content.URL)
@@ -918,7 +869,7 @@ func TestURLFallback_PanelURL_Over_DashboardURL(t *testing.T) {
 }
 
 func TestURLFallback_DashboardURL_WhenNoPanelURL(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -942,9 +893,9 @@ func TestURLFallback_DashboardURL_WhenNoPanelURL(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	var updateReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &updateReq)
+	testutil.UnmarshalBody(t, recorded[1].Body, &updateReq)
 
 	if updateReq.Content.SecondaryURL != "https://grafana.example.com/d/dash/2" {
 		t.Errorf("expected dashboardURL fallback, got %s", updateReq.Content.SecondaryURL)
@@ -952,7 +903,7 @@ func TestURLFallback_DashboardURL_WhenNoPanelURL(t *testing.T) {
 }
 
 func TestNoURLs(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -976,9 +927,9 @@ func TestNoURLs(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	var updateReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &updateReq)
+	testutil.UnmarshalBody(t, recorded[1].Body, &updateReq)
 
 	if updateReq.Content.URL != "" {
 		t.Errorf("expected empty URL, got %s", updateReq.Content.URL)
@@ -989,7 +940,7 @@ func TestNoURLs(t *testing.T) {
 }
 
 func TestCustomSeverityLabel(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.Grafana.SeverityLabel = "priority" // Custom label
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -1018,9 +969,9 @@ func TestCustomSeverityLabel(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	var updateReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &updateReq)
+	testutil.UnmarshalBody(t, recorded[1].Body, &updateReq)
 
 	// Should use "priority" label (critical) not "severity" label (info)
 	if updateReq.Content.Severity != "critical" {
@@ -1062,7 +1013,7 @@ func TestInvalidJSON(t *testing.T) {
 }
 
 func TestEmptyAlertsArray(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -1077,14 +1028,14 @@ func TestEmptyAlertsArray(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Errorf("expected 0 API calls for empty alerts, got %d", len(recorded))
 	}
 }
 
 func TestResolvedRemovesFromMap(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -1139,7 +1090,7 @@ func TestResolvedRemovesFromMap(t *testing.T) {
 	}
 
 	// Verify no DELETE calls — server handles cleanup via ended_ttl
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	for _, c := range recorded {
 		if c.Method == "DELETE" {
 			t.Error("unexpected DELETE call — server handles cleanup via ended_ttl")
@@ -1148,7 +1099,7 @@ func TestResolvedRemovesFromMap(t *testing.T) {
 }
 
 func TestCreateActivity_IncludesTTLValues(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -1172,13 +1123,13 @@ func TestCreateActivity_IncludesTTLValues(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.HandleWebhook(w, req)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) < 1 {
 		t.Fatalf("expected at least 1 call, got %d", len(recorded))
 	}
 
 	var createReq pushward.CreateActivityRequest
-	unmarshalBody(t, recorded[0].Body, &createReq)
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
 
 	expectedEndedTTL := int(cfg.PushWard.CleanupDelay.Seconds())
 	expectedStaleTTL := int(cfg.PushWard.StaleTimeout.Seconds())
@@ -1193,7 +1144,7 @@ func TestCreateActivity_IncludesTTLValues(t *testing.T) {
 
 func TestRealisticGrafanaPayload_PrometheusAlertmanager(t *testing.T) {
 	// Full realistic payload as Grafana would send from Prometheus-style alerting rules
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -1259,14 +1210,14 @@ func TestRealisticGrafanaPayload_PrometheusAlertmanager(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 2 {
 		t.Fatalf("expected 2 calls, got %d", len(recorded))
 	}
 
 	expectedSlug := slugForAlertname("KubePodNotReady")
 	var createReq pushward.CreateActivityRequest
-	unmarshalBody(t, recorded[0].Body, &createReq)
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
 	if createReq.Slug != expectedSlug {
 		t.Errorf("slug: expected %s, got %s", expectedSlug, createReq.Slug)
 	}
@@ -1275,7 +1226,7 @@ func TestRealisticGrafanaPayload_PrometheusAlertmanager(t *testing.T) {
 	}
 
 	var updateReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &updateReq)
+	testutil.UnmarshalBody(t, recorded[1].Body, &updateReq)
 	if updateReq.Content.Subtitle != "Grafana · 10.0.1.5:8080" {
 		t.Errorf("subtitle: expected 'Grafana · 10.0.1.5:8080', got %s", updateReq.Content.Subtitle)
 	}
@@ -1294,7 +1245,7 @@ func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
 	// Multiple instances of TargetDown grouped together.
 	// One pre-existing instance (resolved0000) is already tracked.
 	// Two new instances fire, and the pre-existing one resolves.
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -1387,11 +1338,7 @@ func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
-	// firing00000a: group exists, add instance → update (2 instances) = 1 PATCH
-	// firing00000b: group exists, add instance → update (3 instances) = 1 PATCH
-	// resolved0000: tracked, remove → 2 remaining → update ONGOING = 1 PATCH
-	// Total = 3 (no POST since group was pre-seeded)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 API calls, got %d", len(recorded))
 	}
@@ -1405,7 +1352,7 @@ func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
 
 	// Last call: partial resolve → still ONGOING with 2 remaining instances
 	var lastReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[2].Body, &lastReq)
+	testutil.UnmarshalBody(t, recorded[2].Body, &lastReq)
 	if lastReq.State != "ONGOING" {
 		t.Errorf("expected ONGOING after partial resolve, got %s", lastReq.State)
 	}
@@ -1415,7 +1362,7 @@ func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
 }
 
 func TestUnknownAlertStatus_Ignored(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -1443,14 +1390,14 @@ func TestUnknownAlertStatus_Ignored(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Errorf("expected 0 API calls for unknown status, got %d", len(recorded))
 	}
 }
 
 func TestRefireAfterResolve_CreatesNewGroup(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -1499,7 +1446,7 @@ func TestRefireAfterResolve_CreatesNewGroup(t *testing.T) {
 		t.Error("expected alert group to exist after re-fire")
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// First fire: create + update = 2
 	// Resolve: update (ENDED) = 1
 	// Re-fire: create (new group) + update = 2

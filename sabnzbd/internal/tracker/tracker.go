@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/config"
-	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/pushward"
 	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/sabnzbd"
+	"github.com/mac-lucky/pushward-docker/shared/pushward"
 )
 
 const slug = "sabnzbd"
