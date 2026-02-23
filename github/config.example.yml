@@ -7,6 +7,8 @@ github:
 pushward:
   url: ""             # or set PUSHWARD_URL (e.g. https://api.pushward.app)
   api_key: ""         # or set PUSHWARD_API_KEY (hlk_ integration key)
+  # end_delay: 5s          # PUSHWARD_END_DELAY
+  # end_display_time: 4s   # PUSHWARD_END_DISPLAY_TIME
 
 polling:
   idle_interval: 60s  # or set PUSHWARD_POLL_IDLE
