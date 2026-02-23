@@ -30,8 +30,10 @@ func Load(path string) (*Config, error) {
 			Address: ":8090",
 		},
 		PushWard: sharedconfig.PushWardConfig{
-			Priority:     1,
-			CleanupDelay: 15 * time.Minute,
+			Priority:       1,
+			CleanupDelay:   15 * time.Minute,
+			EndDelay:       5 * time.Second,
+			EndDisplayTime: 4 * time.Second,
 		},
 		Polling: PollingConfig{
 			Interval: 1 * time.Second,

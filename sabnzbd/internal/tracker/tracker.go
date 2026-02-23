@@ -215,19 +215,30 @@ func (t *Tracker) track(resumed bool) {
 		avgSpeed = totalMB / float64(downloadElapsed)
 	}
 
-	subtitle := fmt.Sprintf("%s in %s · %.0f MB/s", formatSize(totalMB), formatDuration(totalElapsed), avgSpeed)
-	slog.Info("complete", "total_mb", totalMB, "elapsed", totalElapsed, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed)
-
-	if len(subtitle) > 30 {
-		subtitle = subtitle[:30]
+	// Get the completed filename from history
+	subtitle := t.getCompletedName(ctx)
+	if subtitle == "" {
+		subtitle = fmt.Sprintf("%s in %s · %.0f MB/s", formatSize(totalMB), formatDuration(totalElapsed), avgSpeed)
 	}
+	subtitle = truncate(subtitle, 30)
+
+	slog.Info("complete", "total_mb", totalMB, "elapsed", totalElapsed, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed, "subtitle", subtitle)
+
+	// Two-phase end: ONGOING with final content → short display → ENDED
 	if resumed {
 		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ENDED")
-		slog.Info("tracking complete (resumed, skipping cleanup delay)")
+		slog.Info("tracking complete (resumed, skipping two-phase end)")
 	} else {
+		endDelay := t.cfg.PushWard.EndDelay
+		displayTime := t.cfg.PushWard.EndDisplayTime
+
+		// Phase 1: ONGOING with final content (push-update token delivers it)
+		time.Sleep(endDelay)
 		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ONGOING")
-		slog.Info("waiting before ending activity", "cleanup_delay", t.cfg.PushWard.CleanupDelay)
-		time.Sleep(t.cfg.PushWard.CleanupDelay)
+		slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
+
+		// Phase 2: ENDED (dismisses Live Activity)
+		time.Sleep(displayTime)
 		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ENDED")
 		slog.Info("tracking complete")
 	}
@@ -367,6 +378,20 @@ func (t *Tracker) getPPStatus(ctx context.Context) (string, string) {
 		}
 	}
 	return "", ""
+}
+
+// getCompletedName returns the name of the most recently completed history item.
+func (t *Tracker) getCompletedName(ctx context.Context) string {
+	history, err := t.sab.GetHistory(ctx, 5)
+	if err != nil {
+		return ""
+	}
+	for _, slot := range history.Slots {
+		if slot.Status == "Completed" {
+			return slot.Name
+		}
+	}
+	return ""
 }
 
 func parseTimeLeft(timeleft string) *int {
