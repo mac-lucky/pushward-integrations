@@ -47,15 +47,10 @@ func (p *Poller) Run(ctx context.Context) error {
 	}
 
 	for {
-		interval := p.cfg.Polling.IdleInterval
-		if len(p.tracked) > 0 {
-			interval = p.cfg.Polling.ActiveInterval
-		}
-
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(interval):
+		case <-time.After(p.cfg.Polling.IdleInterval):
 		}
 
 		if err := p.refreshRepos(ctx); err != nil {
