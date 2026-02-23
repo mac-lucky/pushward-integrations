@@ -4,10 +4,10 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    paths: ['grafana/**', '.github/workflows/grafana-ci-cd.yml']
+    paths: ['grafana/**', 'shared/**', '.github/workflows/grafana-ci-cd.yml']
   pull_request:
     branches: [main]
-    paths: ['grafana/**', '.github/workflows/grafana-ci-cd.yml']
+    paths: ['grafana/**', 'shared/**', '.github/workflows/grafana-ci-cd.yml']
   workflow_dispatch:
 
 jobs:
@@ -24,7 +24,7 @@ jobs:
       push_to_dockerhub: false
       push_on_main: true
       main_branch: "main"
-      build_context: "./grafana"
+      build_context: "."
       dockerfile_path: "./grafana/Dockerfile"
       go_module_path: "./grafana"
       enable_go_tests: true

@@ -11,7 +11,7 @@ import (
 	"github.com/mac-lucky/pushward-docker/github/internal/config"
 	ghclient "github.com/mac-lucky/pushward-docker/github/internal/github"
 	"github.com/mac-lucky/pushward-docker/github/internal/poller"
-	"github.com/mac-lucky/pushward-docker/github/internal/pushward"
+	"github.com/mac-lucky/pushward-docker/shared/pushward"
 )
 
 func main() {

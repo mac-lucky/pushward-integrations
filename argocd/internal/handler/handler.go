@@ -13,7 +13,7 @@ import (
 
 	"github.com/mac-lucky/pushward-docker/argocd/internal/argocd"
 	"github.com/mac-lucky/pushward-docker/argocd/internal/config"
-	"github.com/mac-lucky/pushward-docker/argocd/internal/pushward"
+	"github.com/mac-lucky/pushward-docker/shared/pushward"
 )
 
 const totalSteps = 3

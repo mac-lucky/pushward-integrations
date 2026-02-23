@@ -1,50 +1,21 @@
 package handler
 
 import (
-	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
 	"github.com/mac-lucky/pushward-docker/argocd/internal/config"
-	"github.com/mac-lucky/pushward-docker/argocd/internal/pushward"
+	sharedconfig "github.com/mac-lucky/pushward-docker/shared/config"
+	"github.com/mac-lucky/pushward-docker/shared/pushward"
+	"github.com/mac-lucky/pushward-docker/shared/testutil"
 )
-
-// apiCall records a PushWard API call made by the handler.
-type apiCall struct {
-	Method string
-	Path   string
-	Body   json.RawMessage
-}
-
-// mockPushWardServer starts an httptest server that records all requests.
-func mockPushWardServer(t *testing.T) (*httptest.Server, *[]apiCall, *sync.Mutex) {
-	t.Helper()
-	var calls []apiCall
-	var mu sync.Mutex
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(r.Body)
-		mu.Lock()
-		calls = append(calls, apiCall{
-			Method: r.Method,
-			Path:   r.URL.Path,
-			Body:   json.RawMessage(body),
-		})
-		mu.Unlock()
-		w.WriteHeader(http.StatusOK)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &calls, &mu
-}
 
 func testConfig() *config.Config {
 	return &config.Config{
-		PushWard: config.PushWardConfig{
+		PushWard: sharedconfig.PushWardConfig{
 			Priority:        3,
 			CleanupDelay:    1 * time.Hour,
 			StaleTimeout:    30 * time.Minute,
@@ -52,21 +23,6 @@ func testConfig() *config.Config {
 			EndDelay:        10 * time.Millisecond,
 			EndDisplayTime:  10 * time.Millisecond,
 		},
-	}
-}
-
-func getCalls(calls *[]apiCall, mu *sync.Mutex) []apiCall {
-	mu.Lock()
-	defer mu.Unlock()
-	result := make([]apiCall, len(*calls))
-	copy(result, *calls)
-	return result
-}
-
-func unmarshalBody(t *testing.T, raw json.RawMessage, v any) {
-	t.Helper()
-	if err := json.Unmarshal(raw, v); err != nil {
-		t.Fatalf("failed to unmarshal body: %v (body: %s)", err, string(raw))
 	}
 }
 
@@ -82,7 +38,7 @@ func sendWebhook(t *testing.T, h *Handler, payload string) *httptest.ResponseRec
 // --- Test: Full happy path ---
 
 func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -102,7 +58,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 		t.Fatalf("sync-running: expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 2 {
 		t.Fatalf("sync-running: expected 2 calls (create + update), got %d", len(recorded))
 	}
@@ -117,7 +73,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 		t.Errorf("expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
 	}
 	var createReq pushward.CreateActivityRequest
-	unmarshalBody(t, recorded[0].Body, &createReq)
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
 	if createReq.Slug != "argocd-pushward-server" {
 		t.Errorf("expected slug argocd-pushward-server, got %s", createReq.Slug)
 	}
@@ -130,7 +86,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 
 	// Verify step 1/3 update
 	var update1 pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &update1)
+	testutil.UnmarshalBody(t, recorded[1].Body, &update1)
 	if update1.State != "ONGOING" {
 		t.Errorf("expected ONGOING, got %s", update1.State)
 	}
@@ -170,7 +126,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 		t.Fatalf("sync-succeeded: expected 200, got %d", w.Code)
 	}
 
-	recorded = getCalls(calls, mu)
+	recorded = testutil.GetCalls(calls, mu)
 	if len(recorded) != 3 {
 		t.Fatalf("sync-succeeded: expected 3 calls, got %d", len(recorded))
 	}
@@ -180,7 +136,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 		t.Errorf("expected PATCH, got %s", recorded[2].Method)
 	}
 	var update2 pushward.UpdateRequest
-	unmarshalBody(t, recorded[2].Body, &update2)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update2)
 	if update2.State != "ONGOING" {
 		t.Errorf("expected ONGOING, got %s", update2.State)
 	}
@@ -208,7 +164,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	// Wait for two-phase end (EndDelay + EndDisplayTime)
 	time.Sleep(100 * time.Millisecond)
 
-	recorded = getCalls(calls, mu)
+	recorded = testutil.GetCalls(calls, mu)
 	// create + step1 + step2 + phase1(ONGOING) + phase2(ENDED) = 5
 	if len(recorded) != 5 {
 		t.Fatalf("deployed: expected 5 calls, got %d", len(recorded))
@@ -216,7 +172,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 
 	// Phase 1: ONGOING with "Deployed" content
 	var phase1 pushward.UpdateRequest
-	unmarshalBody(t, recorded[3].Body, &phase1)
+	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
 	if phase1.State != "ONGOING" {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
@@ -226,7 +182,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 
 	// Phase 2: ENDED with "Deployed" content
 	var phase2 pushward.UpdateRequest
-	unmarshalBody(t, recorded[4].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
 	if phase2.State != "ENDED" {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
@@ -250,7 +206,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 // --- Test: Sync failure ---
 
 func TestSyncRunning_ThenSyncFailed(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -267,14 +223,14 @@ func TestSyncRunning_ThenSyncFailed(t *testing.T) {
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// create + step1 + phase1(ONGOING) + phase2(ENDED) = 4
 	if len(recorded) != 4 {
 		t.Fatalf("expected 4 calls, got %d", len(recorded))
 	}
 
 	var failReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[3].Body, &failReq)
+	testutil.UnmarshalBody(t, recorded[3].Body, &failReq)
 	if failReq.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", failReq.State)
 	}
@@ -296,7 +252,7 @@ func TestSyncRunning_ThenSyncFailed(t *testing.T) {
 // --- Test: Health degraded after sync succeeded ---
 
 func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -309,7 +265,7 @@ func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// create + step1 + step2 + degraded(ONGOING) = 4
 	if len(recorded) != 4 {
 		t.Fatalf("expected 4 calls after degraded, got %d", len(recorded))
@@ -317,7 +273,7 @@ func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 
 	// Degraded should be ONGOING (transient warning), not ENDED
 	var degradedReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[3].Body, &degradedReq)
+	testutil.UnmarshalBody(t, recorded[3].Body, &degradedReq)
 	if degradedReq.State != "ONGOING" {
 		t.Errorf("expected ONGOING (transient warning), got %s", degradedReq.State)
 	}
@@ -351,14 +307,14 @@ func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
 
-	recorded = getCalls(calls, mu)
+	recorded = testutil.GetCalls(calls, mu)
 	// create + step1 + step2 + degraded(ONGOING) + phase1(ONGOING Deployed) + phase2(ENDED Deployed) = 6
 	if len(recorded) != 6 {
 		t.Fatalf("expected 6 calls total, got %d", len(recorded))
 	}
 
 	var phase2 pushward.UpdateRequest
-	unmarshalBody(t, recorded[5].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[5].Body, &phase2)
 	if phase2.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", phase2.State)
 	}
@@ -376,7 +332,7 @@ func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 // --- Test: Untracked events (bridge restart) ---
 
 func TestUntracked_SyncSucceeded(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -387,7 +343,7 @@ func TestUntracked_SyncSucceeded(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// create + step2 update = 2
 	if len(recorded) != 2 {
 		t.Fatalf("expected 2 calls, got %d", len(recorded))
@@ -397,7 +353,7 @@ func TestUntracked_SyncSucceeded(t *testing.T) {
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &update)
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
 	if update.Content.State != "Rolling out..." {
 		t.Errorf("expected 'Rolling out...', got %s", update.Content.State)
 	}
@@ -407,7 +363,7 @@ func TestUntracked_SyncSucceeded(t *testing.T) {
 }
 
 func TestUntracked_Deployed(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -420,7 +376,7 @@ func TestUntracked_Deployed(t *testing.T) {
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// create + phase1(ONGOING) + phase2(ENDED) = 3
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 calls, got %d", len(recorded))
@@ -430,7 +386,7 @@ func TestUntracked_Deployed(t *testing.T) {
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[2].Body, &update)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
 	if update.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
@@ -440,7 +396,7 @@ func TestUntracked_Deployed(t *testing.T) {
 }
 
 func TestUntracked_SyncFailed(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -453,7 +409,7 @@ func TestUntracked_SyncFailed(t *testing.T) {
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// create + phase1(ONGOING) + phase2(ENDED) = 3
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 calls, got %d", len(recorded))
@@ -463,7 +419,7 @@ func TestUntracked_SyncFailed(t *testing.T) {
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[2].Body, &update)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
 	if update.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
@@ -473,7 +429,7 @@ func TestUntracked_SyncFailed(t *testing.T) {
 }
 
 func TestUntracked_HealthDegraded(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -486,14 +442,14 @@ func TestUntracked_HealthDegraded(t *testing.T) {
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// create + phase1(ONGOING) + phase2(ENDED) = 3
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 calls, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[2].Body, &update)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
 	if update.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
@@ -505,7 +461,7 @@ func TestUntracked_HealthDegraded(t *testing.T) {
 // --- Test: Re-sync same revision ---
 
 func TestResyncSameRevision_SkipsCreate(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -516,7 +472,7 @@ func TestResyncSameRevision_SkipsCreate(t *testing.T) {
 	// Re-fire sync-running with same revision
 	sendWebhook(t, h, `{"app":"my-app","event":"sync-running","revision":"rev1"}`)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// First: create + update. Second: update only (no create) = 3
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 calls, got %d", len(recorded))
@@ -535,7 +491,7 @@ func TestResyncSameRevision_SkipsCreate(t *testing.T) {
 // --- Test: New revision during tracked sync ---
 
 func TestNewRevision_ResetsTracking(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -546,7 +502,7 @@ func TestNewRevision_ResetsTracking(t *testing.T) {
 	// New sync with rev2
 	sendWebhook(t, h, `{"app":"my-app","event":"sync-running","revision":"rev2"}`)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// First: create + update. Second: create + update = 4
 	if len(recorded) != 4 {
 		t.Fatalf("expected 4 calls, got %d", len(recorded))
@@ -563,7 +519,7 @@ func TestNewRevision_ResetsTracking(t *testing.T) {
 // --- Test: Webhook secret validation ---
 
 func TestWebhookSecret_Valid(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.ArgoCD.WebhookSecret = "my-secret"
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -578,7 +534,7 @@ func TestWebhookSecret_Valid(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 2 {
 		t.Errorf("expected 2 calls, got %d", len(recorded))
 	}
@@ -618,7 +574,7 @@ func TestWebhookSecret_MissingWhenRequired(t *testing.T) {
 }
 
 func TestWebhookSecret_NotConfigured(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	// No secret configured — any request should pass
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -628,7 +584,7 @@ func TestWebhookSecret_NotConfigured(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 2 {
 		t.Errorf("expected 2 calls, got %d", len(recorded))
 	}
@@ -695,20 +651,20 @@ func TestMissingEvent(t *testing.T) {
 // --- Test: Stale timer ---
 
 func TestCreateActivity_IncludesTTLValues(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
 	sendWebhook(t, h, `{"app":"ttl-app","event":"sync-running","revision":"r1"}`)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) < 1 {
 		t.Fatalf("expected at least 1 call, got %d", len(recorded))
 	}
 
 	var createReq pushward.CreateActivityRequest
-	unmarshalBody(t, recorded[0].Body, &createReq)
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
 
 	expectedEndedTTL := int(cfg.PushWard.CleanupDelay.Seconds())
 	expectedStaleTTL := int(cfg.PushWard.StaleTimeout.Seconds())
@@ -724,7 +680,7 @@ func TestCreateActivity_IncludesTTLValues(t *testing.T) {
 // --- Test: Cleanup timer ---
 
 func TestCleanupAfterEnd_RemovesFromMap(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -735,7 +691,7 @@ func TestCleanupAfterEnd_RemovesFromMap(t *testing.T) {
 	// Wait for two-phase end (EndDelay + EndDisplayTime)
 	time.Sleep(100 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// create + step1 + phase1(ONGOING) + phase2(ENDED) = 4
 	// No DELETE call — server handles cleanup via ended_ttl
 	for _, c := range recorded {
@@ -756,7 +712,7 @@ func TestCleanupAfterEnd_RemovesFromMap(t *testing.T) {
 // --- Test: New sync cancels pending cleanup ---
 
 func TestNewSync_CancelsPendingEnd(t *testing.T) {
-	srv, _, _ := mockPushWardServer(t)
+	srv, _, _ := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.EndDelay = 100 * time.Millisecond
 	cfg.PushWard.EndDisplayTime = 100 * time.Millisecond
@@ -785,7 +741,7 @@ func TestNewSync_CancelsPendingEnd(t *testing.T) {
 // --- Test: Multiple apps tracked independently ---
 
 func TestMultipleApps_Independent(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -802,7 +758,7 @@ func TestMultipleApps_Independent(t *testing.T) {
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// app-one: create + step1 + phase1(ONGOING) + phase2(ENDED) = 4
 	// app-two: create + step1 = 2
 	// Total = 6
@@ -854,7 +810,7 @@ func TestSlugSanitization(t *testing.T) {
 // --- Test: Unknown event ---
 
 func TestUnknownEvent_Ignored(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -864,7 +820,7 @@ func TestUnknownEvent_Ignored(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Errorf("expected 0 API calls for unknown event, got %d", len(recorded))
 	}
@@ -873,7 +829,7 @@ func TestUnknownEvent_Ignored(t *testing.T) {
 // --- Test: Sync failed at step 2 preserves step ---
 
 func TestSyncFailed_AtStep2_PreservesStep(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -887,10 +843,10 @@ func TestSyncFailed_AtStep2_PreservesStep(t *testing.T) {
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	lastCall := recorded[len(recorded)-1]
 	var failReq pushward.UpdateRequest
-	unmarshalBody(t, lastCall.Body, &failReq)
+	testutil.UnmarshalBody(t, lastCall.Body, &failReq)
 
 	if failReq.Content.CurrentStep == nil || *failReq.Content.CurrentStep != 2 {
 		t.Errorf("expected step 2 preserved on failure, got %v", failReq.Content.CurrentStep)
@@ -900,7 +856,7 @@ func TestSyncFailed_AtStep2_PreservesStep(t *testing.T) {
 // --- Grace period tests ---
 
 func TestGracePeriod_FastSync_Skipped(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -914,7 +870,7 @@ func TestGracePeriod_FastSync_Skipped(t *testing.T) {
 	// Wait for grace timer to fire (it shouldn't since it was cancelled)
 	time.Sleep(200 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Fatalf("expected 0 API calls for fast no-op sync, got %d", len(recorded))
 	}
@@ -928,7 +884,7 @@ func TestGracePeriod_FastSync_Skipped(t *testing.T) {
 }
 
 func TestGracePeriod_SlowSync_Created(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.SyncGracePeriod = 50 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -937,7 +893,7 @@ func TestGracePeriod_SlowSync_Created(t *testing.T) {
 	sendWebhook(t, h, `{"app":"slow-app","event":"sync-running","revision":"r1"}`)
 
 	// No API calls yet (in grace period)
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Fatalf("expected 0 API calls during grace, got %d", len(recorded))
 	}
@@ -945,7 +901,7 @@ func TestGracePeriod_SlowSync_Created(t *testing.T) {
 	// Wait for grace to expire
 	time.Sleep(150 * time.Millisecond)
 
-	recorded = getCalls(calls, mu)
+	recorded = testutil.GetCalls(calls, mu)
 	// create + step1 update = 2
 	if len(recorded) != 2 {
 		t.Fatalf("expected 2 API calls after grace expired, got %d", len(recorded))
@@ -955,7 +911,7 @@ func TestGracePeriod_SlowSync_Created(t *testing.T) {
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &update)
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
 	if update.Content.State != "Syncing..." {
 		t.Errorf("expected 'Syncing...', got %s", update.Content.State)
 	}
@@ -967,7 +923,7 @@ func TestGracePeriod_SlowSync_Created(t *testing.T) {
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
 
-	recorded = getCalls(calls, mu)
+	recorded = testutil.GetCalls(calls, mu)
 	// create + step1 + step2 + phase1(ONGOING) + phase2(ENDED) = 5
 	if len(recorded) != 5 {
 		t.Fatalf("expected 5 API calls total, got %d", len(recorded))
@@ -975,7 +931,7 @@ func TestGracePeriod_SlowSync_Created(t *testing.T) {
 }
 
 func TestGracePeriod_SyncSucceededDuringGrace_ExpiresAtStep2(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -987,13 +943,13 @@ func TestGracePeriod_SyncSucceededDuringGrace_ExpiresAtStep2(t *testing.T) {
 	// Grace expires with step at 2
 	time.Sleep(200 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 2 {
 		t.Fatalf("expected 2 API calls, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &update)
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
 	if update.Content.State != "Rolling out..." {
 		t.Errorf("expected 'Rolling out...', got %s", update.Content.State)
 	}
@@ -1003,7 +959,7 @@ func TestGracePeriod_SyncSucceededDuringGrace_ExpiresAtStep2(t *testing.T) {
 }
 
 func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.SyncGracePeriod = 5 * time.Second // long grace to prove bypass
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -1012,7 +968,7 @@ func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
 	sendWebhook(t, h, `{"app":"fail-app","event":"sync-running","revision":"r1"}`)
 
 	// No API calls yet (in grace period)
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Fatalf("expected 0 API calls during grace, got %d", len(recorded))
 	}
@@ -1023,14 +979,14 @@ func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
 
-	recorded = getCalls(calls, mu)
+	recorded = testutil.GetCalls(calls, mu)
 	// create + phase1(ONGOING) + phase2(ENDED) = 3
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 API calls after sync-failed, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[2].Body, &update)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
 	if update.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
@@ -1040,7 +996,7 @@ func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
 }
 
 func TestGracePeriod_HealthDegraded_BypassesGrace(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.SyncGracePeriod = 5 * time.Second
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -1052,14 +1008,14 @@ func TestGracePeriod_HealthDegraded_BypassesGrace(t *testing.T) {
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// create + phase1(ONGOING) + phase2(ENDED) = 3
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 API calls, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[2].Body, &update)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
 	if update.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
@@ -1069,7 +1025,7 @@ func TestGracePeriod_HealthDegraded_BypassesGrace(t *testing.T) {
 }
 
 func TestGracePeriod_UntrackedDeployed_Recorded(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -1080,14 +1036,14 @@ func TestGracePeriod_UntrackedDeployed_Recorded(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Fatalf("expected 0 API calls for untracked deployed, got %d", len(recorded))
 	}
 }
 
 func TestGracePeriod_DeployedBeforeSyncSucceeded_Skipped(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -1100,7 +1056,7 @@ func TestGracePeriod_DeployedBeforeSyncSucceeded_Skipped(t *testing.T) {
 	// Wait for grace timer (should NOT fire — the sync was detected as no-op)
 	time.Sleep(200 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Fatalf("expected 0 API calls for out-of-order deployed+sync-succeeded, got %d", len(recorded))
 	}
@@ -1115,7 +1071,7 @@ func TestGracePeriod_DeployedBeforeSyncSucceeded_Skipped(t *testing.T) {
 }
 
 func TestGracePeriod_UntrackedSyncSucceeded_ThenDeployed_Skipped(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -1127,14 +1083,14 @@ func TestGracePeriod_UntrackedSyncSucceeded_ThenDeployed_Skipped(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Fatalf("expected 0 API calls, got %d", len(recorded))
 	}
 }
 
 func TestGracePeriod_UntrackedSyncSucceeded_GraceExpires(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.SyncGracePeriod = 50 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -1145,14 +1101,14 @@ func TestGracePeriod_UntrackedSyncSucceeded_GraceExpires(t *testing.T) {
 
 	time.Sleep(150 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// create + step2 update = 2
 	if len(recorded) != 2 {
 		t.Fatalf("expected 2 API calls, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
-	unmarshalBody(t, recorded[1].Body, &update)
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
 	if update.Content.State != "Rolling out..." {
 		t.Errorf("expected 'Rolling out...', got %s", update.Content.State)
 	}
@@ -1162,7 +1118,7 @@ func TestGracePeriod_UntrackedSyncSucceeded_GraceExpires(t *testing.T) {
 }
 
 func TestHealthDegraded_AtStep1_StillEnds(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -1174,14 +1130,14 @@ func TestHealthDegraded_AtStep1_StillEnds(t *testing.T) {
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// create + step1 + phase1(ONGOING Degraded) + phase2(ENDED Degraded) = 4
 	if len(recorded) != 4 {
 		t.Fatalf("expected 4 calls, got %d", len(recorded))
 	}
 
 	var endReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[3].Body, &endReq)
+	testutil.UnmarshalBody(t, recorded[3].Body, &endReq)
 	if endReq.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", endReq.State)
 	}
@@ -1202,7 +1158,7 @@ func TestHealthDegraded_AtStep1_StillEnds(t *testing.T) {
 }
 
 func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
@@ -1214,7 +1170,7 @@ func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
 	sendWebhook(t, h, `{"app":"multi-deg","event":"health-degraded","revision":"rev1"}`)
 	sendWebhook(t, h, `{"app":"multi-deg","event":"health-degraded","revision":"rev1"}`)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	// create + step1 + step2 + degraded1(ONGOING) + degraded2(ONGOING) = 5
 	if len(recorded) != 5 {
 		t.Fatalf("expected 5 calls after two degraded, got %d", len(recorded))
@@ -1223,7 +1179,7 @@ func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
 	// Both should be ONGOING
 	for _, idx := range []int{3, 4} {
 		var req pushward.UpdateRequest
-		unmarshalBody(t, recorded[idx].Body, &req)
+		testutil.UnmarshalBody(t, recorded[idx].Body, &req)
 		if req.State != "ONGOING" {
 			t.Errorf("call %d: expected ONGOING, got %s", idx, req.State)
 		}
@@ -1244,14 +1200,14 @@ func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
 	sendWebhook(t, h, `{"app":"multi-deg","event":"deployed","revision":"rev1"}`)
 	time.Sleep(100 * time.Millisecond)
 
-	recorded = getCalls(calls, mu)
+	recorded = testutil.GetCalls(calls, mu)
 	// +phase1(ONGOING Deployed) + phase2(ENDED Deployed) = 7
 	if len(recorded) != 7 {
 		t.Fatalf("expected 7 calls total, got %d", len(recorded))
 	}
 
 	var endReq pushward.UpdateRequest
-	unmarshalBody(t, recorded[6].Body, &endReq)
+	testutil.UnmarshalBody(t, recorded[6].Body, &endReq)
 	if endReq.State != "ENDED" {
 		t.Errorf("expected ENDED, got %s", endReq.State)
 	}
@@ -1264,7 +1220,7 @@ func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
 }
 
 func TestGracePeriod_SyncRunning_DeployedBeforeSyncSucceeded_Skipped(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -1278,7 +1234,7 @@ func TestGracePeriod_SyncRunning_DeployedBeforeSyncSucceeded_Skipped(t *testing.
 	// Wait for any grace timer to fire (should NOT — entire sync was no-op)
 	time.Sleep(300 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Fatalf("expected 0 API calls for pending deployed before sync-succeeded, got %d", len(recorded))
 	}
@@ -1293,7 +1249,7 @@ func TestGracePeriod_SyncRunning_DeployedBeforeSyncSucceeded_Skipped(t *testing.
 }
 
 func TestGracePeriod_DeployedThenSyncSucceededThenSyncRunning_Skipped(t *testing.T) {
-	srv, calls, mu := mockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
@@ -1307,7 +1263,7 @@ func TestGracePeriod_DeployedThenSyncSucceededThenSyncRunning_Skipped(t *testing
 	// Wait for any grace timer to fire
 	time.Sleep(300 * time.Millisecond)
 
-	recorded := getCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Fatalf("expected 0 API calls for late sync-running after deploy, got %d", len(recorded))
 	}

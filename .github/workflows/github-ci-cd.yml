@@ -4,10 +4,10 @@ on:
   push:
     branches: [main]
     tags: ['v*']
-    paths: ['github/**', '.github/workflows/github-ci-cd.yml']
+    paths: ['github/**', 'shared/**', '.github/workflows/github-ci-cd.yml']
   pull_request:
     branches: [main]
-    paths: ['github/**', '.github/workflows/github-ci-cd.yml']
+    paths: ['github/**', 'shared/**', '.github/workflows/github-ci-cd.yml']
   workflow_dispatch:
 
 jobs:
@@ -24,7 +24,7 @@ jobs:
       push_to_dockerhub: false
       push_on_main: true
       main_branch: "main"
-      build_context: "./github"
+      build_context: "."
       dockerfile_path: "./github/Dockerfile"
       go_module_path: "./github"
       enable_container_tests: false
