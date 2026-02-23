@@ -10,4 +10,3 @@ pushward:
 
 polling:
   idle_interval: 60s  # or set PUSHWARD_POLL_IDLE
-  active_interval: 5s # or set PUSHWARD_POLL_ACTIVE

@@ -30,8 +30,7 @@ type PushWardConfig struct {
 }
 
 type PollingConfig struct {
-	IdleInterval   time.Duration `yaml:"idle_interval"`
-	ActiveInterval time.Duration `yaml:"active_interval"`
+	IdleInterval time.Duration `yaml:"idle_interval"`
 }
 
 func Load(path string) (*Config, error) {
@@ -42,8 +41,7 @@ func Load(path string) (*Config, error) {
 			StaleTimeout: 30 * time.Minute,
 		},
 		Polling: PollingConfig{
-			IdleInterval:   60 * time.Second,
-			ActiveInterval: 5 * time.Second,
+			IdleInterval: 60 * time.Second,
 		},
 	}
 
@@ -101,14 +99,6 @@ func Load(path string) (*Config, error) {
 		}
 		cfg.Polling.IdleInterval = d
 	}
-	if v := os.Getenv("PUSHWARD_POLL_ACTIVE"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("parsing PUSHWARD_POLL_ACTIVE: %w", err)
-		}
-		cfg.Polling.ActiveInterval = d
-	}
-
 	// Validation
 	if cfg.GitHub.Token == "" {
 		return nil, fmt.Errorf("github.token is required (set PUSHWARD_GITHUB_TOKEN)")
