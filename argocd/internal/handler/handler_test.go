@@ -1263,6 +1263,35 @@ func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
 	}
 }
 
+func TestGracePeriod_SyncRunning_DeployedBeforeSyncSucceeded_Skipped(t *testing.T) {
+	srv, calls, mu := mockPushWardServer(t)
+	cfg := testConfig()
+	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// sync-running starts grace period, deployed arrives before sync-succeeded
+	sendWebhook(t, h, `{"app":"pending-ooo","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"pending-ooo","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"pending-ooo","event":"sync-succeeded","revision":"r1"}`)
+
+	// Wait for any grace timer to fire (should NOT — entire sync was no-op)
+	time.Sleep(300 * time.Millisecond)
+
+	recorded := getCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 API calls for pending deployed before sync-succeeded, got %d", len(recorded))
+	}
+
+	// App should not be tracked
+	h.mu.Lock()
+	_, exists := h.apps["pending-ooo"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to not be tracked after no-op skip")
+	}
+}
+
 func TestGracePeriod_DeployedThenSyncSucceededThenSyncRunning_Skipped(t *testing.T) {
 	srv, calls, mu := mockPushWardServer(t)
 	cfg := testConfig()

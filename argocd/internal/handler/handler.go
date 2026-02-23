@@ -324,6 +324,19 @@ func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) 
 			app.graceTimer.Stop()
 		}
 		delete(h.apps, p.App)
+
+		// Record in recentDeploys so a late sync-succeeded is also skipped
+		if h.config.PushWard.SyncGracePeriod > 0 {
+			if t, ok := h.recentDeploys[p.App]; ok {
+				t.Stop()
+			}
+			h.recentDeploys[p.App] = time.AfterFunc(h.config.PushWard.SyncGracePeriod*2, func() {
+				h.mu.Lock()
+				delete(h.recentDeploys, p.App)
+				h.mu.Unlock()
+			})
+		}
+
 		h.mu.Unlock()
 		slog.Info("skipped no-op sync", "slug", slug, "app", p.App)
 		return
