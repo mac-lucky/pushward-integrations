@@ -27,16 +27,14 @@ type Handler struct {
 }
 
 type trackedApp struct {
-	slug         string
-	appName      string
-	revision     string
-	repoURL      string
-	step         int
-	pending      bool        // true while in sync grace period (activity not yet created)
-	graceTimer   *time.Timer // fires when grace period expires
-	cleanupTimer *time.Timer
-	staleTimer   *time.Timer
-	endTimer     *time.Timer
+	slug       string
+	appName    string
+	revision   string
+	repoURL    string
+	step       int
+	pending    bool        // true while in sync grace period (activity not yet created)
+	graceTimer *time.Timer // fires when grace period expires
+	endTimer   *time.Timer
 }
 
 func New(client *pushward.Client, cfg *config.Config) *Handler {
@@ -140,12 +138,6 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 			if app.graceTimer != nil {
 				app.graceTimer.Stop()
 			}
-			if app.cleanupTimer != nil {
-				app.cleanupTimer.Stop()
-			}
-			if app.staleTimer != nil {
-				app.staleTimer.Stop()
-			}
 			if app.endTimer != nil {
 				app.endTimer.Stop()
 			}
@@ -159,18 +151,9 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 		}
 		h.apps[p.App] = app
 	} else {
-		// Same revision re-fire, reset stale timer
 		app.step = 1
-		if app.staleTimer != nil {
-			app.staleTimer.Stop()
-			app.staleTimer = nil
-		}
 	}
 
-	if app.cleanupTimer != nil {
-		app.cleanupTimer.Stop()
-		app.cleanupTimer = nil
-	}
 	if app.endTimer != nil {
 		app.endTimer.Stop()
 		app.endTimer = nil
@@ -193,8 +176,11 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 
 	h.mu.Unlock()
 
+	endedTTL := int(h.config.PushWard.CleanupDelay.Seconds())
+	staleTTL := int(h.config.PushWard.StaleTimeout.Seconds())
+
 	if needsCreate {
-		if err := h.client.CreateActivity(ctx, slug, p.App, h.config.PushWard.Priority); err != nil {
+		if err := h.client.CreateActivity(ctx, slug, p.App, h.config.PushWard.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create activity", "slug", slug, "error", err)
 			h.mu.Lock()
 			delete(h.apps, p.App)
@@ -228,14 +214,6 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 		return
 	}
 	slog.Info("updated activity", "slug", slug, "step", "1/3", "state", "Syncing...")
-
-	h.mu.Lock()
-	if a, ok := h.apps[p.App]; ok {
-		a.staleTimer = time.AfterFunc(h.config.PushWard.StaleTimeout, func() {
-			h.forceEnd(p.App)
-		})
-	}
-	h.mu.Unlock()
 }
 
 func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayload) {
@@ -293,7 +271,9 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 		h.apps[p.App] = app
 		h.mu.Unlock()
 
-		if err := h.client.CreateActivity(ctx, slug, p.App, h.config.PushWard.Priority); err != nil {
+		endedTTL := int(h.config.PushWard.CleanupDelay.Seconds())
+		staleTTL := int(h.config.PushWard.StaleTimeout.Seconds())
+		if err := h.client.CreateActivity(ctx, slug, p.App, h.config.PushWard.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create activity", "slug", slug, "error", err)
 			h.mu.Lock()
 			delete(h.apps, p.App)
@@ -303,10 +283,6 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 		slog.Info("created activity (untracked sync-succeeded)", "slug", slug, "app", p.App)
 	} else {
 		app.step = 2
-		if app.staleTimer != nil {
-			app.staleTimer.Stop()
-			app.staleTimer = nil
-		}
 		h.mu.Unlock()
 	}
 
@@ -334,14 +310,6 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 		return
 	}
 	slog.Info("updated activity", "slug", slug, "step", "2/3", "state", "Rolling out...")
-
-	h.mu.Lock()
-	if a, ok := h.apps[p.App]; ok {
-		a.staleTimer = time.AfterFunc(h.config.PushWard.StaleTimeout, func() {
-			h.forceEnd(p.App)
-		})
-	}
-	h.mu.Unlock()
 }
 
 func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) {
@@ -390,7 +358,9 @@ func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) 
 		h.apps[p.App] = app
 		h.mu.Unlock()
 
-		if err := h.client.CreateActivity(ctx, slug, p.App, h.config.PushWard.Priority); err != nil {
+		endedTTL := int(h.config.PushWard.CleanupDelay.Seconds())
+		staleTTL := int(h.config.PushWard.StaleTimeout.Seconds())
+		if err := h.client.CreateActivity(ctx, slug, p.App, h.config.PushWard.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create activity", "slug", slug, "error", err)
 			h.mu.Lock()
 			delete(h.apps, p.App)
@@ -400,10 +370,6 @@ func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) 
 		slog.Info("created activity (untracked deployed)", "slug", slug, "app", p.App)
 	} else {
 		app.step = 3
-		if app.staleTimer != nil {
-			app.staleTimer.Stop()
-			app.staleTimer = nil
-		}
 		h.mu.Unlock()
 	}
 
@@ -444,10 +410,6 @@ func (h *Handler) handleSyncFailed(ctx context.Context, p *argocd.WebhookPayload
 			}
 			app.pending = false
 		}
-		if app.staleTimer != nil {
-			app.staleTimer.Stop()
-			app.staleTimer = nil
-		}
 	} else {
 		app = &trackedApp{
 			slug:    slug,
@@ -462,7 +424,9 @@ func (h *Handler) handleSyncFailed(ctx context.Context, p *argocd.WebhookPayload
 
 	// Create activity if untracked or was pending (activity never created on PushWard)
 	if !exists || wasPending {
-		if err := h.client.CreateActivity(ctx, slug, p.App, h.config.PushWard.Priority); err != nil {
+		endedTTL := int(h.config.PushWard.CleanupDelay.Seconds())
+		staleTTL := int(h.config.PushWard.StaleTimeout.Seconds())
+		if err := h.client.CreateActivity(ctx, slug, p.App, h.config.PushWard.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create activity", "slug", slug, "error", err)
 			h.mu.Lock()
 			delete(h.apps, p.App)
@@ -508,10 +472,6 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 			}
 			app.pending = false
 		}
-		if app.staleTimer != nil {
-			app.staleTimer.Stop()
-			app.staleTimer = nil
-		}
 	} else {
 		app = &trackedApp{
 			slug:    slug,
@@ -526,7 +486,9 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 
 	// Create activity if untracked or was pending (activity never created on PushWard)
 	if !exists || wasPending {
-		if err := h.client.CreateActivity(ctx, slug, p.App, h.config.PushWard.Priority); err != nil {
+		endedTTL := int(h.config.PushWard.CleanupDelay.Seconds())
+		staleTTL := int(h.config.PushWard.StaleTimeout.Seconds())
+		if err := h.client.CreateActivity(ctx, slug, p.App, h.config.PushWard.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create activity", "slug", slug, "error", err)
 			h.mu.Lock()
 			delete(h.apps, p.App)
@@ -575,7 +537,9 @@ func (h *Handler) graceExpired(appName string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	if err := h.client.CreateActivity(ctx, slug, appName, h.config.PushWard.Priority); err != nil {
+	endedTTL := int(h.config.PushWard.CleanupDelay.Seconds())
+	staleTTL := int(h.config.PushWard.StaleTimeout.Seconds())
+	if err := h.client.CreateActivity(ctx, slug, appName, h.config.PushWard.Priority, endedTTL, staleTTL); err != nil {
 		slog.Error("failed to create activity", "slug", slug, "error", err)
 		h.mu.Lock()
 		delete(h.apps, appName)
@@ -617,14 +581,6 @@ func (h *Handler) graceExpired(appName string) {
 		return
 	}
 	slog.Info("updated activity", "slug", slug, "step", fmt.Sprintf("%d/%d", step, total), "state", state)
-
-	h.mu.Lock()
-	if a, ok := h.apps[appName]; ok {
-		a.staleTimer = time.AfterFunc(h.config.PushWard.StaleTimeout, func() {
-			h.forceEnd(appName)
-		})
-	}
-	h.mu.Unlock()
 }
 
 // scheduleEnd schedules a two-phase end for an activity:
@@ -643,7 +599,6 @@ func (h *Handler) scheduleEnd(appName string, content pushward.Content) {
 	slug := app.slug
 	endDelay := h.config.PushWard.EndDelay
 	displayTime := h.config.PushWard.EndDisplayTime
-	cleanupDelay := h.config.PushWard.CleanupDelay
 	app.endTimer = time.AfterFunc(endDelay, func() {
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
@@ -673,71 +628,10 @@ func (h *Handler) scheduleEnd(appName string, content pushward.Content) {
 			slog.Info("ended activity", "slug", slug, "state", content.State)
 		}
 
-		// Schedule cleanup after ENDED
+		// Server handles cleanup via ended_ttl — just remove from local map
 		h.mu.Lock()
-		if a, ok := h.apps[appName]; ok {
-			a.cleanupTimer = time.AfterFunc(cleanupDelay, func() {
-				h.cleanup(appName)
-			})
-		}
+		delete(h.apps, appName)
 		h.mu.Unlock()
 	})
-	h.mu.Unlock()
-}
-
-func (h *Handler) forceEnd(appName string) {
-	h.mu.Lock()
-	app, ok := h.apps[appName]
-	if !ok {
-		h.mu.Unlock()
-		return
-	}
-	slug := app.slug
-	currentStep := app.step
-	repoURL := app.repoURL
-	revision := app.revision
-	h.mu.Unlock()
-
-	slog.Warn("force-ending stale sync", "slug", slug, "app", appName)
-
-	total := totalSteps
-	url, secondaryURL := h.contentURLs(appName, repoURL, revision)
-	content := pushward.Content{
-		Template:     "pipeline",
-		Progress:     float64(currentStep) / float64(total),
-		State:        "Stale sync (auto-ended)",
-		Icon:         "clock.badge.xmark",
-		Subtitle:     "ArgoCD \u00b7 " + appName,
-		AccentColor:  "#8E8E93",
-		CurrentStep:  &currentStep,
-		TotalSteps:   &total,
-		URL:          url,
-		SecondaryURL: secondaryURL,
-	}
-
-	h.scheduleEnd(appName, content)
-}
-
-func (h *Handler) cleanup(appName string) {
-	h.mu.Lock()
-	app, ok := h.apps[appName]
-	if !ok {
-		h.mu.Unlock()
-		return
-	}
-	slug := app.slug
-	h.mu.Unlock()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := h.client.DeleteActivity(ctx, slug); err != nil {
-		slog.Error("failed to delete activity", "slug", slug, "error", err)
-		return
-	}
-	slog.Info("deleted activity", "slug", slug)
-
-	h.mu.Lock()
-	delete(h.apps, appName)
 	h.mu.Unlock()
 }
