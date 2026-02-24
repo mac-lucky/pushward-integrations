@@ -138,12 +138,12 @@ func (t *Tracker) launchTracker(resumed bool) {
 	}()
 }
 
-func (t *Tracker) send(ctx context.Context, progress float64, state, icon string, remainingSeconds *int, subtitle string, activityState string) {
+func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string) {
 	content := pushward.Content{
 		Template:    "generic",
 		Progress:    progress,
 		State:       state,
-		AccentColor: "green",
+		AccentColor: accentColor,
 	}
 	if icon != "" {
 		content.Icon = icon
@@ -169,18 +169,19 @@ func (t *Tracker) track(resumed bool) {
 
 	// Ensure activity exists
 	endedTTL := int(t.cfg.PushWard.CleanupDelay.Seconds())
-	if err := t.pw.CreateActivity(ctx, slug, "SABnzbd", t.cfg.PushWard.Priority, endedTTL, 0); err != nil {
+	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
+	if err := t.pw.CreateActivity(ctx, slug, "SABnzbd", t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
 		slog.Error("failed to create activity", "error", err)
 		return
 	}
 
 	// Phase 1: Wait for SABnzbd to start downloading
 	slog.Info("waiting for download to start")
-	t.send(ctx, 0.0, "Starting...", "arrow.down.circle", nil, "", "ONGOING")
+	t.send(ctx, 0.0, "Starting...", "arrow.down.circle", "blue", nil, "", "ONGOING")
 
 	if !t.waitForQueueActive(ctx, 60) {
 		slog.Warn("SABnzbd never started downloading, giving up")
-		t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", nil, "", "ENDED")
+		t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", "green", nil, "", "ENDED")
 		return
 	}
 
@@ -226,7 +227,7 @@ func (t *Tracker) track(resumed bool) {
 
 	// Two-phase end: ONGOING with final content → short display → ENDED
 	if resumed {
-		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ENDED")
+		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, "ENDED")
 		slog.Info("tracking complete (resumed, skipping two-phase end)")
 	} else {
 		endDelay := t.cfg.PushWard.EndDelay
@@ -234,12 +235,12 @@ func (t *Tracker) track(resumed bool) {
 
 		// Phase 1: ONGOING with final content (push-update token delivers it)
 		time.Sleep(endDelay)
-		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ONGOING")
+		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, "ONGOING")
 		slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
 
 		// Phase 2: ENDED (dismisses Live Activity)
 		time.Sleep(displayTime)
-		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", nil, subtitle, "ENDED")
+		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, "ENDED")
 		slog.Info("tracking complete")
 	}
 }
@@ -296,7 +297,7 @@ func (t *Tracker) trackDownloads(ctx context.Context) float64 {
 // Returns total post-processing duration.
 func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 	slog.Info("tracking post-processing")
-	t.send(ctx, 1.0, "Unpacking...", "archivebox", nil, "", "ONGOING")
+	t.send(ctx, 1.0, "Unpacking...", "archivebox", "orange", nil, "", "ONGOING")
 	ppStart := time.Now()
 
 	for {
@@ -309,7 +310,7 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 			icon = "archivebox"
 		}
 		subtitle := truncate(ppName, 30)
-		t.send(ctx, 1.0, ppStatus+"...", icon, nil, subtitle, "ONGOING")
+		t.send(ctx, 1.0, ppStatus+"...", icon, "orange", nil, subtitle, "ONGOING")
 		time.Sleep(t.cfg.Polling.Interval)
 	}
 
@@ -346,7 +347,7 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 	}
 
 	if status == "Paused" {
-		t.send(ctx, progress, "Paused", "pause.circle.fill", nil, subtitle, "ONGOING")
+		t.send(ctx, progress, "Paused", "pause.circle.fill", "blue", nil, subtitle, "ONGOING")
 		return true
 	}
 
@@ -360,7 +361,7 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 		stateStr += fmt.Sprintf(" · avg %.0f", avgMB)
 	}
 
-	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", remainingSeconds, subtitle, "ONGOING")
+	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", "blue", remainingSeconds, subtitle, "ONGOING")
 	return true
 }
 

@@ -11,6 +11,7 @@ type Content struct {
 	AccentColor   string  `json:"accent_color,omitempty"`
 	CurrentStep   *int    `json:"current_step,omitempty"`
 	TotalSteps    *int    `json:"total_steps,omitempty"`
+	StepRows      []int   `json:"step_rows,omitempty"`
 	URL           string  `json:"url,omitempty"`
 	SecondaryURL  string  `json:"secondary_url,omitempty"`
 	Severity      string  `json:"severity,omitempty"`

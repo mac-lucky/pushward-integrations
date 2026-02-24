@@ -9,9 +9,27 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
+
+// parseRetryAfter parses a Retry-After header value as either seconds or HTTP-date.
+// Returns 0 if the header is empty or unparseable.
+func parseRetryAfter(header string) time.Duration {
+	if header == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(header); err == nil && seconds > 0 {
+		return time.Duration(seconds) * time.Second
+	}
+	if t, err := http.ParseTime(header); err == nil {
+		if d := time.Until(t); d > 0 {
+			return d
+		}
+	}
+	return 0
+}
 
 // Client is the PushWard API client used by all integrations.
 type Client struct {
@@ -44,9 +62,14 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 	}
 
 	var lastErr error
+	var retryAfterOverride time.Duration
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt-1)), float64(30*time.Second)))
+			backoff := retryAfterOverride
+			if backoff == 0 {
+				backoff = time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt-1)), float64(30*time.Second)))
+			}
+			retryAfterOverride = 0
 			slog.Warn("retrying PushWard create activity", "attempt", attempt+1, "backoff", backoff)
 			select {
 			case <-ctx.Done():
@@ -81,6 +104,12 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return nil
 		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			retryAfterOverride = parseRetryAfter(resp.Header.Get("Retry-After"))
+			slog.Warn("rate limited by PushWard", "slug", slug, "retry_after", retryAfterOverride)
+			lastErr = fmt.Errorf("rate limited (429)")
+			continue
+		}
 		lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			return lastErr
@@ -97,9 +126,14 @@ func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequ
 	}
 
 	var lastErr error
+	var retryAfterOverride time.Duration
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt-1)), float64(30*time.Second)))
+			backoff := retryAfterOverride
+			if backoff == 0 {
+				backoff = time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt-1)), float64(30*time.Second)))
+			}
+			retryAfterOverride = 0
 			slog.Warn("retrying PushWard update", "attempt", attempt+1, "backoff", backoff)
 			select {
 			case <-ctx.Done():
@@ -126,6 +160,12 @@ func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequ
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return nil
 		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			retryAfterOverride = parseRetryAfter(resp.Header.Get("Retry-After"))
+			slog.Warn("rate limited by PushWard", "slug", slug, "retry_after", retryAfterOverride)
+			lastErr = fmt.Errorf("rate limited (429)")
+			continue
+		}
 		lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			return lastErr // Don't retry client errors
@@ -137,9 +177,14 @@ func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequ
 // DeleteActivity deletes an activity via DELETE /activities/{slug}.
 func (c *Client) DeleteActivity(ctx context.Context, slug string) error {
 	var lastErr error
+	var retryAfterOverride time.Duration
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
-			backoff := time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt-1)), float64(30*time.Second)))
+			backoff := retryAfterOverride
+			if backoff == 0 {
+				backoff = time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt-1)), float64(30*time.Second)))
+			}
+			retryAfterOverride = 0
 			slog.Warn("retrying PushWard delete activity", "attempt", attempt+1, "backoff", backoff)
 			select {
 			case <-ctx.Done():
@@ -167,6 +212,12 @@ func (c *Client) DeleteActivity(ctx context.Context, slug string) error {
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return nil
+		}
+		if resp.StatusCode == http.StatusTooManyRequests {
+			retryAfterOverride = parseRetryAfter(resp.Header.Get("Retry-After"))
+			slog.Warn("rate limited by PushWard", "slug", slug, "retry_after", retryAfterOverride)
+			lastErr = fmt.Errorf("rate limited (429)")
+			continue
 		}
 		lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
