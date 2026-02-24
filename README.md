@@ -9,6 +9,7 @@ Collection of PushWard integration bridges packaged as Docker containers. Each b
 | [pushward-github](./github/) | GitHub Actions CI/CD workflow progress | - | `ghcr.io/mac-lucky/pushward-github` |
 | [pushward-grafana](./grafana/) | Grafana alert notifications | 8090 | `ghcr.io/mac-lucky/pushward-grafana` |
 | [pushward-sabnzbd](./sabnzbd/) | SABnzbd download and post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
+| [pushward-argocd](./argocd/) | ArgoCD sync progress (Syncing → Rolling Out → Deployed) | 8090 | `ghcr.io/mac-lucky/pushward-argocd` |
 
 ## Common Configuration
 
@@ -23,11 +24,12 @@ See each integration's README for the full list of configuration options.
 
 ## Project Structure
 
-This is a Go workspace (`go.work`) with three independent modules:
+This is a Go workspace (`go.work`) with a shared module and four integration modules:
 
 ```
 pushward-docker/
-  go.work                  # Go workspace: ./github, ./grafana, ./sabnzbd
+  go.work                  # Go workspace: ./shared, ./github, ./grafana, ./sabnzbd, ./argocd
+  shared/                  # Shared PushWard API client, config types, HTTP boilerplate, test utilities
   github/                  # pushward-github integration
     cmd/pushward-github/   # Entry point
     internal/
@@ -55,6 +57,14 @@ pushward-docker/
       pushward/            # PushWard API client (create/update/delete activities)
     Dockerfile
     config.example.yml
+  argocd/                  # pushward-argocd integration
+    cmd/pushward-argocd/   # Entry point
+    internal/
+      config/              # YAML + env var config loading
+      argocd/              # ArgoCD webhook payload types
+      handler/             # Sync lifecycle: running, succeeded, deployed, failed
+    Dockerfile
+    config.example.yml
   .github/workflows/       # Per-integration CI/CD pipelines
 ```
 
@@ -66,6 +76,7 @@ Build any integration from the repo root:
 go build ./github/cmd/pushward-github
 go build ./grafana/cmd/pushward-grafana
 go build ./sabnzbd/cmd/pushward-sabnzbd
+go build ./argocd/cmd/pushward-argocd
 ```
 
 Run locally with a config file:
@@ -74,22 +85,25 @@ Run locally with a config file:
 ./pushward-github -config github/config.example.yml
 ./pushward-grafana -config grafana/config.example.yml
 ./pushward-sabnzbd -config sabnzbd/config.example.yml
+./pushward-argocd -config argocd/config.example.yml
 ```
 
 Build Docker images:
 
 ```bash
-docker build -f github/Dockerfile -t pushward-github ./github
-docker build -f grafana/Dockerfile -t pushward-grafana ./grafana
-docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd ./sabnzbd
+docker build -f github/Dockerfile -t pushward-github .
+docker build -f grafana/Dockerfile -t pushward-grafana .
+docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd .
+docker build -f argocd/Dockerfile -t pushward-argocd .
 ```
 
 ## CI/CD
 
 Each integration has its own GitHub Actions workflow with path filters so only the changed integration gets built:
 
-- `.github/workflows/github-ci-cd.yml` -- triggers on `github/**` changes
-- `.github/workflows/grafana-ci-cd.yml` -- triggers on `grafana/**` changes
-- `.github/workflows/sabnzbd-ci-cd.yml` -- triggers on `sabnzbd/**` changes
+- `.github/workflows/github-ci-cd.yml` -- triggers on `github/**` and `shared/**` changes
+- `.github/workflows/grafana-ci-cd.yml` -- triggers on `grafana/**` and `shared/**` changes
+- `.github/workflows/sabnzbd-ci-cd.yml` -- triggers on `sabnzbd/**` and `shared/**` changes
+- `.github/workflows/argocd-ci-cd.yml` -- triggers on `argocd/**` and `shared/**` changes
 
 All use the shared `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml` workflow. Triggers: push to `main`, tags (`v*`), pull requests to `main`, and manual `workflow_dispatch`. Docker images are built and pushed to GHCR on push to main or tags.
