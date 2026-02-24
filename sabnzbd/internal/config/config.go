@@ -32,6 +32,7 @@ func Load(path string) (*Config, error) {
 		PushWard: sharedconfig.PushWardConfig{
 			Priority:       1,
 			CleanupDelay:   15 * time.Minute,
+			StaleTimeout:   30 * time.Minute,
 			EndDelay:       5 * time.Second,
 			EndDisplayTime: 4 * time.Second,
 		},

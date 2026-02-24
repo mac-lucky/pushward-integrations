@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -239,33 +240,69 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			continue
 		}
 
+		// Group jobs by base name (supports matrix strategies).
+		// Matrix jobs share a base name, e.g. "Build (ubuntu, node-16)" and
+		// "Build (ubuntu, node-18)" both map to "Build".
+		type step struct {
+			name      string
+			count     int
+			completed int
+			active    bool
+			failed    bool
+		}
+		var steps []step
+		stepIdx := make(map[string]int)
 		completedJobs := 0
-		var currentJobName string
-		currentJobIndex := 0
 		allCompleted := true
 		anyFailed := false
 
-		for i, job := range jobs {
+		for _, job := range jobs {
+			base := baseJobName(job.Name)
+			si, ok := stepIdx[base]
+			if !ok {
+				si = len(steps)
+				stepIdx[base] = si
+				steps = append(steps, step{name: base})
+			}
+			steps[si].count++
+
 			switch job.Status {
 			case "completed":
 				completedJobs++
+				steps[si].completed++
 				if job.Conclusion == "failure" || job.Conclusion == "cancelled" {
+					steps[si].failed = true
 					anyFailed = true
 				}
 			case "in_progress":
-				if currentJobName == "" {
-					currentJobName = job.Name
-					currentJobIndex = i + 1
-				}
+				steps[si].active = true
 				allCompleted = false
 			default: // queued
 				allCompleted = false
 			}
 		}
 
-		if currentJobName == "" && !allCompleted {
-			currentJobName = "Queued"
-			currentJobIndex = completedJobs
+		totalSteps := len(steps)
+		stepRows := make([]int, totalSteps)
+		currentStep := 0
+		var currentStepName string
+
+		for i, s := range steps {
+			stepRows[i] = s.count
+			if s.active && currentStepName == "" {
+				currentStepName = s.name
+				currentStep = i + 1
+			}
+		}
+
+		if currentStepName == "" && !allCompleted {
+			currentStepName = "Queued"
+			for i, s := range steps {
+				if s.completed < s.count {
+					currentStep = i
+					break
+				}
+			}
 		}
 
 		p.mu.Lock()
@@ -291,8 +328,9 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				Icon:         "arrow.triangle.branch",
 				Subtitle:     fmt.Sprintf("%s / %s", repoShort, tName),
 				AccentColor:  color,
-				CurrentStep:  intPtr(totalJobs),
-				TotalSteps:   intPtr(totalJobs),
+				CurrentStep:  intPtr(totalSteps),
+				TotalSteps:   intPtr(totalSteps),
+				StepRows:     stepRows,
 				URL:          tHTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
 			})
@@ -306,12 +344,13 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			Content: pushward.Content{
 				Template:     "pipeline",
 				Progress:     progress,
-				State:        currentJobName,
+				State:        currentStepName,
 				Icon:         "arrow.triangle.branch",
 				Subtitle:     fmt.Sprintf("%s / %s", repoShort, tName),
 				AccentColor:  "green",
-				CurrentStep:  intPtr(currentJobIndex),
-				TotalSteps:   intPtr(totalJobs),
+				CurrentStep:  intPtr(currentStep),
+				TotalSteps:   intPtr(totalSteps),
+				StepRows:     stepRows,
 				URL:          tHTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
 			},
@@ -397,4 +436,13 @@ func splitRepo(repo string) []string {
 		}
 	}
 	return []string{repo}
+}
+
+// baseJobName strips matrix parameters from a job name.
+// "Build (ubuntu, node-16)" → "Build", "Test" → "Test"
+func baseJobName(name string) string {
+	if i := strings.LastIndex(name, " ("); i != -1 && strings.HasSuffix(name, ")") {
+		return name[:i]
+	}
+	return name
 }
