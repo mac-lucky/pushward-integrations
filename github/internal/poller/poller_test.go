@@ -311,6 +311,103 @@ func TestScheduleEnd_CancelledByNewRun(t *testing.T) {
 	}
 }
 
+func TestComputeSteps_ReusableWorkflowMatrix(t *testing.T) {
+	// Simulates a real reusable workflow where jobs appear with "ci-cd / " prefix
+	// and matrix parameters. All jobs visible from the start.
+	jobs := []ghclient.Job{
+		{Name: "ci-cd / Check Code Changes", Status: "completed", Conclusion: "success"},
+		{Name: "ci-cd / Setup Build Environment", Status: "completed", Conclusion: "success"},
+		{Name: "ci-cd / Code Analysis (go-vet)", Status: "in_progress"},
+		{Name: "ci-cd / Code Analysis (staticcheck)", Status: "queued"},
+		{Name: "ci-cd / Code Analysis (trivy)", Status: "queued"},
+		{Name: "ci-cd / Go Tests", Status: "in_progress"},
+		{Name: "ci-cd / Build Container Image", Status: "queued"},
+		{Name: "ci-cd / Container Integration Test", Status: "completed", Conclusion: "skipped"},
+		{Name: "ci-cd / Kubernetes Integration Test", Status: "completed", Conclusion: "skipped"},
+		{Name: "ci-cd / Build (linux/amd64)", Status: "queued"},
+		{Name: "ci-cd / Build (linux/arm64)", Status: "queued"},
+		{Name: "ci-cd / Create Multi-arch Manifest", Status: "queued"},
+		{Name: "ci-cd / Post-deployment Verification", Status: "queued"},
+	}
+	info := computeSteps(jobs)
+
+	// 10 unique steps after matrix grouping:
+	// Check Code Changes, Setup Build Environment, Code Analysis (x3),
+	// Go Tests, Build Container Image, Container Integration Test,
+	// Kubernetes Integration Test, Build (x2), Create Multi-arch Manifest,
+	// Post-deployment Verification
+	if info.TotalSteps != 10 {
+		t.Errorf("expected TotalSteps=10, got %d", info.TotalSteps)
+	}
+	if info.CurrentStepName != "ci-cd / Code Analysis" {
+		t.Errorf("expected CurrentStepName='ci-cd / Code Analysis', got %q", info.CurrentStepName)
+	}
+	if info.CurrentStep != 3 {
+		t.Errorf("expected CurrentStep=3, got %d", info.CurrentStep)
+	}
+	// StepRows: [1,1,3,1,1,1,1,2,1,1]
+	wantRows := []int{1, 1, 3, 1, 1, 1, 1, 2, 1, 1}
+	if len(info.StepRows) != len(wantRows) {
+		t.Fatalf("expected StepRows len=%d, got %d: %v", len(wantRows), len(info.StepRows), info.StepRows)
+	}
+	for i, v := range wantRows {
+		if info.StepRows[i] != v {
+			t.Errorf("StepRows[%d]: expected %d, got %d (full: %v)", i, v, info.StepRows[i], info.StepRows)
+		}
+	}
+	// Progress: 4 completed (check, setup, container-test, k8s-test) out of 13 jobs
+	expectedProgress := 4.0 / 13.0
+	if info.Progress != expectedProgress {
+		t.Errorf("expected Progress=%f, got %f", expectedProgress, info.Progress)
+	}
+}
+
+func TestComputeSteps_LazyJobCreation(t *testing.T) {
+	// Simulates the progressive job discovery issue: initially only 7 jobs
+	// visible (5 steps), then more appear.
+
+	// Poll 1: Only first few jobs exist
+	jobsPoll1 := []ghclient.Job{
+		{Name: "ci-cd / Check Code Changes", Status: "completed", Conclusion: "success"},
+		{Name: "ci-cd / Setup Build Environment", Status: "completed", Conclusion: "success"},
+		{Name: "ci-cd / Code Analysis (go-vet)", Status: "in_progress"},
+		{Name: "ci-cd / Code Analysis (staticcheck)", Status: "queued"},
+		{Name: "ci-cd / Code Analysis (trivy)", Status: "queued"},
+		{Name: "ci-cd / Go Tests", Status: "in_progress"},
+		{Name: "ci-cd / Build Container Image", Status: "queued"},
+	}
+	info1 := computeSteps(jobsPoll1)
+	if info1.TotalSteps != 5 {
+		t.Errorf("poll 1: expected TotalSteps=5, got %d", info1.TotalSteps)
+	}
+
+	// Poll 2: More jobs appeared (after code-analysis completed)
+	jobsPoll2 := []ghclient.Job{
+		{Name: "ci-cd / Check Code Changes", Status: "completed", Conclusion: "success"},
+		{Name: "ci-cd / Setup Build Environment", Status: "completed", Conclusion: "success"},
+		{Name: "ci-cd / Code Analysis (go-vet)", Status: "completed", Conclusion: "success"},
+		{Name: "ci-cd / Code Analysis (staticcheck)", Status: "completed", Conclusion: "success"},
+		{Name: "ci-cd / Code Analysis (trivy)", Status: "completed", Conclusion: "success"},
+		{Name: "ci-cd / Go Tests", Status: "completed", Conclusion: "success"},
+		{Name: "ci-cd / Build Container Image", Status: "in_progress"},
+		{Name: "ci-cd / Container Integration Test", Status: "completed", Conclusion: "skipped"},
+		{Name: "ci-cd / Kubernetes Integration Test", Status: "completed", Conclusion: "skipped"},
+		{Name: "ci-cd / Build (linux/amd64)", Status: "queued"},
+		{Name: "ci-cd / Build (linux/arm64)", Status: "queued"},
+		{Name: "ci-cd / Create Multi-arch Manifest", Status: "queued"},
+		{Name: "ci-cd / Post-deployment Verification", Status: "queued"},
+	}
+	info2 := computeSteps(jobsPoll2)
+	if info2.TotalSteps != 10 {
+		t.Errorf("poll 2: expected TotalSteps=10, got %d", info2.TotalSteps)
+	}
+
+	// Verify that max clamping would work: total should go from 5 to 10
+	if info2.TotalSteps <= info1.TotalSteps {
+		t.Errorf("expected poll 2 total (%d) > poll 1 total (%d)", info2.TotalSteps, info1.TotalSteps)
+	}
+}
+
 func TestScheduleEnd_ContentPreserved(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()

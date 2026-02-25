@@ -203,18 +203,31 @@ func (c *Client) GetJobs(ctx context.Context, repo string, runID int64) ([]Job, 
 		return nil, fmt.Errorf("invalid repo format %q, expected owner/repo", repo)
 	}
 
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d/jobs", parts[0], parts[1], runID)
+	var all []Job
+	page := 1
 
-	body, err := c.doWithRetry(ctx, url, "requesting jobs")
-	if err != nil {
-		return nil, err
+	for {
+		url := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d/jobs?per_page=100&page=%d", parts[0], parts[1], runID, page)
+
+		body, err := c.doWithRetry(ctx, url, "requesting jobs")
+		if err != nil {
+			return nil, err
+		}
+
+		var result JobsResponse
+		if err := json.Unmarshal(body, &result); err != nil {
+			return nil, fmt.Errorf("decoding jobs: %w", err)
+		}
+
+		all = append(all, result.Jobs...)
+
+		if len(all) >= result.TotalCount || len(result.Jobs) < 100 {
+			break
+		}
+		page++
 	}
 
-	var result JobsResponse
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("decoding jobs: %w", err)
-	}
-	return result.Jobs, nil
+	return all, nil
 }
 
 func (c *Client) ListRepos(ctx context.Context, owner string) ([]string, error) {
