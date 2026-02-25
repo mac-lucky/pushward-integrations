@@ -1,0 +1,32 @@
+name: CI/CD BambuLab
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: ['bambulab/**', 'shared/**', '.github/workflows/bambulab-ci-cd.yml']
+  pull_request:
+    branches: [main]
+    paths: ['bambulab/**', 'shared/**', '.github/workflows/bambulab-ci-cd.yml']
+  workflow_dispatch:
+
+jobs:
+  ci-cd:
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      app_name: "pushward-bambulab"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-bambulab"
+      dockerhub_image: "maclucky/pushward-bambulab"
+      push_to_dockerhub: false
+      push_on_main: true
+      main_branch: "main"
+      build_context: "."
+      dockerfile_path: "./bambulab/Dockerfile"
+      go_module_path: "./bambulab"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit

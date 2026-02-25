@@ -1,0 +1,14 @@
+bambulab:
+  host: ""           # Printer IP address (set PUSHWARD_BAMBULAB_HOST)
+  access_code: ""    # 8-char access code from printer Settings > WLAN (set PUSHWARD_BAMBULAB_ACCESS_CODE)
+  serial: ""         # Printer serial number (set PUSHWARD_BAMBULAB_SERIAL)
+
+pushward:
+  url: ""            # PushWard server URL (set PUSHWARD_URL)
+  api_key: ""        # Integration key with activity:manage scope (set PUSHWARD_API_KEY)
+  priority: 1
+  cleanup_delay: 15m
+  stale_timeout: 60m
+
+polling:
+  update_interval: 5s  # How often to send progress updates to PushWard (set PUSHWARD_POLL_INTERVAL)
