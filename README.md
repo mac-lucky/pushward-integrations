@@ -10,6 +10,7 @@ Collection of PushWard integration bridges packaged as Docker containers. Each b
 | [pushward-grafana](./grafana/) | Grafana alert notifications | 8090 | `ghcr.io/mac-lucky/pushward-grafana` |
 | [pushward-sabnzbd](./sabnzbd/) | SABnzbd download and post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
 | [pushward-argocd](./argocd/) | ArgoCD sync progress (Syncing → Rolling Out → Deployed) | 8090 | `ghcr.io/mac-lucky/pushward-argocd` |
+| [pushward-bambulab](./bambulab/) | BambuLab 3D printer progress tracking via MQTT | - | `ghcr.io/mac-lucky/pushward-bambulab` |
 
 ## Common Configuration
 
@@ -24,11 +25,11 @@ See each integration's README for the full list of configuration options.
 
 ## Project Structure
 
-This is a Go workspace (`go.work`) with a shared module and four integration modules:
+This is a Go workspace (`go.work`) with a shared module and five integration modules:
 
 ```
 pushward-docker/
-  go.work                  # Go workspace: ./shared, ./github, ./grafana, ./sabnzbd, ./argocd
+  go.work                  # Go workspace: ./shared, ./github, ./grafana, ./sabnzbd, ./argocd, ./bambulab
   shared/                  # Shared PushWard API client, config types, HTTP boilerplate, test utilities
   github/                  # pushward-github integration
     cmd/pushward-github/   # Entry point
@@ -65,6 +66,14 @@ pushward-docker/
       handler/             # Sync lifecycle: running, succeeded, deployed, failed
     Dockerfile
     config.example.yml
+  bambulab/                # pushward-bambulab integration
+    cmd/pushward-bambulab/ # Entry point
+    internal/
+      config/              # YAML + env var config loading
+      bambulab/            # BambuLab MQTT client, printer state types
+      tracker/             # Print lifecycle: preparing, printing, paused, finished, failed
+    Dockerfile
+    config.example.yml
   .github/workflows/       # Per-integration CI/CD pipelines
 ```
 
@@ -77,6 +86,7 @@ go build ./github/cmd/pushward-github
 go build ./grafana/cmd/pushward-grafana
 go build ./sabnzbd/cmd/pushward-sabnzbd
 go build ./argocd/cmd/pushward-argocd
+go build ./bambulab/cmd/pushward-bambulab
 ```
 
 Run locally with a config file:
@@ -86,6 +96,7 @@ Run locally with a config file:
 ./pushward-grafana -config grafana/config.example.yml
 ./pushward-sabnzbd -config sabnzbd/config.example.yml
 ./pushward-argocd -config argocd/config.example.yml
+./pushward-bambulab -config bambulab/config.example.yml
 ```
 
 Build Docker images:
@@ -95,6 +106,7 @@ docker build -f github/Dockerfile -t pushward-github .
 docker build -f grafana/Dockerfile -t pushward-grafana .
 docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd .
 docker build -f argocd/Dockerfile -t pushward-argocd .
+docker build -f bambulab/Dockerfile -t pushward-bambulab .
 ```
 
 ## CI/CD
@@ -105,5 +117,6 @@ Each integration has its own GitHub Actions workflow with path filters so only t
 - `.github/workflows/grafana-ci-cd.yml` -- triggers on `grafana/**` and `shared/**` changes
 - `.github/workflows/sabnzbd-ci-cd.yml` -- triggers on `sabnzbd/**` and `shared/**` changes
 - `.github/workflows/argocd-ci-cd.yml` -- triggers on `argocd/**` and `shared/**` changes
+- `.github/workflows/bambulab-ci-cd.yml` -- triggers on `bambulab/**` and `shared/**` changes
 
 All use the shared `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml` workflow. Triggers: push to `main`, tags (`v*`), pull requests to `main`, and manual `workflow_dispatch`. Docker images are built and pushed to GHCR on push to main or tags.
