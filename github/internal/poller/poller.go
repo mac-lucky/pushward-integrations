@@ -183,6 +183,18 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		}
 		p.mu.Unlock()
 
+		// Fetch jobs for accurate initial step count.
+		initialTotalSteps := 1
+		var initialStepRows []int
+		if jobs, err := p.gh.GetJobs(ctx, repo, run.ID); err != nil {
+			slog.Warn("failed to fetch jobs for initial step count, using default",
+				"repo", repo, "run_id", run.ID, "error", err)
+		} else if len(jobs) > 0 {
+			info := computeSteps(jobs)
+			initialTotalSteps = info.TotalSteps
+			initialStepRows = info.StepRows
+		}
+
 		// Send initial ONGOING (triggers push-to-start)
 		if err := p.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 			State: "ONGOING",
@@ -194,7 +206,8 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 				Subtitle:     fmt.Sprintf("%s / %s", repoShort, run.Name),
 				AccentColor:  "green",
 				CurrentStep:  intPtr(0),
-				TotalSteps:   intPtr(1),
+				TotalSteps:   intPtr(initialTotalSteps),
+				StepRows:     initialStepRows,
 				URL:          run.HTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", repo),
 			},
@@ -203,6 +216,100 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// stepInfo holds computed pipeline step information from a set of jobs.
+type stepInfo struct {
+	TotalSteps      int
+	CurrentStep     int
+	CurrentStepName string
+	StepRows        []int
+	CompletedJobs   int
+	AllCompleted    bool
+	AnyFailed       bool
+	Progress        float64
+}
+
+// computeSteps groups jobs by base name (supporting matrix strategies) and
+// computes pipeline step progress information.
+func computeSteps(jobs []ghclient.Job) stepInfo {
+	type step struct {
+		name      string
+		count     int
+		completed int
+		active    bool
+		failed    bool
+	}
+	var steps []step
+	stepIdx := make(map[string]int)
+	completedJobs := 0
+	allCompleted := true
+	anyFailed := false
+
+	for _, job := range jobs {
+		base := baseJobName(job.Name)
+		si, ok := stepIdx[base]
+		if !ok {
+			si = len(steps)
+			stepIdx[base] = si
+			steps = append(steps, step{name: base})
+		}
+		steps[si].count++
+
+		switch job.Status {
+		case "completed":
+			completedJobs++
+			steps[si].completed++
+			if job.Conclusion == "failure" || job.Conclusion == "cancelled" {
+				steps[si].failed = true
+				anyFailed = true
+			}
+		case "in_progress":
+			steps[si].active = true
+			allCompleted = false
+		default: // queued
+			allCompleted = false
+		}
+	}
+
+	totalSteps := len(steps)
+	stepRows := make([]int, totalSteps)
+	currentStep := 0
+	var currentStepName string
+
+	for i, s := range steps {
+		stepRows[i] = s.count
+		if s.active && currentStepName == "" {
+			currentStepName = s.name
+			currentStep = i + 1
+		}
+	}
+
+	if currentStepName == "" && !allCompleted {
+		currentStepName = "Queued"
+		for i, s := range steps {
+			if s.completed < s.count {
+				currentStep = i
+				break
+			}
+		}
+	}
+
+	progress := 0.0
+	if len(jobs) > 0 {
+		progress = float64(completedJobs) / float64(len(jobs))
+	}
+
+	return stepInfo{
+		TotalSteps:      totalSteps,
+		CurrentStep:     currentStep,
+		CurrentStepName: currentStepName,
+		StepRows:        stepRows,
+		CompletedJobs:   completedJobs,
+		AllCompleted:    allCompleted,
+		AnyFailed:       anyFailed,
+		Progress:        progress,
+	}
 }
 
 func (p *Poller) pollActive(ctx context.Context) error {
@@ -235,75 +342,11 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			continue
 		}
 
-		totalJobs := len(jobs)
-		if totalJobs == 0 {
+		if len(jobs) == 0 {
 			continue
 		}
 
-		// Group jobs by base name (supports matrix strategies).
-		// Matrix jobs share a base name, e.g. "Build (ubuntu, node-16)" and
-		// "Build (ubuntu, node-18)" both map to "Build".
-		type step struct {
-			name      string
-			count     int
-			completed int
-			active    bool
-			failed    bool
-		}
-		var steps []step
-		stepIdx := make(map[string]int)
-		completedJobs := 0
-		allCompleted := true
-		anyFailed := false
-
-		for _, job := range jobs {
-			base := baseJobName(job.Name)
-			si, ok := stepIdx[base]
-			if !ok {
-				si = len(steps)
-				stepIdx[base] = si
-				steps = append(steps, step{name: base})
-			}
-			steps[si].count++
-
-			switch job.Status {
-			case "completed":
-				completedJobs++
-				steps[si].completed++
-				if job.Conclusion == "failure" || job.Conclusion == "cancelled" {
-					steps[si].failed = true
-					anyFailed = true
-				}
-			case "in_progress":
-				steps[si].active = true
-				allCompleted = false
-			default: // queued
-				allCompleted = false
-			}
-		}
-
-		totalSteps := len(steps)
-		stepRows := make([]int, totalSteps)
-		currentStep := 0
-		var currentStepName string
-
-		for i, s := range steps {
-			stepRows[i] = s.count
-			if s.active && currentStepName == "" {
-				currentStepName = s.name
-				currentStep = i + 1
-			}
-		}
-
-		if currentStepName == "" && !allCompleted {
-			currentStepName = "Queued"
-			for i, s := range steps {
-				if s.completed < s.count {
-					currentStep = i
-					break
-				}
-			}
-		}
+		info := computeSteps(jobs)
 
 		p.mu.Lock()
 		if tt, ok := p.tracked[repo]; ok {
@@ -313,10 +356,10 @@ func (p *Poller) pollActive(ctx context.Context) error {
 
 		repoShort := repoName(tRepo)
 
-		if allCompleted {
+		if info.AllCompleted {
 			conclusion := "Success"
 			color := "green"
-			if anyFailed {
+			if info.AnyFailed {
 				conclusion = "Failed"
 				color = "red"
 			}
@@ -328,29 +371,27 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				Icon:         "arrow.triangle.branch",
 				Subtitle:     fmt.Sprintf("%s / %s", repoShort, tName),
 				AccentColor:  color,
-				CurrentStep:  intPtr(totalSteps),
-				TotalSteps:   intPtr(totalSteps),
-				StepRows:     stepRows,
+				CurrentStep:  intPtr(info.TotalSteps),
+				TotalSteps:   intPtr(info.TotalSteps),
+				StepRows:     info.StepRows,
 				URL:          tHTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
 			})
 			continue
 		}
 
-		progress := float64(completedJobs) / float64(totalJobs)
-
 		if err := p.pw.UpdateActivity(ctx, tSlug, pushward.UpdateRequest{
 			State: "ONGOING",
 			Content: pushward.Content{
 				Template:     "pipeline",
-				Progress:     progress,
-				State:        currentStepName,
+				Progress:     info.Progress,
+				State:        info.CurrentStepName,
 				Icon:         "arrow.triangle.branch",
 				Subtitle:     fmt.Sprintf("%s / %s", repoShort, tName),
 				AccentColor:  "green",
-				CurrentStep:  intPtr(currentStep),
-				TotalSteps:   intPtr(totalSteps),
-				StepRows:     stepRows,
+				CurrentStep:  intPtr(info.CurrentStep),
+				TotalSteps:   intPtr(info.TotalSteps),
+				StepRows:     info.StepRows,
 				URL:          tHTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
 			},

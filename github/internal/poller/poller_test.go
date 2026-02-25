@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mac-lucky/pushward-docker/github/internal/config"
+	ghclient "github.com/mac-lucky/pushward-docker/github/internal/github"
 	sharedconfig "github.com/mac-lucky/pushward-docker/shared/config"
 	"github.com/mac-lucky/pushward-docker/shared/pushward"
 	"github.com/mac-lucky/pushward-docker/shared/testutil"
@@ -22,6 +23,92 @@ func testConfig() *config.Config {
 		Polling: config.PollingConfig{
 			IdleInterval: 60 * time.Second,
 		},
+	}
+}
+
+func TestComputeSteps_AllQueued(t *testing.T) {
+	jobs := []ghclient.Job{
+		{Name: "Lint", Status: "queued"},
+		{Name: "Build", Status: "queued"},
+		{Name: "Test", Status: "queued"},
+	}
+	info := computeSteps(jobs)
+	if info.TotalSteps != 3 {
+		t.Errorf("expected TotalSteps=3, got %d", info.TotalSteps)
+	}
+	if info.CurrentStepName != "Queued" {
+		t.Errorf("expected CurrentStepName=Queued, got %s", info.CurrentStepName)
+	}
+	if info.CurrentStep != 0 {
+		t.Errorf("expected CurrentStep=0, got %d", info.CurrentStep)
+	}
+	if info.AllCompleted {
+		t.Error("expected AllCompleted=false")
+	}
+	if info.Progress != 0.0 {
+		t.Errorf("expected Progress=0.0, got %f", info.Progress)
+	}
+	if len(info.StepRows) != 3 || info.StepRows[0] != 1 || info.StepRows[1] != 1 || info.StepRows[2] != 1 {
+		t.Errorf("expected StepRows=[1,1,1], got %v", info.StepRows)
+	}
+}
+
+func TestComputeSteps_MatrixJobs(t *testing.T) {
+	jobs := []ghclient.Job{
+		{Name: "Build (ubuntu, node-16)", Status: "completed", Conclusion: "success"},
+		{Name: "Build (ubuntu, node-18)", Status: "completed", Conclusion: "success"},
+		{Name: "Build (ubuntu, node-20)", Status: "in_progress"},
+		{Name: "Test", Status: "queued"},
+	}
+	info := computeSteps(jobs)
+	if info.TotalSteps != 2 {
+		t.Errorf("expected TotalSteps=2, got %d", info.TotalSteps)
+	}
+	if info.CurrentStepName != "Build" {
+		t.Errorf("expected CurrentStepName=Build, got %s", info.CurrentStepName)
+	}
+	if info.CurrentStep != 1 {
+		t.Errorf("expected CurrentStep=1, got %d", info.CurrentStep)
+	}
+	if len(info.StepRows) != 2 || info.StepRows[0] != 3 || info.StepRows[1] != 1 {
+		t.Errorf("expected StepRows=[3,1], got %v", info.StepRows)
+	}
+	if info.Progress != 0.5 {
+		t.Errorf("expected Progress=0.5, got %f", info.Progress)
+	}
+}
+
+func TestComputeSteps_AllCompletedSuccess(t *testing.T) {
+	jobs := []ghclient.Job{
+		{Name: "Lint", Status: "completed", Conclusion: "success"},
+		{Name: "Build", Status: "completed", Conclusion: "success"},
+	}
+	info := computeSteps(jobs)
+	if !info.AllCompleted {
+		t.Error("expected AllCompleted=true")
+	}
+	if info.AnyFailed {
+		t.Error("expected AnyFailed=false")
+	}
+	if info.TotalSteps != 2 {
+		t.Errorf("expected TotalSteps=2, got %d", info.TotalSteps)
+	}
+	if info.Progress != 1.0 {
+		t.Errorf("expected Progress=1.0, got %f", info.Progress)
+	}
+}
+
+func TestComputeSteps_WithFailure(t *testing.T) {
+	jobs := []ghclient.Job{
+		{Name: "Lint", Status: "completed", Conclusion: "success"},
+		{Name: "Build", Status: "completed", Conclusion: "failure"},
+	}
+	info := computeSteps(jobs)
+	if !info.AllCompleted {
+		t.Error("expected AllCompleted=true")
+	}
+	if !info.AnyFailed {
+		t.Error("expected AnyFailed=true")
 	}
 }
 
