@@ -193,7 +193,18 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			info := computeSteps(jobs)
 			initialTotalSteps = info.TotalSteps
 			initialStepRows = info.StepRows
+			slog.Info("initial job scan",
+				"repo", repo, "jobs", len(jobs),
+				"steps", info.TotalSteps, "step_rows", info.StepRows)
 		}
+
+		// Store max totals on the tracked run.
+		p.mu.Lock()
+		if t, ok := p.tracked[repo]; ok {
+			t.maxTotalSteps = initialTotalSteps
+			t.maxStepRows = append([]int(nil), initialStepRows...)
+		}
+		p.mu.Unlock()
 
 		// Send initial ONGOING (triggers push-to-start)
 		if err := p.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
@@ -351,6 +362,22 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		p.mu.Lock()
 		if tt, ok := p.tracked[repo]; ok {
 			tt.LastUpdate = time.Now()
+
+			// Clamp TotalSteps to never decrease: GitHub lazily creates
+			// jobs behind needs/if conditions, so new steps appear over
+			// time. We keep the highest total to avoid confusing jumps.
+			if info.TotalSteps > tt.maxTotalSteps {
+				slog.Info("new steps discovered",
+					"repo", repo, "jobs", len(jobs),
+					"prev_steps", tt.maxTotalSteps, "new_steps", info.TotalSteps,
+					"step_rows", info.StepRows)
+				tt.maxTotalSteps = info.TotalSteps
+				tt.maxStepRows = append([]int(nil), info.StepRows...)
+			} else if info.TotalSteps < tt.maxTotalSteps {
+				// Fewer steps than our max (shouldn't happen) — use cached.
+				info.TotalSteps = tt.maxTotalSteps
+				info.StepRows = tt.maxStepRows
+			}
 		}
 		p.mu.Unlock()
 
