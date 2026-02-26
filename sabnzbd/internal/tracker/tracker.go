@@ -216,18 +216,29 @@ func (t *Tracker) track(resumed bool) {
 		avgSpeed = totalMB / float64(downloadElapsed)
 	}
 
-	// Get the completed filename from history
-	subtitle := t.getCompletedName(ctx)
-	if subtitle == "" {
-		subtitle = fmt.Sprintf("%s in %s · %.0f MB/s", formatSize(totalMB), formatDuration(totalElapsed), avgSpeed)
+	// Build state line: "Complete · 1.2 GB · 45 MB/s avg · unpack 1m 30s"
+	stateStr := "Done"
+	var stateParts []string
+	if totalMB > 0 {
+		stateParts = append(stateParts, formatSize(totalMB))
 	}
-	subtitle = truncate(subtitle, 30)
+	if avgSpeed > 0 {
+		stateParts = append(stateParts, fmt.Sprintf("%.0f MB/s avg", avgSpeed))
+	}
+	if ppSecs > 0 {
+		stateParts = append(stateParts, fmt.Sprintf("unpack %s", formatDuration(ppSecs)))
+	}
+	if len(stateParts) > 0 {
+		stateStr += " · " + strings.Join(stateParts, " · ")
+	}
 
-	slog.Info("complete", "total_mb", totalMB, "elapsed", totalElapsed, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed, "subtitle", subtitle)
+	subtitle := truncate(t.getCompletedName(ctx), 30)
+
+	slog.Info("complete", "total_mb", totalMB, "elapsed", totalElapsed, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed, "state", stateStr, "subtitle", subtitle)
 
 	// Two-phase end: ONGOING with final content → short display → ENDED
 	if resumed {
-		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, "ENDED")
+		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, "ENDED")
 		slog.Info("tracking complete (resumed, skipping two-phase end)")
 	} else {
 		endDelay := t.cfg.PushWard.EndDelay
@@ -235,12 +246,12 @@ func (t *Tracker) track(resumed bool) {
 
 		// Phase 1: ONGOING with final content (push-update token delivers it)
 		time.Sleep(endDelay)
-		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, "ONGOING")
+		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, "ONGOING")
 		slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
 
 		// Phase 2: ENDED (dismisses Live Activity)
 		time.Sleep(displayTime)
-		t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, "ENDED")
+		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, "ENDED")
 		slog.Info("tracking complete")
 	}
 }
