@@ -7,6 +7,8 @@
 /grafana/pushward-grafana
 /pushward-argocd
 /argocd/pushward-argocd
+/pushward-bambulab
+/bambulab/pushward-bambulab
 *.exe
 
 # IDE
