@@ -2,6 +2,7 @@ package tracker
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/config"
 	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/sabnzbd"
@@ -42,10 +44,11 @@ type Tracker struct {
 	mu     sync.Mutex
 	active bool
 	wg     sync.WaitGroup
+	ctx    context.Context
 }
 
-func New(cfg *config.Config, sab *sabnzbd.Client, pw *pushward.Client) *Tracker {
-	return &Tracker{cfg: cfg, sab: sab, pw: pw}
+func New(ctx context.Context, cfg *config.Config, sab *sabnzbd.Client, pw *pushward.Client) *Tracker {
+	return &Tracker{ctx: ctx, cfg: cfg, sab: sab, pw: pw}
 }
 
 // Cleanup ends any stale activity left over from a previous run (e.g. crash).
@@ -64,9 +67,7 @@ func (t *Tracker) Cleanup(ctx context.Context) {
 // ResumeIfActive checks SABnzbd for in-progress downloads or post-processing
 // and starts tracking if found. Returns true if tracking was resumed.
 func (t *Tracker) ResumeIfActive() bool {
-	ctx := context.Background()
-
-	queue, err := t.sab.GetQueue(ctx)
+	queue, err := t.sab.GetQueue(t.ctx)
 	if err != nil {
 		slog.Warn("failed to check SABnzbd queue on startup", "error", err)
 		return false
@@ -82,7 +83,7 @@ func (t *Tracker) ResumeIfActive() bool {
 		return true
 	}
 
-	ppStatus, _ := t.getPPStatus(ctx)
+	ppStatus, _ := t.getPPStatus(t.ctx)
 	if ppStatus != "" {
 		slog.Info("active post-processing found on startup, resuming tracking", "status", ppStatus)
 		t.mu.Lock()
@@ -105,6 +106,17 @@ func (t *Tracker) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
+	// Webhook secret validation
+	if t.cfg.SABnzbd.WebhookSecret != "" {
+		got := r.Header.Get("X-Webhook-Secret")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(t.cfg.SABnzbd.WebhookSecret)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	t.mu.Lock()
@@ -134,7 +146,7 @@ func (t *Tracker) launchTracker(resumed bool) {
 			t.active = false
 			t.mu.Unlock()
 		}()
-		t.track(resumed)
+		t.track(t.ctx, resumed)
 	}()
 }
 
@@ -164,9 +176,7 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 	}
 }
 
-func (t *Tracker) track(resumed bool) {
-	ctx := context.Background()
-
+func (t *Tracker) track(ctx context.Context, resumed bool) {
 	// Ensure activity exists
 	endedTTL := int(t.cfg.PushWard.CleanupDelay.Seconds())
 	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
@@ -245,12 +255,20 @@ func (t *Tracker) track(resumed bool) {
 		displayTime := t.cfg.PushWard.EndDisplayTime
 
 		// Phase 1: ONGOING with final content (push-update token delivers it)
-		time.Sleep(endDelay)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(endDelay):
+		}
 		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, "ONGOING")
 		slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
 
 		// Phase 2: ENDED (dismisses Live Activity)
-		time.Sleep(displayTime)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(displayTime):
+		}
 		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, "ENDED")
 		slog.Info("tracking complete")
 	}
@@ -263,14 +281,22 @@ func (t *Tracker) waitForQueueActive(ctx context.Context, maxPolls int) bool {
 		queue, err := t.sab.GetQueue(ctx)
 		if err != nil {
 			slog.Warn("failed to fetch queue", "error", err)
-			time.Sleep(t.cfg.Polling.Interval)
+			select {
+			case <-ctx.Done():
+				return false
+			case <-time.After(t.cfg.Polling.Interval):
+			}
 			continue
 		}
 		mb, _ := strconv.ParseFloat(queue.MB, 64)
 		if queue.Status != "Idle" && mb > 0 {
 			return true
 		}
-		time.Sleep(t.cfg.Polling.Interval)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(t.cfg.Polling.Interval):
+		}
 	}
 	return false
 }
@@ -285,7 +311,11 @@ func (t *Tracker) trackDownloads(ctx context.Context) float64 {
 		queue, err := t.sab.GetQueue(ctx)
 		if err != nil {
 			slog.Warn("failed to fetch queue", "error", err)
-			time.Sleep(t.cfg.Polling.Interval)
+			select {
+			case <-ctx.Done():
+				return totalMB
+			case <-time.After(t.cfg.Polling.Interval):
+			}
 			continue
 		}
 
@@ -297,7 +327,11 @@ func (t *Tracker) trackDownloads(ctx context.Context) float64 {
 		if !t.sendDownloadProgress(ctx, queue, startTime) {
 			break
 		}
-		time.Sleep(t.cfg.Polling.Interval)
+		select {
+		case <-ctx.Done():
+			return totalMB
+		case <-time.After(t.cfg.Polling.Interval):
+		}
 	}
 
 	slog.Info("downloads finished", "total_mb", totalMB)
@@ -322,7 +356,11 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 		}
 		subtitle := truncate(ppName, 30)
 		t.send(ctx, 1.0, ppStatus+"...", icon, "orange", nil, subtitle, "ONGOING")
-		time.Sleep(t.cfg.Polling.Interval)
+		select {
+		case <-ctx.Done():
+			return time.Since(ppStart)
+		case <-time.After(t.cfg.Polling.Interval):
+		}
 	}
 
 	elapsed := time.Since(ppStart)
@@ -422,13 +460,13 @@ func parseTimeLeft(timeleft string) *int {
 }
 
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	if utf8.RuneCountInString(s) <= maxLen {
 		return s
 	}
 	if maxLen <= 3 {
-		return s[:maxLen]
+		return string([]rune(s)[:maxLen])
 	}
-	return s[:maxLen-3] + "..."
+	return string([]rune(s)[:maxLen-3]) + "..."
 }
 
 func formatDuration(seconds int) string {

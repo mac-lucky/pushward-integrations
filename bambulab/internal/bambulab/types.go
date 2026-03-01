@@ -12,10 +12,9 @@ type PrintStatus struct {
 	Command string `json:"command"`
 
 	// Print state
-	GcodeState     *string `json:"gcode_state"`
-	SubtaskName    *string `json:"subtask_name"`
-	GcodeFile      *string `json:"gcode_file"`
-	GcodeStartTime *string `json:"gcode_start_time"`
+	GcodeState  *string `json:"gcode_state"`
+	SubtaskName *string `json:"subtask_name"`
+	GcodeFile   *string `json:"gcode_file"`
 
 	// Progress
 	Percent       *int `json:"mc_percent"`

@@ -36,7 +36,7 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	slog.Info("starting pushward-argocd", "address", cfg.Server.Address, "priority", cfg.PushWard.Priority, "cleanup_delay", cfg.PushWard.CleanupDelay, "stale_timeout", cfg.PushWard.StaleTimeout, "sync_grace_period", cfg.PushWard.SyncGracePeriod)
+	slog.Info("starting pushward-argocd", "address", cfg.Server.Address, "priority", cfg.PushWard.Priority, "cleanup_delay", cfg.PushWard.CleanupDelay, "stale_timeout", cfg.PushWard.StaleTimeout, "sync_grace_period", cfg.ArgoCD.SyncGracePeriod)
 	if err := server.ListenAndServe(ctx, cfg.Server.Address, mux); err != nil {
 		slog.Error("server error", "error", err)
 		os.Exit(1)

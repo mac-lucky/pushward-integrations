@@ -7,10 +7,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 )
 
@@ -47,18 +46,20 @@ func NewClient(baseURL, apiKey string) *Client {
 	}
 }
 
-// CreateActivity creates a new activity via POST /activities.
-// Returns nil on 2xx or 409 "already exists". Returns error on 409 "limit".
-func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority, endedTTL, staleTTL int) error {
-	body, err := json.Marshal(CreateActivityRequest{
-		Slug:     slug,
-		Name:     name,
-		Priority: priority,
-		EndedTTL: endedTTL,
-		StaleTTL: staleTTL,
-	})
-	if err != nil {
-		return fmt.Errorf("marshaling create activity: %w", err)
+// doWithRetry executes an HTTP request with exponential backoff and jitter.
+// It handles 429 rate limiting (Retry-After header), retries on 5xx and network
+// errors, and returns immediately on 2xx or non-retryable 4xx errors.
+// The handleConflict callback, if non-nil, is invoked on 409 responses; it
+// receives the response body and returns (done bool, err error). If done is
+// true, doWithRetry returns err immediately.
+func (c *Client) doWithRetry(ctx context.Context, method, url string, body interface{}, handleConflict func([]byte) (bool, error)) error {
+	var reqBody []byte
+	if body != nil {
+		var err error
+		reqBody, err = json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("marshaling request body: %w", err)
+		}
 	}
 
 	var lastErr error
@@ -67,10 +68,12 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 		if attempt > 0 {
 			backoff := retryAfterOverride
 			if backoff == 0 {
-				backoff = time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt-1)), float64(30*time.Second)))
+				// Integer-based exponential backoff capped at 30s with equal jitter.
+				base := min(time.Second<<(attempt-1), 30*time.Second)
+				backoff = base/2 + rand.N(base/2)
 			}
 			retryAfterOverride = 0
-			slog.Warn("retrying PushWard create activity", "attempt", attempt+1, "backoff", backoff)
+			slog.Warn("retrying PushWard request", "method", method, "url", url, "attempt", attempt+1, "backoff", backoff)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -78,81 +81,34 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 			}
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-			fmt.Sprintf("%s/activities", c.baseURL), bytes.NewReader(body))
+		var bodyReader io.Reader
+		if reqBody != nil {
+			bodyReader = bytes.NewReader(reqBody)
+		}
+
+		httpReq, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 		if err != nil {
 			return fmt.Errorf("creating request: %w", err)
 		}
-		httpReq.Header.Set("Content-Type", "application/json")
+		if reqBody != nil {
+			httpReq.Header.Set("Content-Type", "application/json")
+		}
 		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
-			lastErr = fmt.Errorf("sending create activity: %w", err)
+			lastErr = fmt.Errorf("sending request: %w", err)
 			continue
 		}
 
-		if resp.StatusCode == http.StatusConflict {
-			body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusConflict && handleConflict != nil {
+			respBody, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
-			if strings.Contains(string(body), "limit") {
-				return fmt.Errorf("activity limit reached")
+			if done, cerr := handleConflict(respBody); done {
+				return cerr
 			}
-			return nil // Already exists, OK
-		}
-		resp.Body.Close()
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return nil
-		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			retryAfterOverride = parseRetryAfter(resp.Header.Get("Retry-After"))
-			slog.Warn("rate limited by PushWard", "slug", slug, "retry_after", retryAfterOverride)
-			lastErr = fmt.Errorf("rate limited (429)")
-			continue
-		}
-		lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			return lastErr
-		}
-	}
-	return fmt.Errorf("max retries exceeded: %w", lastErr)
-}
-
-// UpdateActivity updates an activity via PATCH /activity/{slug}.
-func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequest) error {
-	body, err := json.Marshal(req)
-	if err != nil {
-		return fmt.Errorf("marshaling update: %w", err)
-	}
-
-	var lastErr error
-	var retryAfterOverride time.Duration
-	for attempt := 0; attempt < 5; attempt++ {
-		if attempt > 0 {
-			backoff := retryAfterOverride
-			if backoff == 0 {
-				backoff = time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt-1)), float64(30*time.Second)))
-			}
-			retryAfterOverride = 0
-			slog.Warn("retrying PushWard update", "attempt", attempt+1, "backoff", backoff)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(backoff):
-			}
-		}
-
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodPatch,
-			fmt.Sprintf("%s/activity/%s", c.baseURL, slug), bytes.NewReader(body))
-		if err != nil {
-			return fmt.Errorf("creating request: %w", err)
-		}
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-		resp, err := c.httpClient.Do(httpReq)
-		if err != nil {
-			lastErr = fmt.Errorf("sending update: %w", err)
+			// If handleConflict says not done, fall through to default handling
+			lastErr = fmt.Errorf("conflict (409)")
 			continue
 		}
 		resp.Body.Close()
@@ -162,7 +118,7 @@ func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequ
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
 			retryAfterOverride = parseRetryAfter(resp.Header.Get("Retry-After"))
-			slog.Warn("rate limited by PushWard", "slug", slug, "retry_after", retryAfterOverride)
+			slog.Warn("rate limited by PushWard", "url", url, "retry_after", retryAfterOverride)
 			lastErr = fmt.Errorf("rate limited (429)")
 			continue
 		}
@@ -174,55 +130,27 @@ func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequ
 	return fmt.Errorf("max retries exceeded: %w", lastErr)
 }
 
-// DeleteActivity deletes an activity via DELETE /activities/{slug}.
-func (c *Client) DeleteActivity(ctx context.Context, slug string) error {
-	var lastErr error
-	var retryAfterOverride time.Duration
-	for attempt := 0; attempt < 5; attempt++ {
-		if attempt > 0 {
-			backoff := retryAfterOverride
-			if backoff == 0 {
-				backoff = time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt-1)), float64(30*time.Second)))
+// CreateActivity creates a new activity via POST /activities.
+// Returns nil on 2xx or 409 "already exists". Returns error on 409 "limit".
+func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority, endedTTL, staleTTL int) error {
+	return c.doWithRetry(ctx, http.MethodPost, fmt.Sprintf("%s/activities", c.baseURL),
+		CreateActivityRequest{
+			Slug:     slug,
+			Name:     name,
+			Priority: priority,
+			EndedTTL: endedTTL,
+			StaleTTL: staleTTL,
+		},
+		func(body []byte) (bool, error) {
+			if bytes.Contains(body, []byte("limit")) {
+				return true, fmt.Errorf("activity limit reached")
 			}
-			retryAfterOverride = 0
-			slog.Warn("retrying PushWard delete activity", "attempt", attempt+1, "backoff", backoff)
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(backoff):
-			}
-		}
+			return true, nil // Already exists, OK
+		},
+	)
+}
 
-		httpReq, err := http.NewRequestWithContext(ctx, http.MethodDelete,
-			fmt.Sprintf("%s/activities/%s", c.baseURL, slug), nil)
-		if err != nil {
-			return fmt.Errorf("creating request: %w", err)
-		}
-		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-		resp, err := c.httpClient.Do(httpReq)
-		if err != nil {
-			lastErr = fmt.Errorf("sending delete activity: %w", err)
-			continue
-		}
-		resp.Body.Close()
-
-		if resp.StatusCode == http.StatusNotFound {
-			return nil // Already gone, OK
-		}
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			return nil
-		}
-		if resp.StatusCode == http.StatusTooManyRequests {
-			retryAfterOverride = parseRetryAfter(resp.Header.Get("Retry-After"))
-			slog.Warn("rate limited by PushWard", "slug", slug, "retry_after", retryAfterOverride)
-			lastErr = fmt.Errorf("rate limited (429)")
-			continue
-		}
-		lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
-		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			return lastErr
-		}
-	}
-	return fmt.Errorf("max retries exceeded: %w", lastErr)
+// UpdateActivity updates an activity via PATCH /activity/{slug}.
+func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequest) error {
+	return c.doWithRetry(ctx, http.MethodPatch, fmt.Sprintf("%s/activity/%s", c.baseURL, slug), req, nil)
 }

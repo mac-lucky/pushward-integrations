@@ -28,15 +28,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
 	sab := sabnzbd.NewClient(cfg.SABnzbd.URL, cfg.SABnzbd.APIKey)
 	pw := pushward.NewClient(cfg.PushWard.URL, cfg.PushWard.APIKey)
-	t := tracker.New(cfg, sab, pw)
+	t := tracker.New(ctx, cfg, sab, pw)
 
 	mux := server.NewMux()
 	mux.HandleFunc("/webhook", t.HandleWebhook)
-
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
 
 	if !t.ResumeIfActive() {
 		t.Cleanup(ctx)

@@ -15,8 +15,9 @@ type Config struct {
 }
 
 type ArgoCDConfig struct {
-	WebhookSecret string `yaml:"webhook_secret"`
-	URL           string `yaml:"url"`
+	WebhookSecret   string        `yaml:"webhook_secret"`
+	URL             string        `yaml:"url"`
+	SyncGracePeriod time.Duration `yaml:"sync_grace_period"`
 }
 
 func Load(path string) (*Config, error) {
@@ -24,13 +25,15 @@ func Load(path string) (*Config, error) {
 		Server: sharedconfig.ServerConfig{
 			Address: ":8090",
 		},
-		PushWard: sharedconfig.PushWardConfig{
-			Priority:        3,
-			CleanupDelay:    5 * time.Minute,
-			StaleTimeout:    30 * time.Minute,
+		ArgoCD: ArgoCDConfig{
 			SyncGracePeriod: 10 * time.Second,
-			EndDelay:        5 * time.Second,
-			EndDisplayTime:  4 * time.Second,
+		},
+		PushWard: sharedconfig.PushWardConfig{
+			Priority:       3,
+			CleanupDelay:   5 * time.Minute,
+			StaleTimeout:   30 * time.Minute,
+			EndDelay:       5 * time.Second,
+			EndDisplayTime: 4 * time.Second,
 		},
 	}
 
@@ -51,7 +54,7 @@ func Load(path string) (*Config, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parsing PUSHWARD_SYNC_GRACE_PERIOD: %w", err)
 		}
-		cfg.PushWard.SyncGracePeriod = d
+		cfg.ArgoCD.SyncGracePeriod = d
 	}
 
 	// Shared PushWard env overrides

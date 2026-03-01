@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-docker/bambulab/internal/bambulab"
 	"github.com/mac-lucky/pushward-docker/bambulab/internal/config"
@@ -14,17 +15,24 @@ import (
 
 const slugPrefix = "bambu"
 
+// Printer abstracts the printer state source for testability.
+type Printer interface {
+	State() bambulab.MergedState
+	UpdateCh() <-chan struct{}
+}
+
 type Tracker struct {
 	cfg   *config.Config
-	bambu *bambulab.Client
+	bambu Printer
 	pw    *pushward.Client
 	slug  string
 
 	tracking  bool
-	lastState string // last gcode_state we acted on
+	lastState string      // last gcode_state we acted on
+	endTimer  *time.Timer // pending two-phase end
 }
 
-func New(cfg *config.Config, bambu *bambulab.Client, pw *pushward.Client) *Tracker {
+func New(cfg *config.Config, bambu Printer, pw *pushward.Client) *Tracker {
 	serial := strings.ToLower(cfg.BambuLab.Serial)
 	return &Tracker{
 		cfg:   cfg,
@@ -50,6 +58,9 @@ func (t *Tracker) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
+			if t.endTimer != nil {
+				t.endTimer.Stop()
+			}
 			if t.tracking {
 				t.endActivity(ctx, "Interrupted", "xmark.circle.fill", "orange")
 			}
@@ -112,6 +123,10 @@ func (t *Tracker) process(ctx context.Context) {
 }
 
 func (t *Tracker) startTracking(ctx context.Context, state *bambulab.MergedState) {
+	if t.endTimer != nil {
+		t.endTimer.Stop()
+		t.endTimer = nil
+	}
 	t.tracking = true
 	t.lastState = state.GcodeState
 
@@ -162,7 +177,7 @@ func (t *Tracker) sendPreparing(ctx context.Context, state *bambulab.MergedState
 	t.send(ctx, 0.0, "Preparing...", "arrow.triangle.2.circlepath", "blue", nil, subtitle, "ONGOING")
 }
 
-func (t *Tracker) finishActivity(ctx context.Context, state *bambulab.MergedState) {
+func (t *Tracker) finishActivity(_ context.Context, state *bambulab.MergedState) {
 	subtitle := ""
 	if state.SubtaskName != "" {
 		subtitle = truncate(state.SubtaskName, 30)
@@ -171,21 +186,28 @@ func (t *Tracker) finishActivity(ctx context.Context, state *bambulab.MergedStat
 	endDelay := t.cfg.PushWard.EndDelay
 	displayTime := t.cfg.PushWard.EndDisplayTime
 
-	// Phase 1: ONGOING with final content
-	time.Sleep(endDelay)
-	t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, "ONGOING")
-	slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
-
-	// Phase 2: ENDED
-	time.Sleep(displayTime)
-	t.send(ctx, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, "ENDED")
-	slog.Info("print tracking complete")
-
+	// Reset tracking immediately to unblock the MQTT event loop
 	t.tracking = false
 	t.lastState = ""
+
+	t.endTimer = time.AfterFunc(endDelay, func() {
+		// Phase 1: ONGOING with final content
+		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+		t.send(ctx1, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, "ONGOING")
+		cancel1()
+		slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
+
+		// Phase 2: ENDED
+		time.AfterFunc(displayTime, func() {
+			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel2()
+			t.send(ctx2, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, "ENDED")
+			slog.Info("print tracking complete")
+		})
+	})
 }
 
-func (t *Tracker) failActivity(ctx context.Context, state *bambulab.MergedState) {
+func (t *Tracker) failActivity(_ context.Context, state *bambulab.MergedState) {
 	progress := float64(state.Percent) / 100.0
 	subtitle := ""
 	if state.SubtaskName != "" {
@@ -195,16 +217,25 @@ func (t *Tracker) failActivity(ctx context.Context, state *bambulab.MergedState)
 	endDelay := t.cfg.PushWard.EndDelay
 	displayTime := t.cfg.PushWard.EndDisplayTime
 
-	time.Sleep(endDelay)
-	t.send(ctx, progress, "Failed", "xmark.circle.fill", "red", nil, subtitle, "ONGOING")
-	slog.Info("two-phase end: sent ONGOING with failure content", "display_time", displayTime)
-
-	time.Sleep(displayTime)
-	t.send(ctx, progress, "Failed", "xmark.circle.fill", "red", nil, subtitle, "ENDED")
-	slog.Info("print failure tracking complete")
-
+	// Reset tracking immediately to unblock the MQTT event loop
 	t.tracking = false
 	t.lastState = ""
+
+	t.endTimer = time.AfterFunc(endDelay, func() {
+		// Phase 1: ONGOING with failure content
+		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+		t.send(ctx1, progress, "Failed", "xmark.circle.fill", "red", nil, subtitle, "ONGOING")
+		cancel1()
+		slog.Info("two-phase end: sent ONGOING with failure content", "display_time", displayTime)
+
+		// Phase 2: ENDED
+		time.AfterFunc(displayTime, func() {
+			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel2()
+			t.send(ctx2, progress, "Failed", "xmark.circle.fill", "red", nil, subtitle, "ENDED")
+			slog.Info("print failure tracking complete")
+		})
+	})
 }
 
 func (t *Tracker) endActivity(ctx context.Context, stateText, icon, color string) {
@@ -238,7 +269,7 @@ func (t *Tracker) send(ctx context.Context, progress float64, stateText, icon, a
 }
 
 func buildSubtitle(state *bambulab.MergedState) string {
-	parts := []string{}
+	var parts []string
 
 	if state.SubtaskName != "" {
 		parts = append(parts, truncate(state.SubtaskName, 20))
@@ -252,11 +283,11 @@ func buildSubtitle(state *bambulab.MergedState) string {
 }
 
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	if utf8.RuneCountInString(s) <= maxLen {
 		return s
 	}
 	if maxLen <= 3 {
-		return s[:maxLen]
+		return string([]rune(s)[:maxLen])
 	}
-	return s[:maxLen-3] + "..."
+	return string([]rune(s)[:maxLen-3]) + "..."
 }

@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,12 @@ import (
 	"github.com/mac-lucky/pushward-docker/grafana/internal/grafana"
 	"github.com/mac-lucky/pushward-docker/shared/pushward"
 )
+
+var severityRank = map[string]int{
+	"critical": 3,
+	"warning":  2,
+	"info":     1,
+}
 
 type Handler struct {
 	client      *pushward.Client
@@ -53,9 +60,18 @@ func slugForAlertname(alertname string) string {
 }
 
 func (h *Handler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
+	}
+
+	if secret := h.config.Grafana.WebhookSecret; secret != "" {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Webhook-Secret")), []byte(secret)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	var payload grafana.WebhookPayload
@@ -121,12 +137,11 @@ func (h *Handler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleFiring(ctx context.Context, alertname, fingerprint string, info *instanceInfo) {
-	slug := slugForAlertname(alertname)
-
 	h.mu.Lock()
 	group, exists := h.alertGroups[alertname]
 	isNew := !exists
 	if isNew {
+		slug := slugForAlertname(alertname)
 		group = &alertGroup{
 			slug:      slug,
 			alertname: alertname,
@@ -134,6 +149,7 @@ func (h *Handler) handleFiring(ctx context.Context, alertname, fingerprint strin
 		}
 		h.alertGroups[alertname] = group
 	}
+	slug := group.slug
 	group.instances[fingerprint] = info
 	h.mu.Unlock()
 
@@ -256,11 +272,6 @@ func buildEndUpdate(info *instanceInfo) pushward.UpdateRequest {
 // worstInstance returns the instance with the highest severity.
 // Must be called with mu held.
 func (h *Handler) worstInstance(group *alertGroup) *instanceInfo {
-	severityRank := map[string]int{
-		"critical": 3,
-		"warning":  2,
-		"info":     1,
-	}
 	var worst *instanceInfo
 	worstRank := -1
 	for _, inst := range group.instances {

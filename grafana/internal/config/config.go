@@ -17,6 +17,7 @@ type GrafanaConfig struct {
 	SeverityLabel   string `yaml:"severity_label"`
 	DefaultSeverity string `yaml:"default_severity"`
 	DefaultIcon     string `yaml:"default_icon"`
+	WebhookSecret   string `yaml:"webhook_secret"`
 }
 
 func Load(path string) (*Config, error) {
@@ -50,6 +51,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("PUSHWARD_GRAFANA_DEFAULT_ICON"); v != "" {
 		cfg.Grafana.DefaultIcon = v
+	}
+	if v := os.Getenv("PUSHWARD_GRAFANA_WEBHOOK_SECRET"); v != "" {
+		cfg.Grafana.WebhookSecret = v
 	}
 
 	// Shared PushWard env overrides

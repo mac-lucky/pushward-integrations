@@ -59,7 +59,9 @@ func (c *Client) Connect() error {
 
 	c.mqttClient = mqtt.NewClient(opts)
 	token := c.mqttClient.Connect()
-	token.Wait()
+	if !token.WaitTimeout(30 * time.Second) {
+		return fmt.Errorf("MQTT connect timeout")
+	}
 	if token.Error() != nil {
 		return fmt.Errorf("MQTT connect: %w", token.Error())
 	}

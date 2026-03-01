@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -76,11 +77,14 @@ func (h *Handler) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Webhook secret validation
 	if h.config.ArgoCD.WebhookSecret != "" {
-		if r.Header.Get("X-Webhook-Secret") != h.config.ArgoCD.WebhookSecret {
+		got := r.Header.Get("X-Webhook-Secret")
+		if subtle.ConstantTimeCompare([]byte(got), []byte(h.config.ArgoCD.WebhookSecret)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
 	var payload argocd.WebhookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -160,7 +164,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 	}
 
 	// Grace period: defer activity creation for new or still-pending syncs
-	gracePeriod := h.config.PushWard.SyncGracePeriod
+	gracePeriod := h.config.ArgoCD.SyncGracePeriod
 	if gracePeriod > 0 && (needsCreate || app.pending) {
 		app.pending = true
 		if app.graceTimer != nil {
@@ -232,7 +236,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 
 	if !exists {
 		// Untracked (bridge restart)
-		gracePeriod := h.config.PushWard.SyncGracePeriod
+		gracePeriod := h.config.ArgoCD.SyncGracePeriod
 		if gracePeriod > 0 {
 			// If deployed already arrived (out-of-order events), this is a no-op.
 			// Leave the marker in place so a late sync-running also detects it.
@@ -326,11 +330,11 @@ func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) 
 		delete(h.apps, p.App)
 
 		// Record in recentDeploys so a late sync-succeeded is also skipped
-		if h.config.PushWard.SyncGracePeriod > 0 {
+		if h.config.ArgoCD.SyncGracePeriod > 0 {
 			if t, ok := h.recentDeploys[p.App]; ok {
 				t.Stop()
 			}
-			h.recentDeploys[p.App] = time.AfterFunc(h.config.PushWard.SyncGracePeriod*2, func() {
+			h.recentDeploys[p.App] = time.AfterFunc(h.config.ArgoCD.SyncGracePeriod*2, func() {
 				h.mu.Lock()
 				delete(h.recentDeploys, p.App)
 				h.mu.Unlock()
@@ -344,13 +348,13 @@ func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) 
 
 	if !exists {
 		// Untracked deployed
-		if h.config.PushWard.SyncGracePeriod > 0 {
+		if h.config.ArgoCD.SyncGracePeriod > 0 {
 			// Record the deploy so a subsequent sync-succeeded can detect
 			// that this was a no-op (deployed arrived before sync-succeeded).
 			if t, ok := h.recentDeploys[p.App]; ok {
 				t.Stop()
 			}
-			h.recentDeploys[p.App] = time.AfterFunc(h.config.PushWard.SyncGracePeriod*2, func() {
+			h.recentDeploys[p.App] = time.AfterFunc(h.config.ArgoCD.SyncGracePeriod*2, func() {
 				h.mu.Lock()
 				delete(h.recentDeploys, p.App)
 				h.mu.Unlock()
