@@ -1,7 +1,6 @@
 package grafana
 
 type WebhookPayload struct {
-	Status string  `json:"status"`
 	Alerts []Alert `json:"alerts"`
 }
 

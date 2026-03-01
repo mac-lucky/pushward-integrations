@@ -15,10 +15,6 @@ type Queue struct {
 
 type QueueSlot struct {
 	Filename string `json:"filename"`
-	Status   string `json:"status"`
-	MB       string `json:"mb"`
-	MBLeft   string `json:"mbleft"`
-	TimeLeft string `json:"timeleft"`
 }
 
 type HistoryResponse struct {

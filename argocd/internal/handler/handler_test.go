@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,12 +19,11 @@ import (
 func testConfig() *config.Config {
 	return &config.Config{
 		PushWard: sharedconfig.PushWardConfig{
-			Priority:        3,
-			CleanupDelay:    1 * time.Hour,
-			StaleTimeout:    30 * time.Minute,
-			SyncGracePeriod: 0, // disabled for existing tests
-			EndDelay:        10 * time.Millisecond,
-			EndDisplayTime:  10 * time.Millisecond,
+			Priority:       3,
+			CleanupDelay:   1 * time.Hour,
+			StaleTimeout:   30 * time.Minute,
+			EndDelay:       10 * time.Millisecond,
+			EndDisplayTime: 10 * time.Millisecond,
 		},
 	}
 }
@@ -858,7 +860,7 @@ func TestSyncFailed_AtStep2_PreservesStep(t *testing.T) {
 func TestGracePeriod_FastSync_Skipped(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	cfg.ArgoCD.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -886,7 +888,7 @@ func TestGracePeriod_FastSync_Skipped(t *testing.T) {
 func TestGracePeriod_SlowSync_Created(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.SyncGracePeriod = 50 * time.Millisecond
+	cfg.ArgoCD.SyncGracePeriod = 50 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -933,7 +935,7 @@ func TestGracePeriod_SlowSync_Created(t *testing.T) {
 func TestGracePeriod_SyncSucceededDuringGrace_ExpiresAtStep2(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	cfg.ArgoCD.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -961,7 +963,7 @@ func TestGracePeriod_SyncSucceededDuringGrace_ExpiresAtStep2(t *testing.T) {
 func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.SyncGracePeriod = 5 * time.Second // long grace to prove bypass
+	cfg.ArgoCD.SyncGracePeriod = 5 * time.Second // long grace to prove bypass
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -998,7 +1000,7 @@ func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
 func TestGracePeriod_HealthDegraded_BypassesGrace(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.SyncGracePeriod = 5 * time.Second
+	cfg.ArgoCD.SyncGracePeriod = 5 * time.Second
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -1027,7 +1029,7 @@ func TestGracePeriod_HealthDegraded_BypassesGrace(t *testing.T) {
 func TestGracePeriod_UntrackedDeployed_Recorded(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	cfg.ArgoCD.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -1045,7 +1047,7 @@ func TestGracePeriod_UntrackedDeployed_Recorded(t *testing.T) {
 func TestGracePeriod_DeployedBeforeSyncSucceeded_Skipped(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	cfg.ArgoCD.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -1073,7 +1075,7 @@ func TestGracePeriod_DeployedBeforeSyncSucceeded_Skipped(t *testing.T) {
 func TestGracePeriod_UntrackedSyncSucceeded_ThenDeployed_Skipped(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	cfg.ArgoCD.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -1092,7 +1094,7 @@ func TestGracePeriod_UntrackedSyncSucceeded_ThenDeployed_Skipped(t *testing.T) {
 func TestGracePeriod_UntrackedSyncSucceeded_GraceExpires(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.SyncGracePeriod = 50 * time.Millisecond
+	cfg.ArgoCD.SyncGracePeriod = 50 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -1222,7 +1224,7 @@ func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
 func TestGracePeriod_SyncRunning_DeployedBeforeSyncSucceeded_Skipped(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	cfg.ArgoCD.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -1251,7 +1253,7 @@ func TestGracePeriod_SyncRunning_DeployedBeforeSyncSucceeded_Skipped(t *testing.
 func TestGracePeriod_DeployedThenSyncSucceededThenSyncRunning_Skipped(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	cfg.PushWard.SyncGracePeriod = 100 * time.Millisecond
+	cfg.ArgoCD.SyncGracePeriod = 100 * time.Millisecond
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	h := New(client, cfg)
 
@@ -1273,5 +1275,518 @@ func TestGracePeriod_DeployedThenSyncSucceededThenSyncRunning_Skipped(t *testing
 	h.mu.Unlock()
 	if exists {
 		t.Error("expected app to not be tracked after skipped late sync-running")
+	}
+}
+
+// --- Helper: mock server that fails a specific HTTP method with 400 ---
+
+func customMockServer(t *testing.T, failMethod string) (*httptest.Server, *[]testutil.APICall, *sync.Mutex) {
+	t.Helper()
+	var calls []testutil.APICall
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		calls = append(calls, testutil.APICall{Method: r.Method, Path: r.URL.Path, Body: json.RawMessage(body)})
+		mu.Unlock()
+		if r.Method == failMethod {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+	return srv, &calls, &mu
+}
+
+// --- Test: ContentURLs with ArgoCD URL and RepoURL ---
+
+func TestContentURLs_WithArgoCDURLAndRepoURL(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	cfg.ArgoCD.URL = "https://argocd.example.com"
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	w := sendWebhook(t, h, `{
+		"app": "url-test-app",
+		"event": "sync-running",
+		"revision": "abc123",
+		"repo_url": "https://github.com/org/repo.git"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) < 2 {
+		t.Fatalf("expected at least 2 calls, got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+
+	expectedURL := "https://argocd.example.com/applications/argocd/url-test-app"
+	if update.Content.URL != expectedURL {
+		t.Errorf("expected URL %s, got %s", expectedURL, update.Content.URL)
+	}
+
+	expectedSecondaryURL := "https://github.com/org/repo/commit/abc123"
+	if update.Content.SecondaryURL != expectedSecondaryURL {
+		t.Errorf("expected SecondaryURL %s, got %s", expectedSecondaryURL, update.Content.SecondaryURL)
+	}
+}
+
+// --- Test: MaxBytesReader oversized body ---
+
+func TestOversizedBody_ReturnsBadRequest(t *testing.T) {
+	cfg := testConfig()
+	client := pushward.NewClient("http://unused", "hlk_test")
+	h := New(client, cfg)
+
+	oversized := strings.Repeat("a", (1<<20)+1)
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(oversized))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	h.HandleWebhook(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for oversized body, got %d", w.Code)
+	}
+}
+
+// --- Test: CreateActivity error paths ---
+
+func TestCreateActivityFails_SyncRunning(t *testing.T) {
+	srv, _, _ := customMockServer(t, http.MethodPost)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	w := sendWebhook(t, h, `{"app":"fail-create","event":"sync-running","revision":"r1"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	h.mu.Lock()
+	_, exists := h.apps["fail-create"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to be removed from map after create failure")
+	}
+}
+
+func TestCreateActivityFails_UntrackedSyncSucceeded(t *testing.T) {
+	srv, _, _ := customMockServer(t, http.MethodPost)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	w := sendWebhook(t, h, `{"app":"fail-create","event":"sync-succeeded","revision":"r1"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	h.mu.Lock()
+	_, exists := h.apps["fail-create"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to be removed from map after create failure")
+	}
+}
+
+func TestCreateActivityFails_UntrackedDeployed(t *testing.T) {
+	srv, _, _ := customMockServer(t, http.MethodPost)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	w := sendWebhook(t, h, `{"app":"fail-create","event":"deployed","revision":"r1"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	h.mu.Lock()
+	_, exists := h.apps["fail-create"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to be removed from map after create failure")
+	}
+}
+
+func TestCreateActivityFails_SyncFailed(t *testing.T) {
+	srv, _, _ := customMockServer(t, http.MethodPost)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	w := sendWebhook(t, h, `{"app":"fail-create","event":"sync-failed","revision":"r1"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	h.mu.Lock()
+	_, exists := h.apps["fail-create"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to be removed from map after create failure")
+	}
+}
+
+func TestCreateActivityFails_HealthDegraded(t *testing.T) {
+	srv, _, _ := customMockServer(t, http.MethodPost)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	w := sendWebhook(t, h, `{"app":"fail-create","event":"health-degraded","revision":"r1"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	h.mu.Lock()
+	_, exists := h.apps["fail-create"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to be removed from map after create failure")
+	}
+}
+
+func TestCreateActivityFails_PendingSyncFailed(t *testing.T) {
+	srv, _, _ := customMockServer(t, http.MethodPost)
+	cfg := testConfig()
+	cfg.ArgoCD.SyncGracePeriod = 5 * time.Second
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// sync-running enters grace (no API calls)
+	sendWebhook(t, h, `{"app":"pending-fail","event":"sync-running","revision":"r1"}`)
+	// sync-failed bypasses grace, tries create — fails
+	sendWebhook(t, h, `{"app":"pending-fail","event":"sync-failed","revision":"r1"}`)
+
+	h.mu.Lock()
+	_, exists := h.apps["pending-fail"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to be removed from map after create failure")
+	}
+}
+
+func TestCreateActivityFails_PendingHealthDegraded(t *testing.T) {
+	srv, _, _ := customMockServer(t, http.MethodPost)
+	cfg := testConfig()
+	cfg.ArgoCD.SyncGracePeriod = 5 * time.Second
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	sendWebhook(t, h, `{"app":"pending-deg","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"pending-deg","event":"health-degraded","revision":"r1"}`)
+
+	h.mu.Lock()
+	_, exists := h.apps["pending-deg"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to be removed from map after create failure")
+	}
+}
+
+// --- Test: UpdateActivity error paths ---
+
+func TestUpdateActivityFails_SyncRunning(t *testing.T) {
+	srv, calls, mu := customMockServer(t, http.MethodPatch)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	w := sendWebhook(t, h, `{"app":"fail-update","event":"sync-running","revision":"r1"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls (POST ok, PATCH fail), got %d", len(recorded))
+	}
+
+	// App should still be tracked (only create-fail removes from map)
+	h.mu.Lock()
+	_, exists := h.apps["fail-update"]
+	h.mu.Unlock()
+	if !exists {
+		t.Error("expected app to still be tracked after update failure")
+	}
+}
+
+func TestUpdateActivityFails_SyncSucceeded(t *testing.T) {
+	srv, calls, mu := customMockServer(t, http.MethodPatch)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// sync-running: POST(create) ok, PATCH(update) fail
+	sendWebhook(t, h, `{"app":"fail-update","event":"sync-running","revision":"r1"}`)
+	// sync-succeeded: PATCH(update) fail
+	w := sendWebhook(t, h, `{"app":"fail-update","event":"sync-succeeded","revision":"r1"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	// POST(create) + PATCH(step1 fail) + PATCH(step2 fail) = 3
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(recorded))
+	}
+}
+
+func TestTransientHealthDegraded_UpdateFails(t *testing.T) {
+	var calls []testutil.APICall
+	var mu sync.Mutex
+	var callCount int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		callCount++
+		n := callCount
+		calls = append(calls, testutil.APICall{Method: r.Method, Path: r.URL.Path, Body: json.RawMessage(body)})
+		mu.Unlock()
+		// 4th call is the transient degraded PATCH — fail it
+		if n == 4 {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	sendWebhook(t, h, `{"app":"deg-fail","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, h, `{"app":"deg-fail","event":"sync-succeeded","revision":"r1"}`)
+	w := sendWebhook(t, h, `{"app":"deg-fail","event":"health-degraded","revision":"r1"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	mu.Lock()
+	got := len(calls)
+	mu.Unlock()
+	// create + step1 + step2 + degraded(fail) = 4
+	if got != 4 {
+		t.Fatalf("expected 4 calls, got %d", got)
+	}
+}
+
+// --- Test: scheduleEnd edge cases ---
+
+func TestScheduleEnd_AppNotInMap(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Call scheduleEnd for non-existent app — should return immediately
+	h.scheduleEnd("non-existent", pushward.Content{})
+
+	time.Sleep(50 * time.Millisecond)
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Errorf("expected 0 API calls, got %d", len(recorded))
+	}
+}
+
+func TestScheduleEnd_UpdateFails(t *testing.T) {
+	srv, _, _ := customMockServer(t, http.MethodPatch)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Create app via sync-running (POST ok, PATCH fail — but app is tracked)
+	sendWebhook(t, h, `{"app":"end-fail","event":"sync-running","revision":"r1"}`)
+	// Deploy triggers scheduleEnd (PATCH phase1 fail, PATCH phase2 fail)
+	sendWebhook(t, h, `{"app":"end-fail","event":"deployed","revision":"r1"}`)
+
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
+	// App should be removed from map even when update fails
+	h.mu.Lock()
+	_, exists := h.apps["end-fail"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to be removed from map after end")
+	}
+}
+
+// --- Test: graceExpired edge cases ---
+
+func TestGraceExpired_AppNotInMap(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Call graceExpired for non-existent app — should return immediately
+	h.graceExpired("non-existent")
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Errorf("expected 0 API calls, got %d", len(recorded))
+	}
+}
+
+func TestGraceExpired_AppNotPending(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Manually add a tracked app that is NOT pending
+	h.mu.Lock()
+	h.apps["not-pending"] = &trackedApp{
+		slug:    "argocd-not-pending",
+		appName: "not-pending",
+		step:    1,
+		pending: false,
+	}
+	h.mu.Unlock()
+
+	h.graceExpired("not-pending")
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Errorf("expected 0 API calls for non-pending app, got %d", len(recorded))
+	}
+}
+
+func TestGraceExpired_DefaultStep(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Manually inject a tracked app at step 5 (safety-net scenario)
+	h.mu.Lock()
+	h.apps["weird-app"] = &trackedApp{
+		slug:    "argocd-weird-app",
+		appName: "weird-app",
+		step:    5,
+		pending: true,
+	}
+	h.mu.Unlock()
+
+	h.graceExpired("weird-app")
+
+	time.Sleep(50 * time.Millisecond)
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.State != "Step 5" {
+		t.Errorf("expected 'Step 5', got %s", update.Content.State)
+	}
+}
+
+func TestGraceExpired_CreateFails(t *testing.T) {
+	srv, _, _ := customMockServer(t, http.MethodPost)
+	cfg := testConfig()
+	cfg.ArgoCD.SyncGracePeriod = 50 * time.Millisecond
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	sendWebhook(t, h, `{"app":"grace-fail","event":"sync-running","revision":"r1"}`)
+
+	// Wait for grace to expire — create will fail
+	time.Sleep(150 * time.Millisecond)
+
+	h.mu.Lock()
+	_, exists := h.apps["grace-fail"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected app to be removed from map after grace-expired create failure")
+	}
+}
+
+func TestGraceExpired_UpdateFails(t *testing.T) {
+	srv, calls, mu := customMockServer(t, http.MethodPatch)
+	cfg := testConfig()
+	cfg.ArgoCD.SyncGracePeriod = 50 * time.Millisecond
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	sendWebhook(t, h, `{"app":"grace-upd-fail","event":"sync-running","revision":"r1"}`)
+
+	// Wait for grace to expire — create succeeds, update fails
+	time.Sleep(150 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// POST(create ok) + PATCH(update fail) = 2
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	}
+}
+
+// --- Test: New revision during grace cancels old grace timer ---
+
+func TestNewRevision_CancelsGraceTimer(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	cfg.ArgoCD.SyncGracePeriod = 5 * time.Second
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// sync-running rev1 enters grace (creates graceTimer)
+	sendWebhook(t, h, `{"app":"rev-cancel","event":"sync-running","revision":"rev1"}`)
+	// sync-running rev2 — new revision cancels old graceTimer, enters grace again
+	sendWebhook(t, h, `{"app":"rev-cancel","event":"sync-running","revision":"rev2"}`)
+
+	// No API calls (both in grace)
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 API calls, got %d", len(recorded))
+	}
+
+	h.mu.Lock()
+	app, exists := h.apps["rev-cancel"]
+	h.mu.Unlock()
+	if !exists {
+		t.Fatal("expected app to be tracked")
+	}
+	if app.revision != "rev2" {
+		t.Errorf("expected revision rev2, got %s", app.revision)
+	}
+}
+
+// --- Test: Re-sync same revision during grace resets grace timer ---
+
+func TestResyncDuringGrace_ResetsGraceTimer(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	cfg.ArgoCD.SyncGracePeriod = 50 * time.Millisecond
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// First sync-running enters grace
+	sendWebhook(t, h, `{"app":"re-grace","event":"sync-running","revision":"r1"}`)
+	// Second sync-running same revision — resets grace timer (covers graceTimer.Stop() branch)
+	sendWebhook(t, h, `{"app":"re-grace","event":"sync-running","revision":"r1"}`)
+
+	// No API calls yet
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 API calls during grace, got %d", len(recorded))
+	}
+
+	// Wait for grace to expire
+	time.Sleep(150 * time.Millisecond)
+
+	recorded = testutil.GetCalls(calls, mu)
+	// create + step1 update = 2
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 API calls after grace, got %d", len(recorded))
 	}
 }

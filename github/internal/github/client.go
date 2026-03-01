@@ -28,6 +28,7 @@ const rateLimitBuffer = 50
 type Client struct {
 	httpClient *http.Client
 	token      string
+	baseURL    string // defaults to https://api.github.com
 
 	mu        sync.Mutex
 	remaining int
@@ -36,10 +37,16 @@ type Client struct {
 
 func NewClient(token string) *Client {
 	return &Client{
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: 15 * time.Second},
 		token:      token,
+		baseURL:    "https://api.github.com",
 		remaining:  -1, // unknown until first response
 	}
+}
+
+// SetBaseURL overrides the GitHub API base URL (for testing).
+func (c *Client) SetBaseURL(url string) {
+	c.baseURL = url
 }
 
 // waitForRateLimit blocks until the rate limit window resets if remaining
@@ -183,7 +190,7 @@ func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]Workflow
 		return nil, fmt.Errorf("invalid repo format %q, expected owner/repo", repo)
 	}
 
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs?status=in_progress&per_page=5", parts[0], parts[1])
+	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?status=in_progress&per_page=5", c.baseURL, parts[0], parts[1])
 
 	body, err := c.doWithRetry(ctx, url, "requesting workflow runs")
 	if err != nil {
@@ -207,7 +214,7 @@ func (c *Client) GetJobs(ctx context.Context, repo string, runID int64) ([]Job, 
 	page := 1
 
 	for {
-		url := fmt.Sprintf("https://api.github.com/repos/%s/%s/actions/runs/%d/jobs?per_page=100&page=%d", parts[0], parts[1], runID, page)
+		url := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/jobs?per_page=100&page=%d", c.baseURL, parts[0], parts[1], runID, page)
 
 		body, err := c.doWithRetry(ctx, url, "requesting jobs")
 		if err != nil {
@@ -235,7 +242,7 @@ func (c *Client) ListRepos(ctx context.Context, owner string) ([]string, error) 
 	page := 1
 
 	for {
-		url := fmt.Sprintf("https://api.github.com/user/repos?per_page=100&page=%d&affiliation=owner", page)
+		url := fmt.Sprintf("%s/users/%s/repos?per_page=100&page=%d", c.baseURL, owner, page)
 
 		body, err := c.doWithRetry(ctx, url, "listing repos")
 		if err != nil {

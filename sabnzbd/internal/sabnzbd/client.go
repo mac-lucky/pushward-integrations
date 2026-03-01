@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -61,7 +62,7 @@ func (c *Client) GetHistory(ctx context.Context, limit int) (*History, error) {
 	q.Set("apikey", c.apiKey)
 	q.Set("output", "json")
 	q.Set("mode", "history")
-	q.Set("limit", fmt.Sprintf("%d", limit))
+	q.Set("limit", strconv.Itoa(limit))
 	req.URL.RawQuery = q.Encode()
 
 	resp, err := c.httpClient.Do(req)

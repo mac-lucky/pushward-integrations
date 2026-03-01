@@ -1396,6 +1396,335 @@ func TestUnknownAlertStatus_Ignored(t *testing.T) {
 	}
 }
 
+func TestWebhookSecret_CorrectSecret(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	cfg.Grafana.WebhookSecret = "my-secret-token"
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	payload := `{
+		"status": "firing",
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "SecretTest", "severity": "info"},
+			"annotations": {"summary": "test"},
+			"startsAt": "2026-02-18T12:00:00Z",
+			"endsAt": "0001-01-01T00:00:00Z",
+			"generatorURL": "",
+			"dashboardURL": "",
+			"panelURL": "",
+			"fingerprint": "secret000001"
+		}]
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	req.Header.Set("X-Webhook-Secret", "my-secret-token")
+	w := httptest.NewRecorder()
+	h.HandleWebhook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 with correct secret, got %d", w.Code)
+	}
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 API calls, got %d", len(recorded))
+	}
+}
+
+func TestWebhookSecret_WrongSecret(t *testing.T) {
+	cfg := testConfig()
+	cfg.Grafana.WebhookSecret = "my-secret-token"
+	client := pushward.NewClient("http://unused", "hlk_test")
+	h := New(client, cfg)
+
+	payload := `{"status": "firing", "alerts": []}`
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	req.Header.Set("X-Webhook-Secret", "wrong-secret")
+	w := httptest.NewRecorder()
+	h.HandleWebhook(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 with wrong secret, got %d", w.Code)
+	}
+}
+
+func TestWebhookSecret_MissingHeader(t *testing.T) {
+	cfg := testConfig()
+	cfg.Grafana.WebhookSecret = "my-secret-token"
+	client := pushward.NewClient("http://unused", "hlk_test")
+	h := New(client, cfg)
+
+	payload := `{"status": "firing", "alerts": []}`
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	// No X-Webhook-Secret header
+	w := httptest.NewRecorder()
+	h.HandleWebhook(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401 with missing secret header, got %d", w.Code)
+	}
+}
+
+func TestWebhookSecret_EmptyConfigSecret_SkipsValidation(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	cfg.Grafana.WebhookSecret = "" // empty = no validation
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	payload := `{
+		"status": "firing",
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "NoSecretTest", "severity": "info"},
+			"annotations": {"summary": "test"},
+			"startsAt": "2026-02-18T12:00:00Z",
+			"endsAt": "0001-01-01T00:00:00Z",
+			"generatorURL": "",
+			"dashboardURL": "",
+			"panelURL": "",
+			"fingerprint": "nosecret0001"
+		}]
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	// No X-Webhook-Secret header, but config secret is empty so validation is skipped
+	w := httptest.NewRecorder()
+	h.HandleWebhook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 when config secret is empty, got %d", w.Code)
+	}
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 API calls, got %d", len(recorded))
+	}
+}
+
+func TestMaxBytesReader_OversizedBody(t *testing.T) {
+	cfg := testConfig()
+	client := pushward.NewClient("http://unused", "hlk_test")
+	h := New(client, cfg)
+
+	// 1<<20 = 1MB limit; send just over
+	oversized := strings.Repeat("x", 1<<20+1)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(oversized))
+	w := httptest.NewRecorder()
+	h.HandleWebhook(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for oversized body, got %d", w.Code)
+	}
+}
+
+func TestCreateActivityFailure_CleansUpGroup(t *testing.T) {
+	// Server returns 400 on POST /activities to simulate create failure
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/activities" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	payload := `{
+		"status": "firing",
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "FailCreate", "severity": "warning"},
+			"annotations": {"summary": "test"},
+			"startsAt": "2026-02-18T12:00:00Z",
+			"endsAt": "0001-01-01T00:00:00Z",
+			"generatorURL": "",
+			"dashboardURL": "",
+			"panelURL": "",
+			"fingerprint": "failcreate01"
+		}]
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	w := httptest.NewRecorder()
+	h.HandleWebhook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (handler still returns OK), got %d", w.Code)
+	}
+
+	// Alert group should be cleaned up after create failure
+	h.mu.Lock()
+	_, exists := h.alertGroups["FailCreate"]
+	h.mu.Unlock()
+	if exists {
+		t.Error("expected alert group to be removed after create failure")
+	}
+}
+
+func TestUpdateActivityFailure_OnFiring(t *testing.T) {
+	// Server returns 200 on create, 422 on update (4xx = no retry)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	payload := `{
+		"status": "firing",
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "FailUpdate", "severity": "warning"},
+			"annotations": {"summary": "test"},
+			"startsAt": "2026-02-18T12:00:00Z",
+			"endsAt": "0001-01-01T00:00:00Z",
+			"generatorURL": "",
+			"dashboardURL": "",
+			"panelURL": "",
+			"fingerprint": "failupdate01"
+		}]
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	w := httptest.NewRecorder()
+	h.HandleWebhook(w, req)
+
+	// Handler still returns OK (errors are logged, not surfaced to webhook sender)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	// Group should still exist (only create failure removes it)
+	h.mu.Lock()
+	_, exists := h.alertGroups["FailUpdate"]
+	h.mu.Unlock()
+	if !exists {
+		t.Error("expected alert group to still exist after update failure")
+	}
+}
+
+func TestUpdateActivityFailure_OnResolve(t *testing.T) {
+	// Server returns 422 on PATCH to simulate update failure (4xx = no retry)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Pre-populate with an active group
+	h.alertGroups["FailResolve"] = &alertGroup{
+		slug:      slugForAlertname("FailResolve"),
+		alertname: "FailResolve",
+		instances: map[string]*instanceInfo{
+			"failresolv01": {severity: "warning", summary: "test", subtitle: "Grafana"},
+		},
+	}
+
+	payload := `{
+		"status": "resolved",
+		"alerts": [{
+			"status": "resolved",
+			"labels": {"alertname": "FailResolve", "severity": "warning"},
+			"annotations": {"summary": "recovered"},
+			"startsAt": "2026-02-18T12:00:00Z",
+			"endsAt": "2026-02-18T12:05:00Z",
+			"generatorURL": "",
+			"dashboardURL": "",
+			"panelURL": "",
+			"fingerprint": "failresolv01"
+		}]
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	w := httptest.NewRecorder()
+	h.HandleWebhook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	// Group should NOT be cleaned up because the update failed (early return before delete)
+	h.mu.Lock()
+	_, exists := h.alertGroups["FailResolve"]
+	h.mu.Unlock()
+	if !exists {
+		t.Error("expected alert group to still exist after update failure on resolve")
+	}
+}
+
+func TestResolvedForUntrackedFingerprint_Skipped(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	h := New(client, cfg)
+
+	// Group exists but with a different fingerprint
+	h.alertGroups["TrackedAlert"] = &alertGroup{
+		slug:      slugForAlertname("TrackedAlert"),
+		alertname: "TrackedAlert",
+		instances: map[string]*instanceInfo{
+			"known-fp-001": {severity: "warning", summary: "test", subtitle: "Grafana"},
+		},
+	}
+
+	payload := `{
+		"status": "resolved",
+		"alerts": [{
+			"status": "resolved",
+			"labels": {"alertname": "TrackedAlert", "severity": "warning"},
+			"annotations": {"summary": "recovered"},
+			"startsAt": "2026-02-18T12:00:00Z",
+			"endsAt": "2026-02-18T12:05:00Z",
+			"generatorURL": "",
+			"dashboardURL": "",
+			"panelURL": "",
+			"fingerprint": "unknown-fp-1"
+		}]
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	w := httptest.NewRecorder()
+	h.HandleWebhook(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Errorf("expected 0 API calls for untracked fingerprint, got %d", len(recorded))
+	}
+
+	// Original group should still exist with its instance
+	h.mu.Lock()
+	group := h.alertGroups["TrackedAlert"]
+	remaining := len(group.instances)
+	h.mu.Unlock()
+	if remaining != 1 {
+		t.Errorf("expected 1 remaining instance, got %d", remaining)
+	}
+}
+
 func TestRefireAfterResolve_CreatesNewGroup(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()

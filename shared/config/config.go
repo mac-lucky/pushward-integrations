@@ -15,9 +15,8 @@ type PushWardConfig struct {
 	Priority       int           `yaml:"priority"`
 	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
 	StaleTimeout   time.Duration `yaml:"stale_timeout"`
-	SyncGracePeriod time.Duration `yaml:"sync_grace_period"`
-	EndDelay        time.Duration `yaml:"end_delay"`
-	EndDisplayTime  time.Duration `yaml:"end_display_time"`
+	EndDelay       time.Duration `yaml:"end_delay"`
+	EndDisplayTime time.Duration `yaml:"end_display_time"`
 }
 
 // ServerConfig holds the HTTP server settings for webhook-based integrations.

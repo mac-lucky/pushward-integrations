@@ -59,11 +59,14 @@ func (p *Poller) Run(ctx context.Context) error {
 		slog.Error("initial poll error", "error", err)
 	}
 
+	ticker := time.NewTicker(p.cfg.Polling.IdleInterval)
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-time.After(p.cfg.Polling.IdleInterval):
+		case <-ticker.C:
 		}
 
 		if err := p.refreshRepos(ctx); err != nil {
@@ -175,10 +178,8 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			Repo:       repo,
 			RunID:      run.ID,
 			Name:       run.Name,
-			Branch:     run.HeadBranch,
 			Slug:       slug,
 			HTMLURL:    run.HTMLURL,
-			StartedAt:  run.CreatedAt,
 			LastUpdate: time.Now(),
 		}
 		p.mu.Unlock()
@@ -235,7 +236,6 @@ type stepInfo struct {
 	CurrentStep     int
 	CurrentStepName string
 	StepRows        []int
-	CompletedJobs   int
 	AllCompleted    bool
 	AnyFailed       bool
 	Progress        float64
@@ -316,7 +316,6 @@ func computeSteps(jobs []ghclient.Job) stepInfo {
 		CurrentStep:     currentStep,
 		CurrentStepName: currentStepName,
 		StepRows:        stepRows,
-		CompletedJobs:   completedJobs,
 		AllCompleted:    allCompleted,
 		AnyFailed:       anyFailed,
 		Progress:        progress,

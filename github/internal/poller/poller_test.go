@@ -1,6 +1,10 @@
 package poller
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -481,5 +485,855 @@ func TestScheduleEnd_ContentPreserved(t *testing.T) {
 	}
 	if req1.Content.SecondaryURL != req2.Content.SecondaryURL {
 		t.Errorf("secondary_url mismatch: %s vs %s", req1.Content.SecondaryURL, req2.Content.SecondaryURL)
+	}
+}
+
+// --- Utility function tests ---
+
+func TestRepoName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"owner/repo", "repo"},
+		{"mac-lucky/pushward-server", "pushward-server"},
+		{"noslash", "noslash"},
+		{"a/b/c", "b/c"},
+	}
+	for _, tt := range tests {
+		got := repoName(tt.input)
+		if got != tt.want {
+			t.Errorf("repoName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestSplitRepo(t *testing.T) {
+	tests := []struct {
+		input string
+		want  []string
+	}{
+		{"owner/repo", []string{"owner", "repo"}},
+		{"noslash", []string{"noslash"}},
+		{"a/b/c", []string{"a", "b/c"}},
+	}
+	for _, tt := range tests {
+		got := splitRepo(tt.input)
+		if len(got) != len(tt.want) {
+			t.Errorf("splitRepo(%q) len = %d, want %d", tt.input, len(got), len(tt.want))
+			continue
+		}
+		for i := range got {
+			if got[i] != tt.want[i] {
+				t.Errorf("splitRepo(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+			}
+		}
+	}
+}
+
+func TestBaseJobName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"Build (ubuntu, node-16)", "Build"},
+		{"Test", "Test"},
+		{"ci-cd / Code Analysis (go-vet)", "ci-cd / Code Analysis"},
+		{"Deploy (prod)", "Deploy"},
+		{"NoParens", "NoParens"},
+		{"Has (Parens) Mid", "Has (Parens) Mid"}, // no trailing )
+	}
+	for _, tt := range tests {
+		got := baseJobName(tt.input)
+		if got != tt.want {
+			t.Errorf("baseJobName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestComputeSteps_Empty(t *testing.T) {
+	info := computeSteps(nil)
+	if info.TotalSteps != 0 {
+		t.Errorf("expected TotalSteps=0, got %d", info.TotalSteps)
+	}
+	if info.Progress != 0 {
+		t.Errorf("expected Progress=0, got %f", info.Progress)
+	}
+	if !info.AllCompleted {
+		// All zero jobs means all completed
+		t.Error("expected AllCompleted=true for empty jobs")
+	}
+}
+
+func TestComputeSteps_WithCancelled(t *testing.T) {
+	jobs := []ghclient.Job{
+		{Name: "Lint", Status: "completed", Conclusion: "success"},
+		{Name: "Build", Status: "completed", Conclusion: "cancelled"},
+	}
+	info := computeSteps(jobs)
+	if !info.AnyFailed {
+		t.Error("expected AnyFailed=true for cancelled job")
+	}
+}
+
+func TestNew(t *testing.T) {
+	cfg := testConfig()
+	cfg.GitHub.Repos = []string{"owner/repo1", "owner/repo2"}
+	gh := ghclient.NewClient("token")
+	pw := pushward.NewClient("http://localhost", "key")
+
+	p := New(cfg, gh, pw)
+	if p.cfg != cfg {
+		t.Error("expected cfg to be set")
+	}
+	if p.gh != gh {
+		t.Error("expected gh to be set")
+	}
+	if p.pw != pw {
+		t.Error("expected pw to be set")
+	}
+	if len(p.repos) != 2 {
+		t.Errorf("expected 2 repos, got %d", len(p.repos))
+	}
+	if len(p.tracked) != 0 {
+		t.Errorf("expected empty tracked map, got %d", len(p.tracked))
+	}
+}
+
+// --- Mock GitHub server helper ---
+
+func mockGitHubClient(t *testing.T, handler http.Handler) *ghclient.Client {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	c := ghclient.NewClient("test-token")
+	c.SetBaseURL(srv.URL)
+	return c
+}
+
+// --- pollIdle tests ---
+
+func TestPollIdle_DiscoversAndTracksWorkflow(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+			TotalCount: 1,
+			WorkflowRuns: []ghclient.WorkflowRun{
+				{ID: 42, Name: "CI", Status: "in_progress", HeadBranch: "main",
+					HTMLURL: "https://github.com/owner/repo/actions/runs/42"},
+			},
+		})
+	})
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 2,
+			Jobs: []ghclient.Job{
+				{ID: 1, Name: "Build", Status: "in_progress"},
+				{ID: 2, Name: "Test", Status: "queued"},
+			},
+		})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo"},
+	}
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 API calls (create + update), got %d", len(got))
+	}
+
+	// Verify create activity (POST)
+	if got[0].Method != "POST" {
+		t.Errorf("expected POST for create, got %s", got[0].Method)
+	}
+	if got[0].Path != "/activities" {
+		t.Errorf("expected /activities path, got %s", got[0].Path)
+	}
+
+	// Verify initial update (PATCH)
+	if got[1].Method != "PATCH" {
+		t.Errorf("expected PATCH for update, got %s", got[1].Method)
+	}
+	if got[1].Path != "/activity/gh-repo" {
+		t.Errorf("expected /activity/gh-repo, got %s", got[1].Path)
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &req)
+	if req.State != "ONGOING" {
+		t.Errorf("expected ONGOING state, got %s", req.State)
+	}
+	if req.Content.Template != "pipeline" {
+		t.Errorf("expected pipeline template, got %s", req.Content.Template)
+	}
+	if req.Content.URL != "https://github.com/owner/repo/actions/runs/42" {
+		t.Errorf("unexpected URL: %s", req.Content.URL)
+	}
+	if req.Content.SecondaryURL != "https://github.com/owner/repo" {
+		t.Errorf("unexpected SecondaryURL: %s", req.Content.SecondaryURL)
+	}
+
+	// Verify tracked state
+	p.mu.Lock()
+	tracked, ok := p.tracked["owner/repo"]
+	p.mu.Unlock()
+	if !ok {
+		t.Fatal("expected repo to be tracked")
+	}
+	if tracked.RunID != 42 {
+		t.Errorf("expected RunID 42, got %d", tracked.RunID)
+	}
+	if tracked.Slug != "gh-repo" {
+		t.Errorf("expected slug gh-repo, got %s", tracked.Slug)
+	}
+	if tracked.maxTotalSteps != 2 {
+		t.Errorf("expected maxTotalSteps 2, got %d", tracked.maxTotalSteps)
+	}
+}
+
+func TestPollIdle_SkipsAlreadyTrackedRepo(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("GitHub API should not be called for tracked repo")
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, _, _ := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo"},
+	}
+	// Pre-track the repo (no pending end timer, so it's actively tracked)
+	p.tracked["owner/repo"] = &trackedRun{
+		Repo:  "owner/repo",
+		RunID: 100,
+		Slug:  "gh-repo",
+	}
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPollIdle_NoRunsFound(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo"},
+	}
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 0 {
+		t.Errorf("expected 0 API calls when no runs found, got %d", len(got))
+	}
+	if len(p.tracked) != 0 {
+		t.Errorf("expected nothing tracked, got %d", len(p.tracked))
+	}
+}
+
+func TestPollIdle_PicksMostRecentRun(t *testing.T) {
+	now := time.Now()
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+			TotalCount: 2,
+			WorkflowRuns: []ghclient.WorkflowRun{
+				{ID: 10, Name: "Old", CreatedAt: now.Add(-time.Hour)},
+				{ID: 20, Name: "New", CreatedAt: now},
+			},
+		})
+	})
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/20/jobs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.JobsResponse{TotalCount: 0})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, _, _ := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo"},
+	}
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	p.mu.Lock()
+	tracked := p.tracked["owner/repo"]
+	p.mu.Unlock()
+	if tracked.RunID != 20 {
+		t.Errorf("expected most recent run (ID=20), got %d", tracked.RunID)
+	}
+}
+
+// --- pollActive tests ---
+
+func TestPollActive_UpdatesOngoingWorkflow(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 3,
+			Jobs: []ghclient.Job{
+				{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+				{ID: 2, Name: "Build", Status: "in_progress"},
+				{ID: 3, Name: "Test", Status: "queued"},
+			},
+		})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo"},
+	}
+	p.tracked["owner/repo"] = &trackedRun{
+		Repo:          "owner/repo",
+		RunID:         42,
+		Slug:          "gh-repo",
+		Name:          "CI",
+		HTMLURL:       "https://github.com/owner/repo/actions/runs/42",
+		maxTotalSteps: 3,
+		maxStepRows:   []int{1, 1, 1},
+	}
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH call, got %d", len(got))
+	}
+	if got[0].Method != "PATCH" {
+		t.Errorf("expected PATCH, got %s", got[0].Method)
+	}
+
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+	if req.State != "ONGOING" {
+		t.Errorf("expected ONGOING, got %s", req.State)
+	}
+	if req.Content.State != "Build" {
+		t.Errorf("expected state Build, got %s", req.Content.State)
+	}
+	if req.Content.AccentColor != "green" {
+		t.Errorf("expected green accent, got %s", req.Content.AccentColor)
+	}
+}
+
+func TestPollActive_CompletesSuccessfulWorkflow(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 2,
+			Jobs: []ghclient.Job{
+				{ID: 1, Name: "Build", Status: "completed", Conclusion: "success"},
+				{ID: 2, Name: "Test", Status: "completed", Conclusion: "success"},
+			},
+		})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+	}
+	p.tracked["owner/repo"] = &trackedRun{
+		Repo:          "owner/repo",
+		RunID:         42,
+		Slug:          "gh-repo",
+		Name:          "CI",
+		HTMLURL:       "https://github.com/owner/repo/actions/runs/42",
+		maxTotalSteps: 2,
+		maxStepRows:   []int{1, 1},
+	}
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Wait for two-phase end to fire
+	time.Sleep(100 * time.Millisecond)
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 API calls (two-phase end), got %d", len(got))
+	}
+
+	var req1 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req1)
+	if req1.State != "ONGOING" {
+		t.Errorf("phase 1: expected ONGOING, got %s", req1.State)
+	}
+	if req1.Content.State != "Success" {
+		t.Errorf("phase 1: expected Success, got %s", req1.Content.State)
+	}
+	if req1.Content.AccentColor != "green" {
+		t.Errorf("phase 1: expected green, got %s", req1.Content.AccentColor)
+	}
+
+	var req2 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &req2)
+	if req2.State != "ENDED" {
+		t.Errorf("phase 2: expected ENDED, got %s", req2.State)
+	}
+}
+
+func TestPollActive_CompletesFailedWorkflow(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 2,
+			Jobs: []ghclient.Job{
+				{ID: 1, Name: "Build", Status: "completed", Conclusion: "failure"},
+				{ID: 2, Name: "Test", Status: "completed", Conclusion: "success"},
+			},
+		})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+	}
+	p.tracked["owner/repo"] = &trackedRun{
+		Repo:          "owner/repo",
+		RunID:         42,
+		Slug:          "gh-repo",
+		Name:          "CI",
+		HTMLURL:       "https://github.com/owner/repo/actions/runs/42",
+		maxTotalSteps: 2,
+		maxStepRows:   []int{1, 1},
+	}
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 API calls, got %d", len(got))
+	}
+
+	var req1 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req1)
+	if req1.Content.State != "Failed" {
+		t.Errorf("expected Failed, got %s", req1.Content.State)
+	}
+	if req1.Content.AccentColor != "red" {
+		t.Errorf("expected red, got %s", req1.Content.AccentColor)
+	}
+}
+
+func TestPollActive_SkipsRepoWithPendingEnd(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		t.Error("GitHub API should not be called for repo with pending end")
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, _, _ := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+	}
+	timer := time.AfterFunc(time.Hour, func() {}) // won't fire
+	defer timer.Stop()
+	p.tracked["owner/repo"] = &trackedRun{
+		Repo:     "owner/repo",
+		RunID:    42,
+		Slug:     "gh-repo",
+		endTimer: timer,
+	}
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPollActive_NoJobs(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.JobsResponse{TotalCount: 0})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+	}
+	p.tracked["owner/repo"] = &trackedRun{
+		Repo:  "owner/repo",
+		RunID: 42,
+		Slug:  "gh-repo",
+	}
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 0 {
+		t.Errorf("expected 0 PushWard calls for no jobs, got %d", len(got))
+	}
+}
+
+func TestPollActive_MaxStepsClamping(t *testing.T) {
+	// Simulate lazy job creation: initially 3 steps tracked, poll returns only 2
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 2,
+			Jobs: []ghclient.Job{
+				{ID: 1, Name: "Build", Status: "in_progress"},
+				{ID: 2, Name: "Test", Status: "queued"},
+			},
+		})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+	}
+	p.tracked["owner/repo"] = &trackedRun{
+		Repo:          "owner/repo",
+		RunID:         42,
+		Slug:          "gh-repo",
+		Name:          "CI",
+		HTMLURL:       "https://github.com/owner/repo/actions/runs/42",
+		maxTotalSteps: 5, // Higher than current 2 steps
+		maxStepRows:   []int{1, 1, 1, 1, 1},
+	}
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(got))
+	}
+
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+	// TotalSteps should be clamped to maxTotalSteps (5), not the current 2
+	if *req.Content.TotalSteps != 5 {
+		t.Errorf("expected TotalSteps clamped to 5, got %d", *req.Content.TotalSteps)
+	}
+}
+
+// --- refreshRepos tests ---
+
+func TestRefreshRepos_NoOwner(t *testing.T) {
+	cfg := testConfig()
+	// No owner set
+	p := &Poller{
+		cfg:   cfg,
+		repos: []string{"owner/repo"},
+	}
+
+	if err := p.refreshRepos(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// repos should be unchanged
+	if len(p.repos) != 1 {
+		t.Errorf("expected repos unchanged, got %d", len(p.repos))
+	}
+}
+
+func TestRefreshRepos_MergesDiscoveredAndConfigured(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/users/testowner/repos", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]ghclient.Repository{
+			{FullName: "testowner/discovered1"},
+			{FullName: "testowner/discovered2"},
+		})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	cfg := testConfig()
+	cfg.GitHub.Owner = "testowner"
+	cfg.GitHub.Repos = []string{"other/configured"}
+
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"other/configured"},
+	}
+
+	if err := p.refreshRepos(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(p.repos) != 3 {
+		t.Fatalf("expected 3 repos (2 discovered + 1 configured), got %d: %v", len(p.repos), p.repos)
+	}
+}
+
+func TestRefreshRepos_SkipsCooldown(t *testing.T) {
+	callCount := 0
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/users/owner/repos", func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		json.NewEncoder(w).Encode([]ghclient.Repository{})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	cfg := testConfig()
+	cfg.GitHub.Owner = "owner"
+
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		tracked: make(map[string]*trackedRun),
+	}
+
+	// First call should hit the API
+	if err := p.refreshRepos(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected 1 API call on first refresh, got %d", callCount)
+	}
+
+	// Second call within cooldown should skip
+	if err := p.refreshRepos(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if callCount != 1 {
+		t.Errorf("expected no additional API calls during cooldown, got %d", callCount)
+	}
+}
+
+func TestRefreshRepos_DeduplicatesRepos(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/users/owner/repos", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode([]ghclient.Repository{
+			{FullName: "owner/repo1"},
+			{FullName: "owner/repo2"},
+		})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	cfg := testConfig()
+	cfg.GitHub.Owner = "owner"
+	cfg.GitHub.Repos = []string{"owner/repo1"} // duplicate of discovered
+
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo1"},
+	}
+
+	if err := p.refreshRepos(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(p.repos) != 2 {
+		t.Errorf("expected 2 repos (deduped), got %d: %v", len(p.repos), p.repos)
+	}
+}
+
+// --- poll tests ---
+
+func TestPoll_CallsBothPhases(t *testing.T) {
+	// poll() calls pollIdle then pollActive. Test that both run.
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, _, _ := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo"},
+	}
+
+	if err := p.poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --- scheduleEnd edge case ---
+
+func TestScheduleEnd_UnknownRepo(t *testing.T) {
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		tracked: make(map[string]*trackedRun),
+	}
+
+	// Should not panic when repo isn't tracked
+	p.scheduleEnd("nonexistent", pushward.Content{})
+}
+
+// --- Run tests ---
+
+func TestRun_ShutdownImmediately(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, _, _ := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	cfg.Polling.IdleInterval = 100 * time.Millisecond
+
+	p := New(cfg, gh, pw)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- p.Run(ctx)
+	}()
+
+	// Let it run one poll cycle then cancel
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("expected nil error on graceful shutdown, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not exit within timeout")
+	}
+}
+
+func TestRun_CleansUpTimersOnShutdown(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, _, _ := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	cfg.Polling.IdleInterval = time.Hour // won't tick
+
+	p := New(cfg, gh, pw)
+
+	// Add a tracked entry with a pending end timer
+	timer := time.AfterFunc(time.Hour, func() {})
+	p.tracked["owner/repo"] = &trackedRun{
+		Repo:     "owner/repo",
+		RunID:    42,
+		Slug:     "gh-repo",
+		endTimer: timer,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() {
+		done <- p.Run(ctx)
+	}()
+
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("expected nil error, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not exit within timeout")
 	}
 }

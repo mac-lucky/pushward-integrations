@@ -22,8 +22,12 @@ func NewMux() *http.ServeMux {
 // It performs a graceful shutdown with a 5-second timeout.
 func ListenAndServe(ctx context.Context, addr string, handler http.Handler) error {
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: handler,
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	errCh := make(chan error, 1)
