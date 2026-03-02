@@ -177,10 +177,9 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 }
 
 func (t *Tracker) track(ctx context.Context, resumed bool) {
-	// Ensure activity exists
-	endedTTL := int(t.cfg.PushWard.CleanupDelay.Seconds())
+	// Ensure activity exists (no ended_ttl so the slug persists)
 	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
-	if err := t.pw.CreateActivity(ctx, slug, "SABnzbd", t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
+	if err := t.pw.CreateActivity(ctx, slug, "SABnzbd", t.cfg.PushWard.Priority, 0, staleTTL); err != nil {
 		slog.Error("failed to create activity", "error", err)
 		return
 	}
