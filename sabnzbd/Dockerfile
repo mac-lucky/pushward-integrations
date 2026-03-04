@@ -25,7 +25,7 @@ RUN adduser -D -u 1000 appuser
 
 COPY --from=builder /pushward-sabnzbd /pushward-sabnzbd
 
-USER appuser
+USER 1000
 
 EXPOSE 8090
 

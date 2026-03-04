@@ -27,7 +27,7 @@ COPY --from=builder /pushward-github /pushward-github
 
 ENV PUSHWARD_URL="https://api.pushward.app"
 
-USER appuser
+USER 1000
 
 ENTRYPOINT ["/pushward-github"]
 CMD ["-config", "/config/config.yml"]

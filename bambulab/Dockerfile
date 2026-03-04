@@ -25,7 +25,7 @@ RUN adduser -D -u 1000 appuser
 
 COPY --from=builder /pushward-bambulab /pushward-bambulab
 
-USER appuser
+USER 1000
 
 ENTRYPOINT ["/pushward-bambulab"]
 CMD ["-config", "/config/config.yml"]
