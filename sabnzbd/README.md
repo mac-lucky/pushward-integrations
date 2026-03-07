@@ -8,10 +8,13 @@ Exposes a webhook endpoint that SABnzbd calls when an NZB is added, then polls t
 
 - **Multi-file tracking** — shows the current filename and a `+N more` count when multiple NZBs are queued
 - **Live ETA countdown** — remaining time displayed on the Dynamic Island
-- **Download speed** — real-time MB/s readout as the activity state
+- **Download speed** — real-time MB/s readout with running average as the activity state
 - **Post-processing phases** — Verifying, Repairing, Extracting, Moving each shown with a distinct icon
-- **Completion summary** — total size, duration, and post-processing time (e.g. `1.2 GB in 5m 30s · PP: 45s`)
+- **Completion summary** — total size, avg speed, and unpack time (e.g. `Done · 1.2 GB · 45 MB/s avg · unpack 2m 3s`)
+- **Two-phase end** — sends ONGOING with final content first (for push-update token delivery), then ENDED to dismiss
+- **Resume on startup** — checks SABnzbd for active downloads/post-processing and resumes tracking automatically
 - **Paused state** — reflects SABnzbd pause/resume on the Live Activity
+- **Webhook secret** — optional `X-Webhook-Secret` header validation
 - **Auto-activity management** — creates the PushWard activity on first webhook, no manual setup needed
 - **Retry with backoff** — PushWard API calls retry up to 5 times with exponential backoff
 - **Graceful shutdown** — waits for active tracking to finish on SIGINT/SIGTERM
@@ -31,12 +34,17 @@ All settings can be provided via YAML config file or environment variables. Envi
 |---|---|---|---|
 | `PUSHWARD_SABNZBD_URL` | `sabnzbd.url` | SABnzbd API URL | Yes |
 | `PUSHWARD_SABNZBD_API_KEY` | `sabnzbd.api_key` | SABnzbd API key | Yes |
+| `PUSHWARD_SABNZBD_WEBHOOK_SECRET` | `sabnzbd.webhook_secret` | Webhook secret for `X-Webhook-Secret` validation | No |
 | `PUSHWARD_URL` | `pushward.url` | PushWard server URL | Yes |
 | `PUSHWARD_API_KEY` | `pushward.api_key` | PushWard integration key (`hlk_`) | Yes |
 | `PUSHWARD_SERVER_ADDRESS` | `server.address` | HTTP listen address (default: `:8090`) | No |
 | `PUSHWARD_PRIORITY` | `pushward.priority` | Activity priority 0-10 (default: `1`) | No |
-| `PUSHWARD_CLEANUP_DELAY` | `pushward.cleanup_delay` | Delay before ENDED (default: `15m`) | No |
-| `PUSHWARD_POLL_INTERVAL` | `polling.interval` | Poll interval (default: `1s`) | No |
+| `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Server-side stale TTL (default: `30m`) | No |
+| `PUSHWARD_END_DELAY` | `pushward.end_delay` | Delay before two-phase end Phase 1 (default: `5s`) | No |
+| `PUSHWARD_END_DISPLAY_TIME` | `pushward.end_display_time` | Display time before ENDED dismissal (default: `4s`) | No |
+| `PUSHWARD_POLL_INTERVAL` | `polling.interval` | Poll interval during tracking (default: `1s`) | No |
+
+> **Note:** `PUSHWARD_CLEANUP_DELAY` is accepted by the shared config but not used by this integration. The activity slug `sabnzbd` is created with `ended_ttl=0` so it persists across sessions for reuse.
 
 ## Docker Compose
 
@@ -74,10 +82,12 @@ Set it to trigger on **NZB added** events.
 
 ## How It Works
 
-1. **Webhook** — SABnzbd sends a POST to `/webhook` when an NZB is added
-2. **Activity creation** — auto-creates the `sabnzbd` activity on PushWard if it doesn't exist
-3. **Wait for start** — polls the queue for up to 60s waiting for an active download
-4. **Download tracking** — polls the queue every 1s, showing progress bar, speed, ETA, and current filename(s)
-5. **Post-processing** — tracks Verifying, Repairing, Extracting, and Moving phases with status-specific icons
-6. **Queue continuation** — if more downloads appear in the queue, loops back to step 4
-7. **Summary** — shows completion stats (total size, duration, post-processing time), then ends after the cleanup delay
+1. **Startup** — checks SABnzbd for active downloads or post-processing; if found, resumes tracking immediately. Otherwise, sends ENDED to dismiss any stale activity from a previous crash
+2. **Webhook** — SABnzbd sends a POST to `/webhook` when an NZB is added
+3. **Activity creation** — auto-creates the `sabnzbd` activity on PushWard (with `ended_ttl=0` so the slug persists, and `stale_ttl=30m`)
+4. **Wait for start** — polls the queue for up to 60s waiting for an active download
+5. **Download tracking** — polls the queue every 1s, showing progress bar, speed, ETA, and current filename(s)
+6. **Post-processing** — tracks Verifying, Repairing, Extracting, and Moving phases with status-specific icons
+7. **Queue continuation** — if more downloads appear in the queue, loops back to step 5
+8. **Summary** — shows completion stats (e.g. `Done · 1.2 GB · 45 MB/s avg · unpack 2m 3s`), subtitle shows the downloaded filename
+9. **Two-phase end** — after the end delay (default 5s), sends ONGOING with final content so the push-update token delivers it to the device, then after the display time (default 4s) sends ENDED to dismiss the Live Activity. Skipped for resumed sessions (sends ENDED directly)
