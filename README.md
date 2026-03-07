@@ -9,7 +9,7 @@ Collection of PushWard integration bridges packaged as Docker containers. Each b
 | [pushward-github](./github/) | GitHub Actions CI/CD workflow progress | - | `ghcr.io/mac-lucky/pushward-github` |
 | [pushward-grafana](./grafana/) | Grafana alert notifications | 8090 | `ghcr.io/mac-lucky/pushward-grafana` |
 | [pushward-sabnzbd](./sabnzbd/) | SABnzbd download and post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
-| [pushward-argocd](./argocd/) | ArgoCD sync progress (Syncing → Rolling Out → Deployed) | 8090 | `ghcr.io/mac-lucky/pushward-argocd` |
+| [pushward-argocd](./argocd/) | ArgoCD sync progress (Syncing -> Rolling Out -> Deployed) | 8090 | `ghcr.io/mac-lucky/pushward-argocd` |
 | [pushward-bambulab](./bambulab/) | BambuLab 3D printer progress tracking via MQTT | - | `ghcr.io/mac-lucky/pushward-bambulab` |
 
 ## Common Configuration
@@ -30,14 +30,17 @@ This is a Go workspace (`go.work`) with a shared module and five integration mod
 ```
 pushward-docker/
   go.work                  # Go workspace: ./shared, ./github, ./grafana, ./sabnzbd, ./argocd, ./bambulab
-  shared/                  # Shared PushWard API client, config types, HTTP boilerplate, test utilities
+  shared/                  # Shared module used by all integrations
+    config/                # Common PushWardConfig, ServerConfig types, YAML loader, env overrides
+    pushward/              # PushWard API client (create/update/delete activities, retry, rate-limit)
+    server/                # HTTP server boilerplate (health endpoint, graceful shutdown)
+    testutil/              # Mock PushWard server, request recording, body unmarshalling
   github/                  # pushward-github integration
     cmd/pushward-github/   # Entry point
     internal/
       config/              # YAML + env var config loading
       github/              # GitHub Actions API client (workflow runs, jobs, repos)
       poller/              # Poll loop: idle/active intervals, tracked run state, cleanup
-      pushward/            # PushWard API client (create/update/delete activities)
     Dockerfile
     config.example.yml
   grafana/                 # pushward-grafana integration
@@ -46,7 +49,6 @@ pushward-docker/
       config/              # YAML + env var config loading
       grafana/             # Grafana webhook payload types
       handler/             # Alert lifecycle: firing, resolved, stale timeout, cleanup
-      pushward/            # PushWard API client (create/update/delete activities)
     Dockerfile
     config.example.yml
   sabnzbd/                 # pushward-sabnzbd integration
@@ -55,7 +57,6 @@ pushward-docker/
       config/              # YAML + env var config loading
       sabnzbd/             # SABnzbd API client (queue, history)
       tracker/             # Download/PP tracking loop, webhook handler
-      pushward/            # PushWard API client (create/update/delete activities)
     Dockerfile
     config.example.yml
   argocd/                  # pushward-argocd integration

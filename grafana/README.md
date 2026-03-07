@@ -6,10 +6,14 @@ Exposes a webhook endpoint that Grafana calls via its contact point configuratio
 
 ## Features
 
+- **Alert grouping** — multiple instances of the same alert rule (by `alertname`) are grouped into a single Live Activity, with the worst severity driving the icon and color
 - **Severity-based styling** — critical (red), warning (orange), and info (blue) alerts each get a distinct icon and accent color
-- **Auto-resolved** — resolved alerts show a green checkmark and dismiss after the cleanup delay
-- **Stale detection** — alerts with no updates for 24h are auto-ended to prevent orphaned Live Activities
-- **Fingerprint-based slugs** — each unique alert gets its own Live Activity (`grafana-<fingerprint>`)
+- **URL links** — each activity links to the alert rule in Grafana (`generatorURL`) and the associated panel or dashboard (`panelURL`/`dashboardURL`)
+- **Fired-at timestamp** — the `startsAt` time is sent to the iOS app for display on the Live Activity
+- **Auto-resolved** — resolved alerts show a green checkmark and the server auto-cleans up after `ended_ttl` expires
+- **Stale detection** — alerts with no updates for 24h are auto-ended via server-side `stale_ttl`
+- **Alertname-based slugs** — each alert rule gets its own Live Activity (`grafana-<sha256(alertname)[:6]>`)
+- **Webhook secret** — optional `X-Webhook-Secret` header validation for securing the endpoint
 - **Auto-activity management** — creates the PushWard activity on first webhook, no manual setup needed
 - **Retry with backoff** — PushWard API calls retry up to 5 times with exponential backoff
 - **Graceful shutdown** — waits for in-flight requests on SIGINT/SIGTERM
@@ -32,10 +36,11 @@ All settings can be provided via YAML config file or environment variables. Envi
 | `PUSHWARD_GRAFANA_SEVERITY_LABEL` | `grafana.severity_label` | Label key to read severity from (default: `severity`) | No |
 | `PUSHWARD_GRAFANA_DEFAULT_SEVERITY` | `grafana.default_severity` | Fallback severity when label missing (default: `warning`) | No |
 | `PUSHWARD_GRAFANA_DEFAULT_ICON` | `grafana.default_icon` | Default SF Symbol icon (default: `exclamationmark.triangle.fill`) | No |
+| `PUSHWARD_GRAFANA_WEBHOOK_SECRET` | `grafana.webhook_secret` | Optional secret for `X-Webhook-Secret` header validation | No |
 | `PUSHWARD_SERVER_ADDRESS` | `server.address` | HTTP listen address (default: `:8090`) | No |
 | `PUSHWARD_PRIORITY` | `pushward.priority` | Activity priority 0-10 (default: `5`) | No |
-| `PUSHWARD_CLEANUP_DELAY` | `pushward.cleanup_delay` | Delay before deleting ended activities (default: `5m`) | No |
-| `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Auto-end alerts with no updates after this duration (default: `24h`) | No |
+| `PUSHWARD_CLEANUP_DELAY` | `pushward.cleanup_delay` | Passed as `ended_ttl` to the server — how long the server keeps an ended activity before deletion (default: `5m`) | No |
+| `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Passed as `stale_ttl` to the server — auto-ends alerts with no updates after this duration (default: `24h`) | No |
 
 ## Docker Compose
 
@@ -84,7 +89,9 @@ Alerts should include a `severity` label (or configure `grafana.severity_label` 
 ## How It Works
 
 1. **Webhook** — Grafana sends a POST to `/webhook` when alerts fire or resolve
-2. **Activity creation** — auto-creates a PushWard activity for each unique alert fingerprint
-3. **Firing** — sends an `ONGOING` update with the `alert` content template, severity-based icon and color
-4. **Resolved** — sends an `ENDED` update with a green checkmark, then deletes after the cleanup delay
-5. **Stale timeout** — if a firing alert receives no updates for 24h, it is auto-ended and cleaned up
+2. **Grouping** — alerts are grouped by `alertname`; multiple instances of the same rule share one Live Activity
+3. **Activity creation** — auto-creates a PushWard activity on the first firing instance of a new alert rule
+4. **Firing** — sends an `ONGOING` update with the `alert` content template, worst severity icon/color, `generatorURL` link, and `startsAt` timestamp
+5. **Partial resolve** — when some instances resolve but others remain firing, the activity updates to reflect the remaining instances
+6. **Resolved** — when all instances resolve, sends an `ENDED` update with a green checkmark; the server auto-deletes after `ended_ttl` expires
+7. **Stale timeout** — if a firing alert receives no updates for 24h, the server auto-ends it via `stale_ttl`
