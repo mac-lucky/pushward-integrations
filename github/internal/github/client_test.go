@@ -162,7 +162,7 @@ func TestGetJobs_InvalidRepo(t *testing.T) {
 
 func TestListRepos_FiltersArchivedAndDisabled(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/users/owner/repos", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]Repository{
 			{FullName: "owner/active1"},
 			{FullName: "owner/archived", Archived: true},
@@ -186,7 +186,7 @@ func TestListRepos_FiltersArchivedAndDisabled(t *testing.T) {
 
 func TestListRepos_Empty(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/users/owner/repos", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]Repository{})
 	})
 	c := testClient(t, mux)
