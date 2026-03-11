@@ -8,9 +8,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/mac-lucky/pushward-docker/bambulab/internal/bambulab"
-	"github.com/mac-lucky/pushward-docker/bambulab/internal/config"
-	"github.com/mac-lucky/pushward-docker/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/bambulab/internal/bambulab"
+	"github.com/mac-lucky/pushward-integrations/bambulab/internal/config"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 const slugPrefix = "bambu"

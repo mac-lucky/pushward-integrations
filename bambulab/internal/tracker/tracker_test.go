@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mac-lucky/pushward-docker/bambulab/internal/bambulab"
-	"github.com/mac-lucky/pushward-docker/bambulab/internal/config"
-	sharedconfig "github.com/mac-lucky/pushward-docker/shared/config"
-	"github.com/mac-lucky/pushward-docker/shared/pushward"
-	"github.com/mac-lucky/pushward-docker/shared/testutil"
+	"github.com/mac-lucky/pushward-integrations/bambulab/internal/bambulab"
+	"github.com/mac-lucky/pushward-integrations/bambulab/internal/config"
+	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
 
 // --- Test helpers ---

@@ -8,11 +8,11 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/config"
-	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/sabnzbd"
-	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/tracker"
-	"github.com/mac-lucky/pushward-docker/shared/pushward"
-	"github.com/mac-lucky/pushward-docker/shared/server"
+	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/config"
+	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/sabnzbd"
+	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/tracker"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/server"
 )
 
 func main() {

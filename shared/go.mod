@@ -1,4 +1,4 @@
-module github.com/mac-lucky/pushward-docker/shared
+module github.com/mac-lucky/pushward-integrations/shared
 
 go 1.25.7
 

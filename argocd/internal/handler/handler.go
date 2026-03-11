@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mac-lucky/pushward-docker/argocd/internal/argocd"
-	"github.com/mac-lucky/pushward-docker/argocd/internal/config"
-	"github.com/mac-lucky/pushward-docker/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/argocd/internal/argocd"
+	"github.com/mac-lucky/pushward-integrations/argocd/internal/config"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 const totalSteps = 3

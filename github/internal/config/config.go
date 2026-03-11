@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	sharedconfig "github.com/mac-lucky/pushward-docker/shared/config"
+	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 )
 
 type Config struct {

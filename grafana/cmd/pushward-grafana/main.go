@@ -8,10 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/mac-lucky/pushward-docker/grafana/internal/config"
-	"github.com/mac-lucky/pushward-docker/grafana/internal/handler"
-	"github.com/mac-lucky/pushward-docker/shared/pushward"
-	"github.com/mac-lucky/pushward-docker/shared/server"
+	"github.com/mac-lucky/pushward-integrations/grafana/internal/config"
+	"github.com/mac-lucky/pushward-integrations/grafana/internal/handler"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/server"
 )
 
 func main() {

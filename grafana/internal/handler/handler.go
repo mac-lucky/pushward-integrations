@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mac-lucky/pushward-docker/grafana/internal/config"
-	"github.com/mac-lucky/pushward-docker/grafana/internal/grafana"
-	"github.com/mac-lucky/pushward-docker/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/grafana/internal/config"
+	"github.com/mac-lucky/pushward-integrations/grafana/internal/grafana"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 var severityRank = map[string]int{
