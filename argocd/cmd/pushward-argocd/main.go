@@ -8,10 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/mac-lucky/pushward-docker/argocd/internal/config"
-	"github.com/mac-lucky/pushward-docker/argocd/internal/handler"
-	"github.com/mac-lucky/pushward-docker/shared/pushward"
-	"github.com/mac-lucky/pushward-docker/shared/server"
+	"github.com/mac-lucky/pushward-integrations/argocd/internal/config"
+	"github.com/mac-lucky/pushward-integrations/argocd/internal/handler"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/server"
 )
 
 func main() {

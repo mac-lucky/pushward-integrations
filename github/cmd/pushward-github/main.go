@@ -8,10 +8,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/mac-lucky/pushward-docker/github/internal/config"
-	ghclient "github.com/mac-lucky/pushward-docker/github/internal/github"
-	"github.com/mac-lucky/pushward-docker/github/internal/poller"
-	"github.com/mac-lucky/pushward-docker/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/github/internal/config"
+	ghclient "github.com/mac-lucky/pushward-integrations/github/internal/github"
+	"github.com/mac-lucky/pushward-integrations/github/internal/poller"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 func main() {

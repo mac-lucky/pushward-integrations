@@ -18,7 +18,7 @@ FROM alpine:3.23
 
 LABEL org.opencontainers.image.title="pushward-argocd" \
       org.opencontainers.image.description="ArgoCD webhook bridge for PushWard sync Live Activities" \
-      org.opencontainers.image.source="https://github.com/mac-lucky/pushward-docker"
+      org.opencontainers.image.source="https://github.com/mac-lucky/pushward-integrations"
 
 RUN apk add --no-cache ca-certificates
 RUN adduser -D -u 1000 appuser

@@ -12,9 +12,9 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/config"
-	"github.com/mac-lucky/pushward-docker/sabnzbd/internal/sabnzbd"
-	"github.com/mac-lucky/pushward-docker/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/config"
+	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/sabnzbd"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 const slug = "sabnzbd"

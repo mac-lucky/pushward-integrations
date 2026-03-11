@@ -1,10 +1,10 @@
-module github.com/mac-lucky/pushward-docker/bambulab
+module github.com/mac-lucky/pushward-integrations/bambulab
 
 go 1.25.7
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.0
-	github.com/mac-lucky/pushward-docker/shared v0.0.0
+	github.com/mac-lucky/pushward-integrations/shared v0.0.0
 )
 
 require (
@@ -14,4 +14,4 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
 
-replace github.com/mac-lucky/pushward-docker/shared => ../shared
+replace github.com/mac-lucky/pushward-integrations/shared => ../shared

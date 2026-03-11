@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mac-lucky/pushward-docker/github/internal/config"
-	ghclient "github.com/mac-lucky/pushward-docker/github/internal/github"
-	"github.com/mac-lucky/pushward-docker/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/github/internal/config"
+	ghclient "github.com/mac-lucky/pushward-integrations/github/internal/github"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 type Poller struct {

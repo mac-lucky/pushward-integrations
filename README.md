@@ -1,4 +1,4 @@
-# pushward-docker
+# pushward-integrations
 
 Collection of PushWard integration bridges packaged as Docker containers. Each bridge monitors an external service and sends real-time Live Activity updates to [pushward-server](https://github.com/mac-lucky/pushward-server) for display on iOS (Dynamic Island and Lock Screen).
 
@@ -28,7 +28,7 @@ See each integration's README for the full list of configuration options.
 This is a Go workspace (`go.work`) with a shared module and five integration modules:
 
 ```
-pushward-docker/
+pushward-integrations/
   go.work                  # Go workspace: ./shared, ./github, ./grafana, ./sabnzbd, ./argocd, ./bambulab
   shared/                  # Shared module used by all integrations
     config/                # Common PushWardConfig, ServerConfig types, YAML loader, env overrides
