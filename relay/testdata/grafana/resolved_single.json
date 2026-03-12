@@ -1,0 +1,35 @@
+{
+  "receiver": "pushward",
+  "status": "resolved",
+  "alerts": [
+    {
+      "status": "resolved",
+      "labels": {
+        "alertname": "DiskSpaceLow",
+        "severity": "warning",
+        "instance": "nas:9100",
+        "job": "node"
+      },
+      "annotations": {
+        "summary": "Disk space recovered on nas:9100"
+      },
+      "startsAt": "2026-02-18T10:00:00Z",
+      "endsAt": "2026-02-18T10:45:00Z",
+      "generatorURL": "https://grafana.example.com/alerting/grafana/f1e2d3c4b5a6/view",
+      "dashboardURL": "https://grafana.example.com/d/disk-dashboard/disk",
+      "panelURL": "",
+      "fingerprint": "f1e2d3c4b5a6"
+    }
+  ],
+  "groupLabels": {
+    "alertname": "DiskSpaceLow"
+  },
+  "commonLabels": {
+    "alertname": "DiskSpaceLow",
+    "severity": "warning"
+  },
+  "commonAnnotations": {},
+  "externalURL": "https://grafana.example.com/",
+  "version": "1",
+  "groupKey": "{}:{alertname=\"DiskSpaceLow\"}"
+}

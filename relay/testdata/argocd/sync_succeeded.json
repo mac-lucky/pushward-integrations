@@ -1,0 +1,9 @@
+{
+  "app": "pushward-server",
+  "project": "default",
+  "event": "sync-succeeded",
+  "sync_status": "Synced",
+  "health_status": "Progressing",
+  "revision": "abc123",
+  "message": "sync completed"
+}

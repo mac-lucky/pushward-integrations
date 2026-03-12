@@ -16,6 +16,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/grafana"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/ratelimit"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/starr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/server"
@@ -77,20 +78,20 @@ func main() {
 	// Provider handlers — each route is wrapped with auth middleware
 	if cfg.Providers.Grafana.Enabled {
 		gh := grafana.NewHandler(store, clients, &cfg.Providers.Grafana)
-		mux.Handle("POST /grafana", auth.Middleware(gh))
+		mux.Handle("POST /grafana", auth.Middleware(ratelimit.Middleware(gh)))
 		slog.Info("enabled provider", "provider", "grafana")
 	}
 
 	if cfg.Providers.ArgoCD.Enabled {
 		ah := argocd.NewHandler(store, clients, &cfg.Providers.ArgoCD)
-		mux.Handle("POST /argocd", auth.Middleware(ah))
+		mux.Handle("POST /argocd", auth.Middleware(ratelimit.Middleware(ah)))
 		slog.Info("enabled provider", "provider", "argocd")
 	}
 
 	if cfg.Providers.Starr.Enabled {
 		sh := starr.NewHandler(store, clients, &cfg.Providers.Starr)
-		mux.Handle("POST /radarr/webhook", auth.Middleware(sh.RadarrHandler()))
-		mux.Handle("POST /sonarr/webhook", auth.Middleware(sh.SonarrHandler()))
+		mux.Handle("POST /radarr/webhook", auth.Middleware(ratelimit.Middleware(sh.RadarrHandler())))
+		mux.Handle("POST /sonarr/webhook", auth.Middleware(ratelimit.Middleware(sh.SonarrHandler())))
 		slog.Info("enabled provider", "provider", "starr")
 	}
 

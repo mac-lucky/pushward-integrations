@@ -1,0 +1,6 @@
+{
+  "app": "my-app",
+  "event": "sync-failed",
+  "revision": "rev1",
+  "message": "sync error"
+}

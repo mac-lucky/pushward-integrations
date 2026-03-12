@@ -1,0 +1,9 @@
+{
+  "app": "pushward-server",
+  "project": "default",
+  "event": "deployed",
+  "sync_status": "Synced",
+  "health_status": "Healthy",
+  "revision": "abc123",
+  "message": "application deployed"
+}

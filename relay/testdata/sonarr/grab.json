@@ -1,0 +1,21 @@
+{
+  "eventType": "Grab",
+  "series": {
+    "id": 1,
+    "title": "Breaking Bad",
+    "year": 2008
+  },
+  "episodes": [
+    {
+      "episodeNumber": 5,
+      "seasonNumber": 2,
+      "title": "Breakage"
+    }
+  ],
+  "release": {
+    "quality": "1080p",
+    "size": 1500000000
+  },
+  "downloadClient": "SABnzbd",
+  "downloadId": "abc-123"
+}
