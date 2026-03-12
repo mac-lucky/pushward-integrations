@@ -12,8 +12,6 @@ use ./argocd
 
 use ./bambulab
 
-use ./radarr
-
-use ./sonarr
+use ./starr
 
 use ./mqtt

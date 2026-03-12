@@ -1,13 +1,13 @@
-name: CI/CD Radarr
+name: CI/CD Starr
 
 on:
   push:
     branches: [main]
     tags: ['v*']
-    paths: ['radarr/**', 'shared/**', '.github/workflows/radarr-ci-cd.yml']
+    paths: ['starr/**', 'shared/**', '.github/workflows/starr-ci-cd.yml']
   pull_request:
     branches: [main]
-    paths: ['radarr/**', 'shared/**', '.github/workflows/radarr-ci-cd.yml']
+    paths: ['starr/**', 'shared/**', '.github/workflows/starr-ci-cd.yml']
   workflow_dispatch:
 
 jobs:
@@ -18,15 +18,15 @@ jobs:
       packages: write
       security-events: write
     with:
-      app_name: "pushward-radarr"
-      ghcr_image: "ghcr.io/mac-lucky/pushward-radarr"
-      dockerhub_image: "maclucky/pushward-radarr"
+      app_name: "pushward-starr"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-starr"
+      dockerhub_image: "maclucky/pushward-starr"
       push_to_dockerhub: false
       push_on_main: true
       main_branch: "main"
       build_context: "."
-      dockerfile_path: "./radarr/Dockerfile"
-      go_module_path: "./radarr"
+      dockerfile_path: "./starr/Dockerfile"
+      go_module_path: "./starr"
       enable_go_tests: true
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
