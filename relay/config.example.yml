@@ -1,0 +1,37 @@
+server:
+  address: ":8090"
+
+database:
+  dsn: "postgres://pushward_relay_user:password@localhost:5432/pushward_relay?sslmode=disable"
+
+providers:
+  grafana:
+    enabled: true
+    webhook_secret: ""                    # optional X-Webhook-Secret validation
+    severity_label: "severity"
+    default_severity: "warning"
+    default_icon: "exclamationmark.triangle.fill"
+    priority: 5
+    cleanup_delay: 5m                     # → ended_ttl
+    stale_timeout: 24h                    # → stale_ttl
+
+  argocd:
+    enabled: true
+    webhook_secret: ""                    # optional X-Webhook-Secret validation
+    url: ""                               # ArgoCD UI URL for deep links
+    sync_grace_period: 10s
+    priority: 3
+    cleanup_delay: 5m
+    stale_timeout: 30m
+    end_delay: 5s
+    end_display_time: 4s
+
+  starr:
+    enabled: true
+    radarr_webhook_secret: ""             # validates Basic Auth password from /radarr/webhook
+    sonarr_webhook_secret: ""             # validates Basic Auth password from /sonarr/webhook
+    priority: 1
+    cleanup_delay: 15m
+    stale_timeout: 30m
+    end_delay: 5s
+    end_display_time: 4s

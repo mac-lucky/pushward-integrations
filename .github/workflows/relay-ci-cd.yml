@@ -1,0 +1,34 @@
+name: CI/CD Relay
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: ['relay/**', 'shared/**', '.github/workflows/relay-ci-cd.yml']
+  pull_request:
+    branches: [main]
+    paths: ['relay/**', 'shared/**', '.github/workflows/relay-ci-cd.yml']
+  workflow_dispatch:
+
+jobs:
+  ci-cd:
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      app_name: "pushward-relay"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-relay"
+      dockerhub_image: "maclucky/pushward-relay"
+      push_to_dockerhub: false
+      push_on_main: true
+      main_branch: "main"
+      build_context: "."
+      dockerfile_path: "./relay/Dockerfile"
+      go_module_path: "./relay"
+      enable_go_tests: true
+      go_test_args: "-race -count=1 -v"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit
