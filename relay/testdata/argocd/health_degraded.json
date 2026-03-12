@@ -1,0 +1,6 @@
+{
+  "app": "web-app",
+  "event": "health-degraded",
+  "revision": "rev1",
+  "health_status": "Degraded"
+}

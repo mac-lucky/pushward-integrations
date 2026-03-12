@@ -1,0 +1,16 @@
+{
+  "eventType": "Grab",
+  "movie": {
+    "id": 1,
+    "title": "Inception",
+    "year": 2010
+  },
+  "release": {
+    "quality": "Bluray-1080p",
+    "size": 5368709120,
+    "indexer": "NZBgeek",
+    "releaseTitle": "Inception.2010.1080p.BluRay"
+  },
+  "downloadClient": "SABnzbd",
+  "downloadId": "SABnzbd_nzo_abc123"
+}

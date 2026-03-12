@@ -5,6 +5,7 @@ go 1.25.7
 require (
 	github.com/jackc/pgx/v5 v5.7.5
 	github.com/mac-lucky/pushward-integrations/shared v0.0.0
+	golang.org/x/time v0.15.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 

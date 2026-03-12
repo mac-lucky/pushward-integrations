@@ -1,0 +1,10 @@
+{
+  "app": "pushward-server",
+  "project": "default",
+  "event": "sync-running",
+  "sync_status": "OutOfSync",
+  "health_status": "Healthy",
+  "operation_phase": "Running",
+  "revision": "abc123",
+  "message": "synchronization started"
+}
