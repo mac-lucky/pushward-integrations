@@ -1,0 +1,41 @@
+server:
+  address: ":8090"
+
+radarr:
+  username: ""             # PUSHWARD_RADARR_USERNAME — optional HTTP Basic Auth
+  password: ""             # PUSHWARD_RADARR_PASSWORD — optional HTTP Basic Auth
+
+sonarr:
+  username: ""             # PUSHWARD_SONARR_USERNAME — optional HTTP Basic Auth
+  password: ""             # PUSHWARD_SONARR_PASSWORD — optional HTTP Basic Auth
+
+pushward:
+  url: "http://pushward-server:8080"
+  api_key: ""                    # or set PUSHWARD_API_KEY env var
+  priority: 1
+  cleanup_delay: 15m
+  stale_timeout: 30m
+  end_delay: 5s                  # wait for push-update token before showing final state
+  end_display_time: 4s           # show final state in Dynamic Island before dismissal
+
+# --- Radarr webhook configuration ---
+#
+# In Radarr: Settings > Connect > Add > Webhook
+#   Name: PushWard
+#   On Grab: Yes
+#   On Import: Yes
+#   On Upgrade: Yes
+#   URL: http://pushward-starr:8090/radarr/webhook
+#   Method: POST
+#   Username: (optional, must match radarr.username above)
+#   Password: (optional, must match radarr.password above)
+
+# --- Sonarr webhook configuration ---
+#
+# In Sonarr: Settings > Connect > Add > Webhook
+#   Name: PushWard
+#   URL: http://pushward-starr:8090/sonarr/webhook
+#   Method: POST
+#   Events: On Grab, On Import (Download)
+#   Username: (optional, must match sonarr.username above)
+#   Password: (optional, must match sonarr.password above)
