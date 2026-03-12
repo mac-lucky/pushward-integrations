@@ -1,0 +1,78 @@
+mqtt:
+  broker: "tcp://192.168.1.50:1883"    # PUSHWARD_MQTT_BROKER
+  username: ""                           # PUSHWARD_MQTT_USERNAME
+  password: ""                           # PUSHWARD_MQTT_PASSWORD
+  client_id: "pushward-mqtt"            # PUSHWARD_MQTT_CLIENT_ID
+  tls:
+    enabled: false
+    insecure_skip_verify: false
+    ca_cert: ""
+    client_cert: ""
+    client_key: ""
+
+rules:
+  # Field lifecycle: state transitions driven by a field value
+  - name: "Washing Machine"
+    topic: "zigbee2mqtt/washing_machine"
+    slug: "washer"
+    template: "generic"
+    priority: 2
+    lifecycle: "field"
+    state_field: "running_state"
+    state_map:
+      idle: "IGNORE"
+      running: "ONGOING"
+      paused: "ONGOING"
+      done: "ENDED"
+    content:
+      state: "{running_state}"
+      subtitle: "{program_name}"
+      progress: "{completion_percentage | div:100}"
+      icon:
+        default: "washer.fill"
+        map:
+          running_state:
+            paused: "pause.circle.fill"
+      accent_color:
+        default: "blue"
+        map:
+          running_state:
+            paused: "orange"
+            done: "green"
+      remaining_time: "{remaining_minutes | mul:60}"
+
+  # Presence lifecycle: activity exists as long as messages arrive
+  - name: "Air Quality"
+    topic: "sensors/+/air_quality"
+    slug: "air-quality"
+    template: "generic"
+    lifecycle: "presence"
+    inactivity_timeout: 5m
+    content:
+      state: "{aqi | format:AQI %0.f}"
+      subtitle: "{_topic_segment:1}"
+      icon:
+        default: "aqi.medium"
+        map:
+          level:
+            good: "aqi.low"
+            moderate: "aqi.medium"
+            unhealthy: "aqi.high"
+      accent_color:
+        default: "green"
+        map:
+          level:
+            moderate: "orange"
+            unhealthy: "red"
+
+pushward:
+  url: ""               # PUSHWARD_URL (required)
+  api_key: ""           # PUSHWARD_API_KEY (required)
+  priority: 1           # PUSHWARD_PRIORITY
+  cleanup_delay: 15m    # PUSHWARD_CLEANUP_DELAY
+  stale_timeout: 30m    # PUSHWARD_STALE_TIMEOUT
+  end_delay: 5s         # PUSHWARD_END_DELAY
+  end_display_time: 4s  # PUSHWARD_END_DISPLAY_TIME
+
+polling:
+  update_interval: 5s   # PUSHWARD_POLL_INTERVAL
