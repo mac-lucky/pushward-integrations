@@ -9,6 +9,12 @@
 /argocd/pushward-argocd
 /pushward-bambulab
 /bambulab/pushward-bambulab
+/pushward-starr
+/starr/pushward-starr
+/pushward-mqtt
+/mqtt/pushward-mqtt
+/pushward-relay
+/relay/pushward-relay
 *.exe
 
 # IDE
