@@ -4,7 +4,7 @@ server:
 grafana:
   severity_label: "severity"
   default_severity: "warning"
-  default_icon: "exclamationmark.triangle.fill"
+  default_icon: "exclamationmark.triangle.fill" # SF Symbol or MDI icon (e.g. "exclamationmark.triangle.fill", "mdi:alert-circle")
 
 pushward:
   url: "http://pushward-server:8080"
