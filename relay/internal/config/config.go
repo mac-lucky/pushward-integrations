@@ -18,7 +18,8 @@ type Config struct {
 
 // DatabaseConfig holds the PostgreSQL connection settings.
 type DatabaseConfig struct {
-	DSN string `yaml:"dsn"`
+	DSN          string `yaml:"dsn"`
+	PasswordFile string `yaml:"password_file"`
 }
 
 // ProvidersConfig holds per-provider settings.
@@ -129,6 +130,9 @@ func (cfg *Config) applyEnvOverrides() {
 
 	if v := os.Getenv("PUSHWARD_DATABASE_DSN"); v != "" {
 		cfg.Database.DSN = v
+	}
+	if v := os.Getenv("PUSHWARD_DATABASE_PASSWORD_FILE"); v != "" {
+		cfg.Database.PasswordFile = v
 	}
 
 	// Grafana overrides

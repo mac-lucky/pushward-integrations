@@ -9,8 +9,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-
 	"github.com/mac-lucky/pushward-integrations/relay/internal/argocd"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
@@ -49,17 +47,12 @@ func main() {
 	defer cancel()
 
 	// Database
-	pool, err := pgxpool.New(ctx, cfg.Database.DSN)
+	pool, err := state.NewPool(ctx, cfg.Database.DSN, cfg.Database.PasswordFile)
 	if err != nil {
 		slog.Error("failed to connect to database", "error", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
-
-	if err := pool.Ping(ctx); err != nil {
-		slog.Error("failed to ping database", "error", err)
-		os.Exit(1)
-	}
 	slog.Info("connected to database")
 
 	// State store
