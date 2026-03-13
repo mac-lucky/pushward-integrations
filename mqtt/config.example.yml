@@ -28,7 +28,7 @@ rules:
       state: "{running_state}"
       subtitle: "{program_name}"
       progress: "{completion_percentage | div:100}"
-      icon:
+      icon: # SF Symbol or MDI icon (e.g. "washer.fill", "mdi:washing-machine")
         default: "washer.fill"
         map:
           running_state:
@@ -51,7 +51,7 @@ rules:
     content:
       state: "{aqi | format:AQI %0.f}"
       subtitle: "{_topic_segment:1}"
-      icon:
+      icon: # SF Symbol or MDI icon (e.g. "aqi.medium", "mdi:air-filter")
         default: "aqi.medium"
         map:
           level:
