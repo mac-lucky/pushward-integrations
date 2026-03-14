@@ -57,17 +57,14 @@ type ArgoCDConfig struct {
 // StarrConfig holds Radarr/Sonarr-specific settings.
 //
 // In the relay, Radarr/Sonarr send the hlk_ integration key as the Basic Auth
-// username (extracted by the relay auth middleware) and the webhook secret as
-// the Basic Auth password (validated here per service).
+// password (extracted by the relay auth middleware). The username field is ignored.
 type StarrConfig struct {
-	Enabled             bool          `yaml:"enabled"`
-	RadarrWebhookSecret string        `yaml:"radarr_webhook_secret"`
-	SonarrWebhookSecret string        `yaml:"sonarr_webhook_secret"`
-	Priority            int           `yaml:"priority"`
-	CleanupDelay        time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout        time.Duration `yaml:"stale_timeout"`
-	EndDelay            time.Duration `yaml:"end_delay"`
-	EndDisplayTime      time.Duration `yaml:"end_display_time"`
+	Enabled        bool          `yaml:"enabled"`
+	Priority       int           `yaml:"priority"`
+	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout   time.Duration `yaml:"stale_timeout"`
+	EndDelay       time.Duration `yaml:"end_delay"`
+	EndDisplayTime time.Duration `yaml:"end_display_time"`
 }
 
 // Load reads the config from a YAML file and applies environment variable overrides.
@@ -162,11 +159,4 @@ func (cfg *Config) applyEnvOverrides() {
 		}
 	}
 
-	// Starr overrides
-	if v := os.Getenv("PUSHWARD_RADARR_WEBHOOK_SECRET"); v != "" {
-		cfg.Providers.Starr.RadarrWebhookSecret = v
-	}
-	if v := os.Getenv("PUSHWARD_SONARR_WEBHOOK_SECRET"); v != "" {
-		cfg.Providers.Starr.SonarrWebhookSecret = v
-	}
 }

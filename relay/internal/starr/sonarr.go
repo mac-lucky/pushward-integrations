@@ -11,13 +11,6 @@ import (
 )
 
 func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
-	if h.config.SonarrWebhookSecret != "" {
-		if !checkWebhookSecret(r, h.config.SonarrWebhookSecret) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-	}
-
 	raw, ok := decodePayload(w, r)
 	if !ok {
 		return

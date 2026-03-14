@@ -2,7 +2,6 @@ package starr
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -57,14 +56,6 @@ func slugForDownload(prefix, downloadID string) string {
 	s = nonAlphanumeric.ReplaceAllString(s, "-")
 	s = strings.Trim(s, "-")
 	return prefix + s
-}
-
-// checkWebhookSecret validates the Basic Auth password against the configured
-// webhook secret. In the relay, the Basic Auth username carries the hlk_ key
-// (already extracted by the auth middleware), so only the password matters here.
-func checkWebhookSecret(r *http.Request, secret string) bool {
-	_, pass, ok := r.BasicAuth()
-	return ok && subtle.ConstantTimeCompare([]byte(pass), []byte(secret)) == 1
 }
 
 func decodePayload(w http.ResponseWriter, r *http.Request) (json.RawMessage, bool) {

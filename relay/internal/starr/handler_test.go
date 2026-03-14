@@ -47,13 +47,13 @@ func sendRadarr(t *testing.T, h *Handler, payload string) *httptest.ResponseReco
 	return w
 }
 
-// sendRadarrWithSecret sends a Radarr webhook through auth middleware with
-// Basic Auth where username=hlk_test (integration key) and password=secret.
-func sendRadarrWithSecret(t *testing.T, h *Handler, payload, secret string) *httptest.ResponseRecorder {
+// sendRadarrBasicAuth sends a Radarr webhook through auth middleware with
+// Basic Auth where password=hlk_test (integration key).
+func sendRadarrBasicAuth(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/starr/radarr/webhook", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("hlk_test", secret)
+	req.SetBasicAuth("radarr", "hlk_test")
 	w := httptest.NewRecorder()
 	auth.Middleware(h.RadarrHandler()).ServeHTTP(w, req)
 	return w
@@ -70,13 +70,13 @@ func sendSonarr(t *testing.T, h *Handler, payload string) *httptest.ResponseReco
 	return w
 }
 
-// sendSonarrWithSecret sends a Sonarr webhook through auth middleware with
-// Basic Auth where username=hlk_test (integration key) and password=secret.
-func sendSonarrWithSecret(t *testing.T, h *Handler, payload, secret string) *httptest.ResponseRecorder {
+// sendSonarrBasicAuth sends a Sonarr webhook through auth middleware with
+// Basic Auth where password=hlk_test (integration key).
+func sendSonarrBasicAuth(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/starr/sonarr/webhook", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
-	req.SetBasicAuth("hlk_test", secret)
+	req.SetBasicAuth("sonarr", "hlk_test")
 	w := httptest.NewRecorder()
 	auth.Middleware(h.SonarrHandler()).ServeHTTP(w, req)
 	return w
@@ -342,59 +342,15 @@ func TestRadarrDownloadWithoutGrab(t *testing.T) {
 	}
 }
 
-// Webhook secret tests use Basic Auth with hlk_ key as username and secret as password.
-// The auth middleware extracts the key from the username; the handler validates the password.
-
-func TestRadarrWebhookSecret_Valid(t *testing.T) {
-	cfg := testConfig()
-	cfg.RadarrWebhookSecret = "s3cret"
-	h, calls, mu := newHandler(t, cfg)
-
-	w := sendRadarrWithSecret(t, h, `{
-		"eventType": "Grab",
-		"movie": {"id": 1, "title": "Inception", "year": 2010},
-		"release": {"quality": "Bluray-1080p", "size": 5368709120},
-		"downloadClient": "SABnzbd",
-		"downloadId": "SABnzbd_nzo_secret1"
-	}`, "s3cret")
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
-	}
-}
-
-func TestRadarrWebhookSecret_Invalid(t *testing.T) {
-	cfg := testConfig()
-	cfg.RadarrWebhookSecret = "s3cret"
-	h, _, _ := newHandler(t, cfg)
-
-	w := sendRadarrWithSecret(t, h, `{
-		"eventType": "Grab",
-		"movie": {"id": 1, "title": "Inception", "year": 2010},
-		"release": {"quality": "Bluray-1080p", "size": 5368709120},
-		"downloadClient": "SABnzbd",
-		"downloadId": "SABnzbd_nzo_secret2"
-	}`, "wrong")
-
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
-	}
-}
-
-func TestRadarrBasicAuth_NoAuthConfigured(t *testing.T) {
+func TestRadarrBasicAuth_KeyInPassword(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 
-	w := sendRadarr(t, h, `{
+	w := sendRadarrBasicAuth(t, h, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"release": {"quality": "Bluray-1080p", "size": 5368709120},
 		"downloadClient": "SABnzbd",
-		"downloadId": "SABnzbd_nzo_noauth"
+		"downloadId": "SABnzbd_nzo_basic"
 	}`)
 
 	if w.Code != http.StatusOK {
@@ -698,58 +654,16 @@ func TestSonarrDownloadWithoutGrab(t *testing.T) {
 	}
 }
 
-func TestSonarrWebhookSecret_Valid(t *testing.T) {
-	cfg := testConfig()
-	cfg.SonarrWebhookSecret = "s3cret"
-	h, calls, mu := newHandler(t, cfg)
-
-	w := sendSonarrWithSecret(t, h, `{
-		"eventType": "Grab",
-		"series": {"id": 1, "title": "Test", "year": 2024},
-		"episodes": [{"episodeNumber": 1, "seasonNumber": 1, "title": "Pilot"}],
-		"release": {"quality": "1080p", "size": 1000},
-		"downloadClient": "SABnzbd",
-		"downloadId": "secret-test"
-	}`, "s3cret")
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	time.Sleep(50 * time.Millisecond)
-	got := testutil.GetCalls(calls, mu)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(got))
-	}
-}
-
-func TestSonarrWebhookSecret_Invalid(t *testing.T) {
-	cfg := testConfig()
-	cfg.SonarrWebhookSecret = "s3cret"
-	h, _, _ := newHandler(t, cfg)
-
-	w := sendSonarrWithSecret(t, h, `{
-		"eventType": "Grab",
-		"series": {"id": 1, "title": "Test", "year": 2024},
-		"episodes": [{"episodeNumber": 1, "seasonNumber": 1, "title": "Pilot"}],
-		"release": {"quality": "1080p", "size": 1000},
-		"downloadClient": "SABnzbd",
-		"downloadId": "secret-test"
-	}`, "wrong")
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
-	}
-}
-
-func TestSonarrWebhookSecret_NoSecretConfigured(t *testing.T) {
+func TestSonarrBasicAuth_KeyInPassword(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 
-	w := sendSonarr(t, h, `{
+	w := sendSonarrBasicAuth(t, h, `{
 		"eventType": "Grab",
 		"series": {"id": 1, "title": "Test", "year": 2024},
 		"episodes": [{"episodeNumber": 1, "seasonNumber": 1, "title": "Pilot"}],
 		"release": {"quality": "1080p", "size": 1000},
 		"downloadClient": "SABnzbd",
-		"downloadId": "no-auth-test"
+		"downloadId": "basic-test"
 	}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
