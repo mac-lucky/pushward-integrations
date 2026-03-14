@@ -68,23 +68,23 @@ func main() {
 	// Router
 	mux := server.NewMux()
 
-	// Provider handlers — each route is wrapped with auth middleware
+	// Provider handlers — each route is wrapped with IP rate limit → auth → key rate limit
 	if cfg.Providers.Grafana.Enabled {
 		gh := grafana.NewHandler(store, clients, &cfg.Providers.Grafana)
-		mux.Handle("POST /grafana", auth.Middleware(ratelimit.Middleware(gh)))
+		mux.Handle("POST /grafana", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(gh))))
 		slog.Info("enabled provider", "provider", "grafana")
 	}
 
 	if cfg.Providers.ArgoCD.Enabled {
 		ah := argocd.NewHandler(store, clients, &cfg.Providers.ArgoCD)
-		mux.Handle("POST /argocd", auth.Middleware(ratelimit.Middleware(ah)))
+		mux.Handle("POST /argocd", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(ah))))
 		slog.Info("enabled provider", "provider", "argocd")
 	}
 
 	if cfg.Providers.Starr.Enabled {
 		sh := starr.NewHandler(store, clients, &cfg.Providers.Starr)
-		mux.Handle("POST /radarr/webhook", auth.Middleware(ratelimit.Middleware(sh.RadarrHandler())))
-		mux.Handle("POST /sonarr/webhook", auth.Middleware(ratelimit.Middleware(sh.SonarrHandler())))
+		mux.Handle("POST /radarr/webhook", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(sh.RadarrHandler()))))
+		mux.Handle("POST /sonarr/webhook", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(sh.SonarrHandler()))))
 		slog.Info("enabled provider", "provider", "starr")
 	}
 

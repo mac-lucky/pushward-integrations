@@ -28,8 +28,6 @@ providers:
 
   starr:
     enabled: true
-    radarr_webhook_secret: ""             # validates Basic Auth password from /radarr/webhook
-    sonarr_webhook_secret: ""             # validates Basic Auth password from /sonarr/webhook
     priority: 1
     cleanup_delay: 15m
     stale_timeout: 30m

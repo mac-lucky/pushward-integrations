@@ -20,7 +20,7 @@ func KeyFromContext(ctx context.Context) string {
 //
 // Supported patterns:
 //  1. Authorization: Bearer hlk_... → use as integration key
-//  2. HTTP Basic Auth → extract hlk_ from username field
+//  2. HTTP Basic Auth → extract hlk_ from password field
 //
 // Returns 401 if no valid key is found.
 func Middleware(next http.Handler) http.Handler {
@@ -46,10 +46,10 @@ func extractKey(r *http.Request) string {
 		}
 	}
 
-	// Pattern 2: Basic Auth — hlk_ in username field
-	if username, _, ok := r.BasicAuth(); ok {
-		if strings.HasPrefix(username, "hlk_") {
-			return username
+	// Pattern 2: Basic Auth — hlk_ in password field
+	if _, password, ok := r.BasicAuth(); ok {
+		if strings.HasPrefix(password, "hlk_") {
+			return password
 		}
 	}
 

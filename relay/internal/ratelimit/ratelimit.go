@@ -12,31 +12,31 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 )
 
-const (
-	burstSize  = 10
-	rateLimit  = rate.Limit(1) // 1 req/s = 60 req/min
-	maxEntries = 10_000
-)
-
 type entry struct {
 	limiter    *rate.Limiter
 	lastAccess time.Time
 }
 
 type limiterMap struct {
-	mu      sync.RWMutex
-	entries map[string]*entry
+	mu         sync.RWMutex
+	entries    map[string]*entry
+	rate       rate.Limit
+	burst      int
+	maxEntries int
 }
 
-func newLimiterMap() *limiterMap {
-	return &limiterMap{entries: make(map[string]*entry)}
+func newLimiterMap(r rate.Limit, burst, maxEntries int) *limiterMap {
+	return &limiterMap{
+		entries:    make(map[string]*entry),
+		rate:       r,
+		burst:      burst,
+		maxEntries: maxEntries,
+	}
 }
 
 func (m *limiterMap) get(key string) *rate.Limiter {
-	hash := keyHash(key)
-
 	m.mu.RLock()
-	if e, ok := m.entries[hash]; ok {
+	if e, ok := m.entries[key]; ok {
 		m.mu.RUnlock()
 		return e.limiter
 	}
@@ -46,13 +46,13 @@ func (m *limiterMap) get(key string) *rate.Limiter {
 	defer m.mu.Unlock()
 
 	// Double-check
-	if e, ok := m.entries[hash]; ok {
+	if e, ok := m.entries[key]; ok {
 		e.lastAccess = time.Now()
 		return e.limiter
 	}
 
 	// Evict LRU if at capacity
-	if len(m.entries) >= maxEntries {
+	if len(m.entries) >= m.maxEntries {
 		var oldestKey string
 		var oldestTime time.Time
 		first := true
@@ -66,8 +66,8 @@ func (m *limiterMap) get(key string) *rate.Limiter {
 		delete(m.entries, oldestKey)
 	}
 
-	l := rate.NewLimiter(rateLimit, burstSize)
-	m.entries[hash] = &entry{limiter: l, lastAccess: time.Now()}
+	l := rate.NewLimiter(m.rate, m.burst)
+	m.entries[key] = &entry{limiter: l, lastAccess: time.Now()}
 	return l
 }
 
@@ -76,7 +76,7 @@ func keyHash(key string) string {
 	return fmt.Sprintf("%x", h[:16])
 }
 
-var limiters = newLimiterMap()
+var keyLimiters = newLimiterMap(1, 10, 10_000)
 
 // Middleware applies per-key rate limiting. Must run after auth.Middleware
 // so that auth.KeyFromContext returns the hlk_ key.
@@ -89,7 +89,7 @@ func Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		limiter := limiters.get(key)
+		limiter := keyLimiters.get(keyHash(key))
 		if !limiter.Allow() {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "1")

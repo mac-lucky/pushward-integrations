@@ -12,13 +12,6 @@ import (
 )
 
 func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
-	if h.config.RadarrWebhookSecret != "" {
-		if !checkWebhookSecret(r, h.config.RadarrWebhookSecret) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-	}
-
 	raw, ok := decodePayload(w, r)
 	if !ok {
 		return
