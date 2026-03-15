@@ -1,6 +1,6 @@
 # pushward-relay
 
-Multi-tenant webhook gateway that consolidates multiple providers into a single [PushWard](https://github.com/mac-lucky/pushward-server) bridge with PostgreSQL shared state. Each tenant authenticates with their own `hlk_` integration key per request — no per-service API key configuration needed.
+Multi-tenant webhook gateway that consolidates multiple providers into a single [PushWard](https://pushward.app) bridge with PostgreSQL shared state. Each tenant authenticates with their own `hlk_` integration key per request — no per-service API key configuration needed.
 
 ## Features
 

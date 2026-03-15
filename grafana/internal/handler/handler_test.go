@@ -1163,22 +1163,22 @@ func TestRealisticGrafanaPayload_PrometheusAlertmanager(t *testing.T) {
 					"grafana_folder": "Kubernetes",
 					"instance": "10.0.1.5:8080",
 					"job": "pushward",
-					"namespace": "default",
-					"pod": "pushward-server-78d4f6b9c-lm2nk",
+					"namespace": "apps",
+					"pod": "app-server-6f7d8e9a1b-x2k4m",
 					"severity": "critical"
 				},
 				"annotations": {
-					"description": "Pod pushward-server-78d4f6b9c-lm2nk in namespace default has been in a non-ready state for longer than 15 minutes.",
+					"description": "Pod app-server-6f7d8e9a1b-x2k4m in namespace apps has been in a non-ready state for longer than 15 minutes.",
 					"runbook_url": "https://runbooks.prometheus-operator.dev/runbooks/kubernetes/kubepodnotready",
 					"summary": "Pod has been in a non-ready state for more than 15 minutes."
 				},
 				"startsAt": "2026-02-18T08:15:30.123456789Z",
 				"endsAt": "0001-01-01T00:00:00Z",
-				"generatorURL": "https://grafana.homelab.local/alerting/grafana/a1b2c3d4/view",
+				"generatorURL": "https://grafana.example.local/alerting/grafana/a1b2c3d4/view",
 				"fingerprint": "e4f5a6b7c8d9",
-				"silenceURL": "https://grafana.homelab.local/alerting/silence/new?alertmanager=grafana&matcher=alertname%3DKubePodNotReady",
-				"dashboardURL": "https://grafana.homelab.local/d/kubernetes-pods/kubernetes-pod-overview?orgId=1",
-				"panelURL": "https://grafana.homelab.local/d/kubernetes-pods/kubernetes-pod-overview?orgId=1&viewPanel=4"
+				"silenceURL": "https://grafana.example.local/alerting/silence/new?alertmanager=grafana&matcher=alertname%3DKubePodNotReady",
+				"dashboardURL": "https://grafana.example.local/d/kubernetes-pods/kubernetes-pod-overview?orgId=1",
+				"panelURL": "https://grafana.example.local/d/kubernetes-pods/kubernetes-pod-overview?orgId=1&viewPanel=4"
 			}
 		],
 		"groupLabels": {
@@ -1192,12 +1192,12 @@ func TestRealisticGrafanaPayload_PrometheusAlertmanager(t *testing.T) {
 		"commonAnnotations": {
 			"summary": "Pod has been in a non-ready state for more than 15 minutes."
 		},
-		"externalURL": "https://grafana.homelab.local/",
+		"externalURL": "https://grafana.example.local/",
 		"version": "1",
 		"groupKey": "{}/{grafana_folder=\"Kubernetes\"}:{alertname=\"KubePodNotReady\"}",
 		"truncatedAlerts": 0,
 		"orgId": 1,
-		"title": "[FIRING:1] KubePodNotReady Kubernetes (default pushward-server-78d4f6b9c-lm2nk critical)"
+		"title": "[FIRING:1] KubePodNotReady Kubernetes (apps app-server-6f7d8e9a1b-x2k4m critical)"
 	}`
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
@@ -1233,10 +1233,10 @@ func TestRealisticGrafanaPayload_PrometheusAlertmanager(t *testing.T) {
 	if updateReq.Content.State != "Pod has been in a non-ready state for more than 15 minutes." {
 		t.Errorf("state (summary): unexpected value: %s", updateReq.Content.State)
 	}
-	if updateReq.Content.URL != "https://grafana.homelab.local/alerting/grafana/a1b2c3d4/view" {
+	if updateReq.Content.URL != "https://grafana.example.local/alerting/grafana/a1b2c3d4/view" {
 		t.Errorf("URL: unexpected value: %s", updateReq.Content.URL)
 	}
-	if updateReq.Content.SecondaryURL != "https://grafana.homelab.local/d/kubernetes-pods/kubernetes-pod-overview?orgId=1&viewPanel=4" {
+	if updateReq.Content.SecondaryURL != "https://grafana.example.local/d/kubernetes-pods/kubernetes-pod-overview?orgId=1&viewPanel=4" {
 		t.Errorf("secondaryURL: unexpected value: %s", updateReq.Content.SecondaryURL)
 	}
 }
@@ -1281,7 +1281,7 @@ func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
 				},
 				"startsAt": "2026-02-18T09:10:00Z",
 				"endsAt": "0001-01-01T00:00:00Z",
-				"generatorURL": "https://grafana.homelab.local/alerting/grafana/uid1/view",
+				"generatorURL": "https://grafana.example.local/alerting/grafana/uid1/view",
 				"dashboardURL": "",
 				"panelURL": "",
 				"fingerprint": "firing00000a"
@@ -1299,7 +1299,7 @@ func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
 				},
 				"startsAt": "2026-02-18T09:12:00Z",
 				"endsAt": "0001-01-01T00:00:00Z",
-				"generatorURL": "https://grafana.homelab.local/alerting/grafana/uid2/view",
+				"generatorURL": "https://grafana.example.local/alerting/grafana/uid2/view",
 				"dashboardURL": "",
 				"panelURL": "",
 				"fingerprint": "firing00000b"
@@ -1317,7 +1317,7 @@ func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
 				},
 				"startsAt": "2026-02-18T07:00:00Z",
 				"endsAt": "2026-02-18T09:15:00Z",
-				"generatorURL": "https://grafana.homelab.local/alerting/grafana/uid3/view",
+				"generatorURL": "https://grafana.example.local/alerting/grafana/uid3/view",
 				"dashboardURL": "",
 				"panelURL": "",
 				"fingerprint": "resolved0000"
@@ -1325,7 +1325,7 @@ func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
 		],
 		"groupLabels": {"alertname": "TargetDown"},
 		"commonLabels": {"alertname": "TargetDown"},
-		"externalURL": "https://grafana.homelab.local/",
+		"externalURL": "https://grafana.example.local/",
 		"version": "1",
 		"title": "[FIRING:2] TargetDown"
 	}`

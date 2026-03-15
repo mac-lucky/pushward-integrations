@@ -1,6 +1,6 @@
 # pushward-bambulab
 
-Bridges a BambuLab 3D printer to [PushWard](https://github.com/mac-lucky/pushward-server) Live Activities on iOS.
+Bridges a BambuLab 3D printer to [PushWard](https://pushward.app) Live Activities on iOS.
 
 Connects directly to the printer via local MQTT over LAN — no cloud dependency. Print progress, layer count, remaining time, and nozzle temperature appear as a Live Activity on your iPhone's Dynamic Island and Lock Screen. Paused, failed, and cancelled prints are reflected in real time.
 

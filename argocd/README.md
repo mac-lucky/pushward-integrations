@@ -1,6 +1,6 @@
 # pushward-argocd
 
-Bridges ArgoCD sync notifications to [PushWard](https://github.com/mac-lucky/pushward-server) Live Activities on iOS.
+Bridges ArgoCD sync notifications to [PushWard](https://pushward.app) Live Activities on iOS.
 
 Receives webhook events from argocd-notifications and maps sync progress to a 3-step pipeline Live Activity: **Syncing -> Rolling Out -> Deployed**. Each step appears on your iPhone's Dynamic Island and Lock Screen with real-time progress updates.
 
@@ -66,7 +66,7 @@ pushward-argocd receives webhooks from [argocd-notifications](https://argo-cd.re
 
 ```yaml
 service.webhook.pushward: |
-  url: http://pushward-argocd.pushward:8090
+  url: http://pushward-argocd.<namespace>:8090
   headers:
     - name: Content-Type
       value: application/json

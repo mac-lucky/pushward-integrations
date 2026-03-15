@@ -21,7 +21,7 @@ pushward:
 #
 # Webhook service:
 #   service.webhook.pushward: |
-#     url: http://pushward-argocd.pushward:8090
+#     url: http://pushward-argocd.<namespace>:8090
 #     headers:
 #       - name: Content-Type
 #         value: application/json
