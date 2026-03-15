@@ -1,0 +1,9 @@
+{
+  "ServerId": "abc123def456abc123def456abc12345",
+  "ServerName": "My Jellyfin",
+  "ServerVersion": "10.9.0",
+  "ServerUrl": "https://jellyfin.example.com",
+  "NotificationType": "GenericUpdateNotification",
+  "Timestamp": "2024-01-15T14:30:00.0000000Z",
+  "UtcTimestamp": "2024-01-15T14:30:00.0000000Z"
+}

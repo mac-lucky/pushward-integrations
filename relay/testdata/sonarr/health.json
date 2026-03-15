@@ -1,0 +1,8 @@
+{
+  "eventType": "Health",
+  "instanceName": "Sonarr",
+  "level": "error",
+  "message": "No indexers available with RSS sync enabled, Sonarr will not grab new releases automatically",
+  "type": "IndexerRssCheck",
+  "wikiUrl": "https://wiki.servarr.com/sonarr/system#no-indexers-available-with-rss-sync-enabled"
+}

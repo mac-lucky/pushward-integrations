@@ -1,0 +1,10 @@
+{
+  "event": "added",
+  "doc_id": 42,
+  "title": "Invoice from Acme Corp",
+  "correspondent": "Acme Corp",
+  "document_type": "Invoice",
+  "doc_url": "https://paperless.example.com/documents/42/details",
+  "filename": "scan_2024.pdf",
+  "tags": "finance,receipts"
+}

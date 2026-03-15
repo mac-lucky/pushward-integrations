@@ -1,0 +1,8 @@
+{
+  "eventType": "HealthRestored",
+  "instanceName": "Radarr",
+  "level": "warning",
+  "message": "Indexer NZBgeek is available again",
+  "type": "IndexerStatusCheck",
+  "previousLevel": "warning"
+}

@@ -1,0 +1,8 @@
+{
+  "eventType": "HealthRestored",
+  "instanceName": "Sonarr",
+  "level": "error",
+  "message": "All indexers are available again",
+  "type": "IndexerRssCheck",
+  "previousLevel": "error"
+}

@@ -1,0 +1,7 @@
+{
+  "version": "1.0",
+  "title": "Unmanic - Task Completed",
+  "message": "Successfully processed: /library/movies/Inception (2010)/Inception.mkv",
+  "msgformat": "text",
+  "type": "success"
+}

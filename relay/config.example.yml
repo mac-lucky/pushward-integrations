@@ -12,7 +12,7 @@ providers:
     default_severity: "warning"
     default_icon: "exclamationmark.triangle.fill"
     priority: 5
-    cleanup_delay: 5m                     # → ended_ttl
+    cleanup_delay: 15m                     # → ended_ttl
     stale_timeout: 24h                    # → stale_ttl
 
   argocd:
@@ -21,7 +21,7 @@ providers:
     url: ""                               # ArgoCD UI URL for deep links
     sync_grace_period: 10s
     priority: 3
-    cleanup_delay: 5m
+    cleanup_delay: 15m
     stale_timeout: 30m
     end_delay: 5s
     end_display_time: 4s
@@ -33,3 +33,55 @@ providers:
     stale_timeout: 30m
     end_delay: 5s
     end_display_time: 4s
+
+  jellyfin:
+    enabled: true
+    webhook_secret: ""                    # optional X-Webhook-Secret validation
+    priority: 1
+    cleanup_delay: 15m
+    stale_timeout: 30m
+    end_delay: 5s
+    end_display_time: 4s
+    progress_debounce: 30s               # skip PlaybackProgress updates within this window
+    # Configure in Jellyfin: Dashboard > Plugins > Webhooks
+    # Add a Generic destination with URL: https://relay.example.com/jellyfin
+    # Set Authorization header: Bearer hlk_...
+    # Enable events: PlaybackStart, PlaybackStop, ItemAdded, etc.
+
+  paperless:
+    enabled: true
+    webhook_secret: ""                    # optional X-Webhook-Secret validation
+    priority: 1
+    cleanup_delay: 15m
+    stale_timeout: 30m
+    end_delay: 5s
+    end_display_time: 4s
+    # Configure in Paperless-ngx: Admin > Workflows
+    # Create a Workflow with trigger "Document Added" and action "Webhook"
+    # URL: https://relay.example.com/paperless
+    # Headers: Authorization: Bearer hlk_...
+    # Body (paste this Jinja2 template):
+    #   {"event":"added","doc_id":{{doc_id}},"title":{{doc_title|tojson}},"correspondent":{{correspondent|tojson}},"document_type":{{document_type|tojson}},"doc_url":{{doc_url|tojson}},"filename":{{original_filename|tojson}},"tags":{{tag_name_list|tojson}}}
+
+  changedetection:
+    enabled: true
+    webhook_secret: ""                    # optional X-Webhook-Secret validation
+    priority: 2
+    cleanup_delay: 15m
+    stale_timeout: 1h
+    # Configure in Changedetection.io: Settings > Notifications (or per-watch)
+    # notification_urls: posts://relay.example.com/changedetection?+Authorization=Bearer+hlk_...
+    # notification_format: custom
+    # notification_body (paste this Jinja2 template):
+    #   {"url":{{watch_url|tojson}},"title":{{watch_title|tojson}},"tag":{{watch_tag|tojson}},"diff_url":{{diff_url|tojson}},"preview_url":{{preview_url|tojson}},"triggered_text":{{triggered_text|tojson}},"timestamp":{{notification_timestamp|tojson}}}
+
+  unmanic:
+    enabled: true
+    priority: 1
+    cleanup_delay: 15m
+    stale_timeout: 30m
+    end_delay: 5s
+    end_display_time: 4s
+    # Configure in Unmanic: Settings > Notifications
+    # Add notification URL: jsons://relay.example.com/unmanic
+    # Unmanic sends Apprise json:// payloads on task completion/failure

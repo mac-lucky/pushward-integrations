@@ -1,16 +1,32 @@
 {
   "eventType": "Grab",
+  "instanceName": "Radarr",
+  "applicationUrl": "http://localhost:7878",
   "movie": {
     "id": 1,
+    "title": "Inception",
+    "year": 2010,
+    "tmdbId": 27205,
+    "imdbId": "tt1375666",
+    "folderPath": "/movies/Inception (2010)"
+  },
+  "remoteMovie": {
+    "tmdbId": 27205,
+    "imdbId": "tt1375666",
     "title": "Inception",
     "year": 2010
   },
   "release": {
     "quality": "Bluray-1080p",
-    "size": 5368709120,
+    "qualityVersion": 1,
+    "releaseGroup": "SPARKS",
+    "releaseTitle": "Inception.2010.1080p.BluRay.x264-SPARKS",
     "indexer": "NZBgeek",
-    "releaseTitle": "Inception.2010.1080p.BluRay"
+    "size": 5368709120,
+    "customFormatScore": 0,
+    "customFormats": []
   },
   "downloadClient": "SABnzbd",
+  "downloadClientType": "Sabnzbd",
   "downloadId": "SABnzbd_nzo_abc123"
 }

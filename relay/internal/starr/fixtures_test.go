@@ -40,6 +40,32 @@ func TestFixturesUnmarshal_Radarr(t *testing.T) {
 				if err := json.Unmarshal(data, &p); err != nil {
 					t.Errorf("unmarshal RadarrDownloadPayload: %v", err)
 				}
+			case "Test":
+				// Test events are valid, no specific payload to unmarshal
+			case "Health":
+				var p HealthPayload
+				if err := json.Unmarshal(data, &p); err != nil {
+					t.Errorf("unmarshal HealthPayload: %v", err)
+				}
+				if p.Message == "" {
+					t.Error("expected non-empty message")
+				}
+			case "HealthRestored":
+				var p HealthRestoredPayload
+				if err := json.Unmarshal(data, &p); err != nil {
+					t.Errorf("unmarshal HealthRestoredPayload: %v", err)
+				}
+				if p.Message == "" {
+					t.Error("expected non-empty message")
+				}
+			case "ManualInteractionRequired":
+				var p ManualInteractionPayload
+				if err := json.Unmarshal(data, &p); err != nil {
+					t.Errorf("unmarshal ManualInteractionPayload: %v", err)
+				}
+				if p.DownloadID == "" {
+					t.Error("expected non-empty downloadId")
+				}
 			default:
 				t.Errorf("unknown eventType %q", envelope.EventType)
 			}
@@ -78,6 +104,32 @@ func TestFixturesUnmarshal_Sonarr(t *testing.T) {
 				var p SonarrDownloadPayload
 				if err := json.Unmarshal(data, &p); err != nil {
 					t.Errorf("unmarshal SonarrDownloadPayload: %v", err)
+				}
+			case "Test":
+				// Test events are valid, no specific payload to unmarshal
+			case "Health":
+				var p HealthPayload
+				if err := json.Unmarshal(data, &p); err != nil {
+					t.Errorf("unmarshal HealthPayload: %v", err)
+				}
+				if p.Message == "" {
+					t.Error("expected non-empty message")
+				}
+			case "HealthRestored":
+				var p HealthRestoredPayload
+				if err := json.Unmarshal(data, &p); err != nil {
+					t.Errorf("unmarshal HealthRestoredPayload: %v", err)
+				}
+				if p.Message == "" {
+					t.Error("expected non-empty message")
+				}
+			case "ManualInteractionRequired":
+				var p ManualInteractionPayload
+				if err := json.Unmarshal(data, &p); err != nil {
+					t.Errorf("unmarshal ManualInteractionPayload: %v", err)
+				}
+				if p.DownloadID == "" {
+					t.Error("expected non-empty downloadId")
 				}
 			default:
 				t.Errorf("unknown eventType %q", envelope.EventType)

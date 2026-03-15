@@ -1,0 +1,21 @@
+{
+  "ServerId": "abc123def456abc123def456abc12345",
+  "ServerName": "My Jellyfin",
+  "ServerVersion": "10.9.0",
+  "ServerUrl": "https://jellyfin.example.com",
+  "NotificationType": "ItemAdded",
+  "Timestamp": "2024-01-15T02:00:00.0000000Z",
+  "UtcTimestamp": "2024-01-15T02:00:00.0000000Z",
+  "ItemId": "c0ffee1234567890abcdef1234567890",
+  "ItemType": "Movie",
+  "Name": "Dune: Part Two",
+  "SeriesName": "",
+  "SeasonNumber": 0,
+  "EpisodeNumber": 0,
+  "ProductionYear": 2024,
+  "RunTimeTicks": 10404000000000,
+  "RunTime": "02:54:00",
+  "PlaybackPositionTicks": 0,
+  "Provider_imdb": "tt15239678",
+  "Provider_tmdb": "693134"
+}

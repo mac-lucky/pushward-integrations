@@ -1,38 +1,44 @@
 {
-  "receiver": "pushward",
+  "receiver": "capture-webhook",
   "status": "firing",
   "alerts": [
     {
       "status": "firing",
       "labels": {
-        "alertname": "HighCPUUsage",
-        "severity": "critical",
-        "instance": "node-exporter:9100",
-        "job": "node"
+        "alertname": "TestCPUAlert",
+        "grafana_folder": "test",
+        "severity": "critical"
       },
       "annotations": {
-        "summary": "CPU usage is above 90% on node-exporter:9100",
-        "description": "CPU has been above 90% for the last 5 minutes."
+        "summary": "Test CPU alert"
       },
-      "startsAt": "2026-02-18T10:30:00Z",
+      "startsAt": "2026-03-15T06:50:40Z",
       "endsAt": "0001-01-01T00:00:00Z",
-      "generatorURL": "https://grafana.example.com/alerting/grafana/abc123def456/view",
-      "dashboardURL": "https://grafana.example.com/d/node-dashboard/node?orgId=1",
-      "panelURL": "https://grafana.example.com/d/node-dashboard/node?orgId=1&viewPanel=2",
-      "fingerprint": "abc123def456"
+      "generatorURL": "http://localhost:3000/alerting/grafana/test-cpu-alert/view?orgId=1",
+      "fingerprint": "8ac1e3c26c70c30f",
+      "silenceURL": "http://localhost:3000/alerting/silence/new?alertmanager=grafana&matcher=__alert_rule_uid__%3Dtest-cpu-alert&matcher=severity%3Dcritical&orgId=1",
+      "dashboardURL": "",
+      "panelURL": "",
+      "values": {
+        "A": 1
+      },
+      "valueString": "[ var='A' labels={} value=1 ]"
     }
   ],
-  "groupLabels": {
-    "alertname": "HighCPUUsage"
-  },
+  "groupLabels": {},
   "commonLabels": {
-    "alertname": "HighCPUUsage",
+    "alertname": "TestCPUAlert",
+    "grafana_folder": "test",
     "severity": "critical"
   },
   "commonAnnotations": {
-    "summary": "CPU usage is above 90%"
+    "summary": "Test CPU alert"
   },
-  "externalURL": "https://grafana.example.com/",
+  "externalURL": "http://localhost:3000/",
   "version": "1",
-  "groupKey": "{}:{alertname=\"HighCPUUsage\"}"
+  "groupKey": "{}:{}",
+  "truncatedAlerts": 0,
+  "orgId": 1,
+  "title": "[FIRING:1]  (TestCPUAlert test critical)",
+  "state": "alerting"
 }

@@ -11,12 +11,16 @@ import (
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/argocd"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/changedetection"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/grafana"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/jellyfin"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/paperless"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/ratelimit"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/starr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
 	"github.com/mac-lucky/pushward-integrations/shared/server"
 )
 
@@ -86,6 +90,30 @@ func main() {
 		mux.Handle("POST /radarr/webhook", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(sh.RadarrHandler()))))
 		mux.Handle("POST /sonarr/webhook", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(sh.SonarrHandler()))))
 		slog.Info("enabled provider", "provider", "starr")
+	}
+
+	if cfg.Providers.Jellyfin.Enabled {
+		jh := jellyfin.NewHandler(store, clients, &cfg.Providers.Jellyfin)
+		mux.Handle("POST /jellyfin", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(jh))))
+		slog.Info("enabled provider", "provider", "jellyfin")
+	}
+
+	if cfg.Providers.Paperless.Enabled {
+		ph := paperless.NewHandler(store, clients, &cfg.Providers.Paperless)
+		mux.Handle("POST /paperless", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(ph))))
+		slog.Info("enabled provider", "provider", "paperless")
+	}
+
+	if cfg.Providers.Changedetection.Enabled {
+		cdh := changedetection.NewHandler(clients, &cfg.Providers.Changedetection)
+		mux.Handle("POST /changedetection", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(cdh))))
+		slog.Info("enabled provider", "provider", "changedetection")
+	}
+
+	if cfg.Providers.Unmanic.Enabled {
+		uh := unmanic.NewHandler(clients, &cfg.Providers.Unmanic)
+		mux.Handle("POST /unmanic", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(uh))))
+		slog.Info("enabled provider", "provider", "unmanic")
 	}
 
 	// Background cleanup goroutine
