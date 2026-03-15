@@ -1,0 +1,19 @@
+{
+  "notification_type": "MEDIA_FAILED",
+  "event": "media.failed",
+  "subject": "Interstellar (2014)",
+  "message": "Failed to process request for Interstellar (2014).",
+  "image": "https://image.tmdb.org/t/p/w600_and_h900_bestv2/interstellar.jpg",
+  "media": {
+    "media_type": "movie",
+    "tmdbId": "157336",
+    "tvdbId": "",
+    "status": "UNKNOWN",
+    "status4k": "UNKNOWN"
+  },
+  "request": {
+    "request_id": "3",
+    "requestedBy_username": "user2"
+  },
+  "extra": []
+}

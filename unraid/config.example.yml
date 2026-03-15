@@ -1,0 +1,14 @@
+unraid:
+  host: "tower.local"
+  port: 3001
+  api_key: ""             # Unraid API key
+  server_name: "Tower"    # Display name for subtitles
+
+pushward:
+  url: "https://api.pushward.app"
+  api_key: ""             # hlk_ integration key
+  priority: 2
+  cleanup_delay: 15m
+  stale_timeout: 24h
+  end_delay: 5s
+  end_display_time: 4s

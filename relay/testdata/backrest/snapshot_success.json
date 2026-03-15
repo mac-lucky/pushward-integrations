@@ -1,0 +1,11 @@
+{
+  "event": "CONDITION_SNAPSHOT_SUCCESS",
+  "plan": "daily-backup",
+  "repo": "local-repo",
+  "snapshot_id": "abc123def",
+  "data_added": 2468421632,
+  "files_new": 42,
+  "files_changed": 156,
+  "duration_ms": 45000,
+  "error": ""
+}

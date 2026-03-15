@@ -5,11 +5,11 @@ Multi-tenant webhook gateway that consolidates multiple providers into a single 
 ## Features
 
 - **Multi-tenant** — tenants are identified by their `hlk_` integration key, extracted from every request by a shared auth middleware
-- **8 providers** — Grafana, ArgoCD, Radarr, Sonarr, Jellyfin, Paperless-ngx, Changedetection.io, Unmanic
+- **12 providers** — Grafana, ArgoCD, Radarr, Sonarr, Jellyfin, Paperless-ngx, Changedetection.io, Unmanic, Proxmox, Overseerr, Uptime Kuma, Backrest
 - **PostgreSQL state** — persistent state store with automatic TTL cleanup for alert grouping, sync tracking, and download tracking
 - **Per-tenant client pool** — LRU pool of PushWard API clients keyed by integration key (max 1000 concurrent tenants)
 - **Rate limiting** — dual-layer: per-IP (5 req/s, burst 20) and per-key (1 req/s, burst 10)
-- **Two-phase end** — activities show final content on Dynamic Island before dismissing (ArgoCD, Starr, Jellyfin, Paperless, Unmanic)
+- **Two-phase end** — activities show final content on Dynamic Island before dismissing (ArgoCD, Starr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Backrest)
 - **Webhook secret validation** — optional per-provider `X-Webhook-Secret` header check (constant-time comparison)
 - **Retry with backoff** — PushWard API calls retry up to 5 times with exponential backoff and 429 rate-limit handling
 - **Graceful shutdown** — waits for in-flight requests on SIGINT/SIGTERM
@@ -175,6 +175,101 @@ Receives Apprise `json://` notifications from Unmanic on transcoding task comple
 jsons://relay.example.com/unmanic?+Authorization=Bearer+hlk_...
 ```
 
+### Proxmox VE
+
+Receives Proxmox VE notification webhooks for backup, replication, fencing, and package update events.
+
+| Route | `POST /proxmox` |
+|---|---|
+| Template | `pipeline` (backup/replication), `alert` (fencing/package-updates) |
+| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Slug | `proxmox-<type>-<target>` |
+
+**Events:**
+
+| Event | State | Icon | Color |
+|---|---|---|---|
+| `vzdump` (start) | Backup starting | `arrow.triangle.2.circlepath` | blue |
+| `vzdump` (complete) | Backup complete | `checkmark.circle.fill` | green |
+| `vzdump` (failed) | Backup failed | `xmark.circle.fill` | red |
+| `replication` (start) | Replication starting | `arrow.triangle.2.circlepath` | blue |
+| `replication` (complete) | Replication complete | `checkmark.circle.fill` | green |
+| `replication` (failed) | Replication failed | `xmark.circle.fill` | red |
+| `fencing` | Node fenced | `exclamationmark.triangle.fill` | red |
+| `package-updates` | Updates available | `arrow.down.circle` | orange |
+
+**Setup:** In Proxmox VE, go to Datacenter > Notifications. Add a webhook target with URL `https://relay.example.com/proxmox`. Set the `Authorization` header to `Bearer hlk_...`.
+
+### Overseerr / Jellyseerr
+
+Receives Overseerr/Jellyseerr media request webhooks. Tracks request lifecycle from pending to available.
+
+| Route | `POST /overseerr` |
+|---|---|
+| Template | `pipeline` |
+| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Slug | `overseerr-<mediaType>-<tmdbId>` |
+
+**Events:**
+
+| Event | State | Step | Color |
+|---|---|---|---|
+| `MEDIA_PENDING` | Requested | 1/4 | blue |
+| `MEDIA_APPROVED` | Approved | 2/4 | blue |
+| `MEDIA_AVAILABLE` | Available | 4/4 | green |
+| `MEDIA_DECLINED` | Declined | - | red |
+| `MEDIA_FAILED` | Failed | - | red |
+
+**Setup:** In Overseerr/Jellyseerr, go to Settings > Notifications > Webhook. Set the Webhook URL to `https://relay.example.com/overseerr`. Set the `Authorization` header to `Bearer hlk_...`.
+
+### Uptime Kuma
+
+Receives Uptime Kuma monitor status webhooks. Maps monitor heartbeat status to alert notifications.
+
+| Route | `POST /uptimekuma` |
+|---|---|
+| Template | `alert` |
+| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Slug | `uptimekuma-<monitorId>` |
+
+**Events:**
+
+| Status | State | Icon | Color |
+|---|---|---|---|
+| `0` (DOWN) | Down | `xmark.circle.fill` | red |
+| `1` (UP) | Up | `checkmark.circle.fill` | green |
+| `2` (PENDING) | Pending | `clock.fill` | orange |
+| `3` (MAINTENANCE) | (skipped) | - | - |
+
+**Setup:** In Uptime Kuma, go to Settings > Notifications. Add a notification of type "Webhook" with URL `https://relay.example.com/uptimekuma`. Set the `Authorization` header to `Bearer hlk_...`.
+
+### Backrest
+
+Receives Backrest backup operation webhooks for snapshot, prune, and check operations.
+
+| Route | `POST /backrest` |
+|---|---|
+| Template | `generic` |
+| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Slug | `backrest-<planId>-<operation>` |
+
+**Events:**
+
+| Condition | State | Icon | Color |
+|---|---|---|---|
+| `CONDITION_SNAPSHOT_START` | Snapshot starting | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_SNAPSHOT_SUCCESS` | Snapshot complete | `checkmark.circle.fill` | green |
+| `CONDITION_SNAPSHOT_WARNING` | Snapshot warning | `exclamationmark.triangle.fill` | orange |
+| `CONDITION_SNAPSHOT_ERROR` | Snapshot failed | `xmark.circle.fill` | red |
+| `CONDITION_PRUNE_START` | Prune starting | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_PRUNE_SUCCESS` | Prune complete | `checkmark.circle.fill` | green |
+| `CONDITION_PRUNE_ERROR` | Prune failed | `xmark.circle.fill` | red |
+| `CONDITION_CHECK_START` | Check starting | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_CHECK_SUCCESS` | Check complete | `checkmark.circle.fill` | green |
+| `CONDITION_CHECK_ERROR` | Check failed | `xmark.circle.fill` | red |
+
+**Setup:** In Backrest, go to Settings > Notifications. Add a webhook with URL `https://relay.example.com/backrest`. Set the `Authorization` header to `Bearer hlk_...`.
+
 ## Configuration
 
 All settings can be provided via YAML config file (`-config` flag, default `config.yml`) or environment variables. Environment variables take precedence.
@@ -194,6 +289,10 @@ All settings can be provided via YAML config file (`-config` flag, default `conf
 | `PUSHWARD_JELLYFIN_WEBHOOK_SECRET` | Jellyfin `X-Webhook-Secret` validation | No |
 | `PUSHWARD_PAPERLESS_WEBHOOK_SECRET` | Paperless `X-Webhook-Secret` validation | No |
 | `PUSHWARD_CHANGEDETECTION_WEBHOOK_SECRET` | Changedetection `X-Webhook-Secret` validation | No |
+| `PUSHWARD_PROXMOX_WEBHOOK_SECRET` | Proxmox `X-Webhook-Secret` validation | No |
+| `PUSHWARD_OVERSEERR_WEBHOOK_SECRET` | Overseerr `X-Webhook-Secret` validation | No |
+| `PUSHWARD_UPTIMEKUMA_WEBHOOK_SECRET` | Uptime Kuma `X-Webhook-Secret` validation | No |
+| `PUSHWARD_BACKREST_WEBHOOK_SECRET` | Backrest `X-Webhook-Secret` validation | No |
 
 See [`config.example.yml`](./config.example.yml) for the full config with per-provider settings.
 
@@ -224,6 +323,10 @@ services:
 | POST | `/paperless` | Paperless-ngx workflow webhooks |
 | POST | `/changedetection` | Changedetection.io notifications |
 | POST | `/unmanic` | Unmanic Apprise notifications |
+| POST | `/proxmox` | Proxmox VE notification webhooks |
+| POST | `/overseerr` | Overseerr/Jellyseerr media request webhooks |
+| POST | `/uptimekuma` | Uptime Kuma monitor status webhooks |
+| POST | `/backrest` | Backrest backup/prune/check webhooks |
 | GET | `/health` | Health check (returns `ok`) |
 
 ## How It Works
@@ -236,3 +339,40 @@ services:
 6. **State store** — PostgreSQL stores tracked state (alert instances, sync progress, download slugs) with automatic TTL expiry
 7. **Two-phase end** — on completion events, handlers send a final ONGOING update (so the content appears on Dynamic Island) then ENDED after a display delay
 8. **Background cleanup** — a goroutine runs every 30s to delete expired state store entries
+
+## Authentication
+
+### Bearer Token (most providers)
+
+Most providers authenticate with a Bearer token containing the `hlk_` integration key in the `Authorization` header:
+
+- Grafana
+- ArgoCD
+- Jellyfin
+- Paperless-ngx
+- Changedetection.io
+- Unmanic
+- Proxmox
+- Overseerr
+- Uptime Kuma
+- Backrest
+
+### HTTP Basic Auth (Radarr/Sonarr only)
+
+Radarr and Sonarr send the `hlk_` integration key as the Basic Auth password. The username field is ignored.
+
+### Optional Webhook Secret
+
+In addition to the `hlk_` integration key (which identifies the tenant), providers can optionally validate an `X-Webhook-Secret` header for an extra layer of authentication. The `hlk_` key is always required and serves as the primary auth mechanism; the webhook secret is a secondary check that verifies the request originated from the expected service instance.
+
+Providers supporting `X-Webhook-Secret`:
+
+- Grafana
+- ArgoCD
+- Jellyfin
+- Paperless-ngx
+- Changedetection.io
+- Proxmox
+- Overseerr
+- Uptime Kuma
+- Backrest

@@ -1,0 +1,19 @@
+{
+  "notification_type": "MEDIA_APPROVED",
+  "event": "media.approved",
+  "subject": "Inception (2010)",
+  "message": "Your request for Inception (2010) has been approved.",
+  "image": "https://image.tmdb.org/t/p/w600_and_h900_bestv2/inception.jpg",
+  "media": {
+    "media_type": "movie",
+    "tmdbId": "27205",
+    "tvdbId": "",
+    "status": "PROCESSING",
+    "status4k": "UNKNOWN"
+  },
+  "request": {
+    "request_id": "1",
+    "requestedBy_username": "admin"
+  },
+  "extra": []
+}

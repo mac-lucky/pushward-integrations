@@ -1,0 +1,17 @@
+{
+  "monitor": {
+    "id": 2,
+    "name": "API Server",
+    "url": "https://api.example.com/health",
+    "type": "http"
+  },
+  "heartbeat": {
+    "status": 2,
+    "time": "2024-01-15T10:30:00.000Z",
+    "msg": "Request timed out",
+    "ping": null,
+    "duration": 0,
+    "important": false
+  },
+  "msg": "API Server is PENDING"
+}

@@ -1,0 +1,17 @@
+{
+  "monitor": {
+    "id": 1,
+    "name": "My Website",
+    "url": "https://example.com",
+    "type": "http"
+  },
+  "heartbeat": {
+    "status": 0,
+    "time": "2024-01-15T10:30:00.000Z",
+    "msg": "Connection refused",
+    "ping": null,
+    "duration": 0,
+    "important": true
+  },
+  "msg": "My Website is DOWN"
+}

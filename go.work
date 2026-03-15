@@ -17,3 +17,7 @@ use ./starr
 use ./mqtt
 
 use ./relay
+
+use ./unraid
+
+use ./octoprint

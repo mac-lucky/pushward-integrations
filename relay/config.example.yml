@@ -85,3 +85,51 @@ providers:
     # Configure in Unmanic: Settings > Notifications
     # Add notification URL: jsons://relay.example.com/unmanic
     # Unmanic sends Apprise json:// payloads on task completion/failure
+
+  proxmox:
+    enabled: true
+    webhook_secret: ""                    # optional X-Webhook-Secret validation
+    priority: 4
+    cleanup_delay: 15m
+    stale_timeout: 1h
+    end_delay: 5s
+    end_display_time: 4s
+    # Configure in Proxmox VE: Datacenter > Notifications
+    # Add a webhook target with URL: https://relay.example.com/proxmox
+    # Set header: Authorization: Bearer hlk_...
+
+  overseerr:
+    enabled: true
+    webhook_secret: ""                    # optional X-Webhook-Secret validation
+    priority: 1
+    cleanup_delay: 15m
+    stale_timeout: 30m
+    end_delay: 5s
+    end_display_time: 4s
+    # Configure in Overseerr/Jellyseerr: Settings > Notifications > Webhook
+    # Set Webhook URL: https://relay.example.com/overseerr
+    # Set Authorization header: Bearer hlk_...
+
+  uptimekuma:
+    enabled: true
+    webhook_secret: ""                    # optional X-Webhook-Secret validation
+    priority: 5
+    cleanup_delay: 15m
+    stale_timeout: 24h
+    end_delay: 5s
+    end_display_time: 4s
+    # Configure in Uptime Kuma: Settings > Notifications
+    # Add notification type "Webhook" with URL: https://relay.example.com/uptimekuma
+    # Set header: Authorization: Bearer hlk_...
+
+  backrest:
+    enabled: true
+    webhook_secret: ""                    # optional X-Webhook-Secret validation
+    priority: 2
+    cleanup_delay: 15m
+    stale_timeout: 1h
+    end_delay: 5s
+    end_display_time: 4s
+    # Configure in Backrest: Settings > Notifications
+    # Add a webhook with URL: https://relay.example.com/backrest
+    # Set header: Authorization: Bearer hlk_...

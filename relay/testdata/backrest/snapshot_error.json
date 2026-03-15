@@ -1,0 +1,11 @@
+{
+  "event": "CONDITION_SNAPSHOT_ERROR",
+  "plan": "daily-backup",
+  "repo": "local-repo",
+  "snapshot_id": "",
+  "data_added": 0,
+  "files_new": 0,
+  "files_changed": 0,
+  "duration_ms": 5000,
+  "error": "repository not found"
+}

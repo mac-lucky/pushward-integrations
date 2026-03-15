@@ -1,0 +1,7 @@
+{
+  "type": "fencing",
+  "title": "Node pve2 fenced",
+  "message": "Node pve2 has been fenced by HA manager",
+  "severity": "error",
+  "hostname": "pve2"
+}

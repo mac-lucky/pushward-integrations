@@ -1,0 +1,7 @@
+{
+  "type": "vzdump",
+  "title": "Backup of VM 100 started",
+  "message": "Starting backup of VM 100 (pbs-full)",
+  "severity": "info",
+  "hostname": "pve1"
+}
