@@ -1,0 +1,7 @@
+{
+  "version": "1.0",
+  "title": "Unmanic - Task Failed",
+  "message": "Failed to process: /library/movies/Corrupted.mkv",
+  "msgformat": "text",
+  "type": "failure"
+}

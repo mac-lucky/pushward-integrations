@@ -44,6 +44,32 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handleSonarrDownload(ctx, userKey, &p)
+	case "Test":
+		slog.Info("test notification received", "provider", "sonarr", "user", userKey)
+	case "Health":
+		var p HealthPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			slog.Error("failed to decode health payload", "error", err)
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+		h.handleHealth(ctx, userKey, "sonarr", &p)
+	case "HealthRestored":
+		var p HealthRestoredPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			slog.Error("failed to decode health restored payload", "error", err)
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+		h.handleHealthRestored(ctx, userKey, "sonarr", &p)
+	case "ManualInteractionRequired":
+		var p ManualInteractionPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			slog.Error("failed to decode manual interaction payload", "error", err)
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+		h.handleManualInteraction(ctx, userKey, "sonarr", &p)
 	default:
 		slog.Debug("ignored event", "eventType", envelope.EventType)
 	}

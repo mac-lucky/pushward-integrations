@@ -1,0 +1,25 @@
+{
+  "eventType": "Test",
+  "instanceName": "Sonarr",
+  "series": {
+    "id": 1,
+    "title": "Test Title",
+    "titleSlug": "test-title",
+    "path": "/tv/Test Title",
+    "tvdbId": 1234567,
+    "tvMazeId": 1,
+    "imdbId": "tt0000001",
+    "type": "Standard",
+    "year": 2024
+  },
+  "episodes": [
+    {
+      "id": 1,
+      "episodeNumber": 1,
+      "seasonNumber": 1,
+      "title": "Test Title",
+      "airDate": "2024-01-01",
+      "airDateUtc": "2024-01-01T00:00:00Z"
+    }
+  ]
+}

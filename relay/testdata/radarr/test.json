@@ -1,0 +1,28 @@
+{
+  "eventType": "Test",
+  "instanceName": "Radarr",
+  "applicationUrl": "",
+  "movie": {
+    "id": 1,
+    "title": "Test Title",
+    "year": 1970,
+    "tmdbId": 0,
+    "folderPath": "C:\\testpath",
+    "releaseDate": "1970-01-01"
+  },
+  "remoteMovie": {
+    "tmdbId": 1234,
+    "imdbId": "5678",
+    "title": "Test title",
+    "year": 1970
+  },
+  "release": {
+    "quality": "Test Quality",
+    "qualityVersion": 1,
+    "releaseGroup": "Test Group",
+    "releaseTitle": "Test Title",
+    "indexer": "Test Indexer",
+    "size": 9999999,
+    "customFormatScore": 0
+  }
+}

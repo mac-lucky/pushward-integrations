@@ -1,0 +1,26 @@
+{
+  "eventType": "ManualInteractionRequired",
+  "instanceName": "Radarr",
+  "movie": {
+    "id": 1,
+    "title": "Inception",
+    "year": 2010,
+    "tmdbId": 27205,
+    "imdbId": "tt1375666",
+    "folderPath": "/movies/Inception (2010)"
+  },
+  "downloadInfo": {
+    "quality": "Bluray-1080p",
+    "title": "Inception.2010.1080p.BluRay.x264-SPARKS",
+    "status": "Warning",
+    "statusMessages": [
+      {
+        "title": "Inception.2010.1080p.BluRay.x264-SPARKS",
+        "messages": ["No files found are eligible for import in /downloads/Inception.2010.1080p.BluRay.x264-SPARKS"]
+      }
+    ]
+  },
+  "downloadClient": "SABnzbd",
+  "downloadClientType": "Sabnzbd",
+  "downloadId": "SABnzbd_nzo_abc123"
+}

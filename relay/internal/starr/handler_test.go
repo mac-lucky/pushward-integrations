@@ -654,6 +654,330 @@ func TestSonarrDownloadWithoutGrab(t *testing.T) {
 	}
 }
 
+// ============================================================
+// Radarr Test Event
+// ============================================================
+
+func TestRadarrTestEvent(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := sendRadarr(t, h, `{"eventType": "Test"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 calls for Test event, got %d", len(recorded))
+	}
+}
+
+// ============================================================
+// Health / HealthRestored Tests
+// ============================================================
+
+func TestRadarrHealth(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := sendRadarr(t, h, `{
+		"eventType": "Health",
+		"level": "warning",
+		"message": "Indexer NZBgeek is unavailable due to failures",
+		"type": "IndexerStatusCheck",
+		"wikiUrl": "https://wiki.servarr.com/radarr/system#indexers"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls (create + update), got %d", len(recorded))
+	}
+
+	// Create
+	var createReq pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
+	if createReq.Name != "Radarr Health" {
+		t.Errorf("expected name 'Radarr Health', got %s", createReq.Name)
+	}
+
+	// ONGOING update
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.State != "ONGOING" {
+		t.Errorf("expected ONGOING, got %s", update.State)
+	}
+	if update.Content.Template != "alert" {
+		t.Errorf("expected template alert, got %s", update.Content.Template)
+	}
+	if update.Content.Severity != "warning" {
+		t.Errorf("expected severity warning, got %s", update.Content.Severity)
+	}
+	if update.Content.Icon != "exclamationmark.triangle.fill" {
+		t.Errorf("expected warning icon, got %s", update.Content.Icon)
+	}
+	if update.Content.AccentColor != "#FF9500" {
+		t.Errorf("expected orange color, got %s", update.Content.AccentColor)
+	}
+	if update.Content.URL != "https://wiki.servarr.com/radarr/system#indexers" {
+		t.Errorf("expected wiki URL, got %s", update.Content.URL)
+	}
+}
+
+func TestRadarrHealthError(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := sendRadarr(t, h, `{
+		"eventType": "Health",
+		"level": "error",
+		"message": "Disk space low",
+		"type": "DiskSpaceCheck",
+		"wikiUrl": "https://wiki.servarr.com"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.Severity != "error" {
+		t.Errorf("expected severity error, got %s", update.Content.Severity)
+	}
+	if update.Content.Icon != "exclamationmark.octagon.fill" {
+		t.Errorf("expected error icon, got %s", update.Content.Icon)
+	}
+	if update.Content.AccentColor != "#FF3B30" {
+		t.Errorf("expected red color, got %s", update.Content.AccentColor)
+	}
+}
+
+func TestRadarrHealthAndRestored(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	// Health
+	sendRadarr(t, h, `{
+		"eventType": "Health",
+		"level": "warning",
+		"message": "Indexer NZBgeek is unavailable",
+		"type": "IndexerStatusCheck",
+		"wikiUrl": "https://wiki.servarr.com"
+	}`)
+
+	// HealthRestored
+	sendRadarr(t, h, `{
+		"eventType": "HealthRestored",
+		"level": "warning",
+		"message": "Indexer NZBgeek is available again",
+		"type": "IndexerStatusCheck",
+		"previousLevel": "warning"
+	}`)
+
+	time.Sleep(100 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + health_update + phase1(ONGOING) + phase2(ENDED) = 4
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	}
+
+	// Phase 1: ONGOING with restored content
+	var phase1 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
+	if phase1.State != "ONGOING" {
+		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
+	}
+	if phase1.Content.Icon != "checkmark.circle.fill" {
+		t.Errorf("expected checkmark icon, got %s", phase1.Content.Icon)
+	}
+	if phase1.Content.AccentColor != "#34C759" {
+		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
+	}
+
+	// Phase 2: ENDED
+	var phase2 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
+	if phase2.State != "ENDED" {
+		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
+	}
+}
+
+func TestSonarrHealth(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := sendSonarr(t, h, `{
+		"eventType": "Health",
+		"level": "error",
+		"message": "No indexers available",
+		"type": "IndexerRssCheck",
+		"wikiUrl": "https://wiki.servarr.com/sonarr"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	}
+
+	var createReq pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
+	if createReq.Name != "Sonarr Health" {
+		t.Errorf("expected name 'Sonarr Health', got %s", createReq.Name)
+	}
+}
+
+// ============================================================
+// ManualInteractionRequired Tests
+// ============================================================
+
+func TestRadarrManualInteraction(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	// Grab first to create a tracked download
+	sendRadarr(t, h, `{
+		"eventType": "Grab",
+		"movie": {"id": 1, "title": "Inception", "year": 2010},
+		"release": {"quality": "Bluray-1080p", "size": 5368709120},
+		"downloadClient": "SABnzbd",
+		"downloadId": "SABnzbd_nzo_manual1"
+	}`)
+
+	// ManualInteractionRequired
+	sendRadarr(t, h, `{
+		"eventType": "ManualInteractionRequired",
+		"downloadId": "SABnzbd_nzo_manual1",
+		"downloadInfo": {
+			"quality": "Bluray-1080p",
+			"title": "Inception.2010.1080p.BluRay.x264-SPARKS",
+			"status": "Warning",
+			"statusMessages": [{
+				"title": "Inception.2010.1080p.BluRay.x264-SPARKS",
+				"messages": ["No files found eligible for import"]
+			}]
+		}
+	}`)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + grab_update + manual_update = 3
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(recorded))
+	}
+
+	// Verify manual interaction update
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
+	if update.State != "ONGOING" {
+		t.Errorf("expected ONGOING, got %s", update.State)
+	}
+	if update.Content.State != "Import Failed" {
+		t.Errorf("expected state 'Import Failed', got %s", update.Content.State)
+	}
+	if update.Content.Icon != "exclamationmark.triangle.fill" {
+		t.Errorf("expected warning icon, got %s", update.Content.Icon)
+	}
+	if update.Content.AccentColor != "#FF9500" {
+		t.Errorf("expected orange color, got %s", update.Content.AccentColor)
+	}
+}
+
+func TestRadarrManualInteractionUntracked(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	// ManualInteractionRequired without a prior Grab — should be silently ignored
+	w := sendRadarr(t, h, `{
+		"eventType": "ManualInteractionRequired",
+		"downloadId": "SABnzbd_nzo_untracked",
+		"downloadInfo": {
+			"quality": "Bluray-1080p",
+			"title": "Movie.mkv",
+			"status": "Warning",
+			"statusMessages": []
+		}
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 calls for untracked manual interaction, got %d", len(recorded))
+	}
+}
+
+func TestRadarrGrabManualInteractionDownload(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	// Grab
+	sendRadarr(t, h, `{
+		"eventType": "Grab",
+		"movie": {"id": 1, "title": "Inception", "year": 2010},
+		"release": {"quality": "Bluray-1080p", "size": 5368709120},
+		"downloadClient": "SABnzbd",
+		"downloadId": "SABnzbd_nzo_full"
+	}`)
+
+	// ManualInteractionRequired
+	sendRadarr(t, h, `{
+		"eventType": "ManualInteractionRequired",
+		"downloadId": "SABnzbd_nzo_full",
+		"downloadInfo": {
+			"quality": "Bluray-1080p",
+			"title": "Inception.2010.1080p.BluRay",
+			"status": "Warning",
+			"statusMessages": [{"title": "test", "messages": ["No files found"]}]
+		}
+	}`)
+
+	// Download (eventually succeeds)
+	sendRadarr(t, h, `{
+		"eventType": "Download",
+		"movie": {"id": 1, "title": "Inception", "year": 2010},
+		"movieFile": {"relativePath": "Inception.mkv", "quality": "Bluray-1080p", "size": 5368709120},
+		"isUpgrade": false,
+		"downloadClient": "SABnzbd",
+		"downloadId": "SABnzbd_nzo_full"
+	}`)
+
+	time.Sleep(100 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + grab_update + manual_update + phase1(ONGOING) + phase2(ENDED) = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	}
+
+	// Phase 2 should be ENDED with "Imported"
+	var phase2 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
+	if phase2.State != "ENDED" {
+		t.Errorf("expected ENDED, got %s", phase2.State)
+	}
+	if phase2.Content.State != "Imported" {
+		t.Errorf("expected 'Imported', got %s", phase2.Content.State)
+	}
+}
+
+func TestSonarrTestEvent(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := sendSonarr(t, h, `{"eventType": "Test"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 calls for Test event, got %d", len(recorded))
+	}
+}
+
 func TestSonarrBasicAuth_KeyInPassword(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 

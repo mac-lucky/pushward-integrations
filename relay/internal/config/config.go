@@ -24,9 +24,13 @@ type DatabaseConfig struct {
 
 // ProvidersConfig holds per-provider settings.
 type ProvidersConfig struct {
-	Grafana GrafanaConfig `yaml:"grafana"`
-	ArgoCD  ArgoCDConfig  `yaml:"argocd"`
-	Starr   StarrConfig   `yaml:"starr"`
+	Grafana         GrafanaConfig         `yaml:"grafana"`
+	ArgoCD          ArgoCDConfig          `yaml:"argocd"`
+	Starr           StarrConfig           `yaml:"starr"`
+	Jellyfin        JellyfinConfig        `yaml:"jellyfin"`
+	Paperless       PaperlessConfig       `yaml:"paperless"`
+	Changedetection ChangedetectionConfig `yaml:"changedetection"`
+	Unmanic         UnmanicConfig         `yaml:"unmanic"`
 }
 
 // GrafanaConfig holds Grafana-specific settings.
@@ -67,6 +71,48 @@ type StarrConfig struct {
 	EndDisplayTime time.Duration `yaml:"end_display_time"`
 }
 
+// JellyfinConfig holds Jellyfin-specific settings.
+type JellyfinConfig struct {
+	Enabled          bool          `yaml:"enabled"`
+	WebhookSecret    string        `yaml:"webhook_secret"`
+	Priority         int           `yaml:"priority"`
+	CleanupDelay     time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout     time.Duration `yaml:"stale_timeout"`
+	EndDelay         time.Duration `yaml:"end_delay"`
+	EndDisplayTime   time.Duration `yaml:"end_display_time"`
+	ProgressDebounce time.Duration `yaml:"progress_debounce"`
+}
+
+// PaperlessConfig holds Paperless-ngx-specific settings.
+type PaperlessConfig struct {
+	Enabled      bool          `yaml:"enabled"`
+	WebhookSecret string       `yaml:"webhook_secret"`
+	Priority     int           `yaml:"priority"`
+	CleanupDelay time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout time.Duration `yaml:"stale_timeout"`
+	EndDelay     time.Duration `yaml:"end_delay"`
+	EndDisplayTime time.Duration `yaml:"end_display_time"`
+}
+
+// ChangedetectionConfig holds Changedetection.io-specific settings.
+type ChangedetectionConfig struct {
+	Enabled      bool          `yaml:"enabled"`
+	WebhookSecret string       `yaml:"webhook_secret"`
+	Priority     int           `yaml:"priority"`
+	CleanupDelay time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout time.Duration `yaml:"stale_timeout"`
+}
+
+// UnmanicConfig holds Unmanic-specific settings.
+type UnmanicConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	Priority       int           `yaml:"priority"`
+	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout   time.Duration `yaml:"stale_timeout"`
+	EndDelay       time.Duration `yaml:"end_delay"`
+	EndDisplayTime time.Duration `yaml:"end_display_time"`
+}
+
 // Load reads the config from a YAML file and applies environment variable overrides.
 func Load(path string) (*Config, error) {
 	cfg := &Config{
@@ -80,19 +126,50 @@ func Load(path string) (*Config, error) {
 				DefaultSeverity: "warning",
 				DefaultIcon:     "exclamationmark.triangle.fill",
 				Priority:        5,
-				CleanupDelay:    5 * time.Minute,
+				CleanupDelay:    15 * time.Minute,
 				StaleTimeout:    24 * time.Hour,
 			},
 			ArgoCD: ArgoCDConfig{
 				Enabled:         true,
 				SyncGracePeriod: 10 * time.Second,
 				Priority:        3,
-				CleanupDelay:    5 * time.Minute,
+				CleanupDelay:    15 * time.Minute,
 				StaleTimeout:    30 * time.Minute,
 				EndDelay:        5 * time.Second,
 				EndDisplayTime:  4 * time.Second,
 			},
 			Starr: StarrConfig{
+				Enabled:        true,
+				Priority:       1,
+				CleanupDelay:   15 * time.Minute,
+				StaleTimeout:   30 * time.Minute,
+				EndDelay:       5 * time.Second,
+				EndDisplayTime: 4 * time.Second,
+			},
+			Jellyfin: JellyfinConfig{
+				Enabled:          true,
+				Priority:         1,
+				CleanupDelay:     15 * time.Minute,
+				StaleTimeout:     30 * time.Minute,
+				EndDelay:         5 * time.Second,
+				EndDisplayTime:   4 * time.Second,
+				ProgressDebounce: 30 * time.Second,
+			},
+			Paperless: PaperlessConfig{
+				Enabled:        true,
+				Priority:       1,
+				CleanupDelay:   15 * time.Minute,
+				StaleTimeout:   30 * time.Minute,
+				EndDelay:       5 * time.Second,
+				EndDisplayTime: 4 * time.Second,
+			},
+			Changedetection: ChangedetectionConfig{
+				Enabled:      true,
+				Priority:     2,
+				CleanupDelay: 15 * time.Minute,
+				StaleTimeout: 1 * time.Hour,
+			},
+			Unmanic: UnmanicConfig{
 				Enabled:        true,
 				Priority:       1,
 				CleanupDelay:   15 * time.Minute,
@@ -159,4 +236,18 @@ func (cfg *Config) applyEnvOverrides() {
 		}
 	}
 
+	// Jellyfin overrides
+	if v := os.Getenv("PUSHWARD_JELLYFIN_WEBHOOK_SECRET"); v != "" {
+		cfg.Providers.Jellyfin.WebhookSecret = v
+	}
+
+	// Paperless overrides
+	if v := os.Getenv("PUSHWARD_PAPERLESS_WEBHOOK_SECRET"); v != "" {
+		cfg.Providers.Paperless.WebhookSecret = v
+	}
+
+	// Changedetection overrides
+	if v := os.Getenv("PUSHWARD_CHANGEDETECTION_WEBHOOK_SECRET"); v != "" {
+		cfg.Providers.Changedetection.WebhookSecret = v
+	}
 }

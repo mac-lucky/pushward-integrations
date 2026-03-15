@@ -1,0 +1,9 @@
+{
+  "url": "https://example.com/product/widget",
+  "title": "Widget Product Page",
+  "tag": "prices",
+  "diff_url": "https://cd.example.com/diff/550e8400-e29b-41d4-a716-446655440000?op=rendered",
+  "preview_url": "https://cd.example.com/preview/550e8400-e29b-41d4-a716-446655440000",
+  "triggered_text": "Price: $29.99",
+  "timestamp": "2024-01-15T10:30:00Z"
+}

@@ -44,6 +44,32 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.handleRadarrDownload(ctx, userKey, &p)
+	case "Test":
+		slog.Info("test notification received", "provider", "radarr", "user", userKey)
+	case "Health":
+		var p HealthPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			slog.Error("failed to decode health payload", "error", err)
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+		h.handleHealth(ctx, userKey, "radarr", &p)
+	case "HealthRestored":
+		var p HealthRestoredPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			slog.Error("failed to decode health restored payload", "error", err)
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+		h.handleHealthRestored(ctx, userKey, "radarr", &p)
+	case "ManualInteractionRequired":
+		var p ManualInteractionPayload
+		if err := json.Unmarshal(raw, &p); err != nil {
+			slog.Error("failed to decode manual interaction payload", "error", err)
+			http.Error(w, "invalid payload", http.StatusBadRequest)
+			return
+		}
+		h.handleManualInteraction(ctx, userKey, "radarr", &p)
 	default:
 		slog.Debug("ignored event", "event_type", envelope.EventType)
 	}

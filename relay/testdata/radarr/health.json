@@ -1,0 +1,8 @@
+{
+  "eventType": "Health",
+  "instanceName": "Radarr",
+  "level": "warning",
+  "message": "Indexer NZBgeek is unavailable due to failures",
+  "type": "IndexerStatusCheck",
+  "wikiUrl": "https://wiki.servarr.com/radarr/system#indexers-are-unavailable-due-to-failures"
+}

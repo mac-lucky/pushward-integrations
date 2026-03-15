@@ -1,5 +1,5 @@
 {
-  "eventType": "Grab",
+  "eventType": "ManualInteractionRequired",
   "instanceName": "Sonarr",
   "series": {
     "id": 1,
@@ -7,8 +7,6 @@
     "titleSlug": "breaking-bad",
     "path": "/tv/Breaking Bad",
     "tvdbId": 81189,
-    "tvMazeId": 169,
-    "imdbId": "tt0903747",
     "type": "Standard",
     "year": 2008
   },
@@ -17,20 +15,19 @@
       "id": 67,
       "episodeNumber": 5,
       "seasonNumber": 2,
-      "title": "Breakage",
-      "airDate": "2009-03-29",
-      "airDateUtc": "2009-03-30T02:00:00Z"
+      "title": "Breakage"
     }
   ],
-  "release": {
+  "downloadInfo": {
     "quality": "HDTV-1080p",
-    "qualityVersion": 1,
-    "releaseTitle": "Breaking.Bad.S02E05.1080p.HDTV.x264-GROUP",
-    "indexer": "NZBgeek",
-    "size": 1500000000,
-    "releaseGroup": "GROUP",
-    "customFormatScore": 0,
-    "customFormats": []
+    "title": "Breaking.Bad.S02E05.1080p.HDTV.x264-GROUP",
+    "status": "Warning",
+    "statusMessages": [
+      {
+        "title": "Breaking.Bad.S02E05.1080p.HDTV.x264-GROUP",
+        "messages": ["No files found are eligible for import in /downloads/Breaking.Bad.S02E05.1080p.HDTV.x264-GROUP"]
+      }
+    ]
   },
   "downloadClient": "SABnzbd",
   "downloadClientType": "Sabnzbd",
