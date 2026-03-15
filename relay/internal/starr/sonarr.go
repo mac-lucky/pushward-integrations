@@ -106,15 +106,19 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, p *Sonar
 		return
 	}
 
+	step := 1
+	total := 2
 	req := pushward.UpdateRequest{
 		State: "ONGOING",
 		Content: pushward.Content{
-			Template:    "generic",
-			Progress:    0,
+			Template:    "pipeline",
+			Progress:    float64(step) / float64(total),
 			State:       "Grabbed",
 			Icon:        "arrow.down.circle",
 			Subtitle:    subtitle,
 			AccentColor: "#007AFF",
+			CurrentStep: &step,
+			TotalSteps:  &total,
 		},
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
@@ -164,14 +168,18 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, p *S
 		state = "Upgraded"
 	}
 
+	step := 2
+	total := 2
 	subtitle := FormatSubtitle(p.Series, p.Episodes, quality)
 	content := pushward.Content{
-		Template:    "generic",
+		Template:    "pipeline",
 		Progress:    1.0,
 		State:       state,
 		Icon:        "checkmark.circle.fill",
 		Subtitle:    subtitle,
 		AccentColor: "#34C759",
+		CurrentStep: &step,
+		TotalSteps:  &total,
 	}
 
 	h.scheduleEnd(userKey, mapKey, slug, content)
