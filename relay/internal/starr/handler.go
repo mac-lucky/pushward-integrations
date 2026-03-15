@@ -291,16 +291,20 @@ func (h *Handler) handleManualInteraction(ctx context.Context, userKey, provider
 
 	subtitle := titleCase(provider) + " \u00b7 " + truncate(reason, 50)
 
+	step := 1
+	total := 2
 	cl := h.clients.Get(userKey)
 	req := pushward.UpdateRequest{
 		State: "ONGOING",
 		Content: pushward.Content{
-			Template:    "generic",
-			Progress:    0.5,
+			Template:    "pipeline",
+			Progress:    float64(step) / float64(total),
 			State:       "Import Failed",
 			Icon:        "exclamationmark.triangle.fill",
 			Subtitle:    subtitle,
 			AccentColor: "#FF9500",
+			CurrentStep: &step,
+			TotalSteps:  &total,
 		},
 	}
 

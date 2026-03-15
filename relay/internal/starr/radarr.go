@@ -123,15 +123,19 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, p *Radar
 	}
 	slog.Info("created activity", "slug", slug, "title", title)
 
+	step := 1
+	total := 2
 	req := pushward.UpdateRequest{
 		State: "ONGOING",
 		Content: pushward.Content{
-			Template:    "generic",
-			Progress:    0,
+			Template:    "pipeline",
+			Progress:    float64(step) / float64(total),
 			State:       "Grabbed",
 			Icon:        "arrow.down.circle",
 			Subtitle:    radarrSubtitle(title, p.Release.Quality),
 			AccentColor: "#007AFF",
+			CurrentStep: &step,
+			TotalSteps:  &total,
 		},
 	}
 
@@ -180,13 +184,17 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, p *R
 		state = "Upgraded"
 	}
 
+	step := 2
+	total := 2
 	content := pushward.Content{
-		Template:    "generic",
+		Template:    "pipeline",
 		Progress:    1.0,
 		State:       state,
 		Icon:        "checkmark.circle.fill",
 		Subtitle:    radarrSubtitle(title, p.MovieFile.Quality),
 		AccentColor: "#34C759",
+		CurrentStep: &step,
+		TotalSteps:  &total,
 	}
 
 	h.scheduleEnd(userKey, mapKey, slug, content)
