@@ -31,6 +31,10 @@ type ProvidersConfig struct {
 	Paperless       PaperlessConfig       `yaml:"paperless"`
 	Changedetection ChangedetectionConfig `yaml:"changedetection"`
 	Unmanic         UnmanicConfig         `yaml:"unmanic"`
+	Proxmox         ProxmoxConfig         `yaml:"proxmox"`
+	Overseerr       OverseerrConfig       `yaml:"overseerr"`
+	UptimeKuma      UptimeKumaConfig      `yaml:"uptimekuma"`
+	Backrest        BackrestConfig        `yaml:"backrest"`
 }
 
 // GrafanaConfig holds Grafana-specific settings.
@@ -113,6 +117,50 @@ type UnmanicConfig struct {
 	EndDisplayTime time.Duration `yaml:"end_display_time"`
 }
 
+// ProxmoxConfig holds Proxmox VE-specific settings.
+type ProxmoxConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	WebhookSecret  string        `yaml:"webhook_secret"`
+	Priority       int           `yaml:"priority"`
+	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout   time.Duration `yaml:"stale_timeout"`
+	EndDelay       time.Duration `yaml:"end_delay"`
+	EndDisplayTime time.Duration `yaml:"end_display_time"`
+}
+
+// OverseerrConfig holds Overseerr/Jellyseerr-specific settings.
+type OverseerrConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	WebhookSecret  string        `yaml:"webhook_secret"`
+	Priority       int           `yaml:"priority"`
+	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout   time.Duration `yaml:"stale_timeout"`
+	EndDelay       time.Duration `yaml:"end_delay"`
+	EndDisplayTime time.Duration `yaml:"end_display_time"`
+}
+
+// BackrestConfig holds Backrest-specific settings.
+type BackrestConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	WebhookSecret  string        `yaml:"webhook_secret"`
+	Priority       int           `yaml:"priority"`
+	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout   time.Duration `yaml:"stale_timeout"`
+	EndDelay       time.Duration `yaml:"end_delay"`
+	EndDisplayTime time.Duration `yaml:"end_display_time"`
+}
+
+// UptimeKumaConfig holds Uptime Kuma-specific settings.
+type UptimeKumaConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	WebhookSecret  string        `yaml:"webhook_secret"`
+	Priority       int           `yaml:"priority"`
+	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout   time.Duration `yaml:"stale_timeout"`
+	EndDelay       time.Duration `yaml:"end_delay"`
+	EndDisplayTime time.Duration `yaml:"end_display_time"`
+}
+
 // Load reads the config from a YAML file and applies environment variable overrides.
 func Load(path string) (*Config, error) {
 	cfg := &Config{
@@ -174,6 +222,38 @@ func Load(path string) (*Config, error) {
 				Priority:       1,
 				CleanupDelay:   15 * time.Minute,
 				StaleTimeout:   30 * time.Minute,
+				EndDelay:       5 * time.Second,
+				EndDisplayTime: 4 * time.Second,
+			},
+			Proxmox: ProxmoxConfig{
+				Enabled:        true,
+				Priority:       4,
+				CleanupDelay:   15 * time.Minute,
+				StaleTimeout:   1 * time.Hour,
+				EndDelay:       5 * time.Second,
+				EndDisplayTime: 4 * time.Second,
+			},
+			Overseerr: OverseerrConfig{
+				Enabled:        true,
+				Priority:       1,
+				CleanupDelay:   15 * time.Minute,
+				StaleTimeout:   30 * time.Minute,
+				EndDelay:       5 * time.Second,
+				EndDisplayTime: 4 * time.Second,
+			},
+			UptimeKuma: UptimeKumaConfig{
+				Enabled:        true,
+				Priority:       5,
+				CleanupDelay:   15 * time.Minute,
+				StaleTimeout:   24 * time.Hour,
+				EndDelay:       5 * time.Second,
+				EndDisplayTime: 4 * time.Second,
+			},
+			Backrest: BackrestConfig{
+				Enabled:        true,
+				Priority:       2,
+				CleanupDelay:   15 * time.Minute,
+				StaleTimeout:   1 * time.Hour,
 				EndDelay:       5 * time.Second,
 				EndDisplayTime: 4 * time.Second,
 			},
@@ -249,5 +329,25 @@ func (cfg *Config) applyEnvOverrides() {
 	// Changedetection overrides
 	if v := os.Getenv("PUSHWARD_CHANGEDETECTION_WEBHOOK_SECRET"); v != "" {
 		cfg.Providers.Changedetection.WebhookSecret = v
+	}
+
+	// Proxmox overrides
+	if v := os.Getenv("PUSHWARD_PROXMOX_WEBHOOK_SECRET"); v != "" {
+		cfg.Providers.Proxmox.WebhookSecret = v
+	}
+
+	// Overseerr overrides
+	if v := os.Getenv("PUSHWARD_OVERSEERR_WEBHOOK_SECRET"); v != "" {
+		cfg.Providers.Overseerr.WebhookSecret = v
+	}
+
+	// Uptime Kuma overrides
+	if v := os.Getenv("PUSHWARD_UPTIMEKUMA_WEBHOOK_SECRET"); v != "" {
+		cfg.Providers.UptimeKuma.WebhookSecret = v
+	}
+
+	// Backrest overrides
+	if v := os.Getenv("PUSHWARD_BACKREST_WEBHOOK_SECRET"); v != "" {
+		cfg.Providers.Backrest.WebhookSecret = v
 	}
 }

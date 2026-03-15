@@ -1,0 +1,19 @@
+{
+  "notification_type": "MEDIA_DECLINED",
+  "event": "media.declined",
+  "subject": "The Matrix (1999)",
+  "message": "Your request for The Matrix (1999) has been declined.",
+  "image": "https://image.tmdb.org/t/p/w600_and_h900_bestv2/matrix.jpg",
+  "media": {
+    "media_type": "movie",
+    "tmdbId": "603",
+    "tvdbId": "",
+    "status": "UNKNOWN",
+    "status4k": "UNKNOWN"
+  },
+  "request": {
+    "request_id": "2",
+    "requestedBy_username": "user1"
+  },
+  "extra": []
+}

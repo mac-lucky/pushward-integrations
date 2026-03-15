@@ -1,0 +1,7 @@
+{
+  "type": "vzdump",
+  "title": "Backup of VM 100 failed",
+  "message": "Backup of VM 100 failed: connection error",
+  "severity": "error",
+  "hostname": "pve1"
+}

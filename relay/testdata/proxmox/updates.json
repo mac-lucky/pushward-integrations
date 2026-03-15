@@ -1,0 +1,7 @@
+{
+  "type": "package-updates",
+  "title": "5 updates available",
+  "message": "5 package updates available on pve1",
+  "severity": "info",
+  "hostname": "pve1"
+}

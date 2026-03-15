@@ -11,16 +11,20 @@ import (
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/argocd"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/backrest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/changedetection"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/grafana"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/jellyfin"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overseerr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/paperless"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/proxmox"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/ratelimit"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/starr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/uptimekuma"
 	"github.com/mac-lucky/pushward-integrations/shared/server"
 )
 
@@ -114,6 +118,30 @@ func main() {
 		uh := unmanic.NewHandler(clients, &cfg.Providers.Unmanic)
 		mux.Handle("POST /unmanic", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(uh))))
 		slog.Info("enabled provider", "provider", "unmanic")
+	}
+
+	if cfg.Providers.Proxmox.Enabled {
+		pxh := proxmox.NewHandler(store, clients, &cfg.Providers.Proxmox)
+		mux.Handle("POST /proxmox", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(pxh))))
+		slog.Info("enabled provider", "provider", "proxmox")
+	}
+
+	if cfg.Providers.Overseerr.Enabled {
+		oh := overseerr.NewHandler(store, clients, &cfg.Providers.Overseerr)
+		mux.Handle("POST /overseerr", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(oh))))
+		slog.Info("enabled provider", "provider", "overseerr")
+	}
+
+	if cfg.Providers.UptimeKuma.Enabled {
+		ukh := uptimekuma.NewHandler(store, clients, &cfg.Providers.UptimeKuma)
+		mux.Handle("POST /uptimekuma", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(ukh))))
+		slog.Info("enabled provider", "provider", "uptimekuma")
+	}
+
+	if cfg.Providers.Backrest.Enabled {
+		bh := backrest.NewHandler(store, clients, &cfg.Providers.Backrest)
+		mux.Handle("POST /backrest", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(bh))))
+		slog.Info("enabled provider", "provider", "backrest")
 	}
 
 	// Background cleanup goroutine

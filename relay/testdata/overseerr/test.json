@@ -1,0 +1,19 @@
+{
+  "notification_type": "TEST_NOTIFICATION",
+  "event": "test",
+  "subject": "Test Notification",
+  "message": "This is a test notification from Overseerr.",
+  "image": "",
+  "media": {
+    "media_type": "",
+    "tmdbId": "",
+    "tvdbId": "",
+    "status": "",
+    "status4k": ""
+  },
+  "request": {
+    "request_id": "",
+    "requestedBy_username": ""
+  },
+  "extra": []
+}

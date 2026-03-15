@@ -1,0 +1,7 @@
+{
+  "type": "vzdump",
+  "title": "Backup of VM 100 finished",
+  "message": "Backup of VM 100 finished successfully",
+  "severity": "info",
+  "hostname": "pve1"
+}

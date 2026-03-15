@@ -1,0 +1,17 @@
+{
+  "monitor": {
+    "id": 1,
+    "name": "My Website",
+    "url": "https://example.com",
+    "type": "http"
+  },
+  "heartbeat": {
+    "status": 1,
+    "time": "2024-01-15T10:35:00.000Z",
+    "msg": "",
+    "ping": 42,
+    "duration": 300,
+    "important": true
+  },
+  "msg": "My Website is UP"
+}
