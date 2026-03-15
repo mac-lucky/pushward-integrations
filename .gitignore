@@ -25,5 +25,8 @@
 # Config with secrets
 config.yml
 
+# Claude
+CLAUDE.md
+
 # OS
 .DS_Store

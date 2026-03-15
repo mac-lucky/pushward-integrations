@@ -1,6 +1,6 @@
 # pushward-mqtt
 
-A generic MQTT-to-Live-Activity bridge for [PushWard](https://github.com/mac-lucky/pushward-server) on iOS.
+A generic MQTT-to-Live-Activity bridge for [PushWard](https://pushward.app) on iOS.
 
 Subscribes to any MQTT broker, matches messages against configurable rules, and maps JSON payloads to Live Activities on your iPhone's Dynamic Island and Lock Screen. Works with Zigbee2MQTT, Home Assistant, custom sensors, or any MQTT source that publishes JSON.
 

@@ -1,6 +1,6 @@
 # pushward-integrations
 
-Collection of PushWard integration bridges packaged as Docker containers. Each bridge monitors an external service and sends real-time Live Activity updates to [pushward-server](https://github.com/mac-lucky/pushward-server) for display on iOS (Dynamic Island and Lock Screen).
+Collection of PushWard integration bridges packaged as Docker containers. Each bridge monitors an external service and sends real-time Live Activity updates to [pushward-server](https://pushward.app) for display on iOS (Dynamic Island and Lock Screen).
 
 ## Integrations
 

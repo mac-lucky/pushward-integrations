@@ -1,6 +1,6 @@
 # pushward-grafana
 
-Bridges Grafana alert notifications to [PushWard](https://github.com/mac-lucky/pushward-server) Live Activities on iOS.
+Bridges Grafana alert notifications to [PushWard](https://pushward.app) Live Activities on iOS.
 
 Exposes a webhook endpoint that Grafana calls via its contact point configuration. Firing alerts appear as Live Activities on your iPhone's Dynamic Island and Lock Screen, color-coded by severity. Resolved alerts automatically dismiss.
 

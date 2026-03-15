@@ -1,6 +1,6 @@
 # pushward-github
 
-Bridges GitHub Actions CI/CD workflows to [PushWard](https://github.com/mac-lucky/pushward-server) Live Activities on iOS.
+Bridges GitHub Actions CI/CD workflows to [PushWard](https://pushward.app) Live Activities on iOS.
 
 Polls the GitHub Actions API for in-progress workflow runs and sends real-time updates to PushWard, which displays them as Live Activities on your iPhone's Dynamic Island and Lock Screen.
 

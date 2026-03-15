@@ -1,6 +1,6 @@
 # pushward-sabnzbd
 
-Bridges SABnzbd download progress to [PushWard](https://github.com/mac-lucky/pushward-server) Live Activities on iOS.
+Bridges SABnzbd download progress to [PushWard](https://pushward.app) Live Activities on iOS.
 
 Exposes a webhook endpoint that SABnzbd calls when an NZB is added, then polls the SABnzbd API through downloading and post-processing phases — displaying real-time progress on your iPhone's Dynamic Island and Lock Screen.
 
