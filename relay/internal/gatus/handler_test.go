@@ -46,17 +46,6 @@ func send(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
 	return w
 }
 
-func sendWithSecret(t *testing.T, h *Handler, payload, secret string) *httptest.ResponseRecorder {
-	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/gatus", strings.NewReader(payload))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer hlk_test")
-	req.Header.Set("X-Webhook-Secret", secret)
-	w := httptest.NewRecorder()
-	auth.Middleware(h).ServeHTTP(w, req)
-	return w
-}
-
 func TestTriggered(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 
@@ -206,43 +195,6 @@ func TestResolvedWithoutPriorTriggered(t *testing.T) {
 	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
 		t.Fatalf("expected 0 calls for RESOLVED without prior TRIGGERED, got %d", len(recorded))
-	}
-}
-
-func TestWebhookSecret(t *testing.T) {
-	cfg := testConfig()
-	cfg.WebhookSecret = "my-secret"
-	h, calls, mu := newHandler(t, cfg)
-
-	// Wrong secret
-	w := sendWithSecret(t, h, `{
-		"endpoint_name": "My API",
-		"endpoint_group": "",
-		"endpoint_url": "https://api.example.com/health",
-		"alert_description": "Health check failed",
-		"status": "TRIGGERED",
-		"result_errors": "error"
-	}`, "wrong-secret")
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("expected 401, got %d", w.Code)
-	}
-
-	// Correct secret
-	w = sendWithSecret(t, h, `{
-		"endpoint_name": "My API",
-		"endpoint_group": "",
-		"endpoint_url": "https://api.example.com/health",
-		"alert_description": "Health check failed",
-		"status": "TRIGGERED",
-		"result_errors": "error"
-	}`, "my-secret")
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls with correct secret, got %d", len(recorded))
 	}
 }
 

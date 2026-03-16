@@ -41,7 +41,6 @@ type ProvidersConfig struct {
 // GrafanaConfig holds Grafana-specific settings.
 type GrafanaConfig struct {
 	Enabled         bool          `yaml:"enabled"`
-	WebhookSecret   string        `yaml:"webhook_secret"`
 	SeverityLabel   string        `yaml:"severity_label"`
 	DefaultSeverity string        `yaml:"default_severity"`
 	DefaultIcon     string        `yaml:"default_icon"`
@@ -53,7 +52,6 @@ type GrafanaConfig struct {
 // ArgoCDConfig holds ArgoCD-specific settings.
 type ArgoCDConfig struct {
 	Enabled         bool          `yaml:"enabled"`
-	WebhookSecret   string        `yaml:"webhook_secret"`
 	URL             string        `yaml:"url"`
 	SyncGracePeriod time.Duration `yaml:"sync_grace_period"`
 	Priority        int           `yaml:"priority"`
@@ -79,7 +77,6 @@ type StarrConfig struct {
 // JellyfinConfig holds Jellyfin-specific settings.
 type JellyfinConfig struct {
 	Enabled          bool          `yaml:"enabled"`
-	WebhookSecret    string        `yaml:"webhook_secret"`
 	Priority         int           `yaml:"priority"`
 	CleanupDelay     time.Duration `yaml:"cleanup_delay"`
 	StaleTimeout     time.Duration `yaml:"stale_timeout"`
@@ -91,7 +88,6 @@ type JellyfinConfig struct {
 // PaperlessConfig holds Paperless-ngx-specific settings.
 type PaperlessConfig struct {
 	Enabled      bool          `yaml:"enabled"`
-	WebhookSecret string       `yaml:"webhook_secret"`
 	Priority     int           `yaml:"priority"`
 	CleanupDelay time.Duration `yaml:"cleanup_delay"`
 	StaleTimeout time.Duration `yaml:"stale_timeout"`
@@ -102,7 +98,6 @@ type PaperlessConfig struct {
 // ChangedetectionConfig holds Changedetection.io-specific settings.
 type ChangedetectionConfig struct {
 	Enabled      bool          `yaml:"enabled"`
-	WebhookSecret string       `yaml:"webhook_secret"`
 	Priority     int           `yaml:"priority"`
 	CleanupDelay time.Duration `yaml:"cleanup_delay"`
 	StaleTimeout time.Duration `yaml:"stale_timeout"`
@@ -121,7 +116,6 @@ type UnmanicConfig struct {
 // ProxmoxConfig holds Proxmox VE-specific settings.
 type ProxmoxConfig struct {
 	Enabled        bool          `yaml:"enabled"`
-	WebhookSecret  string        `yaml:"webhook_secret"`
 	Priority       int           `yaml:"priority"`
 	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
 	StaleTimeout   time.Duration `yaml:"stale_timeout"`
@@ -132,7 +126,6 @@ type ProxmoxConfig struct {
 // OverseerrConfig holds Overseerr/Jellyseerr-specific settings.
 type OverseerrConfig struct {
 	Enabled        bool          `yaml:"enabled"`
-	WebhookSecret  string        `yaml:"webhook_secret"`
 	Priority       int           `yaml:"priority"`
 	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
 	StaleTimeout   time.Duration `yaml:"stale_timeout"`
@@ -143,7 +136,6 @@ type OverseerrConfig struct {
 // BackrestConfig holds Backrest-specific settings.
 type BackrestConfig struct {
 	Enabled        bool          `yaml:"enabled"`
-	WebhookSecret  string        `yaml:"webhook_secret"`
 	Priority       int           `yaml:"priority"`
 	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
 	StaleTimeout   time.Duration `yaml:"stale_timeout"`
@@ -154,7 +146,6 @@ type BackrestConfig struct {
 // GatusConfig holds Gatus-specific settings.
 type GatusConfig struct {
 	Enabled        bool          `yaml:"enabled"`
-	WebhookSecret  string        `yaml:"webhook_secret"`
 	Priority       int           `yaml:"priority"`
 	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
 	StaleTimeout   time.Duration `yaml:"stale_timeout"`
@@ -165,7 +156,6 @@ type GatusConfig struct {
 // UptimeKumaConfig holds Uptime Kuma-specific settings.
 type UptimeKumaConfig struct {
 	Enabled        bool          `yaml:"enabled"`
-	WebhookSecret  string        `yaml:"webhook_secret"`
 	Priority       int           `yaml:"priority"`
 	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
 	StaleTimeout   time.Duration `yaml:"stale_timeout"`
@@ -310,9 +300,6 @@ func (cfg *Config) applyEnvOverrides() {
 	}
 
 	// Grafana overrides
-	if v := os.Getenv("PUSHWARD_GRAFANA_WEBHOOK_SECRET"); v != "" {
-		cfg.Providers.Grafana.WebhookSecret = v
-	}
 	if v := os.Getenv("PUSHWARD_GRAFANA_SEVERITY_LABEL"); v != "" {
 		cfg.Providers.Grafana.SeverityLabel = v
 	}
@@ -324,9 +311,6 @@ func (cfg *Config) applyEnvOverrides() {
 	}
 
 	// ArgoCD overrides
-	if v := os.Getenv("PUSHWARD_ARGOCD_WEBHOOK_SECRET"); v != "" {
-		cfg.Providers.ArgoCD.WebhookSecret = v
-	}
 	if v := os.Getenv("PUSHWARD_ARGOCD_URL"); v != "" {
 		cfg.Providers.ArgoCD.URL = v
 	}
@@ -336,43 +320,4 @@ func (cfg *Config) applyEnvOverrides() {
 		}
 	}
 
-	// Jellyfin overrides
-	if v := os.Getenv("PUSHWARD_JELLYFIN_WEBHOOK_SECRET"); v != "" {
-		cfg.Providers.Jellyfin.WebhookSecret = v
-	}
-
-	// Paperless overrides
-	if v := os.Getenv("PUSHWARD_PAPERLESS_WEBHOOK_SECRET"); v != "" {
-		cfg.Providers.Paperless.WebhookSecret = v
-	}
-
-	// Changedetection overrides
-	if v := os.Getenv("PUSHWARD_CHANGEDETECTION_WEBHOOK_SECRET"); v != "" {
-		cfg.Providers.Changedetection.WebhookSecret = v
-	}
-
-	// Proxmox overrides
-	if v := os.Getenv("PUSHWARD_PROXMOX_WEBHOOK_SECRET"); v != "" {
-		cfg.Providers.Proxmox.WebhookSecret = v
-	}
-
-	// Overseerr overrides
-	if v := os.Getenv("PUSHWARD_OVERSEERR_WEBHOOK_SECRET"); v != "" {
-		cfg.Providers.Overseerr.WebhookSecret = v
-	}
-
-	// Uptime Kuma overrides
-	if v := os.Getenv("PUSHWARD_UPTIMEKUMA_WEBHOOK_SECRET"); v != "" {
-		cfg.Providers.UptimeKuma.WebhookSecret = v
-	}
-
-	// Gatus overrides
-	if v := os.Getenv("PUSHWARD_GATUS_WEBHOOK_SECRET"); v != "" {
-		cfg.Providers.Gatus.WebhookSecret = v
-	}
-
-	// Backrest overrides
-	if v := os.Getenv("PUSHWARD_BACKREST_WEBHOOK_SECRET"); v != "" {
-		cfg.Providers.Backrest.WebhookSecret = v
-	}
 }

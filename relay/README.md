@@ -10,7 +10,6 @@ Multi-tenant webhook gateway that consolidates multiple providers into a single 
 - **Per-tenant client pool** — LRU pool of PushWard API clients keyed by integration key (max 1000 concurrent tenants)
 - **Rate limiting** — dual-layer: per-IP (5 req/s, burst 20) and per-key (1 req/s, burst 10)
 - **Two-phase end** — activities show final content on Dynamic Island before dismissing (ArgoCD, Starr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest)
-- **Webhook secret validation** — optional per-provider `X-Webhook-Secret` header check (constant-time comparison)
 - **Retry with backoff** — PushWard API calls retry up to 5 times with exponential backoff and 429 rate-limit handling
 - **Graceful shutdown** — waits for in-flight requests on SIGINT/SIGTERM
 
@@ -30,7 +29,7 @@ Receives Grafana alert webhooks. Groups alerts by `alertname`, worst severity dr
 | Route | `POST /grafana` |
 |---|---|
 | Template | `alert` |
-| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Auth | `Authorization: Bearer hlk_...` |
 | Slug | `grafana-<sha256(alertname)[:6]>` |
 
 **Events:** `firing` → ONGOING (red/orange/blue by severity), `resolved` → ENDED (green checkmark)
@@ -42,7 +41,7 @@ Receives ArgoCD sync webhooks via argocd-notifications. Maps sync progress to a 
 | Route | `POST /argocd` |
 |---|---|
 | Template | `pipeline` |
-| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Auth | `Authorization: Bearer hlk_...` |
 | Slug | `argocd-<sanitized-app-name>` |
 
 **Events:** `sync-running` → Step 1/3 Syncing, `sync-succeeded` → Step 2/3 Rolling out, `deployed` → Step 3/3 Deployed, `sync-failed` → Sync Failed, `health-degraded` → Degraded (transient warning during rollout)
@@ -75,7 +74,7 @@ Receives Jellyfin webhook plugin notifications. Tracks playback progress, librar
 | Route | `POST /jellyfin` |
 |---|---|
 | Template | `generic` (playback/items/tasks), `alert` (auth failures) |
-| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Auth | `Authorization: Bearer hlk_...` |
 | Slug | `jellyfin-<sha256(ItemId+UserName)[:10]>` (playback), `jellyfin-item-<hash>` (library), `jellyfin-task-<hash>` (tasks), `jellyfin-auth-<hash>` (auth) |
 
 **Events:**
@@ -102,7 +101,7 @@ Receives document consumption webhooks. Users configure the JSON body via a Jinj
 | Route | `POST /paperless` |
 |---|---|
 | Template | `generic` |
-| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Auth | `Authorization: Bearer hlk_...` |
 | Slug | `paperless-<doc_id>` (added/updated), `paperless-<sha256(filename)[:4]>` (consumption started) |
 
 **Events:**
@@ -126,7 +125,7 @@ Receives page change notifications. Users configure the JSON body via a Jinja2 t
 | Route | `POST /changedetection` |
 |---|---|
 | Template | `alert` |
-| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Auth | `Authorization: Bearer hlk_...` |
 | Slug | `cd-<sha256(url)[:8]>` |
 
 **Events:** Single event type — page changed. Creates a fire-and-forget alert notification (ONGOING + immediate ENDED).
@@ -182,7 +181,7 @@ Receives Proxmox VE notification webhooks for backup, replication, fencing, and 
 | Route | `POST /proxmox` |
 |---|---|
 | Template | `pipeline` (backup/replication), `alert` (fencing/package-updates) |
-| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Auth | `Authorization: Bearer hlk_...` |
 | Slug | `proxmox-<type>-<target>` |
 
 **Events:**
@@ -207,7 +206,7 @@ Receives Overseerr/Jellyseerr media request webhooks. Tracks request lifecycle f
 | Route | `POST /overseerr` |
 |---|---|
 | Template | `pipeline` |
-| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Auth | `Authorization: Bearer hlk_...` |
 | Slug | `overseerr-<mediaType>-<tmdbId>` |
 
 **Events:**
@@ -229,7 +228,7 @@ Receives Uptime Kuma monitor status webhooks. Maps monitor heartbeat status to a
 | Route | `POST /uptimekuma` |
 |---|---|
 | Template | `alert` |
-| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Auth | `Authorization: Bearer hlk_...` |
 | Slug | `uptimekuma-<monitorId>` |
 
 **Events:**
@@ -250,7 +249,7 @@ Receives Gatus health check alert webhooks. Maps endpoint TRIGGERED/RESOLVED sta
 | Route | `POST /gatus` |
 |---|---|
 | Template | `alert` |
-| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Auth | `Authorization: Bearer hlk_...` |
 | Slug | `gatus-<sha256(group/endpoint_name)[:12]>` |
 
 **Events:**
@@ -290,7 +289,7 @@ Receives Backrest backup operation webhooks for snapshot, prune, and check opera
 | Route | `POST /backrest` |
 |---|---|
 | Template | `generic` |
-| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Auth | `Authorization: Bearer hlk_...` |
 | Slug | `backrest-<planId>-<operation>` |
 
 **Events:**
@@ -319,22 +318,11 @@ All settings can be provided via YAML config file (`-config` flag, default `conf
 | `PUSHWARD_DATABASE_DSN` | PostgreSQL connection string | Yes |
 | `PUSHWARD_URL` | PushWard server URL (also accepts `-pushward-url` flag) | Yes |
 | `PUSHWARD_SERVER_ADDRESS` | HTTP listen address (default: `:8090`) | No |
-| `PUSHWARD_GRAFANA_WEBHOOK_SECRET` | Grafana `X-Webhook-Secret` validation | No |
 | `PUSHWARD_GRAFANA_SEVERITY_LABEL` | Alert label for severity (default: `severity`) | No |
 | `PUSHWARD_GRAFANA_DEFAULT_SEVERITY` | Fallback severity (default: `warning`) | No |
 | `PUSHWARD_GRAFANA_DEFAULT_ICON` | Fallback icon (default: `exclamationmark.triangle.fill`) | No |
-| `PUSHWARD_ARGOCD_WEBHOOK_SECRET` | ArgoCD `X-Webhook-Secret` validation | No |
 | `PUSHWARD_ARGOCD_URL` | ArgoCD UI URL for "View in ArgoCD" links | No |
 | `PUSHWARD_SYNC_GRACE_PERIOD` | Skip no-op syncs within this window (default: `10s`) | No |
-| `PUSHWARD_JELLYFIN_WEBHOOK_SECRET` | Jellyfin `X-Webhook-Secret` validation | No |
-| `PUSHWARD_PAPERLESS_WEBHOOK_SECRET` | Paperless `X-Webhook-Secret` validation | No |
-| `PUSHWARD_CHANGEDETECTION_WEBHOOK_SECRET` | Changedetection `X-Webhook-Secret` validation | No |
-| `PUSHWARD_PROXMOX_WEBHOOK_SECRET` | Proxmox `X-Webhook-Secret` validation | No |
-| `PUSHWARD_OVERSEERR_WEBHOOK_SECRET` | Overseerr `X-Webhook-Secret` validation | No |
-| `PUSHWARD_UPTIMEKUMA_WEBHOOK_SECRET` | Uptime Kuma `X-Webhook-Secret` validation | No |
-| `PUSHWARD_GATUS_WEBHOOK_SECRET` | Gatus `X-Webhook-Secret` validation | No |
-| `PUSHWARD_BACKREST_WEBHOOK_SECRET` | Backrest `X-Webhook-Secret` validation | No |
-
 See [`config.example.yml`](./config.example.yml) for the full config with per-provider settings.
 
 ## Docker Compose
@@ -404,19 +392,3 @@ Most providers authenticate with a Bearer token containing the `hlk_` integratio
 
 Radarr and Sonarr send the `hlk_` integration key as the Basic Auth password. The username field is ignored.
 
-### Optional Webhook Secret
-
-In addition to the `hlk_` integration key (which identifies the tenant), providers can optionally validate an `X-Webhook-Secret` header for an extra layer of authentication. The `hlk_` key is always required and serves as the primary auth mechanism; the webhook secret is a secondary check that verifies the request originated from the expected service instance.
-
-Providers supporting `X-Webhook-Secret`:
-
-- Grafana
-- ArgoCD
-- Jellyfin
-- Paperless-ngx
-- Changedetection.io
-- Proxmox
-- Overseerr
-- Uptime Kuma
-- Gatus
-- Backrest
