@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
@@ -45,7 +46,10 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		h.handleRadarrDownload(ctx, userKey, &p)
 	case "Test":
-		slog.Info("test notification received", "provider", "radarr", "user", userKey)
+		cl := h.clients.Get(userKey)
+		if err := selftest.SendTest(ctx, cl, "radarr"); err != nil {
+			slog.Error("test notification failed", "provider", "radarr", "error", err)
+		}
 	case "Health":
 		var p HealthPayload
 		if err := json.Unmarshal(raw, &p); err != nil {

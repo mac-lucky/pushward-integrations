@@ -11,6 +11,7 @@ import (
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
@@ -69,7 +70,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "MEDIA_FAILED":
 		h.handleEvent(ctx, userKey, &payload, 0, "Failed", "xmark.circle.fill", "#FF3B30", true)
 	case "TEST_NOTIFICATION":
-		slog.Info("overseerr test notification received", "user", truncateKey(userKey))
+		cl := h.clients.Get(userKey)
+		if err := selftest.SendTest(ctx, cl, "overseerr"); err != nil {
+			slog.Error("test notification failed", "provider", "overseerr", "error", err)
+		}
 	default:
 		slog.Debug("unknown overseerr notification type", "type", payload.NotificationType)
 	}

@@ -65,7 +65,7 @@ Receives Radarr and Sonarr webhooks. Tracks download lifecycle from grab to impo
 | `Download` | Imported / Upgraded | `checkmark.circle.fill` | green |
 | `Health` | (health message) | `exclamationmark.triangle.fill` / `.octagon.fill` | orange / red |
 | `HealthRestored` | (restored message) | `checkmark.circle.fill` | green |
-| `Test` | (logged, no activity) | - | - |
+| `Test` | (provider-specific test activity) | varies | varies |
 
 ### Jellyfin
 
@@ -88,7 +88,7 @@ Receives Jellyfin webhook plugin notifications. Tracks playback progress, librar
 | `ScheduledTaskStarted` | Running... | `arrow.triangle.2.circlepath` | blue |
 | `ScheduledTaskCompleted` | Complete / Failed | `checkmark.circle.fill` / `xmark.circle.fill` | green / red |
 | `AuthenticationFailure` | Failed login: user from IP | `lock.shield.fill` | red |
-| `GenericUpdateNotification` | (logged, no activity) | - | - |
+| `GenericUpdateNotification` | (provider-specific test activity) | varies | varies |
 
 **Debounce:** `PlaybackProgress` updates within `progress_debounce` (default 30s) are skipped.
 
@@ -166,7 +166,7 @@ Receives Apprise `json://` notifications from Unmanic on transcoding task comple
 |---|---|---|---|
 | `success` | Complete | `checkmark.circle.fill` | green |
 | `failure` | Failed | `xmark.circle.fill` | red |
-| `info` | (logged, no activity) | - | - |
+| `info` | (provider-specific test activity) | varies | varies |
 
 **Setup:** In Unmanic, go to Settings > Notifications. Add a notification URL:
 
@@ -357,6 +357,7 @@ services:
 | POST | `/uptimekuma` | Uptime Kuma monitor status webhooks |
 | POST | `/gatus` | Gatus health check alert webhooks |
 | POST | `/backrest` | Backrest backup/prune/check webhooks |
+| POST | `/test/{provider}` | Send a provider-specific test notification |
 | GET | `/health` | Health check (returns `ok`) |
 
 ## How It Works

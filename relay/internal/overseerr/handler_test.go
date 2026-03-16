@@ -450,8 +450,15 @@ func TestTestNotification(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
+	// Verify dispatch to selftest (content details tested in selftest/provider_test.go)
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 0 {
-		t.Fatalf("expected 0 calls for test notification, got %d", len(recorded))
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls (create + update), got %d", len(recorded))
+	}
+
+	var create pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &create)
+	if create.Slug != "relay-test-overseerr" {
+		t.Errorf("expected slug relay-test-overseerr, got %s", create.Slug)
 	}
 }

@@ -12,6 +12,7 @@ import (
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -124,7 +125,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "AuthenticationFailure":
 		h.handleAuthFailure(ctx, userKey, &payload)
 	case "GenericUpdateNotification":
-		slog.Info("test notification received", "provider", "jellyfin", "user", userKey)
+		cl := h.clients.Get(userKey)
+		if err := selftest.SendTest(ctx, cl, "jellyfin"); err != nil {
+			slog.Error("test notification failed", "provider", "jellyfin", "error", err)
+		}
 	default:
 		slog.Warn("unknown notification type", "type", payload.NotificationType)
 	}
