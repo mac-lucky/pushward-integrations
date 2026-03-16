@@ -15,7 +15,6 @@ Each runs as its own container with a dedicated PushWard API key.
 | [pushward-sabnzbd](./sabnzbd/) | SABnzbd download and post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
 | [pushward-argocd](./argocd/) | ArgoCD sync progress (Syncing → Rolling Out → Deployed) | 8090 | `ghcr.io/mac-lucky/pushward-argocd` |
 | [pushward-bambulab](./bambulab/) | BambuLab 3D printer progress via MQTT | - | `ghcr.io/mac-lucky/pushward-bambulab` |
-| [pushward-starr](./starr/) | Radarr/Sonarr download lifecycle (Grab → Download) | 8090 | `ghcr.io/mac-lucky/pushward-starr` |
 | [pushward-mqtt](./mqtt/) | Generic MQTT-to-Live-Activity bridge | - | `ghcr.io/mac-lucky/pushward-mqtt` |
 
 ### Relay (Multi-Tenant Gateway)
@@ -50,7 +49,7 @@ See each integration's README or `config.example.yml` for the full list of confi
 
 ## Project Structure
 
-This is a Go workspace (`go.work`) with a shared module and nine integration modules:
+This is a Go workspace (`go.work`) with a shared module and eight integration modules:
 
 ```
 pushward-integrations/
@@ -61,7 +60,6 @@ pushward-integrations/
   sabnzbd/                   # SABnzbd webhook + download tracker
   argocd/                    # ArgoCD webhook handler
   bambulab/                  # BambuLab MQTT client
-  starr/                     # Radarr/Sonarr webhook handler (standalone)
   mqtt/                      # Generic MQTT bridge
   relay/                     # Multi-tenant webhook gateway (PostgreSQL)
     cmd/pushward-relay/      # Entry point
@@ -94,7 +92,6 @@ go build ./grafana/cmd/pushward-grafana
 go build ./sabnzbd/cmd/pushward-sabnzbd
 go build ./argocd/cmd/pushward-argocd
 go build ./bambulab/cmd/pushward-bambulab
-go build ./starr/cmd/pushward-starr
 go build ./mqtt/cmd/pushward-mqtt
 go build ./relay/cmd/pushward-relay
 ```
@@ -107,7 +104,6 @@ Run locally with a config file:
 ./pushward-sabnzbd -config sabnzbd/config.example.yml
 ./pushward-argocd -config argocd/config.example.yml
 ./pushward-bambulab -config bambulab/config.example.yml
-./pushward-starr -config starr/config.example.yml
 ./pushward-mqtt -config mqtt/config.example.yml
 ./pushward-relay -config relay/config.example.yml
 ```
@@ -116,7 +112,7 @@ Run tests:
 
 ```bash
 # All tests
-go test ./shared/... ./github/... ./grafana/... ./sabnzbd/... ./argocd/... ./bambulab/... ./starr/... ./mqtt/... ./relay/... -v -count=1
+go test ./shared/... ./github/... ./grafana/... ./sabnzbd/... ./argocd/... ./bambulab/... ./mqtt/... ./relay/... -v -count=1
 
 # Relay only (with race detector)
 go test ./relay/... -race -count=1 -v
@@ -130,7 +126,6 @@ docker build -f grafana/Dockerfile -t pushward-grafana .
 docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd .
 docker build -f argocd/Dockerfile -t pushward-argocd .
 docker build -f bambulab/Dockerfile -t pushward-bambulab .
-docker build -f starr/Dockerfile -t pushward-starr .
 docker build -f mqtt/Dockerfile -t pushward-mqtt .
 docker build -f relay/Dockerfile -t pushward-relay .
 ```
@@ -144,7 +139,6 @@ Each integration has its own GitHub Actions workflow with path filters so only t
 - `.github/workflows/sabnzbd-ci-cd.yml` -- triggers on `sabnzbd/**` and `shared/**` changes
 - `.github/workflows/argocd-ci-cd.yml` -- triggers on `argocd/**` and `shared/**` changes
 - `.github/workflows/bambulab-ci-cd.yml` -- triggers on `bambulab/**` and `shared/**` changes
-- `.github/workflows/starr-ci-cd.yml` -- triggers on `starr/**` and `shared/**` changes
 - `.github/workflows/mqtt-ci-cd.yml` -- triggers on `mqtt/**` and `shared/**` changes
 - `.github/workflows/relay-ci-cd.yml` -- triggers on `relay/**` and `shared/**` changes
 
