@@ -14,6 +14,7 @@ import (
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
@@ -58,7 +59,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "failure":
 		h.handleResult(r.Context(), userKey, p, false)
 	case "info":
-		slog.Info("unmanic test received", "title", p.Title)
+		cl := h.clients.Get(userKey)
+		if err := selftest.SendTest(r.Context(), cl, "unmanic"); err != nil {
+			slog.Error("test notification failed", "provider", "unmanic", "error", err)
+		}
 	default:
 		slog.Debug("unmanic unknown type", "type", p.Type)
 	}

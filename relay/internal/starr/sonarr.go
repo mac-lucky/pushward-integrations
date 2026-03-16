@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
@@ -45,7 +46,10 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		h.handleSonarrDownload(ctx, userKey, &p)
 	case "Test":
-		slog.Info("test notification received", "provider", "sonarr", "user", userKey)
+		cl := h.clients.Get(userKey)
+		if err := selftest.SendTest(ctx, cl, "sonarr"); err != nil {
+			slog.Error("test notification failed", "provider", "sonarr", "error", err)
+		}
 	case "Health":
 		var p HealthPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
