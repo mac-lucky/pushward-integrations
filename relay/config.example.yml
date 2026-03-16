@@ -122,6 +122,20 @@ providers:
     # Add notification type "Webhook" with URL: https://relay.example.com/uptimekuma
     # Set header: Authorization: Bearer hlk_...
 
+  gatus:
+    enabled: true
+    webhook_secret: ""                    # optional X-Webhook-Secret validation
+    priority: 5
+    cleanup_delay: 15m
+    stale_timeout: 24h
+    end_delay: 5s
+    end_display_time: 4s
+    # Configure in Gatus: alerting.custom in your gatus.yaml
+    # Set url to https://relay.example.com/gatus
+    # Set headers: Content-Type: application/json, Authorization: Bearer hlk_...
+    # Set body template:
+    #   {"endpoint_name":"[ENDPOINT_NAME]","endpoint_group":"[ENDPOINT_GROUP]","endpoint_url":"[ENDPOINT_URL]","alert_description":"[ALERT_DESCRIPTION]","status":"[ALERT_TRIGGERED_OR_RESOLVED]","result_errors":"[RESULT_ERRORS]"}
+
   backrest:
     enabled: true
     webhook_secret: ""                    # optional X-Webhook-Secret validation

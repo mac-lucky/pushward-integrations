@@ -1,0 +1,302 @@
+package gatus
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/testutil"
+)
+
+func testConfig() *config.GatusConfig {
+	return &config.GatusConfig{
+		Enabled:        true,
+		Priority:       2,
+		EndDelay:       10 * time.Millisecond,
+		EndDisplayTime: 10 * time.Millisecond,
+		CleanupDelay:   1 * time.Hour,
+		StaleTimeout:   1 * time.Hour,
+	}
+}
+
+func newHandler(t *testing.T, cfg *config.GatusConfig) (*Handler, *[]testutil.APICall, *sync.Mutex) {
+	t.Helper()
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	store := state.NewMemoryStore()
+	pool := client.NewPool(srv.URL)
+	h := NewHandler(store, pool, cfg)
+	return h, calls, mu
+}
+
+func send(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/gatus", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer hlk_test")
+	w := httptest.NewRecorder()
+	auth.Middleware(h).ServeHTTP(w, req)
+	return w
+}
+
+func sendWithSecret(t *testing.T, h *Handler, payload, secret string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/gatus", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer hlk_test")
+	req.Header.Set("X-Webhook-Secret", secret)
+	w := httptest.NewRecorder()
+	auth.Middleware(h).ServeHTTP(w, req)
+	return w
+}
+
+func TestTriggered(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := send(t, h, `{
+		"endpoint_name": "My API",
+		"endpoint_group": "",
+		"endpoint_url": "https://api.example.com/health",
+		"alert_description": "Health check failed",
+		"status": "TRIGGERED",
+		"result_errors": "[STATUS] == 200 (expected 200, got 503)"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + ONGOING = 2
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	}
+
+	// Verify create
+	if recorded[0].Method != "POST" || recorded[0].Path != "/activities" {
+		t.Errorf("expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
+	}
+	var createReq pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
+	if createReq.Name != "My API" {
+		t.Errorf("expected name 'My API', got %s", createReq.Name)
+	}
+	if createReq.Priority != 2 {
+		t.Errorf("expected priority 2, got %d", createReq.Priority)
+	}
+
+	// Verify ONGOING update
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.State != "ONGOING" {
+		t.Errorf("expected ONGOING, got %s", update.State)
+	}
+	if update.Content.Template != "alert" {
+		t.Errorf("expected template alert, got %s", update.Content.Template)
+	}
+	if update.Content.State != "[STATUS] == 200 (expected 200, got 503)" {
+		t.Errorf("expected state '[STATUS] == 200 (expected 200, got 503)', got %s", update.Content.State)
+	}
+	if update.Content.AccentColor != "#FF3B30" {
+		t.Errorf("expected red color, got %s", update.Content.AccentColor)
+	}
+	if update.Content.Icon != "exclamationmark.triangle.fill" {
+		t.Errorf("expected icon exclamationmark.triangle.fill, got %s", update.Content.Icon)
+	}
+	if update.Content.Severity != "error" {
+		t.Errorf("expected severity error, got %s", update.Content.Severity)
+	}
+	if update.Content.Subtitle != "Gatus \u00b7 My API" {
+		t.Errorf("expected subtitle 'Gatus \u00b7 My API', got %q", update.Content.Subtitle)
+	}
+	if update.Content.URL != "https://api.example.com/health" {
+		t.Errorf("expected URL https://api.example.com/health, got %s", update.Content.URL)
+	}
+}
+
+func TestTriggeredThenResolved(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	// Send TRIGGERED
+	w := send(t, h, `{
+		"endpoint_name": "My API",
+		"endpoint_group": "",
+		"endpoint_url": "https://api.example.com/health",
+		"alert_description": "Health check failed",
+		"status": "TRIGGERED",
+		"result_errors": "[STATUS] == 200 (expected 200, got 503)"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for TRIGGERED, got %d", w.Code)
+	}
+
+	// Send RESOLVED
+	w = send(t, h, `{
+		"endpoint_name": "My API",
+		"endpoint_group": "",
+		"endpoint_url": "https://api.example.com/health",
+		"alert_description": "Health check failed",
+		"status": "RESOLVED",
+		"result_errors": ""
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for RESOLVED, got %d", w.Code)
+	}
+
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + TRIGGERED(ONGOING) + phase1(ONGOING) + phase2(ENDED) = 4
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	}
+
+	// Phase 1: ONGOING with resolved content
+	var phase1 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
+	if phase1.State != "ONGOING" {
+		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
+	}
+	if phase1.Content.State != "Resolved" {
+		t.Errorf("expected state 'Resolved', got %q", phase1.Content.State)
+	}
+	if phase1.Content.AccentColor != "#34C759" {
+		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
+	}
+	if phase1.Content.Icon != "checkmark.circle.fill" {
+		t.Errorf("expected icon checkmark.circle.fill, got %s", phase1.Content.Icon)
+	}
+	if phase1.Content.Severity != "info" {
+		t.Errorf("expected severity info, got %s", phase1.Content.Severity)
+	}
+
+	// Phase 2: ENDED
+	var phase2 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
+	if phase2.State != "ENDED" {
+		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
+	}
+	if phase2.Content.State != "Resolved" {
+		t.Errorf("expected state 'Resolved', got %q", phase2.Content.State)
+	}
+}
+
+func TestResolvedWithoutPriorTriggered(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := send(t, h, `{
+		"endpoint_name": "My API",
+		"endpoint_group": "",
+		"endpoint_url": "https://api.example.com/health",
+		"alert_description": "Health check failed",
+		"status": "RESOLVED",
+		"result_errors": ""
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 calls for RESOLVED without prior TRIGGERED, got %d", len(recorded))
+	}
+}
+
+func TestWebhookSecret(t *testing.T) {
+	cfg := testConfig()
+	cfg.WebhookSecret = "my-secret"
+	h, calls, mu := newHandler(t, cfg)
+
+	// Wrong secret
+	w := sendWithSecret(t, h, `{
+		"endpoint_name": "My API",
+		"endpoint_group": "",
+		"endpoint_url": "https://api.example.com/health",
+		"alert_description": "Health check failed",
+		"status": "TRIGGERED",
+		"result_errors": "error"
+	}`, "wrong-secret")
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d", w.Code)
+	}
+
+	// Correct secret
+	w = sendWithSecret(t, h, `{
+		"endpoint_name": "My API",
+		"endpoint_group": "",
+		"endpoint_url": "https://api.example.com/health",
+		"alert_description": "Health check failed",
+		"status": "TRIGGERED",
+		"result_errors": "error"
+	}`, "my-secret")
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls with correct secret, got %d", len(recorded))
+	}
+}
+
+func TestTriggeredWithGroup(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := send(t, h, `{
+		"endpoint_name": "My API",
+		"endpoint_group": "production",
+		"endpoint_url": "https://api.example.com/health",
+		"alert_description": "Health check failed",
+		"status": "TRIGGERED",
+		"result_errors": "error"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.Subtitle != "Gatus \u00b7 production/My API" {
+		t.Errorf("expected subtitle 'Gatus \u00b7 production/My API', got %q", update.Content.Subtitle)
+	}
+}
+
+func TestTriggeredFallbackState(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	// result_errors is empty, should fall back to alert_description
+	w := send(t, h, `{
+		"endpoint_name": "My API",
+		"endpoint_group": "",
+		"endpoint_url": "https://api.example.com/health",
+		"alert_description": "Health check failed",
+		"status": "TRIGGERED",
+		"result_errors": ""
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.State != "Health check failed" {
+		t.Errorf("expected state 'Health check failed', got %s", update.Content.State)
+	}
+}

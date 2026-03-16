@@ -15,6 +15,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/changedetection"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/gatus"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/grafana"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/jellyfin"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overseerr"
@@ -136,6 +137,12 @@ func main() {
 		ukh := uptimekuma.NewHandler(store, clients, &cfg.Providers.UptimeKuma)
 		mux.Handle("POST /uptimekuma", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(ukh))))
 		slog.Info("enabled provider", "provider", "uptimekuma")
+	}
+
+	if cfg.Providers.Gatus.Enabled {
+		gah := gatus.NewHandler(store, clients, &cfg.Providers.Gatus)
+		mux.Handle("POST /gatus", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(gah))))
+		slog.Info("enabled provider", "provider", "gatus")
 	}
 
 	if cfg.Providers.Backrest.Enabled {
