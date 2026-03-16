@@ -140,7 +140,7 @@ func (t *Tracker) sendParityUpdate(ctx context.Context, slug string, pc *graphql
 		AccentColor: "#007AFF",
 	}
 
-	req := pushward.UpdateRequest{State: "ONGOING", Content: content}
+	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 	if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
 		slog.Error("failed to update parity activity", "error", err)
 		return
@@ -170,7 +170,7 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 	case "STARTING":
 		_ = t.pw.CreateActivity(ctx, slug, "Array", t.cfg.PushWard.Priority, endedTTL, staleTTL)
 		req := pushward.UpdateRequest{
-			State: "ONGOING",
+			State: pushward.StateOngoing,
 			Content: pushward.Content{
 				Template:    "generic",
 				Progress:    0.5,
@@ -197,7 +197,7 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 	case "STOPPING":
 		_ = t.pw.CreateActivity(ctx, slug, "Array", t.cfg.PushWard.Priority, endedTTL, staleTTL)
 		req := pushward.UpdateRequest{
-			State: "ONGOING",
+			State: pushward.StateOngoing,
 			Content: pushward.Content{
 				Template:    "generic",
 				Progress:    0.5,
@@ -243,7 +243,7 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 			AccentColor: "#FF3B30",
 			Severity:    "error",
 		}
-		req := pushward.UpdateRequest{State: "ONGOING", Content: content}
+		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 		_ = t.pw.UpdateActivity(ctx, slug, req)
 		t.scheduleEnd(slug, content)
 
@@ -271,7 +271,7 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 			AccentColor: accentColor,
 			Severity:    severity,
 		}
-		req := pushward.UpdateRequest{State: "ONGOING", Content: content}
+		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 		_ = t.pw.UpdateActivity(ctx, slug, req)
 		t.scheduleEnd(slug, content)
 
@@ -291,14 +291,14 @@ func (t *Tracker) scheduleEnd(slug string, content pushward.Content) {
 	}
 	t.timers[slug] = time.AfterFunc(endDelay, func() {
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
-		_ = t.pw.UpdateActivity(ctx1, slug, pushward.UpdateRequest{State: "ONGOING", Content: content})
+		_ = t.pw.UpdateActivity(ctx1, slug, pushward.UpdateRequest{State: pushward.StateOngoing, Content: content})
 		cancel1()
 
 		time.Sleep(displayTime)
 
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel2()
-		_ = t.pw.UpdateActivity(ctx2, slug, pushward.UpdateRequest{State: "ENDED", Content: content})
+		_ = t.pw.UpdateActivity(ctx2, slug, pushward.UpdateRequest{State: pushward.StateEnded, Content: content})
 
 		t.mu.Lock()
 		delete(t.timers, slug)

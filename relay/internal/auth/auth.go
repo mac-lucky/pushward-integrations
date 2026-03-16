@@ -27,7 +27,9 @@ func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := extractKey(r)
 		if key == "" {
-			http.Error(w, `{"error":"missing or invalid integration key"}`, http.StatusUnauthorized)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			w.Write([]byte(`{"error":"missing or invalid integration key"}`))
 			return
 		}
 

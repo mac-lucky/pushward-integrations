@@ -124,7 +124,7 @@ func TestRadarrGrab(t *testing.T) {
 	// Verify ONGOING update
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.State != "ONGOING" {
+	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
 	if update.Content.Template != "pipeline" {
@@ -181,7 +181,7 @@ func TestRadarrGrabAndDownload(t *testing.T) {
 	// Phase 1: ONGOING with "Imported"
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
-	if phase1.State != "ONGOING" {
+	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
 	if phase1.Content.State != "Imported" {
@@ -197,7 +197,7 @@ func TestRadarrGrabAndDownload(t *testing.T) {
 	// Phase 2: ENDED with "Imported"
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
 	if phase2.Content.State != "Imported" {
@@ -334,7 +334,7 @@ func TestRadarrDownloadWithoutGrab(t *testing.T) {
 	// Phase 2 should be ENDED
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", phase2.State)
 	}
 	if phase2.Content.State != "Imported" {
@@ -419,7 +419,7 @@ func TestSonarrGrab(t *testing.T) {
 	}
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[1].Body, &update)
-	if update.State != "ONGOING" {
+	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
 	if update.Content.State != "Grabbed" {
@@ -466,7 +466,7 @@ func TestSonarrGrabAndDownload(t *testing.T) {
 	// Phase 1: ONGOING with final state
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[2].Body, &phase1)
-	if phase1.State != "ONGOING" {
+	if phase1.State != pushward.StateOngoing {
 		t.Errorf("phase 1: expected ONGOING, got %s", phase1.State)
 	}
 	if phase1.Content.State != "Downloaded" {
@@ -479,7 +479,7 @@ func TestSonarrGrabAndDownload(t *testing.T) {
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[3].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("phase 2: expected ENDED, got %s", phase2.State)
 	}
 	if phase2.Content.State != "Downloaded" {
@@ -599,7 +599,7 @@ func TestSonarrConcurrentDownloads(t *testing.T) {
 		if c.Method == "PATCH" {
 			var u pushward.UpdateRequest
 			testutil.UnmarshalBody(t, c.Body, &u)
-			if u.State == "ENDED" {
+			if u.State == pushward.StateEnded {
 				endedSlugs = append(endedSlugs, c.Path)
 			}
 		}
@@ -646,7 +646,7 @@ func TestSonarrDownloadWithoutGrab(t *testing.T) {
 	// Phase 2: ENDED with Downloaded
 	var endReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[2].Body, &endReq)
-	if endReq.State != "ENDED" {
+	if endReq.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", endReq.State)
 	}
 	if endReq.Content.State != "Downloaded" {
@@ -712,7 +712,7 @@ func TestRadarrHealth(t *testing.T) {
 	// ONGOING update
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.State != "ONGOING" {
+	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
 	if update.Content.Template != "alert" {
@@ -796,7 +796,7 @@ func TestRadarrHealthAndRestored(t *testing.T) {
 	// Phase 1: ONGOING with restored content
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
-	if phase1.State != "ONGOING" {
+	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
 	if phase1.Content.Icon != "checkmark.circle.fill" {
@@ -809,7 +809,7 @@ func TestRadarrHealthAndRestored(t *testing.T) {
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
 }
@@ -880,7 +880,7 @@ func TestRadarrManualInteraction(t *testing.T) {
 	// Verify manual interaction update
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &update)
-	if update.State != "ONGOING" {
+	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
 	if update.Content.State != "Import Failed" {
@@ -963,7 +963,7 @@ func TestRadarrGrabManualInteractionDownload(t *testing.T) {
 	// Phase 2 should be ENDED with "Imported"
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", phase2.State)
 	}
 	if phase2.Content.State != "Imported" {

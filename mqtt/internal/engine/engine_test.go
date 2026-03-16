@@ -45,7 +45,7 @@ func TestRoute_ExactMatch(t *testing.T) {
 		Template:   "generic",
 		Lifecycle:  "field",
 		StateField: "state",
-		StateMap:   map[string]string{"on": "ONGOING"},
+		StateMap:   map[string]string{"on": pushward.StateOngoing},
 		Content:    config.ContentMapping{State: "{state}"},
 	}
 
@@ -81,7 +81,7 @@ func TestRoute_WildcardPlus(t *testing.T) {
 		Template:   "generic",
 		Lifecycle:  "field",
 		StateField: "state",
-		StateMap:   map[string]string{"active": "ONGOING"},
+		StateMap:   map[string]string{"active": pushward.StateOngoing},
 		Content:    config.ContentMapping{State: "{state}"},
 	}
 
@@ -109,7 +109,7 @@ func TestRoute_WildcardHash(t *testing.T) {
 		Template:   "generic",
 		Lifecycle:  "field",
 		StateField: "state",
-		StateMap:   map[string]string{"active": "ONGOING"},
+		StateMap:   map[string]string{"active": pushward.StateOngoing},
 		Content:    config.ContentMapping{State: "{state}"},
 	}
 
@@ -137,7 +137,7 @@ func TestRoute_VirtualFields(t *testing.T) {
 		Template:   "generic",
 		Lifecycle:  "field",
 		StateField: "state",
-		StateMap:   map[string]string{"on": "ONGOING"},
+		StateMap:   map[string]string{"on": pushward.StateOngoing},
 		Content: config.ContentMapping{
 			State:    "{state}",
 			Subtitle: "{_topic_segment:1}",

@@ -112,7 +112,7 @@ func TestFiringSingleAlert(t *testing.T) {
 	}
 	var updateReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &updateReq)
-	if updateReq.State != "ONGOING" {
+	if updateReq.State != pushward.StateOngoing {
 		t.Errorf("expected state ONGOING, got %s", updateReq.State)
 	}
 	if updateReq.Content.Template != "alert" {
@@ -219,7 +219,7 @@ func TestResolvedAlert(t *testing.T) {
 	}
 	var updateReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &updateReq)
-	if updateReq.State != "ENDED" {
+	if updateReq.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", updateReq.State)
 	}
 	if updateReq.Content.Icon != "checkmark.circle.fill" {
@@ -324,7 +324,7 @@ func TestFiringThenResolved_FullLifecycle(t *testing.T) {
 
 	var endReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &endReq)
-	if endReq.State != "ENDED" {
+	if endReq.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", endReq.State)
 	}
 	if endReq.Content.Icon != "checkmark.circle.fill" {
@@ -501,7 +501,7 @@ func TestMultipleAlertsInSinglePayload_GroupedByAlertname(t *testing.T) {
 	// Second: PATCH with 1 instance (web-1, critical)
 	var update1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update1)
-	if update1.State != "ONGOING" {
+	if update1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update1.State)
 	}
 	if update1.Content.Severity != "critical" {
@@ -514,7 +514,7 @@ func TestMultipleAlertsInSinglePayload_GroupedByAlertname(t *testing.T) {
 	// Third: PATCH with 2 instances (worst = critical from web-1)
 	var update2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &update2)
-	if update2.State != "ONGOING" {
+	if update2.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update2.State)
 	}
 	if update2.Content.State != "2 instances firing" {
@@ -572,7 +572,7 @@ func TestPartialResolve_ActivityContinues(t *testing.T) {
 	}
 	var updateReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &updateReq)
-	if updateReq.State != "ONGOING" {
+	if updateReq.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING after partial resolve, got %s", updateReq.State)
 	}
 	// Remaining instance is "fp-bbb" (warning)
@@ -1353,7 +1353,7 @@ func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
 	// Last call: partial resolve → still ONGOING with 2 remaining instances
 	var lastReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &lastReq)
-	if lastReq.State != "ONGOING" {
+	if lastReq.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING after partial resolve, got %s", lastReq.State)
 	}
 	if lastReq.Content.State != "2 instances firing" {

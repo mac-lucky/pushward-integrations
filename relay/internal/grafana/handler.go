@@ -178,7 +178,7 @@ func (h *Handler) handleFiring(ctx context.Context, userKey string, pwClient *pu
 		slog.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "state", "ONGOING", "severity", req.Content.Severity)
+	slog.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", req.Content.Severity)
 }
 
 func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) {
@@ -217,7 +217,7 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *
 	}
 
 	if len(remaining) == 0 {
-		slog.Info("ended activity", "slug", slug, "state", "ENDED")
+		slog.Info("ended activity", "slug", slug, "state", pushward.StateEnded)
 		_ = h.store.DeleteGroup(ctx, "grafana", userKey, alertname)
 	} else {
 		slog.Info("updated activity after partial resolve", "slug", slug, "remaining", len(remaining))
@@ -249,7 +249,7 @@ func (h *Handler) buildOngoingUpdate(instances map[string]json.RawMessage) pushw
 	firedAt := worst.FiredAt
 
 	return pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:     "alert",
 			Progress:     1.0,
@@ -268,7 +268,7 @@ func (h *Handler) buildOngoingUpdate(instances map[string]json.RawMessage) pushw
 func buildEndUpdate(info *instanceInfo) pushward.UpdateRequest {
 	firedAt := info.FiredAt
 	return pushward.UpdateRequest{
-		State: "ENDED",
+		State: pushward.StateEnded,
 		Content: pushward.Content{
 			Template:     "alert",
 			Progress:     1.0,

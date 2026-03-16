@@ -85,7 +85,7 @@ func TestSuccess(t *testing.T) {
 	// Phase 1: ONGOING with "Complete"
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &phase1)
-	if phase1.State != "ONGOING" {
+	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
 	if phase1.Content.State != "Complete" {
@@ -101,7 +101,7 @@ func TestSuccess(t *testing.T) {
 	// Phase 2: ENDED with "Complete"
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
 	if phase2.Content.State != "Complete" {
@@ -134,7 +134,7 @@ func TestFailure(t *testing.T) {
 	// Phase 1: ONGOING with "Failed"
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &phase1)
-	if phase1.State != "ONGOING" {
+	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
 	if phase1.Content.State != "Failed" {
@@ -150,7 +150,7 @@ func TestFailure(t *testing.T) {
 	// Phase 2: ENDED with "Failed"
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
 	if phase2.Content.State != "Failed" {

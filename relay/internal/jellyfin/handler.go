@@ -12,8 +12,8 @@ import (
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
@@ -24,8 +24,8 @@ type Handler struct {
 	clients    *client.Pool
 	config     *config.JellyfinConfig
 	mu         sync.Mutex
-	timers     map[string]*time.Timer    // "userKey:mapKey" → end timer
-	lastUpdate map[string]time.Time      // "userKey:slug" → last progress update time
+	timers     map[string]*time.Timer // "userKey:mapKey" → end timer
+	lastUpdate map[string]time.Time   // "userKey:slug" → last progress update time
 }
 
 // NewHandler creates a new Jellyfin webhook handler.
@@ -158,7 +158,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *we
 
 	remaining := remainingSeconds(p)
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:      "generic",
 			Progress:      playbackProgress(p),
@@ -200,7 +200,7 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p 
 	cl := h.clients.Get(userKey)
 	remaining := remainingSeconds(p)
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:      "generic",
 			Progress:      playbackProgress(p),
@@ -267,7 +267,7 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, p *webhoo
 
 	// Send ONGOING update first
 	req := pushward.UpdateRequest{
-		State:   "ONGOING",
+		State:   pushward.StateOngoing,
 		Content: content,
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
@@ -299,7 +299,7 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, p *webh
 	_ = h.store.Set(ctx, "jellyfin", userKey, mapKey, "", data, h.config.StaleTimeout)
 
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:    "generic",
 			Progress:    0,
@@ -357,7 +357,7 @@ func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, p *webh
 	slog.Info("created activity", "slug", slug)
 
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:    "alert",
 			Progress:    1.0,
@@ -393,7 +393,7 @@ func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Con
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 		ongoingReq := pushward.UpdateRequest{
-			State:   "ONGOING",
+			State:   pushward.StateOngoing,
 			Content: content,
 		}
 		if err := cl.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
@@ -409,7 +409,7 @@ func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Con
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel2()
 		endedReq := pushward.UpdateRequest{
-			State:   "ENDED",
+			State:   pushward.StateEnded,
 			Content: content,
 		}
 		if err := cl.UpdateActivity(ctx2, slug, endedReq); err != nil {

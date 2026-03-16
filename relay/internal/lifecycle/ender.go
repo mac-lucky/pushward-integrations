@@ -58,7 +58,7 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 		ongoingReq := pushward.UpdateRequest{
-			State:   "ONGOING",
+			State:   pushward.StateOngoing,
 			Content: content,
 		}
 		if err := cl.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
@@ -74,7 +74,7 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel2()
 		endedReq := pushward.UpdateRequest{
-			State:   "ENDED",
+			State:   pushward.StateEnded,
 			Content: content,
 		}
 		if err := cl.UpdateActivity(ctx2, slug, endedReq); err != nil {

@@ -113,7 +113,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, p *Sonar
 	step := 1
 	total := 2
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:    "pipeline",
 			Progress:    float64(step) / float64(total),

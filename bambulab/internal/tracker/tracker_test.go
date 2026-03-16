@@ -230,7 +230,7 @@ func TestProcess_PrepareToRunningToFinish(t *testing.T) {
 	}
 	var prepUpdate pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &prepUpdate)
-	if prepUpdate.State != "ONGOING" {
+	if prepUpdate.State != pushward.StateOngoing {
 		t.Errorf("prepare state = %q, want ONGOING", prepUpdate.State)
 	}
 	if prepUpdate.Content.State != "Preparing..." {
@@ -261,7 +261,7 @@ func TestProcess_PrepareToRunningToFinish(t *testing.T) {
 	lastCall := recorded[len(recorded)-1]
 	var runUpdate pushward.UpdateRequest
 	testutil.UnmarshalBody(t, lastCall.Body, &runUpdate)
-	if runUpdate.State != "ONGOING" {
+	if runUpdate.State != pushward.StateOngoing {
 		t.Errorf("running state = %q, want ONGOING", runUpdate.State)
 	}
 	if runUpdate.Content.State != "Layer 50/200" {
@@ -309,10 +309,10 @@ func TestProcess_PrepareToRunningToFinish(t *testing.T) {
 		var req pushward.UpdateRequest
 		testutil.UnmarshalBody(t, c.Body, &req)
 		if req.Content.State == "Complete" && req.Content.Icon == "checkmark.circle.fill" {
-			if req.State == "ONGOING" {
+			if req.State == pushward.StateOngoing {
 				foundOngoing = true
 			}
-			if req.State == "ENDED" {
+			if req.State == pushward.StateEnded {
 				foundEnded = true
 			}
 		}
@@ -445,13 +445,13 @@ func TestProcess_Failed(t *testing.T) {
 			if req.Content.AccentColor != "red" {
 				t.Errorf("failure accent = %q, want red", req.Content.AccentColor)
 			}
-			if req.State == "ONGOING" {
+			if req.State == pushward.StateOngoing {
 				foundOngoing = true
 				if req.Content.Progress != 0.3 {
 					t.Errorf("failure progress = %f, want 0.3", req.Content.Progress)
 				}
 			}
-			if req.State == "ENDED" {
+			if req.State == pushward.StateEnded {
 				foundEnded = true
 			}
 		}
@@ -494,7 +494,7 @@ func TestProcess_IdleCancellation(t *testing.T) {
 	lastCall := recorded[len(recorded)-1]
 	var endReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, lastCall.Body, &endReq)
-	if endReq.State != "ENDED" {
+	if endReq.State != pushward.StateEnded {
 		t.Errorf("idle end state = %q, want ENDED", endReq.State)
 	}
 	if endReq.Content.State != "Cancelled" {
@@ -714,7 +714,7 @@ func TestFinishActivity_TwoPhaseEnd(t *testing.T) {
 	// Phase 1: ONGOING with "Complete"
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &phase1)
-	if phase1.State != "ONGOING" {
+	if phase1.State != pushward.StateOngoing {
 		t.Errorf("phase 1 state = %q, want ONGOING", phase1.State)
 	}
 	if phase1.Content.State != "Complete" {
@@ -730,7 +730,7 @@ func TestFinishActivity_TwoPhaseEnd(t *testing.T) {
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("phase 2 state = %q, want ENDED", phase2.State)
 	}
 }
@@ -769,7 +769,7 @@ func TestFailActivity_TwoPhaseEnd(t *testing.T) {
 	// Phase 1: ONGOING "Failed"
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &phase1)
-	if phase1.State != "ONGOING" {
+	if phase1.State != pushward.StateOngoing {
 		t.Errorf("phase 1 state = %q, want ONGOING", phase1.State)
 	}
 	if phase1.Content.State != "Failed" {
@@ -785,7 +785,7 @@ func TestFailActivity_TwoPhaseEnd(t *testing.T) {
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("phase 2 state = %q, want ENDED", phase2.State)
 	}
 }
@@ -810,7 +810,7 @@ func TestEndActivity_Immediate(t *testing.T) {
 	}
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.State != "ENDED" {
+	if req.State != pushward.StateEnded {
 		t.Errorf("state = %q, want ENDED", req.State)
 	}
 	if req.Content.State != "Cancelled" {

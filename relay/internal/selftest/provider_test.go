@@ -35,19 +35,19 @@ func sendTest(t *testing.T, h *ProviderTestHandler, provider string) *httptest.R
 
 func TestProviderTestHandler_ValidProvider(t *testing.T) {
 	expectedTemplates := map[string]string{
-		"grafana":           "alert",
-		"argocd":            "pipeline",
-		"radarr":            "pipeline",
-		"sonarr":            "pipeline",
-		"jellyfin":          "generic",
-		"paperless":         "generic",
-		"changedetection":   "alert",
-		"unmanic":           "generic",
-		"proxmox":           "pipeline",
-		"overseerr":         "pipeline",
-		"uptimekuma":        "alert",
-		"gatus":             "alert",
-		"backrest":          "generic",
+		"grafana":         "alert",
+		"argocd":          "pipeline",
+		"radarr":          "pipeline",
+		"sonarr":          "pipeline",
+		"jellyfin":        "generic",
+		"paperless":       "generic",
+		"changedetection": "alert",
+		"unmanic":         "generic",
+		"proxmox":         "pipeline",
+		"overseerr":       "pipeline",
+		"uptimekuma":      "alert",
+		"gatus":           "alert",
+		"backrest":        "generic",
 	}
 
 	for provider, expectedTemplate := range expectedTemplates {
@@ -89,7 +89,7 @@ func TestProviderTestHandler_ValidProvider(t *testing.T) {
 			}
 			var update pushward.UpdateRequest
 			testutil.UnmarshalBody(t, recorded[1].Body, &update)
-			if update.State != "ONGOING" {
+			if update.State != pushward.StateOngoing {
 				t.Errorf("expected ONGOING, got %s", update.State)
 			}
 			if update.Content.Template != expectedTemplate {

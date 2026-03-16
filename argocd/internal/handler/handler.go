@@ -23,7 +23,7 @@ type Handler struct {
 	client        *pushward.Client
 	config        *config.Config
 	mu            sync.Mutex
-	apps          map[string]*trackedApp  // keyed by app name
+	apps          map[string]*trackedApp // keyed by app name
 	recentDeploys map[string]*time.Timer // untracked deploys awaiting a matching sync-succeeded
 }
 
@@ -147,11 +147,11 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 			}
 		}
 		app = &trackedApp{
-			slug:    slug,
-			appName: p.App,
+			slug:     slug,
+			appName:  p.App,
 			revision: p.Revision,
-			repoURL: p.RepoURL,
-			step:    1,
+			repoURL:  p.RepoURL,
+			step:     1,
 		}
 		h.apps[p.App] = app
 	} else {
@@ -198,7 +198,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:     "pipeline",
 			Progress:     float64(step) / float64(total),
@@ -248,12 +248,12 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 
 			// Start grace period at step 2 — if deployed comes quickly, skip
 			app = &trackedApp{
-				slug:    slug,
-				appName: p.App,
+				slug:     slug,
+				appName:  p.App,
 				revision: p.Revision,
-				repoURL: p.RepoURL,
-				step:    2,
-				pending: true,
+				repoURL:  p.RepoURL,
+				step:     2,
+				pending:  true,
 			}
 			app.graceTimer = time.AfterFunc(gracePeriod, func() {
 				h.graceExpired(p.App)
@@ -266,11 +266,11 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 
 		// No grace period — create and send step 2 (original behavior)
 		app = &trackedApp{
-			slug:    slug,
-			appName: p.App,
+			slug:     slug,
+			appName:  p.App,
 			revision: p.Revision,
-			repoURL: p.RepoURL,
-			step:    2,
+			repoURL:  p.RepoURL,
+			step:     2,
 		}
 		h.apps[p.App] = app
 		h.mu.Unlock()
@@ -294,7 +294,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:     "pipeline",
 			Progress:     float64(step) / float64(total),
@@ -366,11 +366,11 @@ func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) 
 
 		// No grace period — create and immediately end (original behavior)
 		app = &trackedApp{
-			slug:    slug,
-			appName: p.App,
+			slug:     slug,
+			appName:  p.App,
 			revision: p.Revision,
-			repoURL: p.RepoURL,
-			step:    3,
+			repoURL:  p.RepoURL,
+			step:     3,
 		}
 		h.apps[p.App] = app
 		h.mu.Unlock()
@@ -429,11 +429,11 @@ func (h *Handler) handleSyncFailed(ctx context.Context, p *argocd.WebhookPayload
 		}
 	} else {
 		app = &trackedApp{
-			slug:    slug,
-			appName: p.App,
+			slug:     slug,
+			appName:  p.App,
 			revision: p.Revision,
-			repoURL: p.RepoURL,
-			step:    1,
+			repoURL:  p.RepoURL,
+			step:     1,
 		}
 		h.apps[p.App] = app
 	}
@@ -491,11 +491,11 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 		}
 	} else {
 		app = &trackedApp{
-			slug:    slug,
-			appName: p.App,
+			slug:     slug,
+			appName:  p.App,
 			revision: p.Revision,
-			repoURL: p.RepoURL,
-			step:    1,
+			repoURL:  p.RepoURL,
+			step:     1,
 		}
 		h.apps[p.App] = app
 	}
@@ -508,7 +508,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 		total := totalSteps
 		url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 		req := pushward.UpdateRequest{
-			State: "ONGOING",
+			State: pushward.StateOngoing,
 			Content: pushward.Content{
 				Template:     "pipeline",
 				Progress:     float64(step) / float64(total),
@@ -607,7 +607,7 @@ func (h *Handler) graceExpired(appName string) {
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(appName, repoURL, revision)
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:     "pipeline",
 			Progress:     float64(step) / float64(total),
@@ -649,7 +649,7 @@ func (h *Handler) scheduleEnd(appName string, content pushward.Content) {
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 		ongoingReq := pushward.UpdateRequest{
-			State:   "ONGOING",
+			State:   pushward.StateOngoing,
 			Content: content,
 		}
 		if err := h.client.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
@@ -665,7 +665,7 @@ func (h *Handler) scheduleEnd(appName string, content pushward.Content) {
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel2()
 		endedReq := pushward.UpdateRequest{
-			State:   "ENDED",
+			State:   pushward.StateEnded,
 			Content: content,
 		}
 		if err := h.client.UpdateActivity(ctx2, slug, endedReq); err != nil {

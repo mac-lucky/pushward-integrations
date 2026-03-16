@@ -89,9 +89,9 @@ func (t *Tracker) handleField(slug string, data map[string]any) {
 	switch mapped {
 	case "IGNORE":
 		return
-	case "ONGOING":
+	case pushward.StateOngoing:
 		t.createOrUpdate(slug, data)
-	case "ENDED":
+	case pushward.StateEnded:
 		t.scheduleEnd(slug, data)
 	}
 }
@@ -131,7 +131,7 @@ func (t *Tracker) handlePresence(slug string, data map[string]any) {
 	t.mu.Unlock()
 
 	// Debounced update
-	t.sendUpdate(slug, data, "ONGOING")
+	t.sendUpdate(slug, data, pushward.StateOngoing)
 }
 
 func (t *Tracker) createOrUpdate(slug string, data map[string]any) {
@@ -147,7 +147,7 @@ func (t *Tracker) createOrUpdate(slug string, data map[string]any) {
 		t.createActivity(slug, data)
 	}
 
-	t.sendUpdate(slug, data, "ONGOING")
+	t.sendUpdate(slug, data, pushward.StateOngoing)
 }
 
 func (t *Tracker) createActivity(slug string, data map[string]any) {
@@ -185,7 +185,7 @@ func (t *Tracker) sendUpdate(slug string, data map[string]any, state string) {
 	}
 
 	// Debounce: skip if within update interval (exception: ENDED always goes through)
-	if state != "ENDED" && time.Since(act.lastSent) < t.cfg.UpdateInterval {
+	if state != pushward.StateEnded && time.Since(act.lastSent) < t.cfg.UpdateInterval {
 		t.mu.Unlock()
 		return
 	}
@@ -229,7 +229,7 @@ func (t *Tracker) scheduleEnd(slug string, data map[string]any) {
 
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
-		req1 := pushward.UpdateRequest{State: "ONGOING", Content: content}
+		req1 := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 		if err := t.pw.UpdateActivity(ctx1, slug, req1); err != nil {
 			slog.Error("failed to update activity (end phase 1)", "slug", slug, "error", err)
 		}
@@ -240,7 +240,7 @@ func (t *Tracker) scheduleEnd(slug string, data map[string]any) {
 		time.AfterFunc(displayTime, func() {
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel2()
-			req2 := pushward.UpdateRequest{State: "ENDED", Content: content}
+			req2 := pushward.UpdateRequest{State: pushward.StateEnded, Content: content}
 			if err := t.pw.UpdateActivity(ctx2, slug, req2); err != nil {
 				slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
 			}

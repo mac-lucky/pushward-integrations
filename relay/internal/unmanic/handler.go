@@ -14,8 +14,8 @@ import (
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
@@ -141,7 +141,7 @@ func (h *Handler) scheduleEnd(userKey, slug string, content pushward.Content) {
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 		ongoingReq := pushward.UpdateRequest{
-			State:   "ONGOING",
+			State:   pushward.StateOngoing,
 			Content: content,
 		}
 		if err := cl.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
@@ -157,7 +157,7 @@ func (h *Handler) scheduleEnd(userKey, slug string, content pushward.Content) {
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel2()
 		endedReq := pushward.UpdateRequest{
-			State:   "ENDED",
+			State:   pushward.StateEnded,
 			Content: content,
 		}
 		if err := cl.UpdateActivity(ctx2, slug, endedReq); err != nil {

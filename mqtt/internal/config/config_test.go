@@ -20,8 +20,8 @@ rules:
     lifecycle: "field"
     state_field: "status"
     state_map:
-      on: "ONGOING"
-      off: "ENDED"
+      on: pushward.StateOngoing
+      off: pushward.StateEnded
 `
 	path := filepath.Join(t.TempDir(), "config.yml")
 	if err := os.WriteFile(path, []byte(yml), 0o644); err != nil {
@@ -56,7 +56,7 @@ rules:
     lifecycle: "field"
     state_field: "status"
     state_map:
-      on: "ONGOING"
+      on: pushward.StateOngoing
 `
 	path := filepath.Join(t.TempDir(), "config.yml")
 	os.WriteFile(path, []byte(yml), 0o644)

@@ -106,8 +106,8 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, p *webhookPa
 			return
 		}
 
-		step1 := intPtr(1)
-		step2 := intPtr(2)
+		step1 := pushward.IntPtr(1)
+		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
 			Template:    "pipeline",
 			Progress:    0,
@@ -119,7 +119,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, p *webhookPa
 			TotalSteps:  step2,
 		}
 
-		req := pushward.UpdateRequest{State: "ONGOING", Content: content}
+		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 		if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 			slog.Error("failed to update proxmox backup activity", "slug", slug, "error", err)
 			return
@@ -137,7 +137,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, p *webhookPa
 			return
 		}
 
-		step2 := intPtr(2)
+		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
 			Template:    "pipeline",
 			Progress:    1.0,
@@ -158,7 +158,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, p *webhookPa
 			return
 		}
 
-		step2 := intPtr(2)
+		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
 			Template:    "pipeline",
 			Progress:    1.0,
@@ -207,8 +207,8 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, p *webh
 			return
 		}
 
-		step1 := intPtr(1)
-		step2 := intPtr(2)
+		step1 := pushward.IntPtr(1)
+		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
 			Template:    "pipeline",
 			Progress:    0,
@@ -220,7 +220,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, p *webh
 			TotalSteps:  step2,
 		}
 
-		req := pushward.UpdateRequest{State: "ONGOING", Content: content}
+		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 		if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 			slog.Error("failed to update proxmox replication activity", "slug", slug, "error", err)
 			return
@@ -238,7 +238,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, p *webh
 			return
 		}
 
-		step2 := intPtr(2)
+		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
 			Template:    "pipeline",
 			Progress:    1.0,
@@ -259,7 +259,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, p *webh
 			return
 		}
 
-		step2 := intPtr(2)
+		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
 			Template:    "pipeline",
 			Progress:    1.0,
@@ -301,7 +301,7 @@ func (h *Handler) handleFencing(ctx context.Context, userKey string, p *webhookP
 		AccentColor: "#FF3B30",
 	}
 
-	req := pushward.UpdateRequest{State: "ONGOING", Content: content}
+	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		slog.Error("failed to update proxmox fencing activity", "slug", slug, "error", err)
 		return
@@ -339,7 +339,7 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey string, p *webhookP
 		AccentColor: "#007AFF",
 	}
 
-	req := pushward.UpdateRequest{State: "ONGOING", Content: content}
+	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		slog.Error("failed to update proxmox updates activity", "slug", slug, "error", err)
 		return
@@ -351,8 +351,6 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey string, p *webhookP
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	slog.Info("proxmox updates event", "slug", slug, "hostname", p.Hostname)
 }
-
-func intPtr(v int) *int { return &v }
 
 func truncateField(s string, max int) string {
 	if utf8.RuneCountInString(s) <= max {

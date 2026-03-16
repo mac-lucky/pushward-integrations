@@ -49,7 +49,7 @@ func New(ctx context.Context, cfg *config.Config, octo OctoPrintAPI, pw *pushwar
 // Cleanup ends any stale activity left over from a previous run.
 func (t *Tracker) Cleanup(ctx context.Context) {
 	req := pushward.UpdateRequest{
-		State:   "ENDED",
+		State:   pushward.StateEnded,
 		Content: pushward.Content{Template: "generic", Progress: 0, State: "Dismissed"},
 	}
 	if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
@@ -165,7 +165,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		return
 	}
 
-	t.send(ctx, 0.0, "Starting...", "arrow.triangle.2.circlepath", "#007AFF", nil, "", "ONGOING")
+	t.send(ctx, 0.0, "Starting...", "arrow.triangle.2.circlepath", "#007AFF", nil, "", pushward.StateOngoing)
 
 	ticker := time.NewTicker(t.cfg.Polling.Interval)
 	defer ticker.Stop()
@@ -197,7 +197,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 			// Build subtitle with filename and nozzle temp
 			subtitle := buildSubtitle(ctx, t.octo, filename)
 
-			t.send(ctx, progress, stateText, "printer.fill", "#007AFF", job.Progress.PrintTimeLeft, subtitle, "ONGOING")
+			t.send(ctx, progress, stateText, "printer.fill", "#007AFF", job.Progress.PrintTimeLeft, subtitle, pushward.StateOngoing)
 
 		case job.State == "Pausing" || job.State == "Paused":
 			progress := float64(0)
@@ -205,14 +205,14 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 				progress = *job.Progress.Completion / 100.0
 			}
 			subtitle := buildSubtitle(ctx, t.octo, filename)
-			t.send(ctx, progress, "Paused", "pause.circle.fill", "#FF9500", nil, subtitle, "ONGOING")
+			t.send(ctx, progress, "Paused", "pause.circle.fill", "#FF9500", nil, subtitle, pushward.StateOngoing)
 
 		case job.State == "Cancelling":
 			progress := float64(0)
 			if job.Progress.Completion != nil {
 				progress = *job.Progress.Completion / 100.0
 			}
-			t.send(ctx, progress, "Cancelling...", "xmark.circle", "#FF9500", nil, filename, "ONGOING")
+			t.send(ctx, progress, "Cancelling...", "xmark.circle", "#FF9500", nil, filename, pushward.StateOngoing)
 
 		case job.State == "Operational":
 			t.mu.Lock()
@@ -244,7 +244,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 
 		case job.State == "Offline":
 			slog.Warn("printer went offline")
-			t.send(ctx, 0.0, "Offline", "wifi.slash", "#FF3B30", nil, "", "ENDED")
+			t.send(ctx, 0.0, "Offline", "wifi.slash", "#FF3B30", nil, "", pushward.StateEnded)
 			return
 		}
 	}
@@ -252,7 +252,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 
 func (t *Tracker) twoPhaseEnd(ctx context.Context, resumed bool, progress float64, stateText, icon, color, subtitle string) {
 	if resumed {
-		t.send(ctx, progress, stateText, icon, color, nil, subtitle, "ENDED")
+		t.send(ctx, progress, stateText, icon, color, nil, subtitle, pushward.StateEnded)
 		slog.Info("tracking complete (resumed, skipping two-phase end)")
 		return
 	}
@@ -266,7 +266,7 @@ func (t *Tracker) twoPhaseEnd(ctx context.Context, resumed bool, progress float6
 		return
 	case <-time.After(endDelay):
 	}
-	t.send(ctx, progress, stateText, icon, color, nil, subtitle, "ONGOING")
+	t.send(ctx, progress, stateText, icon, color, nil, subtitle, pushward.StateOngoing)
 	slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
 
 	// Phase 2: ENDED
@@ -275,7 +275,7 @@ func (t *Tracker) twoPhaseEnd(ctx context.Context, resumed bool, progress float6
 		return
 	case <-time.After(displayTime):
 	}
-	t.send(ctx, progress, stateText, icon, color, nil, subtitle, "ENDED")
+	t.send(ctx, progress, stateText, icon, color, nil, subtitle, pushward.StateEnded)
 	slog.Info("tracking complete")
 }
 

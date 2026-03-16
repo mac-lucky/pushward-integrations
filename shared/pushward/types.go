@@ -1,5 +1,17 @@
 package pushward
 
+// Activity state constants.
+const (
+	StateOngoing = "ONGOING"
+	StateEnded   = "ENDED"
+)
+
+// IntPtr returns a pointer to the given int value.
+func IntPtr(v int) *int { return &v }
+
+// Int64Ptr returns a pointer to the given int64 value.
+func Int64Ptr(v int64) *int64 { return &v }
+
 // Content is the superset of all content fields used across integrations.
 // Unused fields use omitempty and won't appear in JSON.
 type Content struct {

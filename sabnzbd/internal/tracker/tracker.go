@@ -54,7 +54,7 @@ func New(ctx context.Context, cfg *config.Config, sab *sabnzbd.Client, pw *pushw
 // Cleanup ends any stale activity left over from a previous run (e.g. crash).
 func (t *Tracker) Cleanup(ctx context.Context) {
 	req := pushward.UpdateRequest{
-		State:   "ENDED",
+		State:   pushward.StateEnded,
 		Content: pushward.Content{Template: "generic", Progress: 0, State: "Dismissed"},
 	}
 	if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
@@ -186,11 +186,11 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 
 	// Phase 1: Wait for SABnzbd to start downloading
 	slog.Info("waiting for download to start")
-	t.send(ctx, 0.0, "Starting...", "arrow.down.circle", "blue", nil, "", "ONGOING")
+	t.send(ctx, 0.0, "Starting...", "arrow.down.circle", "blue", nil, "", pushward.StateOngoing)
 
 	if !t.waitForQueueActive(ctx, 60) {
 		slog.Warn("SABnzbd never started downloading, giving up")
-		t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", "green", nil, "", "ENDED")
+		t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", "green", nil, "", pushward.StateEnded)
 		return
 	}
 
@@ -247,7 +247,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 
 	// Two-phase end: ONGOING with final content → short display → ENDED
 	if resumed {
-		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, "ENDED")
+		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, pushward.StateEnded)
 		slog.Info("tracking complete (resumed, skipping two-phase end)")
 	} else {
 		endDelay := t.cfg.PushWard.EndDelay
@@ -259,7 +259,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 			return
 		case <-time.After(endDelay):
 		}
-		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, "ONGOING")
+		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, pushward.StateOngoing)
 		slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
 
 		// Phase 2: ENDED (dismisses Live Activity)
@@ -268,7 +268,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 			return
 		case <-time.After(displayTime):
 		}
-		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, "ENDED")
+		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, pushward.StateEnded)
 		slog.Info("tracking complete")
 	}
 }
@@ -341,7 +341,7 @@ func (t *Tracker) trackDownloads(ctx context.Context) float64 {
 // Returns total post-processing duration.
 func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 	slog.Info("tracking post-processing")
-	t.send(ctx, 1.0, "Unpacking...", "archivebox", "orange", nil, "", "ONGOING")
+	t.send(ctx, 1.0, "Unpacking...", "archivebox", "orange", nil, "", pushward.StateOngoing)
 	ppStart := time.Now()
 
 	for {
@@ -354,7 +354,7 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 			icon = "archivebox"
 		}
 		subtitle := truncate(ppName, 30)
-		t.send(ctx, 1.0, ppStatus+"...", icon, "orange", nil, subtitle, "ONGOING")
+		t.send(ctx, 1.0, ppStatus+"...", icon, "orange", nil, subtitle, pushward.StateOngoing)
 		select {
 		case <-ctx.Done():
 			return time.Since(ppStart)
@@ -395,7 +395,7 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 	}
 
 	if status == "Paused" {
-		t.send(ctx, progress, "Paused", "pause.circle.fill", "blue", nil, subtitle, "ONGOING")
+		t.send(ctx, progress, "Paused", "pause.circle.fill", "blue", nil, subtitle, pushward.StateOngoing)
 		return true
 	}
 
@@ -409,7 +409,7 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 		stateStr += fmt.Sprintf(" · avg %.0f", avgMB)
 	}
 
-	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", "blue", remainingSeconds, subtitle, "ONGOING")
+	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", "blue", remainingSeconds, subtitle, pushward.StateOngoing)
 	return true
 }
 

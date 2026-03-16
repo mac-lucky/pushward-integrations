@@ -83,7 +83,7 @@ func testConfig() *config.Config {
 func printingJob(filename string, completion float64, timeLeft int) api.JobResponse {
 	comp := completion
 	return api.JobResponse{
-		Job:   api.JobInfo{File: api.FileInfo{Name: filename}},
+		Job: api.JobInfo{File: api.FileInfo{Name: filename}},
 		Progress: api.ProgressInfo{
 			Completion:    &comp,
 			PrintTimeLeft: &timeLeft,
@@ -167,7 +167,7 @@ func TestWebhookStartsTracking(t *testing.T) {
 	// Verify starting update
 	var starting pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &starting)
-	if starting.State != "ONGOING" {
+	if starting.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", starting.State)
 	}
 	if starting.Content.State != "Starting..." {
@@ -290,10 +290,10 @@ func TestTrackingProgressToComplete(t *testing.T) {
 		var req pushward.UpdateRequest
 		testutil.UnmarshalBody(t, c.Body, &req)
 		if req.Content.State == "Complete" && req.Content.Icon == "checkmark.circle.fill" {
-			if req.State == "ONGOING" {
+			if req.State == pushward.StateOngoing {
 				foundOngoing = true
 			}
-			if req.State == "ENDED" {
+			if req.State == pushward.StateEnded {
 				foundEnded = true
 			}
 		}
@@ -342,7 +342,7 @@ func TestTrackingError(t *testing.T) {
 		}
 		var req pushward.UpdateRequest
 		testutil.UnmarshalBody(t, c.Body, &req)
-		if req.Content.State == "Failed" && req.State == "ENDED" {
+		if req.Content.State == "Failed" && req.State == pushward.StateEnded {
 			foundFailed = true
 			if req.Content.AccentColor != "#FF3B30" {
 				t.Errorf("failed accent = %q, want #FF3B30", req.Content.AccentColor)

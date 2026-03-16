@@ -30,8 +30,8 @@ func fieldRule() *config.RuleConfig {
 		StateField: "running_state",
 		StateMap: map[string]string{
 			"idle":    "IGNORE",
-			"running": "ONGOING",
-			"done":    "ENDED",
+			"running": pushward.StateOngoing,
+			"done":    pushward.StateEnded,
 		},
 		Content: config.ContentMapping{
 			State: "{running_state}",
@@ -118,7 +118,7 @@ func TestFieldMode_Ended(t *testing.T) {
 
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, c[3].Body, &req)
-	if req.State != "ENDED" {
+	if req.State != pushward.StateEnded {
 		t.Errorf("final state = %q, want ENDED", req.State)
 	}
 }
@@ -155,7 +155,7 @@ func TestPresenceMode_AutoEnd(t *testing.T) {
 	// Last call should be ENDED
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, c[len(c)-1].Body, &req)
-	if req.State != "ENDED" {
+	if req.State != pushward.StateEnded {
 		t.Errorf("final state = %q, want ENDED", req.State)
 	}
 }

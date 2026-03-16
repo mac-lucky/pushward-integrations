@@ -19,9 +19,6 @@ type providerTest struct {
 	content pushward.Content
 }
 
-func intPtr(v int) *int    { return &v }
-func int64Ptr(v int64) *int64 { return &v }
-
 var providers = map[string]providerTest{
 	"grafana": {
 		name: "Grafana Test",
@@ -44,8 +41,8 @@ var providers = map[string]providerTest{
 			Icon:        "arrow.triangle.2.circlepath",
 			Subtitle:    "ArgoCD \u00b7 test-app",
 			AccentColor: "#007AFF",
-			CurrentStep: intPtr(2),
-			TotalSteps:  intPtr(3),
+			CurrentStep: pushward.IntPtr(2),
+			TotalSteps:  pushward.IntPtr(3),
 		},
 	},
 	"radarr": {
@@ -57,8 +54,8 @@ var providers = map[string]providerTest{
 			Icon:        "arrow.down.circle",
 			Subtitle:    "Radarr \u00b7 Test Movie (2024) \u00b7 1080p",
 			AccentColor: "#007AFF",
-			CurrentStep: intPtr(1),
-			TotalSteps:  intPtr(2),
+			CurrentStep: pushward.IntPtr(1),
+			TotalSteps:  pushward.IntPtr(2),
 		},
 	},
 	"sonarr": {
@@ -70,8 +67,8 @@ var providers = map[string]providerTest{
 			Icon:        "arrow.down.circle",
 			Subtitle:    "Sonarr \u00b7 Test Show - S01E01 \u00b7 1080p",
 			AccentColor: "#007AFF",
-			CurrentStep: intPtr(1),
-			TotalSteps:  intPtr(2),
+			CurrentStep: pushward.IntPtr(1),
+			TotalSteps:  pushward.IntPtr(2),
 		},
 	},
 	"jellyfin": {
@@ -128,8 +125,8 @@ var providers = map[string]providerTest{
 			Icon:        "externaldrive.fill.badge.timemachine",
 			Subtitle:    "Proxmox \u00b7 pve1",
 			AccentColor: "#007AFF",
-			CurrentStep: intPtr(1),
-			TotalSteps:  intPtr(2),
+			CurrentStep: pushward.IntPtr(1),
+			TotalSteps:  pushward.IntPtr(2),
 		},
 	},
 	"overseerr": {
@@ -141,8 +138,8 @@ var providers = map[string]providerTest{
 			Icon:        "hourglass",
 			Subtitle:    "Overseerr \u00b7 Test Movie",
 			AccentColor: "#FF9500",
-			CurrentStep: intPtr(1),
-			TotalSteps:  intPtr(4),
+			CurrentStep: pushward.IntPtr(1),
+			TotalSteps:  pushward.IntPtr(4),
 		},
 	},
 	"uptimekuma": {
@@ -213,19 +210,19 @@ func SendTest(ctx context.Context, cl *pushward.Client, provider string) error {
 	content := pt.content
 	// Deep-copy pointer fields to avoid mutating the shared map entries
 	if content.CurrentStep != nil {
-		content.CurrentStep = intPtr(*content.CurrentStep)
+		content.CurrentStep = pushward.IntPtr(*content.CurrentStep)
 	}
 	if content.TotalSteps != nil {
-		content.TotalSteps = intPtr(*content.TotalSteps)
+		content.TotalSteps = pushward.IntPtr(*content.TotalSteps)
 	}
 	// For alert-template providers, set FiredAt to now
 	if content.Template == "alert" {
 		now := time.Now().Unix()
-		content.FiredAt = int64Ptr(now)
+		content.FiredAt = pushward.Int64Ptr(now)
 	}
 
 	if err := cl.UpdateActivity(ctx, slug, pushward.UpdateRequest{
-		State:   "ONGOING",
+		State:   pushward.StateOngoing,
 		Content: content,
 	}); err != nil {
 		return fmt.Errorf("update activity: %w", err)

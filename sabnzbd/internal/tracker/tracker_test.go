@@ -262,10 +262,10 @@ func TestParseTimeLeft(t *testing.T) {
 		input string
 		want  *int
 	}{
-		{"0:05:30", intPtr(330)},
-		{"1:30:00", intPtr(5400)},
-		{"0:00:10", intPtr(10)},
-		{"0:00:00", intPtr(0)},
+		{"0:05:30", pushward.IntPtr(330)},
+		{"1:30:00", pushward.IntPtr(5400)},
+		{"0:00:10", pushward.IntPtr(10)},
+		{"0:00:00", pushward.IntPtr(0)},
 		{"invalid", nil},
 		{"1:2", nil},
 		{"a:b:c", nil},
@@ -290,8 +290,6 @@ func TestParseTimeLeft(t *testing.T) {
 		})
 	}
 }
-
-func intPtr(v int) *int { return &v }
 
 // --- formatDuration tests ---
 
@@ -370,7 +368,7 @@ func TestCleanup_SendsEndedUpdate(t *testing.T) {
 
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req)
-	if req.State != "ENDED" {
+	if req.State != pushward.StateEnded {
 		t.Errorf("expected ENDED state, got %s", req.State)
 	}
 }
@@ -491,7 +489,7 @@ func TestTrackingLifecycle_Download_PP_Complete(t *testing.T) {
 	}
 	var lastReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, last.Body, &lastReq)
-	if lastReq.State != "ENDED" {
+	if lastReq.State != pushward.StateEnded {
 		t.Errorf("last update state: expected ENDED, got %s", lastReq.State)
 	}
 
@@ -501,7 +499,7 @@ func TestTrackingLifecycle_Download_PP_Complete(t *testing.T) {
 		if c.Method == "PATCH" {
 			var r pushward.UpdateRequest
 			testutil.UnmarshalBody(t, c.Body, &r)
-			if r.State == "ONGOING" {
+			if r.State == pushward.StateOngoing {
 				hasOngoing = true
 				break
 			}
@@ -728,7 +726,7 @@ func TestResumedTracking_SkipsTwoPhaseEnd(t *testing.T) {
 		if c.Method == "PATCH" {
 			var req pushward.UpdateRequest
 			testutil.UnmarshalBody(t, c.Body, &req)
-			if req.State == "ENDED" {
+			if req.State == pushward.StateEnded {
 				endedCount++
 			}
 		}

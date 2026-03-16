@@ -160,13 +160,13 @@ func (t *Tracker) sendProgress(ctx context.Context, state *bambulab.MergedState)
 		stateText = fmt.Sprintf("%d%%", state.Percent)
 	}
 
-	t.send(ctx, progress, stateText, "printer.fill", "blue", &remaining, subtitle, "ONGOING")
+	t.send(ctx, progress, stateText, "printer.fill", "blue", &remaining, subtitle, pushward.StateOngoing)
 }
 
 func (t *Tracker) sendPaused(ctx context.Context, state *bambulab.MergedState) {
 	progress := float64(state.Percent) / 100.0
 	subtitle := buildSubtitle(state)
-	t.send(ctx, progress, "Paused", "pause.circle.fill", "orange", nil, subtitle, "ONGOING")
+	t.send(ctx, progress, "Paused", "pause.circle.fill", "orange", nil, subtitle, pushward.StateOngoing)
 }
 
 func (t *Tracker) sendPreparing(ctx context.Context, state *bambulab.MergedState) {
@@ -174,7 +174,7 @@ func (t *Tracker) sendPreparing(ctx context.Context, state *bambulab.MergedState
 	if state.SubtaskName != "" {
 		subtitle = truncate(state.SubtaskName, 30)
 	}
-	t.send(ctx, 0.0, "Preparing...", "arrow.triangle.2.circlepath", "blue", nil, subtitle, "ONGOING")
+	t.send(ctx, 0.0, "Preparing...", "arrow.triangle.2.circlepath", "blue", nil, subtitle, pushward.StateOngoing)
 }
 
 func (t *Tracker) finishActivity(_ context.Context, state *bambulab.MergedState) {
@@ -193,7 +193,7 @@ func (t *Tracker) finishActivity(_ context.Context, state *bambulab.MergedState)
 	t.endTimer = time.AfterFunc(endDelay, func() {
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
-		t.send(ctx1, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, "ONGOING")
+		t.send(ctx1, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, pushward.StateOngoing)
 		cancel1()
 		slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
 
@@ -201,7 +201,7 @@ func (t *Tracker) finishActivity(_ context.Context, state *bambulab.MergedState)
 		time.AfterFunc(displayTime, func() {
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel2()
-			t.send(ctx2, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, "ENDED")
+			t.send(ctx2, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, pushward.StateEnded)
 			slog.Info("print tracking complete")
 		})
 	})
@@ -224,7 +224,7 @@ func (t *Tracker) failActivity(_ context.Context, state *bambulab.MergedState) {
 	t.endTimer = time.AfterFunc(endDelay, func() {
 		// Phase 1: ONGOING with failure content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
-		t.send(ctx1, progress, "Failed", "xmark.circle.fill", "red", nil, subtitle, "ONGOING")
+		t.send(ctx1, progress, "Failed", "xmark.circle.fill", "red", nil, subtitle, pushward.StateOngoing)
 		cancel1()
 		slog.Info("two-phase end: sent ONGOING with failure content", "display_time", displayTime)
 
@@ -232,14 +232,14 @@ func (t *Tracker) failActivity(_ context.Context, state *bambulab.MergedState) {
 		time.AfterFunc(displayTime, func() {
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel2()
-			t.send(ctx2, progress, "Failed", "xmark.circle.fill", "red", nil, subtitle, "ENDED")
+			t.send(ctx2, progress, "Failed", "xmark.circle.fill", "red", nil, subtitle, pushward.StateEnded)
 			slog.Info("print failure tracking complete")
 		})
 	})
 }
 
 func (t *Tracker) endActivity(ctx context.Context, stateText, icon, color string) {
-	t.send(ctx, 0.0, stateText, icon, color, nil, "", "ENDED")
+	t.send(ctx, 0.0, stateText, icon, color, nil, "", pushward.StateEnded)
 	t.tracking = false
 	t.lastState = ""
 }

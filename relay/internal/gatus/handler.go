@@ -129,7 +129,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 	}
 
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:    "alert",
 			Progress:    1.0,
@@ -146,7 +146,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 		slog.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "state", "ONGOING", "severity", "error")
+	slog.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "error")
 }
 
 func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *pushward.Client, p *webhookPayload) {

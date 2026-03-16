@@ -120,7 +120,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, pwClient *push
 	subtitle := "Uptime Kuma \u00b7 " + truncateField(p.Monitor.Name, 50)
 
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:    "alert",
 			Progress:    1.0,
@@ -137,7 +137,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, pwClient *push
 		slog.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "state", "ONGOING", "severity", "error")
+	slog.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "error")
 }
 
 func (h *Handler) handleUp(ctx context.Context, userKey string, pwClient *pushward.Client, p *webhookPayload) {
@@ -197,7 +197,7 @@ func (h *Handler) handlePending(ctx context.Context, userKey string, pwClient *p
 	subtitle := "Uptime Kuma \u00b7 " + truncateField(p.Monitor.Name, 50)
 
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:    "alert",
 			Progress:    1.0,

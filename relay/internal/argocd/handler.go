@@ -258,7 +258,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:     "pipeline",
 			Progress:     float64(step) / float64(total),
@@ -357,7 +357,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *we
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:     "pipeline",
 			Progress:     float64(step) / float64(total),
@@ -565,7 +565,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *w
 		total := totalSteps
 		url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 		req := pushward.UpdateRequest{
-			State: "ONGOING",
+			State: pushward.StateOngoing,
 			Content: pushward.Content{
 				Template:     "pipeline",
 				Progress:     float64(step) / float64(total),
@@ -670,7 +670,7 @@ func (h *Handler) graceExpired(userKey, appName string) {
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(appName, repoURL, revision)
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:     "pipeline",
 			Progress:     float64(step) / float64(total),
@@ -715,7 +715,7 @@ func (h *Handler) scheduleEnd(userKey, appName string, content pushward.Content)
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 		ongoingReq := pushward.UpdateRequest{
-			State:   "ONGOING",
+			State:   pushward.StateOngoing,
 			Content: content,
 		}
 		if err := pw.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
@@ -731,7 +731,7 @@ func (h *Handler) scheduleEnd(userKey, appName string, content pushward.Content)
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel2()
 		endedReq := pushward.UpdateRequest{
-			State:   "ENDED",
+			State:   pushward.StateEnded,
 			Content: content,
 		}
 		if err := pw.UpdateActivity(ctx2, slug, endedReq); err != nil {

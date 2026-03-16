@@ -108,7 +108,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	// Verify step 1/3 update
 	var update1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update1)
-	if update1.State != "ONGOING" {
+	if update1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update1.State)
 	}
 	if update1.Content.Template != "pipeline" {
@@ -158,7 +158,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	}
 	var update2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &update2)
-	if update2.State != "ONGOING" {
+	if update2.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update2.State)
 	}
 	if update2.Content.State != "Rolling out..." {
@@ -194,7 +194,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	// Phase 1: ONGOING with "Deployed" content
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
-	if phase1.State != "ONGOING" {
+	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
 	if phase1.Content.State != "Deployed" {
@@ -204,7 +204,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	// Phase 2: ENDED with "Deployed" content
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
 	if phase2.Content.State != "Deployed" {
@@ -251,7 +251,7 @@ func TestSyncRunning_ThenSyncFailed(t *testing.T) {
 
 	var failReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &failReq)
-	if failReq.State != "ENDED" {
+	if failReq.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", failReq.State)
 	}
 	if failReq.Content.State != "Sync Failed" {
@@ -293,7 +293,7 @@ func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 	// Degraded should be ONGOING (transient warning), not ENDED
 	var degradedReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &degradedReq)
-	if degradedReq.State != "ONGOING" {
+	if degradedReq.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (transient warning), got %s", degradedReq.State)
 	}
 	if degradedReq.Content.State != "Degraded" {
@@ -331,7 +331,7 @@ func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[5].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", phase2.State)
 	}
 	if phase2.Content.State != "Deployed" {
@@ -401,7 +401,7 @@ func TestUntracked_Deployed(t *testing.T) {
 
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &update)
-	if update.State != "ENDED" {
+	if update.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
 	if update.Content.State != "Deployed" {
@@ -433,7 +433,7 @@ func TestUntracked_SyncFailed(t *testing.T) {
 
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &update)
-	if update.State != "ENDED" {
+	if update.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
 	if update.Content.State != "Sync Failed" {
@@ -462,7 +462,7 @@ func TestUntracked_HealthDegraded(t *testing.T) {
 
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &update)
-	if update.State != "ENDED" {
+	if update.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
 	if update.Content.State != "Degraded" {
@@ -898,7 +898,7 @@ func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
 
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &update)
-	if update.State != "ENDED" {
+	if update.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
 	if update.Content.State != "Sync Failed" {
@@ -926,7 +926,7 @@ func TestGracePeriod_HealthDegraded_BypassesGrace(t *testing.T) {
 
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &update)
-	if update.State != "ENDED" {
+	if update.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", update.State)
 	}
 	if update.Content.State != "Degraded" {
@@ -1040,7 +1040,7 @@ func TestHealthDegraded_AtStep1_StillEnds(t *testing.T) {
 
 	var endReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &endReq)
-	if endReq.State != "ENDED" {
+	if endReq.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", endReq.State)
 	}
 	if endReq.Content.State != "Degraded" {
@@ -1078,7 +1078,7 @@ func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
 	for _, idx := range []int{3, 4} {
 		var req pushward.UpdateRequest
 		testutil.UnmarshalBody(t, recorded[idx].Body, &req)
-		if req.State != "ONGOING" {
+		if req.State != pushward.StateOngoing {
 			t.Errorf("call %d: expected ONGOING, got %s", idx, req.State)
 		}
 		if req.Content.State != "Degraded" {
@@ -1103,7 +1103,7 @@ func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
 
 	var endReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[6].Body, &endReq)
-	if endReq.State != "ENDED" {
+	if endReq.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", endReq.State)
 	}
 	if endReq.Content.State != "Deployed" {
