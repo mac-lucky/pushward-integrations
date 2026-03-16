@@ -174,7 +174,7 @@ func (h *Handler) handleFiring(ctx context.Context, alertname, fingerprint strin
 		slog.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "state", "ONGOING", "severity", req.Content.Severity)
+	slog.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", req.Content.Severity)
 }
 
 func (h *Handler) handleResolved(ctx context.Context, alertname, fingerprint string, info *instanceInfo) {
@@ -206,7 +206,7 @@ func (h *Handler) handleResolved(ctx context.Context, alertname, fingerprint str
 	}
 
 	if remaining == 0 {
-		slog.Info("ended activity", "slug", slug, "state", "ENDED")
+		slog.Info("ended activity", "slug", slug, "state", pushward.StateEnded)
 		// Server handles cleanup via ended_ttl — just remove from local map
 		h.mu.Lock()
 		delete(h.alertGroups, alertname)
@@ -234,7 +234,7 @@ func (h *Handler) buildOngoingUpdate(group *alertGroup) pushward.UpdateRequest {
 	firedAtPtr := &worst.firedAt
 
 	return pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:     "alert",
 			Progress:     1.0,
@@ -253,7 +253,7 @@ func (h *Handler) buildOngoingUpdate(group *alertGroup) pushward.UpdateRequest {
 func buildEndUpdate(info *instanceInfo) pushward.UpdateRequest {
 	firedAtPtr := &info.firedAt
 	return pushward.UpdateRequest{
-		State: "ENDED",
+		State: pushward.StateEnded,
 		Content: pushward.Content{
 			Template:     "alert",
 			Progress:     1.0,

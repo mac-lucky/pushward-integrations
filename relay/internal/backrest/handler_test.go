@@ -101,7 +101,7 @@ func TestSnapshotLifecycle(t *testing.T) {
 	// Verify initial ONGOING update
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.State != "ONGOING" {
+	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
 	if update.Content.State != "Backing up..." {
@@ -123,7 +123,7 @@ func TestSnapshotLifecycle(t *testing.T) {
 	// Phase 1: ONGOING with final content (from SUCCESS)
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
-	if phase1.State != "ONGOING" {
+	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
 	if phase1.Content.State != "Complete · 2.3 GB" {
@@ -139,7 +139,7 @@ func TestSnapshotLifecycle(t *testing.T) {
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
 	if phase2.Content.State != "Complete · 2.3 GB" {
@@ -195,7 +195,7 @@ func TestSnapshotError(t *testing.T) {
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
 }

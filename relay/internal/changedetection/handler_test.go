@@ -83,7 +83,7 @@ func TestPageChanged(t *testing.T) {
 	// Verify ONGOING update
 	var ongoing pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &ongoing)
-	if ongoing.State != "ONGOING" {
+	if ongoing.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", ongoing.State)
 	}
 	if ongoing.Content.Template != "alert" {
@@ -121,7 +121,7 @@ func TestPageChanged(t *testing.T) {
 	// Verify ENDED update
 	var ended pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &ended)
-	if ended.State != "ENDED" {
+	if ended.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", ended.State)
 	}
 	if ended.Content.State != "Price: $29.99" {

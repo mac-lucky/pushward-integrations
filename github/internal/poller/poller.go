@@ -209,7 +209,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 
 		// Send initial ONGOING (triggers push-to-start)
 		if err := p.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
-			State: "ONGOING",
+			State: pushward.StateOngoing,
 			Content: pushward.Content{
 				Template:     "pipeline",
 				Progress:     0.0,
@@ -217,8 +217,8 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 				Icon:         "arrow.triangle.branch",
 				Subtitle:     fmt.Sprintf("%s / %s", repoShort, run.Name),
 				AccentColor:  "green",
-				CurrentStep:  intPtr(0),
-				TotalSteps:   intPtr(initialTotalSteps),
+				CurrentStep:  pushward.IntPtr(0),
+				TotalSteps:   pushward.IntPtr(initialTotalSteps),
 				StepRows:     initialStepRows,
 				URL:          run.HTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", repo),
@@ -397,8 +397,8 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				Icon:         "arrow.triangle.branch",
 				Subtitle:     fmt.Sprintf("%s / %s", repoShort, tName),
 				AccentColor:  color,
-				CurrentStep:  intPtr(info.TotalSteps),
-				TotalSteps:   intPtr(info.TotalSteps),
+				CurrentStep:  pushward.IntPtr(info.TotalSteps),
+				TotalSteps:   pushward.IntPtr(info.TotalSteps),
 				StepRows:     info.StepRows,
 				URL:          tHTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
@@ -407,7 +407,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		}
 
 		if err := p.pw.UpdateActivity(ctx, tSlug, pushward.UpdateRequest{
-			State: "ONGOING",
+			State: pushward.StateOngoing,
 			Content: pushward.Content{
 				Template:     "pipeline",
 				Progress:     info.Progress,
@@ -415,8 +415,8 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				Icon:         "arrow.triangle.branch",
 				Subtitle:     fmt.Sprintf("%s / %s", repoShort, tName),
 				AccentColor:  "green",
-				CurrentStep:  intPtr(info.CurrentStep),
-				TotalSteps:   intPtr(info.TotalSteps),
+				CurrentStep:  pushward.IntPtr(info.CurrentStep),
+				TotalSteps:   pushward.IntPtr(info.TotalSteps),
 				StepRows:     info.StepRows,
 				URL:          tHTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
@@ -449,7 +449,7 @@ func (p *Poller) scheduleEnd(repo string, content pushward.Content) {
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 		ongoingReq := pushward.UpdateRequest{
-			State:   "ONGOING",
+			State:   pushward.StateOngoing,
 			Content: content,
 		}
 		if err := p.pw.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
@@ -465,7 +465,7 @@ func (p *Poller) scheduleEnd(repo string, content pushward.Content) {
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel2()
 		endedReq := pushward.UpdateRequest{
-			State:   "ENDED",
+			State:   pushward.StateEnded,
 			Content: content,
 		}
 		if err := p.pw.UpdateActivity(ctx2, slug, endedReq); err != nil {
@@ -482,10 +482,6 @@ func (p *Poller) scheduleEnd(repo string, content pushward.Content) {
 		p.mu.Unlock()
 	})
 	p.mu.Unlock()
-}
-
-func intPtr(v int) *int {
-	return &v
 }
 
 func repoName(fullRepo string) string {

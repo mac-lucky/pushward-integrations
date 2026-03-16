@@ -91,7 +91,7 @@ func TestPlaybackStart(t *testing.T) {
 	// Verify ONGOING update
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.State != "ONGOING" {
+	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
 	if update.Content.Template != "generic" {
@@ -169,7 +169,7 @@ func TestPlaybackStartAndStop(t *testing.T) {
 	// Phase 1: ONGOING with "Watched on Apple TV"
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
-	if phase1.State != "ONGOING" {
+	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
 	if phase1.Content.State != "Watched on Apple TV" {
@@ -185,7 +185,7 @@ func TestPlaybackStartAndStop(t *testing.T) {
 	// Phase 2: ENDED with "Watched on Apple TV"
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
 	if phase2.Content.State != "Watched on Apple TV" {
@@ -296,7 +296,7 @@ func TestItemAdded(t *testing.T) {
 	// Verify initial ONGOING
 	var ongoing pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &ongoing)
-	if ongoing.State != "ONGOING" {
+	if ongoing.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", ongoing.State)
 	}
 	if ongoing.Content.State != "Added to library" {
@@ -309,7 +309,7 @@ func TestItemAdded(t *testing.T) {
 	// Verify ENDED
 	var ended pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &ended)
-	if ended.State != "ENDED" {
+	if ended.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", ended.State)
 	}
 }
@@ -361,7 +361,7 @@ func TestTaskStartedAndCompleted(t *testing.T) {
 	// Verify Phase 1 (ONGOING with "Complete")
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
-	if phase1.State != "ONGOING" {
+	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
 	if phase1.Content.State != "Complete" {
@@ -377,7 +377,7 @@ func TestTaskStartedAndCompleted(t *testing.T) {
 	// Verify Phase 2 (ENDED)
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
-	if phase2.State != "ENDED" {
+	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
 }

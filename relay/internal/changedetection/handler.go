@@ -95,7 +95,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ongoingReq := pushward.UpdateRequest{
-		State:   "ONGOING",
+		State:   pushward.StateOngoing,
 		Content: content,
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, ongoingReq); err != nil {
@@ -105,7 +105,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	endedReq := pushward.UpdateRequest{
-		State:   "ENDED",
+		State:   pushward.StateEnded,
 		Content: content,
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, endedReq); err != nil {

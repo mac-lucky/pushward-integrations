@@ -134,7 +134,7 @@ func (h *Handler) handleStart(ctx context.Context, userKey string, p *webhookPay
 	}
 
 	req := pushward.UpdateRequest{
-		State:   "ONGOING",
+		State:   pushward.StateOngoing,
 		Content: content,
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {

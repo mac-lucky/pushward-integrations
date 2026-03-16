@@ -141,8 +141,8 @@ func TestScheduleEnd_TwoPhaseSuccess(t *testing.T) {
 		Icon:         "arrow.triangle.branch",
 		Subtitle:     "repo / CI",
 		AccentColor:  "green",
-		CurrentStep:  intPtr(2),
-		TotalSteps:   intPtr(2),
+		CurrentStep:  pushward.IntPtr(2),
+		TotalSteps:   pushward.IntPtr(2),
 		URL:          "https://github.com/owner/repo/actions/runs/100",
 		SecondaryURL: "https://github.com/owner/repo",
 	}
@@ -166,7 +166,7 @@ func TestScheduleEnd_TwoPhaseSuccess(t *testing.T) {
 	}
 	var req1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req1)
-	if req1.State != "ONGOING" {
+	if req1.State != pushward.StateOngoing {
 		t.Errorf("phase 1: expected ONGOING, got %s", req1.State)
 	}
 	if req1.Content.State != "Success" {
@@ -179,7 +179,7 @@ func TestScheduleEnd_TwoPhaseSuccess(t *testing.T) {
 	}
 	var req2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[1].Body, &req2)
-	if req2.State != "ENDED" {
+	if req2.State != pushward.StateEnded {
 		t.Errorf("phase 2: expected ENDED, got %s", req2.State)
 	}
 	if req2.Content.State != "Success" {
@@ -219,8 +219,8 @@ func TestScheduleEnd_TwoPhaseFailed(t *testing.T) {
 		Icon:         "arrow.triangle.branch",
 		Subtitle:     "repo / CI",
 		AccentColor:  "red",
-		CurrentStep:  intPtr(1),
-		TotalSteps:   intPtr(3),
+		CurrentStep:  pushward.IntPtr(1),
+		TotalSteps:   pushward.IntPtr(3),
 		URL:          "https://github.com/owner/repo/actions/runs/200",
 		SecondaryURL: "https://github.com/owner/repo",
 	}
@@ -235,7 +235,7 @@ func TestScheduleEnd_TwoPhaseFailed(t *testing.T) {
 
 	var req1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req1)
-	if req1.State != "ONGOING" {
+	if req1.State != pushward.StateOngoing {
 		t.Errorf("phase 1: expected ONGOING, got %s", req1.State)
 	}
 	if req1.Content.AccentColor != "red" {
@@ -244,7 +244,7 @@ func TestScheduleEnd_TwoPhaseFailed(t *testing.T) {
 
 	var req2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[1].Body, &req2)
-	if req2.State != "ENDED" {
+	if req2.State != pushward.StateEnded {
 		t.Errorf("phase 2: expected ENDED, got %s", req2.State)
 	}
 	if req2.Content.State != "Failed" {
@@ -437,8 +437,8 @@ func TestScheduleEnd_ContentPreserved(t *testing.T) {
 		Icon:         "arrow.triangle.branch",
 		Subtitle:     "repo / Deploy",
 		AccentColor:  "green",
-		CurrentStep:  intPtr(4),
-		TotalSteps:   intPtr(4),
+		CurrentStep:  pushward.IntPtr(4),
+		TotalSteps:   pushward.IntPtr(4),
 		URL:          "https://github.com/owner/repo/actions/runs/400",
 		SecondaryURL: "https://github.com/owner/repo",
 	}
@@ -673,7 +673,7 @@ func TestPollIdle_DiscoversAndTracksWorkflow(t *testing.T) {
 	}
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[1].Body, &req)
-	if req.State != "ONGOING" {
+	if req.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING state, got %s", req.State)
 	}
 	if req.Content.Template != "pipeline" {
@@ -858,7 +858,7 @@ func TestPollActive_UpdatesOngoingWorkflow(t *testing.T) {
 
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req)
-	if req.State != "ONGOING" {
+	if req.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", req.State)
 	}
 	if req.Content.State != "Build" {
@@ -916,7 +916,7 @@ func TestPollActive_CompletesSuccessfulWorkflow(t *testing.T) {
 
 	var req1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req1)
-	if req1.State != "ONGOING" {
+	if req1.State != pushward.StateOngoing {
 		t.Errorf("phase 1: expected ONGOING, got %s", req1.State)
 	}
 	if req1.Content.State != "Success" {
@@ -928,7 +928,7 @@ func TestPollActive_CompletesSuccessfulWorkflow(t *testing.T) {
 
 	var req2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[1].Body, &req2)
-	if req2.State != "ENDED" {
+	if req2.State != pushward.StateEnded {
 		t.Errorf("phase 2: expected ENDED, got %s", req2.State)
 	}
 }

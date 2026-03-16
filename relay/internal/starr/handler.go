@@ -94,7 +94,7 @@ func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Con
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 		ongoingReq := pushward.UpdateRequest{
-			State:   "ONGOING",
+			State:   pushward.StateOngoing,
 			Content: content,
 		}
 		if err := cl.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
@@ -110,7 +110,7 @@ func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Con
 		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel2()
 		endedReq := pushward.UpdateRequest{
-			State:   "ENDED",
+			State:   pushward.StateEnded,
 			Content: content,
 		}
 		if err := cl.UpdateActivity(ctx2, slug, endedReq); err != nil {
@@ -222,7 +222,7 @@ func (h *Handler) handleHealth(ctx context.Context, userKey, provider string, p 
 	}
 
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:    "alert",
 			Progress:    1.0,
@@ -295,7 +295,7 @@ func (h *Handler) handleManualInteraction(ctx context.Context, userKey, provider
 	total := 2
 	cl := h.clients.Get(userKey)
 	req := pushward.UpdateRequest{
-		State: "ONGOING",
+		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:    "pipeline",
 			Progress:    float64(step) / float64(total),

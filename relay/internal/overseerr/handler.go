@@ -11,9 +11,9 @@ import (
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
@@ -127,7 +127,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, p *webhookPay
 	}
 
 	req := pushward.UpdateRequest{
-		State:   "ONGOING",
+		State:   pushward.StateOngoing,
 		Content: content,
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {

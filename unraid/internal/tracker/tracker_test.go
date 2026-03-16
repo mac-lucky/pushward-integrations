@@ -5,11 +5,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mac-lucky/pushward-integrations/unraid/internal/config"
-	"github.com/mac-lucky/pushward-integrations/unraid/internal/graphql"
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
+	"github.com/mac-lucky/pushward-integrations/unraid/internal/config"
+	"github.com/mac-lucky/pushward-integrations/unraid/internal/graphql"
 )
 
 func testConfig() *config.Config {
@@ -94,7 +94,7 @@ func TestParityCheck_StartProgressComplete(t *testing.T) {
 	// Verify first update
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.State != "ONGOING" {
+	if update.State != pushward.StateOngoing {
 		t.Errorf("state = %q, want ONGOING", update.State)
 	}
 	if update.Content.State != "Checking · 5%" {
@@ -125,10 +125,10 @@ func TestParityCheck_StartProgressComplete(t *testing.T) {
 		var req pushward.UpdateRequest
 		testutil.UnmarshalBody(t, c.Body, &req)
 		if req.Content.State == "Parity Valid" && req.Content.Icon == "checkmark.circle.fill" {
-			if req.State == "ONGOING" {
+			if req.State == pushward.StateOngoing {
 				foundOngoing = true
 			}
-			if req.State == "ENDED" {
+			if req.State == pushward.StateEnded {
 				foundEnded = true
 			}
 		}
@@ -228,13 +228,13 @@ func TestArrayState_StartingToStarted(t *testing.T) {
 		var req pushward.UpdateRequest
 		testutil.UnmarshalBody(t, c.Body, &req)
 		if req.Content.State == "Array Started" {
-			if req.State == "ONGOING" {
+			if req.State == pushward.StateOngoing {
 				foundOngoing = true
 				if req.Content.AccentColor != "#34C759" {
 					t.Errorf("started accent = %q, want #34C759", req.Content.AccentColor)
 				}
 			}
-			if req.State == "ENDED" {
+			if req.State == pushward.StateEnded {
 				foundEnded = true
 			}
 		}
@@ -291,7 +291,7 @@ func TestArrayState_StoppingToStopped(t *testing.T) {
 		}
 		var req pushward.UpdateRequest
 		testutil.UnmarshalBody(t, c.Body, &req)
-		if req.Content.State == "Array Stopped" && req.State == "ENDED" {
+		if req.Content.State == "Array Stopped" && req.State == pushward.StateEnded {
 			foundEnded = true
 		}
 	}
