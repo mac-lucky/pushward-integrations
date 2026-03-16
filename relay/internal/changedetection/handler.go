@@ -2,7 +2,6 @@ package changedetection
 
 import (
 	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -39,13 +38,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
-	}
-
-	if secret := h.config.WebhookSecret; secret != "" {
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get("X-Webhook-Secret")), []byte(secret)) != 1 {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
 	}
 
 	var payload webhookPayload

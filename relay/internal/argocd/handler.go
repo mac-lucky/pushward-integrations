@@ -2,7 +2,6 @@ package argocd
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -138,15 +137,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
-	}
-
-	// Webhook secret validation
-	if h.config.WebhookSecret != "" {
-		got := r.Header.Get("X-Webhook-Secret")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(h.config.WebhookSecret)) != 1 {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
 	}
 
 	var payload webhookPayload

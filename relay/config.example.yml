@@ -7,7 +7,6 @@ database:
 providers:
   grafana:
     enabled: true
-    webhook_secret: ""                    # optional X-Webhook-Secret validation
     severity_label: "severity"
     default_severity: "warning"
     default_icon: "exclamationmark.triangle.fill"
@@ -17,7 +16,6 @@ providers:
 
   argocd:
     enabled: true
-    webhook_secret: ""                    # optional X-Webhook-Secret validation
     url: ""                               # ArgoCD UI URL for deep links
     sync_grace_period: 10s
     priority: 3
@@ -36,7 +34,6 @@ providers:
 
   jellyfin:
     enabled: true
-    webhook_secret: ""                    # optional X-Webhook-Secret validation
     priority: 1
     cleanup_delay: 15m
     stale_timeout: 30m
@@ -50,7 +47,6 @@ providers:
 
   paperless:
     enabled: true
-    webhook_secret: ""                    # optional X-Webhook-Secret validation
     priority: 1
     cleanup_delay: 15m
     stale_timeout: 30m
@@ -65,7 +61,6 @@ providers:
 
   changedetection:
     enabled: true
-    webhook_secret: ""                    # optional X-Webhook-Secret validation
     priority: 2
     cleanup_delay: 15m
     stale_timeout: 1h
@@ -88,7 +83,6 @@ providers:
 
   proxmox:
     enabled: true
-    webhook_secret: ""                    # optional X-Webhook-Secret validation
     priority: 4
     cleanup_delay: 15m
     stale_timeout: 1h
@@ -100,7 +94,6 @@ providers:
 
   overseerr:
     enabled: true
-    webhook_secret: ""                    # optional X-Webhook-Secret validation
     priority: 1
     cleanup_delay: 15m
     stale_timeout: 30m
@@ -112,7 +105,6 @@ providers:
 
   uptimekuma:
     enabled: true
-    webhook_secret: ""                    # optional X-Webhook-Secret validation
     priority: 5
     cleanup_delay: 15m
     stale_timeout: 24h
@@ -124,7 +116,6 @@ providers:
 
   gatus:
     enabled: true
-    webhook_secret: ""                    # optional X-Webhook-Secret validation
     priority: 5
     cleanup_delay: 15m
     stale_timeout: 24h
@@ -138,7 +129,6 @@ providers:
 
   backrest:
     enabled: true
-    webhook_secret: ""                    # optional X-Webhook-Secret validation
     priority: 2
     cleanup_delay: 15m
     stale_timeout: 1h
