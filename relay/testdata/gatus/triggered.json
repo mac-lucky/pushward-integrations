@@ -1,0 +1,8 @@
+{
+  "endpoint_name": "My API",
+  "endpoint_group": "production",
+  "endpoint_url": "https://api.example.com/health",
+  "alert_description": "Health check failed",
+  "status": "TRIGGERED",
+  "result_errors": "[STATUS] == 200 (expected 200, got 503)"
+}

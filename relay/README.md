@@ -5,11 +5,11 @@ Multi-tenant webhook gateway that consolidates multiple providers into a single 
 ## Features
 
 - **Multi-tenant** — tenants are identified by their `hlk_` integration key, extracted from every request by a shared auth middleware
-- **12 providers** — Grafana, ArgoCD, Radarr, Sonarr, Jellyfin, Paperless-ngx, Changedetection.io, Unmanic, Proxmox, Overseerr, Uptime Kuma, Backrest
+- **13 providers** — Grafana, ArgoCD, Radarr, Sonarr, Jellyfin, Paperless-ngx, Changedetection.io, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest
 - **PostgreSQL state** — persistent state store with automatic TTL cleanup for alert grouping, sync tracking, and download tracking
 - **Per-tenant client pool** — LRU pool of PushWard API clients keyed by integration key (max 1000 concurrent tenants)
 - **Rate limiting** — dual-layer: per-IP (5 req/s, burst 20) and per-key (1 req/s, burst 10)
-- **Two-phase end** — activities show final content on Dynamic Island before dismissing (ArgoCD, Starr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Backrest)
+- **Two-phase end** — activities show final content on Dynamic Island before dismissing (ArgoCD, Starr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest)
 - **Webhook secret validation** — optional per-provider `X-Webhook-Secret` header check (constant-time comparison)
 - **Retry with backoff** — PushWard API calls retry up to 5 times with exponential backoff and 429 rate-limit handling
 - **Graceful shutdown** — waits for in-flight requests on SIGINT/SIGTERM
@@ -243,6 +243,46 @@ Receives Uptime Kuma monitor status webhooks. Maps monitor heartbeat status to a
 
 **Setup:** In Uptime Kuma, go to Settings > Notifications. Add a notification of type "Webhook" with URL `https://relay.example.com/uptimekuma`. Set the `Authorization` header to `Bearer hlk_...`.
 
+### Gatus
+
+Receives Gatus health check alert webhooks. Maps endpoint TRIGGERED/RESOLVED states to alert notifications.
+
+| Route | `POST /gatus` |
+|---|---|
+| Template | `alert` |
+| Auth | `Authorization: Bearer hlk_...` + optional `X-Webhook-Secret` |
+| Slug | `gatus-<sha256(group/endpoint_name)[:12]>` |
+
+**Events:**
+
+| Status | State | Icon | Color |
+|---|---|---|---|
+| `TRIGGERED` | (error details) | `exclamationmark.triangle.fill` | red |
+| `RESOLVED` | Resolved | `checkmark.circle.fill` | green |
+
+**Setup:** In your `gatus.yaml`, configure `alerting.custom`:
+
+```yaml
+alerting:
+  custom:
+    url: "https://relay.example.com/gatus"
+    method: "POST"
+    headers:
+      Content-Type: "application/json"
+      Authorization: "Bearer hlk_..."
+    body: |
+      {
+        "endpoint_name": "[ENDPOINT_NAME]",
+        "endpoint_group": "[ENDPOINT_GROUP]",
+        "endpoint_url": "[ENDPOINT_URL]",
+        "alert_description": "[ALERT_DESCRIPTION]",
+        "status": "[ALERT_TRIGGERED_OR_RESOLVED]",
+        "result_errors": "[RESULT_ERRORS]"
+      }
+```
+
+Then reference `type: custom` in your endpoint alerts with `send-on-resolved: true`.
+
 ### Backrest
 
 Receives Backrest backup operation webhooks for snapshot, prune, and check operations.
@@ -292,6 +332,7 @@ All settings can be provided via YAML config file (`-config` flag, default `conf
 | `PUSHWARD_PROXMOX_WEBHOOK_SECRET` | Proxmox `X-Webhook-Secret` validation | No |
 | `PUSHWARD_OVERSEERR_WEBHOOK_SECRET` | Overseerr `X-Webhook-Secret` validation | No |
 | `PUSHWARD_UPTIMEKUMA_WEBHOOK_SECRET` | Uptime Kuma `X-Webhook-Secret` validation | No |
+| `PUSHWARD_GATUS_WEBHOOK_SECRET` | Gatus `X-Webhook-Secret` validation | No |
 | `PUSHWARD_BACKREST_WEBHOOK_SECRET` | Backrest `X-Webhook-Secret` validation | No |
 
 See [`config.example.yml`](./config.example.yml) for the full config with per-provider settings.
@@ -326,6 +367,7 @@ services:
 | POST | `/proxmox` | Proxmox VE notification webhooks |
 | POST | `/overseerr` | Overseerr/Jellyseerr media request webhooks |
 | POST | `/uptimekuma` | Uptime Kuma monitor status webhooks |
+| POST | `/gatus` | Gatus health check alert webhooks |
 | POST | `/backrest` | Backrest backup/prune/check webhooks |
 | GET | `/health` | Health check (returns `ok`) |
 
@@ -355,6 +397,7 @@ Most providers authenticate with a Bearer token containing the `hlk_` integratio
 - Proxmox
 - Overseerr
 - Uptime Kuma
+- Gatus
 - Backrest
 
 ### HTTP Basic Auth (Radarr/Sonarr only)
@@ -375,4 +418,5 @@ Providers supporting `X-Webhook-Secret`:
 - Proxmox
 - Overseerr
 - Uptime Kuma
+- Gatus
 - Backrest

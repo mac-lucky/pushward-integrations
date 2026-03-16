@@ -34,6 +34,7 @@ type ProvidersConfig struct {
 	Proxmox         ProxmoxConfig         `yaml:"proxmox"`
 	Overseerr       OverseerrConfig       `yaml:"overseerr"`
 	UptimeKuma      UptimeKumaConfig      `yaml:"uptimekuma"`
+	Gatus           GatusConfig           `yaml:"gatus"`
 	Backrest        BackrestConfig        `yaml:"backrest"`
 }
 
@@ -150,6 +151,17 @@ type BackrestConfig struct {
 	EndDisplayTime time.Duration `yaml:"end_display_time"`
 }
 
+// GatusConfig holds Gatus-specific settings.
+type GatusConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	WebhookSecret  string        `yaml:"webhook_secret"`
+	Priority       int           `yaml:"priority"`
+	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout   time.Duration `yaml:"stale_timeout"`
+	EndDelay       time.Duration `yaml:"end_delay"`
+	EndDisplayTime time.Duration `yaml:"end_display_time"`
+}
+
 // UptimeKumaConfig holds Uptime Kuma-specific settings.
 type UptimeKumaConfig struct {
 	Enabled        bool          `yaml:"enabled"`
@@ -242,6 +254,14 @@ func Load(path string) (*Config, error) {
 				EndDisplayTime: 4 * time.Second,
 			},
 			UptimeKuma: UptimeKumaConfig{
+				Enabled:        true,
+				Priority:       5,
+				CleanupDelay:   15 * time.Minute,
+				StaleTimeout:   24 * time.Hour,
+				EndDelay:       5 * time.Second,
+				EndDisplayTime: 4 * time.Second,
+			},
+			Gatus: GatusConfig{
 				Enabled:        true,
 				Priority:       5,
 				CleanupDelay:   15 * time.Minute,
@@ -344,6 +364,11 @@ func (cfg *Config) applyEnvOverrides() {
 	// Uptime Kuma overrides
 	if v := os.Getenv("PUSHWARD_UPTIMEKUMA_WEBHOOK_SECRET"); v != "" {
 		cfg.Providers.UptimeKuma.WebhookSecret = v
+	}
+
+	// Gatus overrides
+	if v := os.Getenv("PUSHWARD_GATUS_WEBHOOK_SECRET"); v != "" {
+		cfg.Providers.Gatus.WebhookSecret = v
 	}
 
 	// Backrest overrides
