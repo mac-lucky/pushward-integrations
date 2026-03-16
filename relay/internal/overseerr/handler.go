@@ -150,13 +150,6 @@ func isNumeric(s string) bool {
 	return err == nil
 }
 
-func truncateKey(key string) string {
-	if len(key) <= 8 {
-		return key
-	}
-	return key[:8] + "..."
-}
-
 func truncateField(s string, max int) string {
 	if utf8.RuneCountInString(s) <= max {
 		return s
