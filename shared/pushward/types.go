@@ -29,6 +29,12 @@ type Content struct {
 	Severity      string  `json:"severity,omitempty"`
 	FiredAt       *int64  `json:"fired_at,omitempty"`
 	RemainingTime *int    `json:"remaining_time,omitempty"`
+
+	// Gauge template fields
+	Value    *float64 `json:"value,omitempty"`
+	MinValue *float64 `json:"min_value,omitempty"`
+	MaxValue *float64 `json:"max_value,omitempty"`
+	Unit     string   `json:"unit,omitempty"`
 }
 
 // CreateActivityRequest is the body for POST /activities.
