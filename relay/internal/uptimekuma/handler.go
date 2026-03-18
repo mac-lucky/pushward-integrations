@@ -14,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
@@ -63,8 +64,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleUp(ctx, userKey, pwClient, &payload)
 	case 2: // PENDING
 		h.handlePending(ctx, userKey, pwClient, &payload)
-	case 3: // MAINTENANCE
-		slog.Debug("skipping maintenance event", "monitor_id", payload.Monitor.ID)
+	case 3: // MAINTENANCE — used as test event
+		if err := selftest.SendTest(ctx, pwClient, "uptimekuma"); err != nil {
+			slog.Error("test notification failed", "provider", "uptimekuma", "error", err)
+		}
 	default:
 		slog.Warn("unknown heartbeat status", "status", payload.Heartbeat.Status, "monitor_id", payload.Monitor.ID)
 	}
@@ -109,9 +112,9 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, pwClient *push
 		stateText = "Monitor Down"
 	}
 
-	var firedAt int64
+	var firedAtPtr *int64
 	if t, err := time.Parse(time.RFC3339Nano, p.Heartbeat.Time); err == nil {
-		firedAt = t.Unix()
+		firedAtPtr = pushward.Int64Ptr(t.Unix())
 	}
 
 	subtitle := "Uptime Kuma \u00b7 " + truncateField(p.Monitor.Name, 50)
@@ -126,7 +129,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, pwClient *push
 			Subtitle:    subtitle,
 			AccentColor: "#FF3B30",
 			Severity:    "error",
-			FiredAt:     &firedAt,
+			FiredAt:     firedAtPtr,
 			URL:         sanitizeMonitorURL(p.Monitor.URL),
 		},
 	}

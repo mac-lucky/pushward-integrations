@@ -118,7 +118,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 		stateText = "Health Check Failed"
 	}
 
-	firedAt := time.Now().Unix()
+	firedAt := pushward.Int64Ptr(time.Now().Unix())
 
 	subtitle := "Gatus \u00b7 " + truncateField(p.EndpointName, 50)
 	if p.EndpointGroup != "" {
@@ -135,7 +135,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 			Subtitle:    subtitle,
 			AccentColor: "#FF3B30",
 			Severity:    "error",
-			FiredAt:     &firedAt,
+			FiredAt:     firedAt,
 			URL:         sanitizeURL(p.EndpointURL),
 		},
 	}

@@ -309,7 +309,7 @@ func TestUpdatesNotification(t *testing.T) {
 	}
 }
 
-func TestUnknownType(t *testing.T) {
+func TestSystemEventSendsTestNotification(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 
 	w := send(t, h, `{
@@ -324,7 +324,23 @@ func TestUnknownType(t *testing.T) {
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 0 {
-		t.Fatalf("expected 0 calls for system event, got %d", len(recorded))
+	// selftest: create + update = 2 calls
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls for system event (selftest), got %d", len(recorded))
+	}
+
+	var create pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &create)
+	if create.Slug != "relay-test-proxmox" {
+		t.Errorf("expected slug relay-test-proxmox, got %s", create.Slug)
+	}
+
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.State != pushward.StateOngoing {
+		t.Errorf("expected ONGOING, got %s", update.State)
+	}
+	if update.Content.Template != "pipeline" {
+		t.Errorf("expected template pipeline, got %s", update.Content.Template)
 	}
 }

@@ -196,6 +196,7 @@ Receives Proxmox VE notification webhooks for backup, replication, fencing, and 
 | `replication` (failed) | Replication failed | `xmark.circle.fill` | red |
 | `fencing` | Node fenced | `exclamationmark.triangle.fill` | red |
 | `package-updates` | Updates available | `arrow.down.circle` | orange |
+| `system` | (test notification) | varies | varies |
 
 **Setup:** In Proxmox VE, go to Datacenter > Notifications. Add a webhook target with URL `https://relay.example.com/proxmox`. Set the `Authorization` header to `Bearer hlk_...`.
 
@@ -238,7 +239,7 @@ Receives Uptime Kuma monitor status webhooks. Maps monitor heartbeat status to a
 | `0` (DOWN) | Down | `xmark.circle.fill` | red |
 | `1` (UP) | Up | `checkmark.circle.fill` | green |
 | `2` (PENDING) | Pending | `clock.fill` | orange |
-| `3` (MAINTENANCE) | (skipped) | - | - |
+| `3` (MAINTENANCE) | (test notification) | varies | varies |
 
 **Setup:** In Uptime Kuma, go to Settings > Notifications. Add a notification of type "Webhook" with URL `https://relay.example.com/uptimekuma`. Set the `Authorization` header to `Bearer hlk_...`.
 
@@ -357,7 +358,6 @@ services:
 | POST | `/uptimekuma` | Uptime Kuma monitor status webhooks |
 | POST | `/gatus` | Gatus health check alert webhooks |
 | POST | `/backrest` | Backrest backup/prune/check webhooks |
-| POST | `/test/{provider}` | Send a provider-specific test notification |
 | GET | `/health` | Health check (returns `ok`) |
 
 ## How It Works

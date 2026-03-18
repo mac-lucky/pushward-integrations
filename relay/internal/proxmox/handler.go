@@ -15,6 +15,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
@@ -68,7 +69,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "package-updates":
 		h.handleUpdates(ctx, userKey, &payload)
 	case "system":
-		slog.Debug("proxmox system event, skipping", "hostname", payload.Hostname)
+		cl := h.clients.Get(userKey)
+		if err := selftest.SendTest(ctx, cl, "proxmox"); err != nil {
+			slog.Error("test notification failed", "provider", "proxmox", "error", err)
+		}
 	default:
 		slog.Debug("unknown proxmox event type", "type", payload.Type)
 	}
