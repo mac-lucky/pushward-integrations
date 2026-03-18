@@ -343,8 +343,8 @@ func TestComputeSteps_ReusableWorkflowMatrix(t *testing.T) {
 	if info.TotalSteps != 10 {
 		t.Errorf("expected TotalSteps=10, got %d", info.TotalSteps)
 	}
-	if info.CurrentStepName != "ci-cd / Code Analysis" {
-		t.Errorf("expected CurrentStepName='ci-cd / Code Analysis', got %q", info.CurrentStepName)
+	if info.CurrentStepName != "Code Analysis" {
+		t.Errorf("expected CurrentStepName='Code Analysis', got %q", info.CurrentStepName)
 	}
 	if info.CurrentStep != 3 {
 		t.Errorf("expected CurrentStep=3, got %d", info.CurrentStep)
@@ -538,7 +538,9 @@ func TestBaseJobName(t *testing.T) {
 	}{
 		{"Build (ubuntu, node-16)", "Build"},
 		{"Test", "Test"},
-		{"ci-cd / Code Analysis (go-vet)", "ci-cd / Code Analysis"},
+		{"ci-cd / Code Analysis (go-vet)", "Code Analysis"},
+		{"ci-cd / Setup Build Environment", "Setup Build Environment"},
+		{"ci-cd / Go Tests", "Go Tests"},
 		{"Deploy (prod)", "Deploy"},
 		{"NoParens", "NoParens"},
 		{"Has (Parens) Mid", "Has (Parens) Mid"}, // no trailing )

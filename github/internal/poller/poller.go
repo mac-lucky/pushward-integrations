@@ -513,9 +513,17 @@ func splitRepo(repo string) []string {
 	return []string{repo}
 }
 
-// baseJobName strips matrix parameters from a job name.
-// "Build (ubuntu, node-16)" → "Build", "Test" → "Test"
+// baseJobName strips the reusable-workflow caller prefix and matrix
+// parameters from a job name.
+// "ci-cd / Build (ubuntu, node-16)" → "Build"
+// "ci-cd / Setup Build Environment"  → "Setup Build Environment"
+// "Test" → "Test"
 func baseJobName(name string) string {
+	// Strip reusable-workflow caller prefix ("ci-cd / X" → "X").
+	if i := strings.Index(name, " / "); i != -1 {
+		name = name[i+3:]
+	}
+	// Strip matrix parameters ("Build (ubuntu, node-16)" → "Build").
 	if i := strings.LastIndex(name, " ("); i != -1 && strings.HasSuffix(name, ")") {
 		return name[:i]
 	}
