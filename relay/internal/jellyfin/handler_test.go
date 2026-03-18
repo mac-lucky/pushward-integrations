@@ -237,6 +237,54 @@ func TestPlaybackProgressDebounce(t *testing.T) {
 	}
 }
 
+func TestPlaybackProgressCreatesActivity(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	// Send PlaybackProgress without a prior PlaybackStart
+	w := send(t, h, `{
+		"NotificationType": "PlaybackProgress",
+		"ItemId": "abc123",
+		"ItemType": "Episode",
+		"Name": "Pilot",
+		"SeriesName": "Breaking Bad",
+		"SeasonNumber": 1,
+		"EpisodeNumber": 1,
+		"ProductionYear": 2008,
+		"RunTimeTicks": 27630000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": false
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + update = 2
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls (create + update), got %d", len(recorded))
+	}
+
+	// Verify create
+	var createReq pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
+	if createReq.Name != "Breaking Bad" {
+		t.Errorf("expected name 'Breaking Bad', got %s", createReq.Name)
+	}
+
+	// Verify ONGOING update
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.State != pushward.StateOngoing {
+		t.Errorf("expected ONGOING, got %s", update.State)
+	}
+	if update.Content.State != "Playing on Apple TV" {
+		t.Errorf("expected state 'Playing on Apple TV', got %s", update.Content.State)
+	}
+}
+
 func TestGenericUpdateNotification(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 

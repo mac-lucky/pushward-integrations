@@ -182,6 +182,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *we
 
 func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p *webhookPayload) {
 	slug := playbackSlug(p.ItemID, p.UserName)
+	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
 	// Debounce check
 	debounceKey := userKey + ":" + slug
@@ -195,6 +196,21 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p 
 	h.mu.Unlock()
 
 	cl := h.clients.Get(userKey)
+
+	// Create activity if it doesn't exist (e.g. PlaybackStart was missed)
+	if exists, _ := h.store.Exists(ctx, "jellyfin", userKey, mapKey, ""); !exists {
+		endedTTL := int(h.config.CleanupDelay.Seconds())
+		staleTTL := int(h.config.StaleTimeout.Seconds())
+		name := mediaName(p)
+		if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
+			slog.Error("failed to create activity", "slug", slug, "error", err)
+			return
+		}
+		slog.Info("created activity (late join)", "slug", slug, "name", name)
+		data, _ := json.Marshal(map[string]string{"slug": slug})
+		_ = h.store.Set(ctx, "jellyfin", userKey, mapKey, "", data, h.config.StaleTimeout)
+	}
+
 	remaining := remainingSeconds(p)
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
