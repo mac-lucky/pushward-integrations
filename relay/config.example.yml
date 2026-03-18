@@ -39,7 +39,7 @@ providers:
     stale_timeout: 30m
     end_delay: 5s
     end_display_time: 4s
-    progress_debounce: 30s               # skip PlaybackProgress updates within this window
+    progress_debounce: 10s               # skip PlaybackProgress updates within this window (state changes bypass debounce)
     # Configure in Jellyfin: Dashboard > Plugins > Webhooks
     # Add a Generic destination with URL: https://relay.example.com/jellyfin
     # Set Authorization header: Bearer hlk_...

@@ -237,6 +237,58 @@ func TestPlaybackProgressDebounce(t *testing.T) {
 	}
 }
 
+func TestPlaybackProgressStateChangeBypassesDebounce(t *testing.T) {
+	cfg := testConfig()
+	cfg.ProgressDebounce = 500 * time.Millisecond // Long debounce
+	h, calls, mu := newHandler(t, cfg)
+
+	// Start playback (not paused)
+	send(t, h, `{
+		"NotificationType": "PlaybackStart",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 0,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": false
+	}`)
+
+	// Send progress with IsPaused=true (state change, should bypass debounce)
+	send(t, h, `{
+		"NotificationType": "PlaybackProgress",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": true
+	}`)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + start_update + progress_update = 3 (not debounced because state changed)
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls (state change bypasses debounce), got %d", len(recorded))
+	}
+
+	// Verify the progress update shows "Paused"
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
+	if update.Content.State != "Paused on Apple TV" {
+		t.Errorf("expected state 'Paused on Apple TV', got %s", update.Content.State)
+	}
+	if update.Content.Icon != "pause.circle.fill" {
+		t.Errorf("expected icon pause.circle.fill, got %s", update.Content.Icon)
+	}
+}
+
 func TestPlaybackProgressCreatesActivity(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 

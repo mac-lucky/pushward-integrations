@@ -25,6 +25,7 @@ type Handler struct {
 	mu         sync.Mutex
 	timers     map[string]*time.Timer // "userKey:mapKey" → end timer
 	lastUpdate map[string]time.Time   // "userKey:slug" → last progress update time
+	lastPaused map[string]bool        // "userKey:slug" → last IsPaused state
 }
 
 func NewHandler(store state.Store, clients *client.Pool, cfg *config.JellyfinConfig) *Handler {
@@ -34,6 +35,7 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.JellyfinCon
 		config:     cfg,
 		timers:     make(map[string]*time.Timer),
 		lastUpdate: make(map[string]time.Time),
+		lastPaused: make(map[string]bool),
 	}
 }
 
@@ -172,9 +174,11 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *we
 		return
 	}
 
-	// Record last update time for debounce
+	// Record last update time and paused state for debounce
 	h.mu.Lock()
-	h.lastUpdate[userKey+":"+slug] = time.Now()
+	debounceKey := userKey + ":" + slug
+	h.lastUpdate[debounceKey] = time.Now()
+	h.lastPaused[debounceKey] = p.IsPaused
 	h.mu.Unlock()
 
 	slog.Info("updated activity", "slug", slug, "state", "Playing on "+p.DeviceName)
@@ -184,15 +188,18 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p 
 	slug := playbackSlug(p.ItemID, p.UserName)
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
-	// Debounce check
+	// Debounce check — bypass when IsPaused state changes
 	debounceKey := userKey + ":" + slug
 	h.mu.Lock()
-	last, ok := h.lastUpdate[debounceKey]
-	if ok && time.Since(last) < h.config.ProgressDebounce {
+	last, hasLast := h.lastUpdate[debounceKey]
+	prevPaused, hasPrev := h.lastPaused[debounceKey]
+	stateChanged := hasPrev && prevPaused != p.IsPaused
+	if hasLast && !stateChanged && time.Since(last) < h.config.ProgressDebounce {
 		h.mu.Unlock()
 		return
 	}
 	h.lastUpdate[debounceKey] = time.Now()
+	h.lastPaused[debounceKey] = p.IsPaused
 	h.mu.Unlock()
 
 	cl := h.clients.Get(userKey)
@@ -211,14 +218,21 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p 
 		_ = h.store.Set(ctx, "jellyfin", userKey, mapKey, "", data, h.config.StaleTimeout)
 	}
 
+	stateText := "Playing on " + p.DeviceName
+	icon := "play.circle.fill"
+	if p.IsPaused {
+		stateText = "Paused on " + p.DeviceName
+		icon = "pause.circle.fill"
+	}
+
 	remaining := remainingSeconds(p)
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:      "generic",
 			Progress:      playbackProgress(p),
-			State:         "Playing on " + p.DeviceName,
-			Icon:          "play.circle.fill",
+			State:         stateText,
+			Icon:          icon,
 			Subtitle:      playbackSubtitle(p),
 			AccentColor:   "#007AFF",
 			RemainingTime: &remaining,
@@ -229,7 +243,7 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p 
 		slog.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("updated activity (progress)", "slug", slug)
+	slog.Info("updated activity (progress)", "slug", slug, "paused", p.IsPaused)
 }
 
 func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, p *webhookPayload) {
@@ -453,8 +467,9 @@ func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Con
 
 		h.mu.Lock()
 		delete(h.timers, timerKey)
-		// Clean up debounce entry for playback slugs
+		// Clean up debounce entries for playback slugs
 		delete(h.lastUpdate, userKey+":"+slug)
+		delete(h.lastPaused, userKey+":"+slug)
 		h.mu.Unlock()
 	})
 	h.mu.Unlock()
