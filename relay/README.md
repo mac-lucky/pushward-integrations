@@ -73,7 +73,7 @@ Receives Jellyfin webhook plugin notifications. Tracks playback progress, librar
 
 | Route | `POST /jellyfin` |
 |---|---|
-| Template | `generic` (playback/items/tasks), `alert` (auth failures) |
+| Template | `generic` (playback), `pipeline` (items/tasks), `alert` (auth failures) |
 | Auth | `Authorization: Bearer hlk_...` |
 | Slug | `jellyfin-<sha256(ItemId+UserName)[:10]>` (playback), `jellyfin-item-<hash>` (library), `jellyfin-task-<hash>` (tasks), `jellyfin-auth-<hash>` (auth) |
 
@@ -92,7 +92,7 @@ Receives Jellyfin webhook plugin notifications. Tracks playback progress, librar
 
 **Debounce:** `PlaybackProgress` updates within `progress_debounce` (default 30s) are skipped.
 
-**Setup:** In Jellyfin, install the Webhook plugin. Add a Generic destination with URL `https://relay.example.com/jellyfin` and set the `Authorization` header to `Bearer hlk_...`.
+**Setup:** In Jellyfin, install the Webhook plugin. Add a Generic destination with URL `https://relay.example.com/jellyfin`. Under **Add Request Header**, set Key to `Authorization` and Value to `Bearer hlk_...`.
 
 ### Paperless-ngx
 
