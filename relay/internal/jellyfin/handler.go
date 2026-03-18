@@ -157,16 +157,21 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *we
 	_ = h.store.Set(ctx, "jellyfin", userKey, mapKey, "", data, h.config.StaleTimeout)
 
 	remaining := remainingSeconds(p)
+	step := 1
+	total := 2
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
-			Template:      "generic",
+			Template:      "pipeline",
 			Progress:      playbackProgress(p),
 			State:         "Playing on " + p.DeviceName,
 			Icon:          "play.circle.fill",
 			Subtitle:      playbackSubtitle(p),
 			AccentColor:   "#007AFF",
 			RemainingTime: &remaining,
+			CurrentStep:   &step,
+			TotalSteps:    &total,
+			StepLabels:    []string{"Playing", "Watched"},
 		},
 	}
 
@@ -180,7 +185,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *we
 	h.lastUpdate[userKey+":"+slug] = time.Now()
 	h.mu.Unlock()
 
-	slog.Info("updated activity", "slug", slug, "state", "Playing on "+p.DeviceName)
+	slog.Info("updated activity", "slug", slug, "step", "1/2", "state", "Playing on "+p.DeviceName)
 }
 
 func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p *webhookPayload) {
@@ -199,16 +204,21 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p 
 
 	cl := h.clients.Get(userKey)
 	remaining := remainingSeconds(p)
+	step := 1
+	total := 2
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
-			Template:      "generic",
+			Template:      "pipeline",
 			Progress:      playbackProgress(p),
 			State:         "Playing on " + p.DeviceName,
 			Icon:          "play.circle.fill",
 			Subtitle:      playbackSubtitle(p),
 			AccentColor:   "#007AFF",
 			RemainingTime: &remaining,
+			CurrentStep:   &step,
+			TotalSteps:    &total,
+			StepLabels:    []string{"Playing", "Watched"},
 		},
 	}
 
@@ -223,17 +233,22 @@ func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, p *web
 	slug := playbackSlug(p.ItemID, p.UserName)
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
+	step := 2
+	total := 2
 	content := pushward.Content{
-		Template:    "generic",
+		Template:    "pipeline",
 		Progress:    1.0,
 		State:       "Watched on " + p.DeviceName,
 		Icon:        "checkmark.circle.fill",
 		Subtitle:    playbackSubtitle(p),
 		AccentColor: "#34C759",
+		CurrentStep: &step,
+		TotalSteps:  &total,
+		StepLabels:  []string{"Playing", "Watched"},
 	}
 
 	h.scheduleEnd(userKey, mapKey, slug, content)
-	slog.Info("scheduled end", "slug", slug, "state", "Watched on "+p.DeviceName)
+	slog.Info("scheduled end", "slug", slug, "step", "2/2", "state", "Watched on "+p.DeviceName)
 }
 
 func (h *Handler) handleItemAdded(ctx context.Context, userKey string, p *webhookPayload) {
@@ -256,13 +271,18 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, p *webhoo
 		subtitle = fmt.Sprintf("Jellyfin \u00b7 %d", p.ProductionYear)
 	}
 
+	step := 1
+	total := 1
 	content := pushward.Content{
-		Template:    "generic",
+		Template:    "pipeline",
 		Progress:    1.0,
 		State:       "Added to library",
 		Icon:        "plus.circle.fill",
 		Subtitle:    subtitle,
 		AccentColor: "#34C759",
+		CurrentStep: &step,
+		TotalSteps:  &total,
+		StepLabels:  []string{"Added"},
 	}
 
 	// Send ONGOING update first
@@ -298,15 +318,20 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, p *webh
 	data, _ := json.Marshal(map[string]string{"slug": slug})
 	_ = h.store.Set(ctx, "jellyfin", userKey, mapKey, "", data, h.config.StaleTimeout)
 
+	step := 1
+	total := 2
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
-			Template:    "generic",
+			Template:    "pipeline",
 			Progress:    0,
 			State:       "Running...",
 			Icon:        "arrow.triangle.2.circlepath",
 			Subtitle:    "Jellyfin \u00b7 " + p.TaskName,
 			AccentColor: "#007AFF",
+			CurrentStep: &step,
+			TotalSteps:  &total,
+			StepLabels:  []string{"Running", "Done"},
 		},
 	}
 
@@ -314,7 +339,7 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, p *webh
 		slog.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "state", "Running...")
+	slog.Info("updated activity", "slug", slug, "step", "1/2", "state", "Running...")
 }
 
 func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, p *webhookPayload) {
@@ -330,17 +355,22 @@ func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, p *we
 		accent = "#FF3B30"
 	}
 
+	step := 2
+	total := 2
 	content := pushward.Content{
-		Template:    "generic",
+		Template:    "pipeline",
 		Progress:    1.0,
 		State:       stateText,
 		Icon:        icon,
 		Subtitle:    "Jellyfin \u00b7 " + p.TaskName,
 		AccentColor: accent,
+		CurrentStep: &step,
+		TotalSteps:  &total,
+		StepLabels:  []string{"Running", "Done"},
 	}
 
 	h.scheduleEnd(userKey, mapKey, slug, content)
-	slog.Info("scheduled end", "slug", slug, "state", stateText)
+	slog.Info("scheduled end", "slug", slug, "step", "2/2", "state", stateText)
 }
 
 func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, p *webhookPayload) {
