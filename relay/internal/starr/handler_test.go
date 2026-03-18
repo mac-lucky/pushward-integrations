@@ -39,7 +39,7 @@ func newHandler(t *testing.T, cfg *config.StarrConfig) (*Handler, *[]testutil.AP
 // sendRadarr sends a Radarr webhook through auth middleware with Bearer hlk_test.
 func sendRadarr(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/starr/radarr/webhook", strings.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/starr/radarr", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer hlk_test")
 	w := httptest.NewRecorder()
@@ -51,7 +51,7 @@ func sendRadarr(t *testing.T, h *Handler, payload string) *httptest.ResponseReco
 // Basic Auth where password=hlk_test (integration key).
 func sendRadarrBasicAuth(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/starr/radarr/webhook", strings.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/starr/radarr", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth("radarr", "hlk_test")
 	w := httptest.NewRecorder()
@@ -62,7 +62,7 @@ func sendRadarrBasicAuth(t *testing.T, h *Handler, payload string) *httptest.Res
 // sendSonarr sends a Sonarr webhook through auth middleware with Bearer hlk_test.
 func sendSonarr(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/starr/sonarr/webhook", strings.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/starr/sonarr", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer hlk_test")
 	w := httptest.NewRecorder()
@@ -74,7 +74,7 @@ func sendSonarr(t *testing.T, h *Handler, payload string) *httptest.ResponseReco
 // Basic Auth where password=hlk_test (integration key).
 func sendSonarrBasicAuth(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/starr/sonarr/webhook", strings.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/starr/sonarr", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth("sonarr", "hlk_test")
 	w := httptest.NewRecorder()

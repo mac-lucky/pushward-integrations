@@ -25,8 +25,8 @@ Each runs as its own container with a dedicated PushWard API key.
 |---|---|---|---|
 | Grafana | `POST /grafana` | alert | Alert firing/resolved lifecycle |
 | ArgoCD | `POST /argocd` | pipeline | 3-step sync pipeline |
-| Radarr | `POST /radarr/webhook` | generic | Movie grab/download/health/manual interaction |
-| Sonarr | `POST /sonarr/webhook` | generic | TV episode grab/download/health/manual interaction |
+| Radarr | `POST /radarr` | generic | Movie grab/download/health/manual interaction |
+| Sonarr | `POST /sonarr` | generic | TV episode grab/download/health/manual interaction |
 | Jellyfin | `POST /jellyfin` | generic | Playback tracking, library additions, tasks, auth failures |
 | Paperless-ngx | `POST /paperless` | generic | Document consumption and processing |
 | Changedetection.io | `POST /changedetection` | alert | Page change notifications |
