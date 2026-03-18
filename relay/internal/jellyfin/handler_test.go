@@ -289,6 +289,66 @@ func TestPlaybackProgressStateChangeBypassesDebounce(t *testing.T) {
 	}
 }
 
+func TestPlaybackProgressSuppressedWhilePaused(t *testing.T) {
+	cfg := testConfig()
+	cfg.ProgressDebounce = 10 * time.Millisecond
+	h, calls, mu := newHandler(t, cfg)
+
+	// Start playback
+	send(t, h, `{
+		"NotificationType": "PlaybackStart",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 0,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": false
+	}`)
+
+	// Pause (state change → goes through)
+	send(t, h, `{
+		"NotificationType": "PlaybackProgress",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": true
+	}`)
+
+	// Wait for debounce to expire
+	time.Sleep(20 * time.Millisecond)
+
+	// Still paused — should be suppressed even though debounce expired
+	send(t, h, `{
+		"NotificationType": "PlaybackProgress",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": true
+	}`)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + start_update + pause_update = 3 (second paused progress suppressed)
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls (paused progress suppressed), got %d", len(recorded))
+	}
+}
+
 func TestPlaybackProgressCreatesActivity(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 
