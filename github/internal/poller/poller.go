@@ -187,6 +187,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		// Fetch jobs for accurate initial step count.
 		initialTotalSteps := 1
 		var initialStepRows []int
+		var initialStepLabels []string
 		if jobs, err := p.gh.GetJobs(ctx, repo, run.ID); err != nil {
 			slog.Warn("failed to fetch jobs for initial step count, using default",
 				"repo", repo, "run_id", run.ID, "error", err)
@@ -194,6 +195,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			info := computeSteps(jobs)
 			initialTotalSteps = info.TotalSteps
 			initialStepRows = info.StepRows
+			initialStepLabels = info.StepLabels
 			slog.Info("initial job scan",
 				"repo", repo, "jobs", len(jobs),
 				"steps", info.TotalSteps, "step_rows", info.StepRows)
@@ -204,6 +206,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		if t, ok := p.tracked[repo]; ok {
 			t.maxTotalSteps = initialTotalSteps
 			t.maxStepRows = append([]int(nil), initialStepRows...)
+			t.maxStepLabels = append([]string(nil), initialStepLabels...)
 		}
 		p.mu.Unlock()
 
@@ -220,6 +223,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 				CurrentStep:  pushward.IntPtr(0),
 				TotalSteps:   pushward.IntPtr(initialTotalSteps),
 				StepRows:     initialStepRows,
+				StepLabels:   initialStepLabels,
 				URL:          run.HTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", repo),
 			},
@@ -236,6 +240,7 @@ type stepInfo struct {
 	CurrentStep     int
 	CurrentStepName string
 	StepRows        []int
+	StepLabels      []string
 	AllCompleted    bool
 	AnyFailed       bool
 	Progress        float64
@@ -285,11 +290,13 @@ func computeSteps(jobs []ghclient.Job) stepInfo {
 
 	totalSteps := len(steps)
 	stepRows := make([]int, totalSteps)
+	stepLabels := make([]string, totalSteps)
 	currentStep := 0
 	var currentStepName string
 
 	for i, s := range steps {
 		stepRows[i] = s.count
+		stepLabels[i] = s.name
 		if s.active && currentStepName == "" {
 			currentStepName = s.name
 			currentStep = i + 1
@@ -316,6 +323,7 @@ func computeSteps(jobs []ghclient.Job) stepInfo {
 		CurrentStep:     currentStep,
 		CurrentStepName: currentStepName,
 		StepRows:        stepRows,
+		StepLabels:      stepLabels,
 		AllCompleted:    allCompleted,
 		AnyFailed:       anyFailed,
 		Progress:        progress,
@@ -372,10 +380,12 @@ func (p *Poller) pollActive(ctx context.Context) error {
 					"step_rows", info.StepRows)
 				tt.maxTotalSteps = info.TotalSteps
 				tt.maxStepRows = append([]int(nil), info.StepRows...)
+				tt.maxStepLabels = append([]string(nil), info.StepLabels...)
 			} else if info.TotalSteps < tt.maxTotalSteps {
 				// Fewer steps than our max (shouldn't happen) — use cached.
 				info.TotalSteps = tt.maxTotalSteps
 				info.StepRows = tt.maxStepRows
+				info.StepLabels = tt.maxStepLabels
 			}
 		}
 		p.mu.Unlock()
@@ -400,6 +410,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				CurrentStep:  pushward.IntPtr(info.TotalSteps),
 				TotalSteps:   pushward.IntPtr(info.TotalSteps),
 				StepRows:     info.StepRows,
+				StepLabels:   info.StepLabels,
 				URL:          tHTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
 			})
@@ -418,6 +429,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				CurrentStep:  pushward.IntPtr(info.CurrentStep),
 				TotalSteps:   pushward.IntPtr(info.TotalSteps),
 				StepRows:     info.StepRows,
+				StepLabels:   info.StepLabels,
 				URL:          tHTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
 			},
