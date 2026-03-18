@@ -29,6 +29,16 @@ type Job struct {
 	Status     string `json:"status"`     // queued, in_progress, completed
 	Conclusion string `json:"conclusion"` // success, failure, cancelled, skipped, null
 	StartedAt  string `json:"started_at"`
+	Steps      []Step `json:"steps"`
+}
+
+type Step struct {
+	Name        string `json:"name"`
+	Status      string `json:"status"`      // queued, in_progress, completed
+	Conclusion  string `json:"conclusion"`   // success, failure, cancelled, skipped, null
+	Number      int    `json:"number"`
+	StartedAt   string `json:"started_at"`
+	CompletedAt string `json:"completed_at"`
 }
 
 type Repository struct {
