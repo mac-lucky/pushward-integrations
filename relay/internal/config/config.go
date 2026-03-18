@@ -203,7 +203,7 @@ func Load(path string) (*Config, error) {
 				StaleTimeout:     30 * time.Minute,
 				EndDelay:         5 * time.Second,
 				EndDisplayTime:   4 * time.Second,
-				ProgressDebounce: 30 * time.Second,
+				ProgressDebounce: 10 * time.Second,
 			},
 			Paperless: PaperlessConfig{
 				Enabled:        true,
