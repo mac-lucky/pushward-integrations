@@ -19,6 +19,8 @@ import (
 
 const totalSteps = 3
 
+var stepLabels = []string{"Sync", "Rollout", "Deploy"}
+
 type Handler struct {
 	client        *pushward.Client
 	config        *config.Config
@@ -208,6 +210,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, p *argocd.WebhookPayloa
 			AccentColor:  "#007AFF",
 			CurrentStep:  &step,
 			TotalSteps:   &total,
+			StepLabels:   stepLabels,
 			URL:          url,
 			SecondaryURL: secondaryURL,
 		},
@@ -304,6 +307,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, p *argocd.WebhookPayl
 			AccentColor:  "#007AFF",
 			CurrentStep:  &step,
 			TotalSteps:   &total,
+			StepLabels:   stepLabels,
 			URL:          url,
 			SecondaryURL: secondaryURL,
 		},
@@ -402,6 +406,7 @@ func (h *Handler) handleDeployed(ctx context.Context, p *argocd.WebhookPayload) 
 		AccentColor:  "#34C759",
 		CurrentStep:  &step,
 		TotalSteps:   &total,
+		StepLabels:   stepLabels,
 		URL:          url,
 		SecondaryURL: secondaryURL,
 	}
@@ -464,6 +469,7 @@ func (h *Handler) handleSyncFailed(ctx context.Context, p *argocd.WebhookPayload
 		AccentColor:  "#FF3B30",
 		CurrentStep:  &currentStep,
 		TotalSteps:   &total,
+		StepLabels:   stepLabels,
 		URL:          url,
 		SecondaryURL: secondaryURL,
 	}
@@ -518,6 +524,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 				AccentColor:  "#FF9500",
 				CurrentStep:  &step,
 				TotalSteps:   &total,
+				StepLabels:   stepLabels,
 				URL:          url,
 				SecondaryURL: secondaryURL,
 			},
@@ -555,6 +562,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, p *argocd.WebhookPay
 		AccentColor:  "#FF9500",
 		CurrentStep:  &currentStep,
 		TotalSteps:   &total,
+		StepLabels:   stepLabels,
 		URL:          url,
 		SecondaryURL: secondaryURL,
 	}
@@ -617,6 +625,7 @@ func (h *Handler) graceExpired(appName string) {
 			AccentColor:  "#007AFF",
 			CurrentStep:  &step,
 			TotalSteps:   &total,
+			StepLabels:   stepLabels,
 			URL:          url,
 			SecondaryURL: secondaryURL,
 		},
