@@ -50,7 +50,7 @@ Receives ArgoCD sync webhooks via argocd-notifications. Maps sync progress to a 
 
 Receives Radarr and Sonarr webhooks. Tracks download lifecycle from grab to import.
 
-| Route | `POST /radarr/webhook` / `POST /sonarr/webhook` |
+| Route | `POST /radarr` / `POST /sonarr` |
 |---|---|
 | Template | `generic` (downloads), `alert` (health) |
 | Auth | Basic Auth with `hlk_` key as password |
@@ -346,8 +346,8 @@ services:
 |---|---|---|
 | POST | `/grafana` | Grafana alert webhooks |
 | POST | `/argocd` | ArgoCD sync webhooks |
-| POST | `/radarr/webhook` | Radarr webhooks |
-| POST | `/sonarr/webhook` | Sonarr webhooks |
+| POST | `/radarr` | Radarr webhooks |
+| POST | `/sonarr` | Sonarr webhooks |
 | POST | `/jellyfin` | Jellyfin webhook plugin |
 | POST | `/paperless` | Paperless-ngx workflow webhooks |
 | POST | `/changedetection` | Changedetection.io notifications |

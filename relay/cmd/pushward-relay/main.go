@@ -97,8 +97,8 @@ func main() {
 
 	if cfg.Providers.Starr.Enabled {
 		sh := starr.NewHandler(store, clients, &cfg.Providers.Starr)
-		mux.Handle("POST /radarr/webhook", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(sh.RadarrHandler()))))
-		mux.Handle("POST /sonarr/webhook", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(sh.SonarrHandler()))))
+		mux.Handle("POST /radarr", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(sh.RadarrHandler()))))
+		mux.Handle("POST /sonarr", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(sh.SonarrHandler()))))
 		slog.Info("enabled provider", "provider", "starr")
 	}
 
