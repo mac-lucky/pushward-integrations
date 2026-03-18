@@ -71,9 +71,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		subtitle = "Changedetection \u00b7 " + payload.Tag
 	}
 
-	var firedAt int64
+	var firedAtPtr *int64
 	if t, err := time.Parse(time.RFC3339, payload.Timestamp); err == nil {
-		firedAt = t.Unix()
+		firedAtPtr = pushward.Int64Ptr(t.Unix())
 	}
 
 	endedTTL := int(h.config.CleanupDelay.Seconds())
@@ -92,7 +92,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Subtitle:     subtitle,
 		AccentColor:  "#FF9500",
 		Severity:     "info",
-		FiredAt:      &firedAt,
+		FiredAt:      firedAtPtr,
 		URL:          payload.DiffURL,
 		SecondaryURL: payload.PreviewURL,
 	}

@@ -1480,3 +1480,111 @@ func TestMissingAuthKey_Unauthorized(t *testing.T) {
 		t.Errorf("expected 401 without auth key, got %d", w.Code)
 	}
 }
+
+func TestZeroStartsAt_FiredAtOmitted(t *testing.T) {
+	_, handler, calls, mu := setup(t)
+
+	// startsAt is "0001-01-01T00:00:00Z" (Go zero time) — common in Grafana test notifications
+	payload := `{
+		"alerts": [
+			{
+				"status": "firing",
+				"labels": {"alertname": "TestAlert", "severity": "warning"},
+				"annotations": {"summary": "Test alert"},
+				"startsAt": "0001-01-01T00:00:00Z",
+				"fingerprint": "test000"
+			}
+		]
+	}`
+
+	w := sendWebhook(t, handler, payload)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.FiredAt != nil {
+		t.Errorf("expected FiredAt to be nil for zero startsAt, got %d", *update.Content.FiredAt)
+	}
+}
+
+func TestEmptyStartsAt_FiredAtOmitted(t *testing.T) {
+	_, handler, calls, mu := setup(t)
+
+	// startsAt is empty — unparseable
+	payload := `{
+		"alerts": [
+			{
+				"status": "firing",
+				"labels": {"alertname": "TestAlert2", "severity": "warning"},
+				"annotations": {"summary": "Test alert"},
+				"startsAt": "",
+				"fingerprint": "test001"
+			}
+		]
+	}`
+
+	w := sendWebhook(t, handler, payload)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.FiredAt != nil {
+		t.Errorf("expected FiredAt to be nil for empty startsAt, got %d", *update.Content.FiredAt)
+	}
+}
+
+func TestResolvedAlert_ZeroStartsAt_FiredAtOmitted(t *testing.T) {
+	store, handler, calls, mu := setup(t)
+
+	// Seed an instance with FiredAt=0 (simulating zero time parse)
+	seedInstance(t, store, "TestResolve", "fp-zero", instanceInfo{
+		Severity: "warning",
+		FiredAt:  0,
+		Subtitle: "Grafana",
+	})
+
+	payload := `{
+		"alerts": [
+			{
+				"status": "resolved",
+				"labels": {"alertname": "TestResolve", "severity": "warning"},
+				"annotations": {"summary": "Resolved"},
+				"startsAt": "0001-01-01T00:00:00Z",
+				"fingerprint": "fp-zero"
+			}
+		]
+	}`
+
+	w := sendWebhook(t, handler, payload)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call (end update), got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &update)
+	if update.State != pushward.StateEnded {
+		t.Errorf("expected ENDED, got %s", update.State)
+	}
+	if update.Content.FiredAt != nil {
+		t.Errorf("expected FiredAt to be nil for zero FiredAt, got %d", *update.Content.FiredAt)
+	}
+}

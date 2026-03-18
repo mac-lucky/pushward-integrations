@@ -2,15 +2,11 @@ package selftest
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"sort"
 	"time"
 
-	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
@@ -203,7 +199,7 @@ func SendTest(ctx context.Context, cl *pushward.Client, provider string) error {
 
 	slug := "relay-test-" + provider
 
-	if err := cl.CreateActivity(ctx, slug, pt.name, 1, 30, 25); err != nil {
+	if err := cl.CreateActivity(ctx, slug, pt.name, 1, 300, 120); err != nil {
 		return fmt.Errorf("create activity: %w", err)
 	}
 
@@ -232,40 +228,3 @@ func SendTest(ctx context.Context, cl *pushward.Client, provider string) error {
 	return nil
 }
 
-// ProviderTestHandler handles POST /test/{provider} requests.
-type ProviderTestHandler struct {
-	clients *client.Pool
-}
-
-// NewProviderTestHandler creates a new provider test handler.
-func NewProviderTestHandler(clients *client.Pool) *ProviderTestHandler {
-	return &ProviderTestHandler{clients: clients}
-}
-
-// ServeHTTP handles the request by extracting the provider from the path and sending a test.
-func (h *ProviderTestHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	provider := r.PathValue("provider")
-
-	if _, ok := providers[provider]; !ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]any{
-			"error":           "unknown provider",
-			"valid_providers": ValidProviders(),
-		})
-		return
-	}
-
-	ctx := r.Context()
-	userKey := auth.KeyFromContext(ctx)
-	cl := h.clients.Get(userKey)
-
-	if err := SendTest(ctx, cl, provider); err != nil {
-		slog.Error("test notification failed", "provider", provider, "error", err)
-		http.Error(w, "failed to send test notification", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
-}

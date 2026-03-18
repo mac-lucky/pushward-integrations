@@ -22,7 +22,6 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/paperless"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/proxmox"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/ratelimit"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/starr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
@@ -77,10 +76,6 @@ func main() {
 
 	// Router
 	mux := server.NewMux()
-
-	// Test endpoint — always enabled so users can verify the relay works
-	pth := selftest.NewProviderTestHandler(clients)
-	mux.Handle("POST /test/{provider}", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(pth))))
 
 	// Provider handlers — each route is wrapped with IP rate limit → auth → key rate limit
 	if cfg.Providers.Grafana.Enabled {

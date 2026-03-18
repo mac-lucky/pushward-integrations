@@ -246,7 +246,10 @@ func (h *Handler) buildOngoingUpdate(instances map[string]json.RawMessage) pushw
 		subtitle = "Grafana"
 	}
 
-	firedAt := worst.FiredAt
+	var firedAtPtr *int64
+	if worst.FiredAt > 0 {
+		firedAtPtr = pushward.Int64Ptr(worst.FiredAt)
+	}
 
 	return pushward.UpdateRequest{
 		State: pushward.StateOngoing,
@@ -258,7 +261,7 @@ func (h *Handler) buildOngoingUpdate(instances map[string]json.RawMessage) pushw
 			Subtitle:     subtitle,
 			AccentColor:  h.colorForSeverity(worst.Severity),
 			Severity:     worst.Severity,
-			FiredAt:      &firedAt,
+			FiredAt:      firedAtPtr,
 			URL:          worst.GeneratorURL,
 			SecondaryURL: worst.SecondaryURL,
 		},
@@ -266,7 +269,10 @@ func (h *Handler) buildOngoingUpdate(instances map[string]json.RawMessage) pushw
 }
 
 func buildEndUpdate(info *instanceInfo) pushward.UpdateRequest {
-	firedAt := info.FiredAt
+	var firedAtPtr *int64
+	if info.FiredAt > 0 {
+		firedAtPtr = pushward.Int64Ptr(info.FiredAt)
+	}
 	return pushward.UpdateRequest{
 		State: pushward.StateEnded,
 		Content: pushward.Content{
@@ -277,7 +283,7 @@ func buildEndUpdate(info *instanceInfo) pushward.UpdateRequest {
 			Subtitle:     info.Subtitle,
 			AccentColor:  "#34C759",
 			Severity:     info.Severity,
-			FiredAt:      &firedAt,
+			FiredAt:      firedAtPtr,
 			URL:          info.GeneratorURL,
 			SecondaryURL: info.SecondaryURL,
 		},
