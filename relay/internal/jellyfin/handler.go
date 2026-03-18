@@ -155,14 +155,21 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *we
 	data, _ := json.Marshal(map[string]string{"slug": slug})
 	_ = h.store.Set(ctx, "jellyfin", userKey, mapKey, "", data, h.config.StaleTimeout)
 
+	stateText := "Playing on " + p.DeviceName
+	icon := "play.circle.fill"
+	if p.IsPaused {
+		stateText = "Paused on " + p.DeviceName
+		icon = "pause.circle.fill"
+	}
+
 	remaining := remainingSeconds(p)
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:      "generic",
 			Progress:      playbackProgress(p),
-			State:         "Playing on " + p.DeviceName,
-			Icon:          "play.circle.fill",
+			State:         stateText,
+			Icon:          icon,
 			Subtitle:      playbackSubtitle(p),
 			AccentColor:   "#007AFF",
 			RemainingTime: &remaining,
@@ -181,19 +188,24 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *we
 	h.lastPaused[debounceKey] = p.IsPaused
 	h.mu.Unlock()
 
-	slog.Info("updated activity", "slug", slug, "state", "Playing on "+p.DeviceName)
+	slog.Info("updated activity", "slug", slug, "state", stateText)
 }
 
 func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p *webhookPayload) {
 	slug := playbackSlug(p.ItemID, p.UserName)
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
-	// Debounce check — bypass when IsPaused state changes
+	// Debounce check — bypass on state change, suppress while paused
 	debounceKey := userKey + ":" + slug
 	h.mu.Lock()
 	last, hasLast := h.lastUpdate[debounceKey]
 	prevPaused, hasPrev := h.lastPaused[debounceKey]
 	stateChanged := hasPrev && prevPaused != p.IsPaused
+	// Suppress all updates while still paused (let stale timer expire)
+	if hasPrev && prevPaused && p.IsPaused {
+		h.mu.Unlock()
+		return
+	}
 	if hasLast && !stateChanged && time.Since(last) < h.config.ProgressDebounce {
 		h.mu.Unlock()
 		return
