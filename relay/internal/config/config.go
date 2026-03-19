@@ -83,6 +83,7 @@ type JellyfinConfig struct {
 	EndDelay         time.Duration `yaml:"end_delay"`
 	EndDisplayTime   time.Duration `yaml:"end_display_time"`
 	ProgressDebounce time.Duration `yaml:"progress_debounce"`
+	PauseTimeout     time.Duration `yaml:"pause_timeout"`
 }
 
 // PaperlessConfig holds Paperless-ngx-specific settings.
@@ -204,6 +205,7 @@ func Load(path string) (*Config, error) {
 				EndDelay:         5 * time.Second,
 				EndDisplayTime:   4 * time.Second,
 				ProgressDebounce: 10 * time.Second,
+				PauseTimeout:     5 * time.Minute,
 			},
 			Paperless: PaperlessConfig{
 				Enabled:        true,

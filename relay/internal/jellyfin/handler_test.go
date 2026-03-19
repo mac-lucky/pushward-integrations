@@ -25,6 +25,7 @@ func testConfig() *config.JellyfinConfig {
 		EndDelay:         10 * time.Millisecond,
 		EndDisplayTime:   10 * time.Millisecond,
 		ProgressDebounce: 10 * time.Millisecond,
+		PauseTimeout:     1 * time.Hour, // long default so existing tests aren't affected
 	}
 }
 
@@ -471,6 +472,198 @@ func TestItemAdded(t *testing.T) {
 	testutil.UnmarshalBody(t, recorded[3].Body, &ended)
 	if ended.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", ended.State)
+	}
+}
+
+func TestPauseAutoEnd(t *testing.T) {
+	cfg := testConfig()
+	cfg.PauseTimeout = 50 * time.Millisecond
+	h, calls, mu := newHandler(t, cfg)
+
+	// Start playback
+	send(t, h, `{
+		"NotificationType": "PlaybackStart",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": false
+	}`)
+
+	// Pause (state change → goes through, starts pause timer)
+	send(t, h, `{
+		"NotificationType": "PlaybackProgress",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": true
+	}`)
+
+	// Wait for pause timeout + end phases
+	time.Sleep(200 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + start_update + pause_update + phase1(ONGOING "Paused") + phase2(ENDED) = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 calls (auto-end after pause timeout), got %d", len(recorded))
+	}
+
+	// Phase 1: ONGOING with "Paused on Apple TV"
+	var phase1 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
+	if phase1.State != pushward.StateOngoing {
+		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
+	}
+	if phase1.Content.State != "Paused on Apple TV" {
+		t.Errorf("expected state 'Paused on Apple TV', got %s", phase1.Content.State)
+	}
+	if phase1.Content.Icon != "pause.circle.fill" {
+		t.Errorf("expected pause icon, got %s", phase1.Content.Icon)
+	}
+
+	// Phase 2: ENDED
+	var phase2 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
+	if phase2.State != pushward.StateEnded {
+		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
+	}
+}
+
+func TestPauseResumeCancelsAutoEnd(t *testing.T) {
+	cfg := testConfig()
+	cfg.PauseTimeout = 100 * time.Millisecond
+	h, calls, mu := newHandler(t, cfg)
+
+	// Start playback
+	send(t, h, `{
+		"NotificationType": "PlaybackStart",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": false
+	}`)
+
+	// Pause (state change)
+	send(t, h, `{
+		"NotificationType": "PlaybackProgress",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": true
+	}`)
+
+	// Resume before timeout (state change → bypasses debounce)
+	send(t, h, `{
+		"NotificationType": "PlaybackProgress",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 12000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": false
+	}`)
+
+	// Wait past the timeout — should NOT auto-end
+	time.Sleep(200 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + start_update + pause_update + resume_update = 4 (no auto-end)
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 calls (no auto-end after resume), got %d", len(recorded))
+	}
+}
+
+func TestPauseStopCancelsAutoEnd(t *testing.T) {
+	cfg := testConfig()
+	cfg.PauseTimeout = 200 * time.Millisecond
+	h, calls, mu := newHandler(t, cfg)
+
+	// Start playback
+	send(t, h, `{
+		"NotificationType": "PlaybackStart",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": false
+	}`)
+
+	// Pause
+	send(t, h, `{
+		"NotificationType": "PlaybackProgress",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": true
+	}`)
+
+	// Stop before pause timeout
+	send(t, h, `{
+		"NotificationType": "PlaybackStop",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": false
+	}`)
+
+	// Wait for end phases (from PlaybackStop) and past pause timeout
+	time.Sleep(300 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + start_update + pause_update + phase1("Watched") + phase2(ENDED) = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 calls (stop ends, not pause auto-end), got %d", len(recorded))
+	}
+
+	// Verify it ended with "Watched" (from PlaybackStop), not "Paused"
+	var phase1 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
+	if phase1.Content.State != "Watched on Apple TV" {
+		t.Errorf("expected state 'Watched on Apple TV', got %s", phase1.Content.State)
 	}
 }
 
