@@ -11,9 +11,7 @@ Each runs as its own container with a dedicated PushWard API key.
 | Integration | Description | Port | Docker Image |
 |---|---|---|---|
 | [pushward-github](./github/) | GitHub Actions CI/CD workflow progress | - | `ghcr.io/mac-lucky/pushward-github` |
-| [pushward-grafana](./grafana/) | Grafana alert notifications | 8090 | `ghcr.io/mac-lucky/pushward-grafana` |
 | [pushward-sabnzbd](./sabnzbd/) | SABnzbd download and post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
-| [pushward-argocd](./argocd/) | ArgoCD sync progress (Syncing → Rolling Out → Deployed) | 8090 | `ghcr.io/mac-lucky/pushward-argocd` |
 | [pushward-bambulab](./bambulab/) | BambuLab 3D printer progress via MQTT | - | `ghcr.io/mac-lucky/pushward-bambulab` |
 | [pushward-mqtt](./mqtt/) | Generic MQTT-to-Live-Activity bridge | - | `ghcr.io/mac-lucky/pushward-mqtt` |
 
@@ -49,16 +47,14 @@ See each integration's README or `config.example.yml` for the full list of confi
 
 ## Project Structure
 
-This is a Go workspace (`go.work`) with a shared module and eight integration modules:
+This is a Go workspace (`go.work`) with a shared module and six integration modules:
 
 ```
 pushward-integrations/
   go.work                    # Go workspace
   shared/                    # Shared module (API client, config, server, test utils)
   github/                    # GitHub Actions poller
-  grafana/                   # Grafana webhook handler
   sabnzbd/                   # SABnzbd webhook + download tracker
-  argocd/                    # ArgoCD webhook handler
   bambulab/                  # BambuLab MQTT client
   mqtt/                      # Generic MQTT bridge
   relay/                     # Multi-tenant webhook gateway (PostgreSQL)
@@ -88,9 +84,7 @@ Build any integration from the repo root:
 
 ```bash
 go build ./github/cmd/pushward-github
-go build ./grafana/cmd/pushward-grafana
 go build ./sabnzbd/cmd/pushward-sabnzbd
-go build ./argocd/cmd/pushward-argocd
 go build ./bambulab/cmd/pushward-bambulab
 go build ./mqtt/cmd/pushward-mqtt
 go build ./relay/cmd/pushward-relay
@@ -100,9 +94,7 @@ Run locally with a config file:
 
 ```bash
 ./pushward-github -config github/config.example.yml
-./pushward-grafana -config grafana/config.example.yml
 ./pushward-sabnzbd -config sabnzbd/config.example.yml
-./pushward-argocd -config argocd/config.example.yml
 ./pushward-bambulab -config bambulab/config.example.yml
 ./pushward-mqtt -config mqtt/config.example.yml
 ./pushward-relay -config relay/config.example.yml
@@ -112,7 +104,7 @@ Run tests:
 
 ```bash
 # All tests
-go test ./shared/... ./github/... ./grafana/... ./sabnzbd/... ./argocd/... ./bambulab/... ./mqtt/... ./relay/... -v -count=1
+go test ./shared/... ./github/... ./sabnzbd/... ./bambulab/... ./mqtt/... ./relay/... -v -count=1
 
 # Relay only (with race detector)
 go test ./relay/... -race -count=1 -v
@@ -122,9 +114,7 @@ Build Docker images:
 
 ```bash
 docker build -f github/Dockerfile -t pushward-github .
-docker build -f grafana/Dockerfile -t pushward-grafana .
 docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd .
-docker build -f argocd/Dockerfile -t pushward-argocd .
 docker build -f bambulab/Dockerfile -t pushward-bambulab .
 docker build -f mqtt/Dockerfile -t pushward-mqtt .
 docker build -f relay/Dockerfile -t pushward-relay .
@@ -135,9 +125,7 @@ docker build -f relay/Dockerfile -t pushward-relay .
 Each integration has its own GitHub Actions workflow with path filters so only the changed integration gets built:
 
 - `.github/workflows/github-ci-cd.yml` -- triggers on `github/**` and `shared/**` changes
-- `.github/workflows/grafana-ci-cd.yml` -- triggers on `grafana/**` and `shared/**` changes
 - `.github/workflows/sabnzbd-ci-cd.yml` -- triggers on `sabnzbd/**` and `shared/**` changes
-- `.github/workflows/argocd-ci-cd.yml` -- triggers on `argocd/**` and `shared/**` changes
 - `.github/workflows/bambulab-ci-cd.yml` -- triggers on `bambulab/**` and `shared/**` changes
 - `.github/workflows/mqtt-ci-cd.yml` -- triggers on `mqtt/**` and `shared/**` changes
 - `.github/workflows/relay-ci-cd.yml` -- triggers on `relay/**` and `shared/**` changes
