@@ -329,9 +329,19 @@ func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, p *web
 	}
 	h.mu.Unlock()
 
+	progress := playbackProgress(p)
+	if progress <= 0 {
+		// PlaybackStop may lack position ticks; fall back to last known progress.
+		h.mu.Lock()
+		if prev, ok := h.lastProgress[debounceKey]; ok {
+			progress = prev
+		}
+		h.mu.Unlock()
+	}
+
 	content := pushward.Content{
 		Template:    "generic",
-		Progress:    1.0,
+		Progress:    progress,
 		State:       "Watched on " + p.DeviceName,
 		Icon:        "checkmark.circle.fill",
 		Subtitle:    playbackSubtitle(p),
