@@ -20,24 +20,28 @@ import (
 
 // Handler processes Jellyfin webhooks for multiple tenants.
 type Handler struct {
-	store      state.Store
-	clients    *client.Pool
-	config     *config.JellyfinConfig
-	mu         sync.Mutex
-	timers     map[string]*time.Timer // "userKey:mapKey" → end timer
-	lastUpdate map[string]time.Time   // "userKey:slug" → last progress update time
-	lastPaused map[string]bool        // "userKey:slug" → last IsPaused state
+	store        state.Store
+	clients      *client.Pool
+	config       *config.JellyfinConfig
+	mu           sync.Mutex
+	timers       map[string]*time.Timer // "userKey:mapKey" → end timer
+	pauseTimers  map[string]*time.Timer // debounceKey → pause auto-end timer
+	lastUpdate   map[string]time.Time   // "userKey:slug" → last progress update time
+	lastPaused   map[string]bool        // "userKey:slug" → last IsPaused state
+	lastProgress map[string]float64     // "userKey:slug" → last progress value
 }
 
 // NewHandler creates a new Jellyfin webhook handler.
 func NewHandler(store state.Store, clients *client.Pool, cfg *config.JellyfinConfig) *Handler {
 	return &Handler{
-		store:      store,
-		clients:    clients,
-		config:     cfg,
-		timers:     make(map[string]*time.Timer),
-		lastUpdate: make(map[string]time.Time),
-		lastPaused: make(map[string]bool),
+		store:        store,
+		clients:      clients,
+		config:       cfg,
+		timers:       make(map[string]*time.Timer),
+		pauseTimers:  make(map[string]*time.Timer),
+		lastUpdate:   make(map[string]time.Time),
+		lastPaused:   make(map[string]bool),
+		lastProgress: make(map[string]float64),
 	}
 }
 
@@ -189,6 +193,18 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *we
 	debounceKey := userKey + ":" + slug
 	h.lastUpdate[debounceKey] = time.Now()
 	h.lastPaused[debounceKey] = p.IsPaused
+	progress := playbackProgress(p)
+	h.lastProgress[debounceKey] = progress
+	if p.IsPaused && h.config.PauseTimeout > 0 {
+		if existing, ok := h.pauseTimers[debounceKey]; ok {
+			existing.Stop()
+		}
+		deviceName := p.DeviceName
+		subtitle := playbackSubtitle(p)
+		h.pauseTimers[debounceKey] = time.AfterFunc(h.config.PauseTimeout, func() {
+			h.endPaused(userKey, mapKey, slug, deviceName, subtitle, progress, debounceKey)
+		})
+	}
 	h.mu.Unlock()
 
 	slog.Info("updated activity", "slug", slug, "state", stateText)
@@ -204,17 +220,56 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p 
 	last, hasLast := h.lastUpdate[debounceKey]
 	prevPaused, hasPrev := h.lastPaused[debounceKey]
 	stateChanged := hasPrev && prevPaused != p.IsPaused
-	// Suppress all updates while still paused (let stale timer expire)
+
+	// Handle pause→play: cancel pause timer
+	if stateChanged && !p.IsPaused {
+		if t, ok := h.pauseTimers[debounceKey]; ok {
+			t.Stop()
+			delete(h.pauseTimers, debounceKey)
+		}
+	}
+
+	// Suppress all updates while still paused; reset timer on seek
 	if hasPrev && prevPaused && p.IsPaused {
+		progress := playbackProgress(p)
+		if h.config.PauseTimeout > 0 {
+			if prev, ok := h.lastProgress[debounceKey]; ok && progress != prev {
+				h.lastProgress[debounceKey] = progress
+				if t, ok2 := h.pauseTimers[debounceKey]; ok2 {
+					t.Stop()
+				}
+				deviceName := p.DeviceName
+				subtitle := playbackSubtitle(p)
+				h.pauseTimers[debounceKey] = time.AfterFunc(h.config.PauseTimeout, func() {
+					h.endPaused(userKey, mapKey, slug, deviceName, subtitle, progress, debounceKey)
+				})
+			}
+		}
 		h.mu.Unlock()
 		return
 	}
+
 	if hasLast && !stateChanged && time.Since(last) < h.config.ProgressDebounce {
 		h.mu.Unlock()
 		return
 	}
+
 	h.lastUpdate[debounceKey] = time.Now()
 	h.lastPaused[debounceKey] = p.IsPaused
+	progress := playbackProgress(p)
+	h.lastProgress[debounceKey] = progress
+
+	// Start pause timer on play→pause or initial pause
+	if p.IsPaused && h.config.PauseTimeout > 0 && (stateChanged || !hasPrev) {
+		if t, ok := h.pauseTimers[debounceKey]; ok {
+			t.Stop()
+		}
+		deviceName := p.DeviceName
+		subtitle := playbackSubtitle(p)
+		h.pauseTimers[debounceKey] = time.AfterFunc(h.config.PauseTimeout, func() {
+			h.endPaused(userKey, mapKey, slug, deviceName, subtitle, progress, debounceKey)
+		})
+	}
 	h.mu.Unlock()
 
 	cl := h.clients.Get(userKey)
@@ -264,6 +319,15 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p 
 func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, p *webhookPayload) {
 	slug := playbackSlug(p.ItemID, p.UserName)
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
+
+	// Cancel pause timer if running
+	debounceKey := userKey + ":" + slug
+	h.mu.Lock()
+	if t, ok := h.pauseTimers[debounceKey]; ok {
+		t.Stop()
+		delete(h.pauseTimers, debounceKey)
+	}
+	h.mu.Unlock()
 
 	content := pushward.Content{
 		Template:    "generic",
@@ -483,9 +547,35 @@ func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Con
 		h.mu.Lock()
 		delete(h.timers, timerKey)
 		// Clean up debounce entries for playback slugs
-		delete(h.lastUpdate, userKey+":"+slug)
-		delete(h.lastPaused, userKey+":"+slug)
+		debounceKey := userKey + ":" + slug
+		delete(h.lastUpdate, debounceKey)
+		delete(h.lastPaused, debounceKey)
+		delete(h.lastProgress, debounceKey)
+		if pt, ok := h.pauseTimers[debounceKey]; ok {
+			pt.Stop()
+			delete(h.pauseTimers, debounceKey)
+		}
 		h.mu.Unlock()
 	})
 	h.mu.Unlock()
+}
+
+// endPaused is called when the pause timer fires — auto-ends the activity
+// because it has been paused with no progress change.
+func (h *Handler) endPaused(userKey, mapKey, slug, deviceName, subtitle string, progress float64, debounceKey string) {
+	h.mu.Lock()
+	delete(h.pauseTimers, debounceKey)
+	h.mu.Unlock()
+
+	content := pushward.Content{
+		Template:    "generic",
+		Progress:    progress,
+		State:       "Paused on " + deviceName,
+		Icon:        "pause.circle.fill",
+		Subtitle:    subtitle,
+		AccentColor: "#007AFF",
+	}
+
+	h.scheduleEnd(userKey, mapKey, slug, content)
+	slog.Info("auto-ending paused activity", "slug", slug)
 }
