@@ -118,6 +118,113 @@ func TestPlaybackStart(t *testing.T) {
 	}
 }
 
+func TestPlaybackStartPausedIgnored(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := send(t, h, `{
+		"NotificationType": "PlaybackStart",
+		"ItemId": "abc123",
+		"ItemType": "Episode",
+		"Name": "Pilot",
+		"SeriesName": "Breaking Bad",
+		"SeasonNumber": 1,
+		"EpisodeNumber": 1,
+		"ProductionYear": 2008,
+		"RunTimeTicks": 27630000000,
+		"PlaybackPositionTicks": 0,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": true
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 calls (paused start ignored), got %d", len(recorded))
+	}
+}
+
+func TestPlaybackStartPausedThenResume(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	// Paused start — should be ignored
+	send(t, h, `{
+		"NotificationType": "PlaybackStart",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": true
+	}`)
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 calls after paused start, got %d", len(recorded))
+	}
+
+	// Resume — should create activity via late join
+	send(t, h, `{
+		"NotificationType": "PlaybackProgress",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 12000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": false
+	}`)
+
+	recorded = testutil.GetCalls(calls, mu)
+	// create + update = 2
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls (late-join create + update), got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.State != "Playing on Apple TV" {
+		t.Errorf("expected state 'Playing on Apple TV', got %s", update.Content.State)
+	}
+}
+
+func TestPlaybackProgressPausedNoActivityIgnored(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	// PlaybackProgress with IsPaused=true and no prior start
+	w := send(t, h, `{
+		"NotificationType": "PlaybackProgress",
+		"ItemId": "abc123",
+		"ItemType": "Movie",
+		"Name": "Inception",
+		"ProductionYear": 2010,
+		"RunTimeTicks": 88320000000,
+		"PlaybackPositionTicks": 10000000000,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": true
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 0 {
+		t.Fatalf("expected 0 calls (paused progress without activity ignored), got %d", len(recorded))
+	}
+}
+
 func TestPlaybackStartAndStop(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 

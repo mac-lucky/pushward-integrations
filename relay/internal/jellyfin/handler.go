@@ -142,6 +142,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *webhookPayload) {
 	slug := playbackSlug(p.ItemID, p.UserName)
+
+	// Skip paused starts — Jellyfin fires PlaybackStart with IsPaused=true
+	// for stale sessions, causing false-positive activities. Record debounce
+	// state so a real resume (IsPaused=false) triggers late-join creation.
+	if p.IsPaused {
+		debounceKey := userKey + ":" + slug
+		h.mu.Lock()
+		h.lastPaused[debounceKey] = true
+		h.lastProgress[debounceKey] = playbackProgress(p)
+		h.lastUpdate[debounceKey] = time.Now()
+		h.mu.Unlock()
+		slog.Info("skipped paused playback start", "slug", slug)
+		return
+	}
+
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
 	cl := h.clients.Get(userKey)
@@ -273,6 +288,16 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p 
 
 	// Create activity if it doesn't exist (e.g. PlaybackStart was missed)
 	if exists, _ := h.store.Exists(ctx, "jellyfin", userKey, mapKey, ""); !exists {
+		// Don't create activity for paused playback — wait for a real play event.
+		if p.IsPaused {
+			h.mu.Lock()
+			if t, ok := h.pauseTimers[debounceKey]; ok {
+				t.Stop()
+				delete(h.pauseTimers, debounceKey)
+			}
+			h.mu.Unlock()
+			return
+		}
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		name := mediaName(p)
