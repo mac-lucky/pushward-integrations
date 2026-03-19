@@ -4,11 +4,7 @@ use ./shared
 
 use ./github
 
-use ./grafana
-
 use ./sabnzbd
-
-use ./argocd
 
 use ./bambulab
 
