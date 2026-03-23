@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
@@ -40,11 +39,6 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.UptimeKumaC
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 
 	var payload webhookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -130,7 +124,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, pwClient *push
 			AccentColor: "#FF3B30",
 			Severity:    "error",
 			FiredAt:     firedAtPtr,
-			URL:         sanitizeMonitorURL(p.Monitor.URL),
+			URL:         text.SanitizeURL(p.Monitor.URL),
 		},
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
@@ -168,7 +162,7 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, pwClient *pushwa
 		Subtitle:    subtitle,
 		AccentColor: "#34C759",
 		Severity:    "info",
-		URL:         sanitizeMonitorURL(p.Monitor.URL),
+		URL:         text.SanitizeURL(p.Monitor.URL),
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
@@ -206,7 +200,7 @@ func (h *Handler) handlePending(ctx context.Context, userKey string, pwClient *p
 			Subtitle:    subtitle,
 			AccentColor: "#FF9500",
 			Severity:    "warning",
-			URL:         sanitizeMonitorURL(p.Monitor.URL),
+			URL:         text.SanitizeURL(p.Monitor.URL),
 		},
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
@@ -214,12 +208,4 @@ func (h *Handler) handlePending(ctx context.Context, userKey string, pwClient *p
 		return
 	}
 	slog.Info("created pending activity", "slug", slug, "monitor", p.Monitor.Name)
-}
-
-func sanitizeMonitorURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return ""
-	}
-	return raw
 }

@@ -23,12 +23,14 @@ const testKey = "hlk_test"
 
 func testConfig() *config.ArgoCDConfig {
 	return &config.ArgoCDConfig{
-		Enabled:        true,
-		Priority:       3,
-		CleanupDelay:   1 * time.Hour,
-		StaleTimeout:   30 * time.Minute,
-		EndDelay:       10 * time.Millisecond,
-		EndDisplayTime: 10 * time.Millisecond,
+		BaseProviderConfig: config.BaseProviderConfig{
+			Enabled:        true,
+			Priority:       3,
+			CleanupDelay:   1 * time.Hour,
+			StaleTimeout:   30 * time.Minute,
+			EndDelay:       10 * time.Millisecond,
+			EndDisplayTime: 10 * time.Millisecond,
+		},
 	}
 }
 
@@ -523,25 +525,6 @@ func TestNewRevision_ResetsTracking(t *testing.T) {
 	}
 	if recorded[2].Method != "POST" {
 		t.Errorf("third call should be POST (new revision create), got %s", recorded[2].Method)
-	}
-}
-
-// --- Test: Method not allowed ---
-
-func TestMethodNotAllowed(t *testing.T) {
-	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, "http://unused")
-
-	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
-		t.Run(method, func(t *testing.T) {
-			req := httptest.NewRequest(method, "/webhook", nil)
-			req.Header.Set("Authorization", "Bearer "+testKey)
-			w := httptest.NewRecorder()
-			auth.Middleware(h).ServeHTTP(w, req)
-			if w.Code != http.StatusMethodNotAllowed {
-				t.Errorf("expected 405 for %s, got %d", method, w.Code)
-			}
-		})
 	}
 }
 

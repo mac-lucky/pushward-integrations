@@ -16,7 +16,6 @@ import (
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
-	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 func testConfig() *config.Config {
@@ -223,37 +222,6 @@ func TestHandleWebhook_AlreadyActive(t *testing.T) {
 	}
 
 	tr.Wait()
-}
-
-// --- truncate tests ---
-
-func TestTruncate(t *testing.T) {
-	tests := []struct {
-		name   string
-		input  string
-		maxLen int
-		want   string
-	}{
-		{"shorter than limit", "hello", 10, "hello"},
-		{"exact length", "hello", 5, "hello"},
-		{"ASCII truncation", "hello world foo bar", 10, "hello w..."},
-		{"UTF-8 rune-aware", "héllo wörld", 8, "héllo..."},
-		{"CJK characters", "你好世界测试数据", 6, "你好世..."},
-		{"maxLen 3", "abcdef", 3, "abc"},
-		{"maxLen 2", "abcdef", 2, "ab"},
-		{"maxLen 1", "abcdef", 1, "a"},
-		{"empty string", "", 5, ""},
-		{"maxLen 4 with ellipsis", "abcdef", 4, "a..."},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := text.Truncate(tt.input, tt.maxLen)
-			if got != tt.want {
-				t.Errorf("Truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
-			}
-		})
-	}
 }
 
 // --- parseTimeLeft tests ---

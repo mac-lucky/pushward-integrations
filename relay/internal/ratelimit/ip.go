@@ -55,15 +55,18 @@ func clientIP(r *http.Request) string {
 	}
 
 	if isTrustedProxy(remoteHost) {
-		if ip := r.Header.Get("CF-Connecting-IP"); ip != "" {
+		if ip := r.Header.Get("CF-Connecting-IP"); ip != "" && net.ParseIP(ip) != nil {
 			return ip
 		}
-		if ip := r.Header.Get("X-Real-IP"); ip != "" {
+		if ip := r.Header.Get("X-Real-IP"); ip != "" && net.ParseIP(ip) != nil {
 			return ip
 		}
 		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 			if first, _, _ := strings.Cut(xff, ","); first != "" {
-				return strings.TrimSpace(first)
+				first = strings.TrimSpace(first)
+				if net.ParseIP(first) != nil {
+					return first
+				}
 			}
 		}
 	}

@@ -76,7 +76,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 		}
 		h.handleManualInteraction(ctx, userKey, "sonarr", &p)
 	default:
-		slog.Debug("ignored event", "eventType", envelope.EventType)
+		slog.Debug("ignored event", "event_type", envelope.EventType)
 	}
 
 	w.WriteHeader(http.StatusOK)

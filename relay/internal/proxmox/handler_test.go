@@ -18,12 +18,14 @@ import (
 
 func testConfig() *config.ProxmoxConfig {
 	return &config.ProxmoxConfig{
-		Enabled:        true,
-		Priority:       2,
-		CleanupDelay:   1 * time.Hour,
-		StaleTimeout:   30 * time.Minute,
-		EndDelay:       10 * time.Millisecond,
-		EndDisplayTime: 10 * time.Millisecond,
+		BaseProviderConfig: config.BaseProviderConfig{
+			Enabled:        true,
+			Priority:       2,
+			CleanupDelay:   1 * time.Hour,
+			StaleTimeout:   30 * time.Minute,
+			EndDelay:       10 * time.Millisecond,
+			EndDisplayTime: 10 * time.Millisecond,
+		},
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -173,21 +172,6 @@ var providers = map[string]providerTest{
 			AccentColor: "#007AFF",
 		},
 	},
-}
-
-var validProviders []string
-
-func init() {
-	validProviders = make([]string, 0, len(providers))
-	for k := range providers {
-		validProviders = append(validProviders, k)
-	}
-	sort.Strings(validProviders)
-}
-
-// ValidProviders returns the sorted list of registered provider names.
-func ValidProviders() []string {
-	return validProviders
 }
 
 // SendTest creates a test activity and sends an ONGOING update for the given provider.

@@ -173,7 +173,9 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 
 	switch status.State {
 	case "STARTING":
-		_ = t.pw.CreateActivity(ctx, slug, "Array", t.cfg.PushWard.Priority, endedTTL, staleTTL)
+		if err := t.pw.CreateActivity(ctx, slug, "Array", t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
+			slog.Error("failed to create array activity", "error", err)
+		}
 		req := pushward.UpdateRequest{
 			State: pushward.StateOngoing,
 			Content: pushward.Content{
@@ -185,7 +187,9 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 				AccentColor: "#007AFF",
 			},
 		}
-		_ = t.pw.UpdateActivity(ctx, slug, req)
+		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
+			slog.Error("failed to update array activity", "error", err)
+		}
 
 	case "STARTED":
 		if prevState == "STARTING" {
@@ -200,7 +204,9 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 		}
 
 	case "STOPPING":
-		_ = t.pw.CreateActivity(ctx, slug, "Array", t.cfg.PushWard.Priority, endedTTL, staleTTL)
+		if err := t.pw.CreateActivity(ctx, slug, "Array", t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
+			slog.Error("failed to create array activity", "error", err)
+		}
 		req := pushward.UpdateRequest{
 			State: pushward.StateOngoing,
 			Content: pushward.Content{
@@ -212,7 +218,9 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 				AccentColor: "#FF9500",
 			},
 		}
-		_ = t.pw.UpdateActivity(ctx, slug, req)
+		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
+			slog.Error("failed to update array activity", "error", err)
+		}
 
 	case "STOPPED":
 		if prevState == "STOPPING" {
@@ -238,7 +246,9 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 		strings.Contains(notif.Subject, "disk") ||
 		strings.Contains(notif.Subject, "Disk"):
 		slug := fmt.Sprintf("unraid-disk-%s", sanitize(notif.Subject))
-		_ = t.pw.CreateActivity(ctx, slug, text.TruncateHard(notif.Subject, 100), t.cfg.PushWard.Priority, endedTTL, staleTTL)
+		if err := t.pw.CreateActivity(ctx, slug, text.TruncateHard(notif.Subject, 100), t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
+			slog.Error("failed to create disk activity", "slug", slug, "error", err)
+		}
 		content := pushward.Content{
 			Template:    "alert",
 			Progress:    1.0,
@@ -249,7 +259,9 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 			Severity:    "error",
 		}
 		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
-		_ = t.pw.UpdateActivity(ctx, slug, req)
+		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
+			slog.Error("failed to update disk activity", "slug", slug, "error", err)
+		}
 		t.scheduleEnd(slug, content)
 
 	case strings.Contains(notif.Subject, "UPS") ||
@@ -257,7 +269,9 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 		strings.Contains(notif.Subject, "battery") ||
 		strings.Contains(notif.Subject, "Battery"):
 		slug := "unraid-ups"
-		_ = t.pw.CreateActivity(ctx, slug, "UPS Event", t.cfg.PushWard.Priority, endedTTL, staleTTL)
+		if err := t.pw.CreateActivity(ctx, slug, "UPS Event", t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
+			slog.Error("failed to create UPS activity", "error", err)
+		}
 
 		accentColor := "#FF9500"
 		icon := "bolt.slash.fill"
@@ -277,7 +291,9 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 			Severity:    severity,
 		}
 		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
-		_ = t.pw.UpdateActivity(ctx, slug, req)
+		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
+			slog.Error("failed to update UPS activity", "error", err)
+		}
 		t.scheduleEnd(slug, content)
 
 	default:
@@ -302,7 +318,9 @@ func (t *Tracker) scheduleEnd(slug string, content pushward.Content) {
 	tp.phase1 = time.AfterFunc(endDelay, func() {
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
-		_ = t.pw.UpdateActivity(ctx1, slug, pushward.UpdateRequest{State: pushward.StateOngoing, Content: content})
+		if err := t.pw.UpdateActivity(ctx1, slug, pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}); err != nil {
+			slog.Error("failed to update activity (end phase 1)", "slug", slug, "error", err)
+		}
 		cancel1()
 
 		// Phase 2: schedule ENDED after display time
@@ -314,7 +332,9 @@ func (t *Tracker) scheduleEnd(slug string, content pushward.Content) {
 		tp.phase2 = time.AfterFunc(displayTime, func() {
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel2()
-			_ = t.pw.UpdateActivity(ctx2, slug, pushward.UpdateRequest{State: pushward.StateEnded, Content: content})
+			if err := t.pw.UpdateActivity(ctx2, slug, pushward.UpdateRequest{State: pushward.StateEnded, Content: content}); err != nil {
+				slog.Error("failed to update activity (end phase 2)", "slug", slug, "error", err)
+			}
 
 			t.mu.Lock()
 			delete(t.timers, slug)

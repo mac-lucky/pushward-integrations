@@ -512,20 +512,10 @@ func (p *Poller) scheduleEnd(repo string, content pushward.Content) {
 }
 
 func repoName(fullRepo string) string {
-	parts := splitRepo(fullRepo)
-	if len(parts) == 2 {
-		return parts[1]
+	if _, name, ok := strings.Cut(fullRepo, "/"); ok {
+		return name
 	}
 	return fullRepo
-}
-
-func splitRepo(repo string) []string {
-	for i, c := range repo {
-		if c == '/' {
-			return []string{repo[:i], repo[i+1:]}
-		}
-	}
-	return []string{repo}
 }
 
 // baseJobName strips the reusable-workflow caller prefix and matrix

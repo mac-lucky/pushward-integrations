@@ -18,12 +18,14 @@ import (
 
 func testConfig() *config.GatusConfig {
 	return &config.GatusConfig{
-		Enabled:        true,
-		Priority:       2,
-		EndDelay:       10 * time.Millisecond,
-		EndDisplayTime: 10 * time.Millisecond,
-		CleanupDelay:   1 * time.Hour,
-		StaleTimeout:   1 * time.Hour,
+		BaseProviderConfig: config.BaseProviderConfig{
+			Enabled:        true,
+			Priority:       2,
+			EndDelay:       10 * time.Millisecond,
+			EndDisplayTime: 10 * time.Millisecond,
+			CleanupDelay:   1 * time.Hour,
+			StaleTimeout:   1 * time.Hour,
+		},
 	}
 }
 

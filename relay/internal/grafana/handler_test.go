@@ -22,13 +22,15 @@ const testKey = "hlk_test"
 
 func testConfig() *config.GrafanaConfig {
 	return &config.GrafanaConfig{
-		Enabled:         true,
+		BaseProviderConfig: config.BaseProviderConfig{
+			Enabled:      true,
+			Priority:     5,
+			CleanupDelay: 1 * time.Hour,
+			StaleTimeout: 24 * time.Hour,
+		},
 		SeverityLabel:   "severity",
 		DefaultSeverity: "warning",
 		DefaultIcon:     "exclamationmark.triangle.fill",
-		Priority:        5,
-		CleanupDelay:    1 * time.Hour,
-		StaleTimeout:    24 * time.Hour,
 	}
 }
 
@@ -945,22 +947,6 @@ func TestCustomSeverityLabel(t *testing.T) {
 	}
 	if updateReq.Content.Icon != "exclamationmark.octagon.fill" {
 		t.Errorf("expected critical icon, got %s", updateReq.Content.Icon)
-	}
-}
-
-func TestMethodNotAllowed(t *testing.T) {
-	_, handler, _, _ := setup(t)
-
-	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
-		t.Run(method, func(t *testing.T) {
-			req := httptest.NewRequest(method, "/webhook", nil)
-			req.Header.Set("Authorization", "Bearer "+testKey)
-			w := httptest.NewRecorder()
-			handler.ServeHTTP(w, req)
-			if w.Code != http.StatusMethodNotAllowed {
-				t.Errorf("expected 405 for %s, got %d", method, w.Code)
-			}
-		})
 	}
 }
 

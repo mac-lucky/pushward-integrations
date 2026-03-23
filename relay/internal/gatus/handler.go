@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
@@ -40,11 +39,6 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.GatusConfig
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 
 	var payload webhookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -136,7 +130,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 			AccentColor: "#FF3B30",
 			Severity:    "error",
 			FiredAt:     firedAt,
-			URL:         sanitizeURL(p.EndpointURL),
+			URL:         text.SanitizeURL(p.EndpointURL),
 		},
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
@@ -147,7 +141,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 }
 
 func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *pushward.Client, p *webhookPayload) {
-	_, mapKey := h.slugAndKey(p)
+	slug, mapKey := h.slugAndKey(p)
 
 	existing, err := h.store.Get(ctx, "gatus", userKey, mapKey, "")
 	if err != nil {
@@ -157,8 +151,6 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *
 	if existing == nil {
 		return // No prior TRIGGERED — skip routine RESOLVED
 	}
-
-	slug, _ := h.slugAndKey(p)
 	subtitle := "Gatus \u00b7 " + text.TruncateHard(p.EndpointName, 50)
 	if p.EndpointGroup != "" {
 		subtitle = "Gatus \u00b7 " + text.TruncateHard(p.EndpointGroup+"/"+p.EndpointName, 50)
@@ -172,7 +164,7 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *
 		Subtitle:    subtitle,
 		AccentColor: "#34C759",
 		Severity:    "info",
-		URL:         sanitizeURL(p.EndpointURL),
+		URL:         text.SanitizeURL(p.EndpointURL),
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
@@ -180,10 +172,3 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *
 	slog.Info("scheduled end for activity", "slug", slug, "endpoint", p.EndpointName)
 }
 
-func sanitizeURL(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
-		return ""
-	}
-	return raw
-}

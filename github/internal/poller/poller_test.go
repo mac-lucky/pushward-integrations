@@ -511,29 +511,6 @@ func TestRepoName(t *testing.T) {
 	}
 }
 
-func TestSplitRepo(t *testing.T) {
-	tests := []struct {
-		input string
-		want  []string
-	}{
-		{"owner/repo", []string{"owner", "repo"}},
-		{"noslash", []string{"noslash"}},
-		{"a/b/c", []string{"a", "b/c"}},
-	}
-	for _, tt := range tests {
-		got := splitRepo(tt.input)
-		if len(got) != len(tt.want) {
-			t.Errorf("splitRepo(%q) len = %d, want %d", tt.input, len(got), len(tt.want))
-			continue
-		}
-		for i := range got {
-			if got[i] != tt.want[i] {
-				t.Errorf("splitRepo(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
-			}
-		}
-	}
-}
-
 func TestBaseJobName(t *testing.T) {
 	tests := []struct {
 		input string

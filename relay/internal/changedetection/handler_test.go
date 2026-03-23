@@ -17,10 +17,12 @@ import (
 
 func testConfig() *config.ChangedetectionConfig {
 	return &config.ChangedetectionConfig{
-		Enabled:      true,
-		Priority:     2,
-		CleanupDelay: 5 * time.Minute,
-		StaleTimeout: 1 * time.Hour,
+		BaseProviderConfig: config.BaseProviderConfig{
+			Enabled:      true,
+			Priority:     2,
+			CleanupDelay: 5 * time.Minute,
+			StaleTimeout: 1 * time.Hour,
+		},
 	}
 }
 

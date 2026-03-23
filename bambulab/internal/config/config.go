@@ -33,7 +33,7 @@ func Load(path string) (*Config, error) {
 	cfg := &Config{
 		BambuLab: BambuLabConfig{
 			TLS: TLSConfig{
-				InsecureSkipVerify: true, // BambuLab printers use self-signed certs
+				InsecureSkipVerify: false,
 			},
 		},
 		PushWard: sharedconfig.PushWardConfig{

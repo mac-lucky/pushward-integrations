@@ -40,17 +40,18 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// Integration-specific env overrides
-	if v := os.Getenv("UNRAID_HOST"); v != "" {
+	// Integration-specific env overrides (PUSHWARD_ prefix preferred, bare fallback for compat)
+	if v := envOr("PUSHWARD_UNRAID_HOST", "UNRAID_HOST"); v != "" {
 		cfg.Unraid.Host = v
 	}
-	if v := os.Getenv("UNRAID_PORT"); v != "" {
+	if v := envOr("PUSHWARD_UNRAID_PORT", "UNRAID_PORT"); v != "" {
 		var p int
-		if _, err := fmt.Sscanf(v, "%d", &p); err == nil {
-			cfg.Unraid.Port = p
+		if _, err := fmt.Sscanf(v, "%d", &p); err != nil {
+			return nil, fmt.Errorf("parsing PUSHWARD_UNRAID_PORT: %w", err)
 		}
+		cfg.Unraid.Port = p
 	}
-	if v := os.Getenv("UNRAID_API_KEY"); v != "" {
+	if v := envOr("PUSHWARD_UNRAID_API_KEY", "UNRAID_API_KEY"); v != "" {
 		cfg.Unraid.APIKey = v
 	}
 
@@ -61,14 +62,24 @@ func Load(path string) (*Config, error) {
 
 	// Validation
 	if cfg.Unraid.Host == "" {
-		return nil, fmt.Errorf("unraid.host is required (set UNRAID_HOST)")
+		return nil, fmt.Errorf("unraid.host is required (set PUSHWARD_UNRAID_HOST)")
 	}
 	if cfg.Unraid.APIKey == "" {
-		return nil, fmt.Errorf("unraid.api_key is required (set UNRAID_API_KEY)")
+		return nil, fmt.Errorf("unraid.api_key is required (set PUSHWARD_UNRAID_API_KEY)")
 	}
 	if err := cfg.PushWard.Validate(); err != nil {
 		return nil, err
 	}
 
 	return cfg, nil
+}
+
+// envOr returns the first non-empty value from the given environment variable names.
+func envOr(keys ...string) string {
+	for _, k := range keys {
+		if v := os.Getenv(k); v != "" {
+			return v
+		}
+	}
+	return ""
 }

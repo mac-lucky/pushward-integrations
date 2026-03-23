@@ -7,6 +7,9 @@ github:
 pushward:
   url: ""             # or set PUSHWARD_URL (e.g. https://api.pushward.app)
   api_key: ""         # or set PUSHWARD_API_KEY (hlk_ integration key)
+  # priority: 1            # PUSHWARD_PRIORITY
+  # cleanup_delay: 15m     # PUSHWARD_CLEANUP_DELAY
+  # stale_timeout: 60m     # PUSHWARD_STALE_TIMEOUT
   # end_delay: 5s          # PUSHWARD_END_DELAY
   # end_display_time: 4s   # PUSHWARD_END_DISPLAY_TIME
 

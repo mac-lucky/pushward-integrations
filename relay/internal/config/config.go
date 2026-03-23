@@ -40,27 +40,31 @@ type ProvidersConfig struct {
 	Backrest        BackrestConfig        `yaml:"backrest"`
 }
 
+// BaseProviderConfig holds fields shared by all provider configs.
+type BaseProviderConfig struct {
+	Enabled        bool          `yaml:"enabled"`
+	Priority       int           `yaml:"priority"`
+	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
+	StaleTimeout   time.Duration `yaml:"stale_timeout"`
+	EndDelay       time.Duration `yaml:"end_delay"`
+	EndDisplayTime time.Duration `yaml:"end_display_time"`
+}
+
 // GrafanaConfig holds Grafana-specific settings.
+// Grafana alerts are fire-and-forget (no two-phase end), so EndDelay and
+// EndDisplayTime from BaseProviderConfig are unused.
 type GrafanaConfig struct {
-	Enabled         bool          `yaml:"enabled"`
-	SeverityLabel   string        `yaml:"severity_label"`
-	DefaultSeverity string        `yaml:"default_severity"`
-	DefaultIcon     string        `yaml:"default_icon"`
-	Priority        int           `yaml:"priority"`
-	CleanupDelay    time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout    time.Duration `yaml:"stale_timeout"`
+	BaseProviderConfig `yaml:",inline"`
+	SeverityLabel      string `yaml:"severity_label"`
+	DefaultSeverity    string `yaml:"default_severity"`
+	DefaultIcon        string `yaml:"default_icon"`
 }
 
 // ArgoCDConfig holds ArgoCD-specific settings.
 type ArgoCDConfig struct {
-	Enabled         bool          `yaml:"enabled"`
-	URL             string        `yaml:"url"`
-	SyncGracePeriod time.Duration `yaml:"sync_grace_period"`
-	Priority        int           `yaml:"priority"`
-	CleanupDelay    time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout    time.Duration `yaml:"stale_timeout"`
-	EndDelay        time.Duration `yaml:"end_delay"`
-	EndDisplayTime  time.Duration `yaml:"end_display_time"`
+	BaseProviderConfig `yaml:",inline"`
+	URL                string        `yaml:"url"`
+	SyncGracePeriod    time.Duration `yaml:"sync_grace_period"`
 }
 
 // StarrConfig holds Radarr/Sonarr-specific settings.
@@ -68,102 +72,56 @@ type ArgoCDConfig struct {
 // In the relay, Radarr/Sonarr send the hlk_ integration key as the Basic Auth
 // password (extracted by the relay auth middleware). The username field is ignored.
 type StarrConfig struct {
-	Enabled        bool          `yaml:"enabled"`
-	Priority       int           `yaml:"priority"`
-	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout   time.Duration `yaml:"stale_timeout"`
-	EndDelay       time.Duration `yaml:"end_delay"`
-	EndDisplayTime time.Duration `yaml:"end_display_time"`
+	BaseProviderConfig `yaml:",inline"`
 }
 
 // JellyfinConfig holds Jellyfin-specific settings.
 type JellyfinConfig struct {
-	Enabled          bool          `yaml:"enabled"`
-	Priority         int           `yaml:"priority"`
-	CleanupDelay     time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout     time.Duration `yaml:"stale_timeout"`
-	EndDelay         time.Duration `yaml:"end_delay"`
-	EndDisplayTime   time.Duration `yaml:"end_display_time"`
-	ProgressDebounce time.Duration `yaml:"progress_debounce"`
-	PauseTimeout     time.Duration `yaml:"pause_timeout"`
+	BaseProviderConfig `yaml:",inline"`
+	ProgressDebounce   time.Duration `yaml:"progress_debounce"`
+	PauseTimeout       time.Duration `yaml:"pause_timeout"`
 }
 
 // PaperlessConfig holds Paperless-ngx-specific settings.
 type PaperlessConfig struct {
-	Enabled      bool          `yaml:"enabled"`
-	Priority     int           `yaml:"priority"`
-	CleanupDelay time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout time.Duration `yaml:"stale_timeout"`
-	EndDelay     time.Duration `yaml:"end_delay"`
-	EndDisplayTime time.Duration `yaml:"end_display_time"`
+	BaseProviderConfig `yaml:",inline"`
 }
 
 // ChangedetectionConfig holds Changedetection.io-specific settings.
+// Changedetection alerts are fire-and-forget, so EndDelay and
+// EndDisplayTime from BaseProviderConfig are unused.
 type ChangedetectionConfig struct {
-	Enabled      bool          `yaml:"enabled"`
-	Priority     int           `yaml:"priority"`
-	CleanupDelay time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout time.Duration `yaml:"stale_timeout"`
+	BaseProviderConfig `yaml:",inline"`
 }
 
 // UnmanicConfig holds Unmanic-specific settings.
 type UnmanicConfig struct {
-	Enabled        bool          `yaml:"enabled"`
-	Priority       int           `yaml:"priority"`
-	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout   time.Duration `yaml:"stale_timeout"`
-	EndDelay       time.Duration `yaml:"end_delay"`
-	EndDisplayTime time.Duration `yaml:"end_display_time"`
+	BaseProviderConfig `yaml:",inline"`
 }
 
 // ProxmoxConfig holds Proxmox VE-specific settings.
 type ProxmoxConfig struct {
-	Enabled        bool          `yaml:"enabled"`
-	Priority       int           `yaml:"priority"`
-	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout   time.Duration `yaml:"stale_timeout"`
-	EndDelay       time.Duration `yaml:"end_delay"`
-	EndDisplayTime time.Duration `yaml:"end_display_time"`
+	BaseProviderConfig `yaml:",inline"`
 }
 
 // OverseerrConfig holds Overseerr/Jellyseerr-specific settings.
 type OverseerrConfig struct {
-	Enabled        bool          `yaml:"enabled"`
-	Priority       int           `yaml:"priority"`
-	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout   time.Duration `yaml:"stale_timeout"`
-	EndDelay       time.Duration `yaml:"end_delay"`
-	EndDisplayTime time.Duration `yaml:"end_display_time"`
+	BaseProviderConfig `yaml:",inline"`
 }
 
 // BackrestConfig holds Backrest-specific settings.
 type BackrestConfig struct {
-	Enabled        bool          `yaml:"enabled"`
-	Priority       int           `yaml:"priority"`
-	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout   time.Duration `yaml:"stale_timeout"`
-	EndDelay       time.Duration `yaml:"end_delay"`
-	EndDisplayTime time.Duration `yaml:"end_display_time"`
+	BaseProviderConfig `yaml:",inline"`
 }
 
 // GatusConfig holds Gatus-specific settings.
 type GatusConfig struct {
-	Enabled        bool          `yaml:"enabled"`
-	Priority       int           `yaml:"priority"`
-	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout   time.Duration `yaml:"stale_timeout"`
-	EndDelay       time.Duration `yaml:"end_delay"`
-	EndDisplayTime time.Duration `yaml:"end_display_time"`
+	BaseProviderConfig `yaml:",inline"`
 }
 
 // UptimeKumaConfig holds Uptime Kuma-specific settings.
 type UptimeKumaConfig struct {
-	Enabled        bool          `yaml:"enabled"`
-	Priority       int           `yaml:"priority"`
-	CleanupDelay   time.Duration `yaml:"cleanup_delay"`
-	StaleTimeout   time.Duration `yaml:"stale_timeout"`
-	EndDelay       time.Duration `yaml:"end_delay"`
-	EndDisplayTime time.Duration `yaml:"end_display_time"`
+	BaseProviderConfig `yaml:",inline"`
 }
 
 // Load reads the config from a YAML file and applies environment variable overrides.
@@ -174,102 +132,126 @@ func Load(path string) (*Config, error) {
 		},
 		Providers: ProvidersConfig{
 			Grafana: GrafanaConfig{
-				Enabled:         true,
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:      true,
+					Priority:     5,
+					CleanupDelay: 15 * time.Minute,
+					StaleTimeout: 24 * time.Hour,
+				},
 				SeverityLabel:   "severity",
 				DefaultSeverity: "warning",
 				DefaultIcon:     "exclamationmark.triangle.fill",
-				Priority:        5,
-				CleanupDelay:    15 * time.Minute,
-				StaleTimeout:    24 * time.Hour,
 			},
 			ArgoCD: ArgoCDConfig{
-				Enabled:         true,
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       3,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   30 * time.Minute,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
 				SyncGracePeriod: 10 * time.Second,
-				Priority:        3,
-				CleanupDelay:    15 * time.Minute,
-				StaleTimeout:    30 * time.Minute,
-				EndDelay:        5 * time.Second,
-				EndDisplayTime:  4 * time.Second,
 			},
 			Starr: StarrConfig{
-				Enabled:        true,
-				Priority:       1,
-				CleanupDelay:   15 * time.Minute,
-				StaleTimeout:   30 * time.Minute,
-				EndDelay:       5 * time.Second,
-				EndDisplayTime: 4 * time.Second,
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       1,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   30 * time.Minute,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
 			},
 			Jellyfin: JellyfinConfig{
-				Enabled:          true,
-				Priority:         1,
-				CleanupDelay:     15 * time.Minute,
-				StaleTimeout:     30 * time.Minute,
-				EndDelay:         5 * time.Second,
-				EndDisplayTime:   4 * time.Second,
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       1,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   30 * time.Minute,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
 				ProgressDebounce: 10 * time.Second,
 				PauseTimeout:     5 * time.Minute,
 			},
 			Paperless: PaperlessConfig{
-				Enabled:        true,
-				Priority:       1,
-				CleanupDelay:   15 * time.Minute,
-				StaleTimeout:   30 * time.Minute,
-				EndDelay:       5 * time.Second,
-				EndDisplayTime: 4 * time.Second,
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       1,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   30 * time.Minute,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
 			},
 			Changedetection: ChangedetectionConfig{
-				Enabled:      true,
-				Priority:     2,
-				CleanupDelay: 15 * time.Minute,
-				StaleTimeout: 1 * time.Hour,
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:      true,
+					Priority:     2,
+					CleanupDelay: 15 * time.Minute,
+					StaleTimeout: 1 * time.Hour,
+				},
 			},
 			Unmanic: UnmanicConfig{
-				Enabled:        true,
-				Priority:       1,
-				CleanupDelay:   15 * time.Minute,
-				StaleTimeout:   30 * time.Minute,
-				EndDelay:       5 * time.Second,
-				EndDisplayTime: 4 * time.Second,
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       1,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   30 * time.Minute,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
 			},
 			Proxmox: ProxmoxConfig{
-				Enabled:        true,
-				Priority:       4,
-				CleanupDelay:   15 * time.Minute,
-				StaleTimeout:   1 * time.Hour,
-				EndDelay:       5 * time.Second,
-				EndDisplayTime: 4 * time.Second,
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       4,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   1 * time.Hour,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
 			},
 			Overseerr: OverseerrConfig{
-				Enabled:        true,
-				Priority:       1,
-				CleanupDelay:   15 * time.Minute,
-				StaleTimeout:   30 * time.Minute,
-				EndDelay:       5 * time.Second,
-				EndDisplayTime: 4 * time.Second,
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       1,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   30 * time.Minute,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
 			},
 			UptimeKuma: UptimeKumaConfig{
-				Enabled:        true,
-				Priority:       5,
-				CleanupDelay:   15 * time.Minute,
-				StaleTimeout:   24 * time.Hour,
-				EndDelay:       5 * time.Second,
-				EndDisplayTime: 4 * time.Second,
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       5,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   24 * time.Hour,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
 			},
 			Gatus: GatusConfig{
-				Enabled:        true,
-				Priority:       5,
-				CleanupDelay:   15 * time.Minute,
-				StaleTimeout:   24 * time.Hour,
-				EndDelay:       5 * time.Second,
-				EndDisplayTime: 4 * time.Second,
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       5,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   24 * time.Hour,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
 			},
 			Backrest: BackrestConfig{
-				Enabled:        true,
-				Priority:       2,
-				CleanupDelay:   15 * time.Minute,
-				StaleTimeout:   1 * time.Hour,
-				EndDelay:       5 * time.Second,
-				EndDisplayTime: 4 * time.Second,
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       2,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   1 * time.Hour,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
 			},
 		},
 	}
@@ -284,6 +266,10 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Database.DSN == "" {
 		return nil, fmt.Errorf("database.dsn is required (set PUSHWARD_DATABASE_DSN)")
+	}
+
+	if err := cfg.validatePriorities(); err != nil {
+		return nil, err
 	}
 
 	return cfg, nil
@@ -343,13 +329,46 @@ func (cfg *Config) applyEnvOverrides() error {
 	if v := os.Getenv("PUSHWARD_ARGOCD_URL"); v != "" {
 		cfg.Providers.ArgoCD.URL = v
 	}
-	if v := os.Getenv("PUSHWARD_SYNC_GRACE_PERIOD"); v != "" {
-		d, err := time.ParseDuration(v)
+	// PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD is the canonical name;
+	// PUSHWARD_SYNC_GRACE_PERIOD is kept as a fallback for existing deployments.
+	syncGrace := os.Getenv("PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD")
+	if syncGrace == "" {
+		syncGrace = os.Getenv("PUSHWARD_SYNC_GRACE_PERIOD")
+	}
+	if syncGrace != "" {
+		d, err := time.ParseDuration(syncGrace)
 		if err != nil {
-			return fmt.Errorf("parsing PUSHWARD_SYNC_GRACE_PERIOD: %w", err)
+			return fmt.Errorf("parsing PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD: %w", err)
 		}
 		cfg.Providers.ArgoCD.SyncGracePeriod = d
 	}
 
+	return nil
+}
+
+func (cfg *Config) validatePriorities() error {
+	type entry struct {
+		name     string
+		priority int
+	}
+	providers := []entry{
+		{"grafana", cfg.Providers.Grafana.Priority},
+		{"argocd", cfg.Providers.ArgoCD.Priority},
+		{"starr", cfg.Providers.Starr.Priority},
+		{"jellyfin", cfg.Providers.Jellyfin.Priority},
+		{"paperless", cfg.Providers.Paperless.Priority},
+		{"changedetection", cfg.Providers.Changedetection.Priority},
+		{"unmanic", cfg.Providers.Unmanic.Priority},
+		{"proxmox", cfg.Providers.Proxmox.Priority},
+		{"overseerr", cfg.Providers.Overseerr.Priority},
+		{"uptimekuma", cfg.Providers.UptimeKuma.Priority},
+		{"gatus", cfg.Providers.Gatus.Priority},
+		{"backrest", cfg.Providers.Backrest.Priority},
+	}
+	for _, p := range providers {
+		if p.priority < 0 || p.priority > 10 {
+			return fmt.Errorf("providers.%s.priority: must be 0-10, got %d", p.name, p.priority)
+		}
+	}
 	return nil
 }

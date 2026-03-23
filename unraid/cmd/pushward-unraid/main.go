@@ -36,7 +36,7 @@ func main() {
 	t := tracker.New(cfg, gql, pw)
 
 	slog.Info("starting pushward-unraid", "host", cfg.Unraid.Host, "port", cfg.Unraid.Port)
-	if err := t.Run(ctx); err != nil {
+	if err := t.Run(ctx); err != nil && ctx.Err() == nil {
 		slog.Error("tracker error", "error", err)
 		os.Exit(1)
 	}
