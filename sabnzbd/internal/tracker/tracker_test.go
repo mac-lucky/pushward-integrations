@@ -16,6 +16,7 @@ import (
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 func testConfig() *config.Config {
@@ -247,9 +248,9 @@ func TestTruncate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := truncate(tt.input, tt.maxLen)
+			got := text.Truncate(tt.input, tt.maxLen)
 			if got != tt.want {
-				t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+				t.Errorf("Truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 			}
 		})
 	}

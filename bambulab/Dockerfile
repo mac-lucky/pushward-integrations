@@ -20,8 +20,7 @@ LABEL org.opencontainers.image.title="pushward-bambulab" \
       org.opencontainers.image.description="BambuLab 3D printer Live Activity bridge for PushWard" \
       org.opencontainers.image.source="https://github.com/mac-lucky/pushward-integrations"
 
-RUN apk add --no-cache ca-certificates
-RUN adduser -D -u 1000 appuser
+RUN apk add --no-cache ca-certificates && adduser -D -u 1000 appuser
 
 COPY --from=builder /pushward-bambulab /pushward-bambulab
 

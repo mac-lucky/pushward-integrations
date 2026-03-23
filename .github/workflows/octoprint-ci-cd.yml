@@ -1,0 +1,32 @@
+name: CI/CD OctoPrint
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: ['octoprint/**', 'shared/**', '.github/workflows/octoprint-ci-cd.yml']
+  pull_request:
+    branches: [main]
+    paths: ['octoprint/**', 'shared/**', '.github/workflows/octoprint-ci-cd.yml']
+  workflow_dispatch:
+
+jobs:
+  ci-cd:
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      app_name: "pushward-octoprint"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-octoprint"
+      dockerhub_image: "maclucky/pushward-octoprint"
+      push_to_dockerhub: false
+      push_on_main: true
+      main_branch: "main"
+      build_context: "."
+      dockerfile_path: "./octoprint/Dockerfile"
+      go_module_path: "./octoprint"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit

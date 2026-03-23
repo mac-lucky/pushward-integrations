@@ -17,6 +17,12 @@ type EndConfig struct {
 	EndDisplayTime time.Duration
 }
 
+// timerPair holds both phase-1 and phase-2 timers so StopTimer can cancel both.
+type timerPair struct {
+	phase1 *time.Timer
+	phase2 *time.Timer
+}
+
 // Ender manages two-phase activity end scheduling.
 // Phase 1 sends an ONGOING update with final content (visible on Dynamic Island).
 // Phase 2 sends an ENDED update after a display delay (dismisses the Live Activity).
@@ -26,7 +32,7 @@ type Ender struct {
 	provider string
 	config   EndConfig
 	mu       sync.Mutex
-	timers   map[string]*time.Timer
+	timers   map[string]*timerPair
 }
 
 // NewEnder creates a new Ender. Pass nil for store if no state cleanup is needed.
@@ -36,7 +42,7 @@ func NewEnder(clients *client.Pool, store state.Store, provider string, cfg EndC
 		store:    store,
 		provider: provider,
 		config:   cfg,
-		timers:   make(map[string]*time.Timer),
+		timers:   make(map[string]*timerPair),
 	}
 }
 
@@ -52,9 +58,13 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 
 	e.mu.Lock()
 	if existing, ok := e.timers[timerKey]; ok {
-		existing.Stop()
+		existing.phase1.Stop()
+		if existing.phase2 != nil {
+			existing.phase2.Stop()
+		}
 	}
-	e.timers[timerKey] = time.AfterFunc(e.config.EndDelay, func() {
+	tp := &timerPair{}
+	tp.phase1 = time.AfterFunc(e.config.EndDelay, func() {
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 		ongoingReq := pushward.UpdateRequest{
@@ -68,38 +78,45 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 		}
 		cancel1()
 
-		time.Sleep(e.config.EndDisplayTime)
-
-		// Phase 2: ENDED with same content
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel2()
-		endedReq := pushward.UpdateRequest{
-			State:   pushward.StateEnded,
-			Content: content,
-		}
-		if err := cl.UpdateActivity(ctx2, slug, endedReq); err != nil {
-			slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
-		} else {
-			slog.Info("ended activity", "slug", slug, "state", content.State)
-		}
-
-		// Clean up state store
-		if e.store != nil {
-			delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer delCancel()
-			_ = e.store.Delete(delCtx, e.provider, userKey, mapKey, "")
-		}
-
-		// Clean up timer
+		// Phase 2: schedule ENDED after display time
 		e.mu.Lock()
-		delete(e.timers, timerKey)
-		e.mu.Unlock()
-
-		// Run optional post-cleanup callback
-		for _, fn := range onComplete {
-			fn()
+		if _, ok := e.timers[timerKey]; !ok {
+			e.mu.Unlock()
+			return // StopTimer already cancelled this end sequence
 		}
+		tp.phase2 = time.AfterFunc(e.config.EndDisplayTime, func() {
+			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel2()
+			endedReq := pushward.UpdateRequest{
+				State:   pushward.StateEnded,
+				Content: content,
+			}
+			if err := cl.UpdateActivity(ctx2, slug, endedReq); err != nil {
+				slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
+			} else {
+				slog.Info("ended activity", "slug", slug, "state", content.State)
+			}
+
+			// Clean up state store
+			if e.store != nil {
+				delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer delCancel()
+				_ = e.store.Delete(delCtx, e.provider, userKey, mapKey, "")
+			}
+
+			// Clean up timer
+			e.mu.Lock()
+			delete(e.timers, timerKey)
+			e.mu.Unlock()
+
+			// Run optional post-cleanup callback
+			for _, fn := range onComplete {
+				fn()
+			}
+		})
+		e.mu.Unlock()
 	})
+	e.timers[timerKey] = tp
 	e.mu.Unlock()
 }
 
@@ -107,8 +124,11 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 func (e *Ender) StopTimer(userKey, mapKey string) {
 	timerKey := userKey + ":" + mapKey
 	e.mu.Lock()
-	if t, ok := e.timers[timerKey]; ok {
-		t.Stop()
+	if tp, ok := e.timers[timerKey]; ok {
+		tp.phase1.Stop()
+		if tp.phase2 != nil {
+			tp.phase2.Stop()
+		}
 		delete(e.timers, timerKey)
 	}
 	e.mu.Unlock()

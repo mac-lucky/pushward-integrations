@@ -3,17 +3,19 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
 	"time"
 
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
-	"gopkg.in/yaml.v3"
 )
 
 // Config holds the relay gateway configuration.
 type Config struct {
-	Server   sharedconfig.ServerConfig `yaml:"server"`
-	Database DatabaseConfig            `yaml:"database"`
-	Providers ProvidersConfig          `yaml:"providers"`
+	Server            sharedconfig.ServerConfig `yaml:"server"`
+	Database          DatabaseConfig            `yaml:"database"`
+	TrustedProxyCIDRs []string                  `yaml:"trusted_proxy_cidrs"`
+	Providers         ProvidersConfig           `yaml:"providers"`
 }
 
 // DatabaseConfig holds the PostgreSQL connection settings.
@@ -272,17 +274,13 @@ func Load(path string) (*Config, error) {
 		},
 	}
 
-	data, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("reading config: %w", err)
-	}
-	if err == nil {
-		if err := yaml.Unmarshal(data, cfg); err != nil {
-			return nil, fmt.Errorf("parsing config: %w", err)
-		}
+	if err := sharedconfig.LoadYAML(path, cfg); err != nil {
+		return nil, err
 	}
 
-	cfg.applyEnvOverrides()
+	if err := cfg.applyEnvOverrides(); err != nil {
+		return nil, err
+	}
 
 	if cfg.Database.DSN == "" {
 		return nil, fmt.Errorf("database.dsn is required (set PUSHWARD_DATABASE_DSN)")
@@ -291,7 +289,7 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-func (cfg *Config) applyEnvOverrides() {
+func (cfg *Config) applyEnvOverrides() error {
 	cfg.Server.ApplyEnvOverrides()
 
 	if v := os.Getenv("PUSHWARD_DATABASE_DSN"); v != "" {
@@ -300,7 +298,36 @@ func (cfg *Config) applyEnvOverrides() {
 	if v := os.Getenv("PUSHWARD_DATABASE_PASSWORD_FILE"); v != "" {
 		cfg.Database.PasswordFile = v
 	}
+	if v := os.Getenv("PUSHWARD_TRUSTED_PROXY_CIDRS"); v != "" {
+		parts := strings.Split(v, ",")
+		for i, p := range parts {
+			parts[i] = strings.TrimSpace(p)
+		}
+		cfg.TrustedProxyCIDRs = parts
+	}
 
+	// Provider Enabled overrides
+	if v := os.Getenv("PUSHWARD_GRAFANA_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("parsing PUSHWARD_GRAFANA_ENABLED: %w", err)
+		}
+		cfg.Providers.Grafana.Enabled = b
+	}
+	if v := os.Getenv("PUSHWARD_ARGOCD_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("parsing PUSHWARD_ARGOCD_ENABLED: %w", err)
+		}
+		cfg.Providers.ArgoCD.Enabled = b
+	}
+	if v := os.Getenv("PUSHWARD_STARR_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("parsing PUSHWARD_STARR_ENABLED: %w", err)
+		}
+		cfg.Providers.Starr.Enabled = b
+	}
 	// Grafana overrides
 	if v := os.Getenv("PUSHWARD_GRAFANA_SEVERITY_LABEL"); v != "" {
 		cfg.Providers.Grafana.SeverityLabel = v
@@ -317,9 +344,12 @@ func (cfg *Config) applyEnvOverrides() {
 		cfg.Providers.ArgoCD.URL = v
 	}
 	if v := os.Getenv("PUSHWARD_SYNC_GRACE_PERIOD"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.Providers.ArgoCD.SyncGracePeriod = d
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("parsing PUSHWARD_SYNC_GRACE_PERIOD: %w", err)
 		}
+		cfg.Providers.ArgoCD.SyncGracePeriod = d
 	}
 
+	return nil
 }

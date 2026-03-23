@@ -6,11 +6,11 @@ import (
 	"log/slog"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/bambulab/internal/bambulab"
 	"github.com/mac-lucky/pushward-integrations/bambulab/internal/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 const slugPrefix = "bambu"
@@ -135,7 +135,7 @@ func (t *Tracker) startTracking(ctx context.Context, state *bambulab.MergedState
 
 	name := "BambuLab Print"
 	if state.SubtaskName != "" {
-		name = truncate(state.SubtaskName, 40)
+		name = text.Truncate(state.SubtaskName, 40)
 	}
 
 	if err := t.pw.CreateActivity(ctx, t.slug, name, t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
@@ -172,7 +172,7 @@ func (t *Tracker) sendPaused(ctx context.Context, state *bambulab.MergedState) {
 func (t *Tracker) sendPreparing(ctx context.Context, state *bambulab.MergedState) {
 	subtitle := ""
 	if state.SubtaskName != "" {
-		subtitle = truncate(state.SubtaskName, 30)
+		subtitle = text.Truncate(state.SubtaskName, 30)
 	}
 	t.send(ctx, 0.0, "Preparing...", "arrow.triangle.2.circlepath", "blue", nil, subtitle, pushward.StateOngoing)
 }
@@ -180,7 +180,7 @@ func (t *Tracker) sendPreparing(ctx context.Context, state *bambulab.MergedState
 func (t *Tracker) finishActivity(_ context.Context, state *bambulab.MergedState) {
 	subtitle := ""
 	if state.SubtaskName != "" {
-		subtitle = truncate(state.SubtaskName, 30)
+		subtitle = text.Truncate(state.SubtaskName, 30)
 	}
 
 	endDelay := t.cfg.PushWard.EndDelay
@@ -211,7 +211,7 @@ func (t *Tracker) failActivity(_ context.Context, state *bambulab.MergedState) {
 	progress := float64(state.Percent) / 100.0
 	subtitle := ""
 	if state.SubtaskName != "" {
-		subtitle = truncate(state.SubtaskName, 30)
+		subtitle = text.Truncate(state.SubtaskName, 30)
 	}
 
 	endDelay := t.cfg.PushWard.EndDelay
@@ -272,7 +272,7 @@ func buildSubtitle(state *bambulab.MergedState) string {
 	var parts []string
 
 	if state.SubtaskName != "" {
-		parts = append(parts, truncate(state.SubtaskName, 20))
+		parts = append(parts, text.Truncate(state.SubtaskName, 20))
 	}
 
 	if state.NozzleTemper > 0 {
@@ -280,14 +280,4 @@ func buildSubtitle(state *bambulab.MergedState) string {
 	}
 
 	return strings.Join(parts, " · ")
-}
-
-func truncate(s string, maxLen int) string {
-	if utf8.RuneCountInString(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return string([]rune(s)[:maxLen])
-	}
-	return string([]rune(s)[:maxLen-3]) + "..."
 }

@@ -7,13 +7,18 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
-
-	"github.com/mac-lucky/pushward-integrations/unraid/internal/config"
-	"github.com/mac-lucky/pushward-integrations/unraid/internal/graphql"
 
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
+	"github.com/mac-lucky/pushward-integrations/unraid/internal/config"
+	"github.com/mac-lucky/pushward-integrations/unraid/internal/graphql"
 )
+
+// timerPair holds both phase-1 and phase-2 timers so scheduleEnd can cancel both.
+type timerPair struct {
+	phase1 *time.Timer
+	phase2 *time.Timer
+}
 
 // Tracker monitors Unraid array status and notifications, creating
 // PushWard Live Activities for parity checks, array state changes,
@@ -27,7 +32,7 @@ type Tracker struct {
 	parityActive   bool
 	parityLastSent time.Time
 	arrayState     string
-	timers         map[string]*time.Timer
+	timers         map[string]*timerPair
 }
 
 // New creates a new Tracker.
@@ -36,7 +41,7 @@ func New(cfg *config.Config, gql *graphql.Client, pw *pushward.Client) *Tracker 
 		cfg:    cfg,
 		gql:    gql,
 		pw:     pw,
-		timers: make(map[string]*time.Timer),
+		timers: make(map[string]*timerPair),
 	}
 }
 
@@ -233,13 +238,13 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 		strings.Contains(notif.Subject, "disk") ||
 		strings.Contains(notif.Subject, "Disk"):
 		slug := fmt.Sprintf("unraid-disk-%s", sanitize(notif.Subject))
-		_ = t.pw.CreateActivity(ctx, slug, truncateField(notif.Subject, 100), t.cfg.PushWard.Priority, endedTTL, staleTTL)
+		_ = t.pw.CreateActivity(ctx, slug, text.TruncateHard(notif.Subject, 100), t.cfg.PushWard.Priority, endedTTL, staleTTL)
 		content := pushward.Content{
 			Template:    "alert",
 			Progress:    1.0,
-			State:       truncateField(notif.Description, 100),
+			State:       text.TruncateHard(notif.Description, 100),
 			Icon:        "exclamationmark.octagon.fill",
-			Subtitle:    truncateField("Unraid · "+serverName, 50),
+			Subtitle:    text.TruncateHard("Unraid · "+serverName, 50),
 			AccentColor: "#FF3B30",
 			Severity:    "error",
 		}
@@ -265,9 +270,9 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 		content := pushward.Content{
 			Template:    "alert",
 			Progress:    1.0,
-			State:       truncateField(notif.Subject, 100),
+			State:       text.TruncateHard(notif.Subject, 100),
 			Icon:        icon,
-			Subtitle:    truncateField("Unraid · "+serverName, 50),
+			Subtitle:    text.TruncateHard("Unraid · "+serverName, 50),
 			AccentColor: accentColor,
 			Severity:    severity,
 		}
@@ -280,38 +285,45 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 	}
 }
 
-// scheduleEnd runs a two-phase end for the activity.
+// scheduleEnd runs a two-phase end for the activity using a timerPair
+// so that both timers can be cancelled when a new event arrives.
 func (t *Tracker) scheduleEnd(slug string, content pushward.Content) {
 	endDelay := t.cfg.PushWard.EndDelay
 	displayTime := t.cfg.PushWard.EndDisplayTime
 
 	t.mu.Lock()
 	if existing, ok := t.timers[slug]; ok {
-		existing.Stop()
+		existing.phase1.Stop()
+		if existing.phase2 != nil {
+			existing.phase2.Stop()
+		}
 	}
-	t.timers[slug] = time.AfterFunc(endDelay, func() {
+	tp := &timerPair{}
+	tp.phase1 = time.AfterFunc(endDelay, func() {
+		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 		_ = t.pw.UpdateActivity(ctx1, slug, pushward.UpdateRequest{State: pushward.StateOngoing, Content: content})
 		cancel1()
 
-		time.Sleep(displayTime)
-
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel2()
-		_ = t.pw.UpdateActivity(ctx2, slug, pushward.UpdateRequest{State: pushward.StateEnded, Content: content})
-
+		// Phase 2: schedule ENDED after display time
 		t.mu.Lock()
-		delete(t.timers, slug)
+		if _, ok := t.timers[slug]; !ok {
+			t.mu.Unlock()
+			return // cancelled between phases
+		}
+		tp.phase2 = time.AfterFunc(displayTime, func() {
+			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel2()
+			_ = t.pw.UpdateActivity(ctx2, slug, pushward.UpdateRequest{State: pushward.StateEnded, Content: content})
+
+			t.mu.Lock()
+			delete(t.timers, slug)
+			t.mu.Unlock()
+		})
 		t.mu.Unlock()
 	})
+	t.timers[slug] = tp
 	t.mu.Unlock()
-}
-
-func truncateField(s string, max int) string {
-	if utf8.RuneCountInString(s) <= max {
-		return s
-	}
-	return string([]rune(s)[:max])
 }
 
 func sanitize(s string) string {

@@ -2,6 +2,8 @@ bambulab:
   host: ""           # Printer IP address (set PUSHWARD_BAMBULAB_HOST)
   access_code: ""    # 8-char access code from printer Settings > WLAN (set PUSHWARD_BAMBULAB_ACCESS_CODE)
   serial: ""         # Printer serial number (set PUSHWARD_BAMBULAB_SERIAL)
+  tls:
+    insecure_skip_verify: true  # BambuLab printers use self-signed certs (default: true)
 
 pushward:
   url: ""            # PushWard server URL (set PUSHWARD_URL)

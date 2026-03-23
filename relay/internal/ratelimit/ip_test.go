@@ -6,7 +6,19 @@ import (
 	"testing"
 )
 
+func setupTrustedProxy(t *testing.T) {
+	t.Helper()
+	saved := trustedProxies
+	// Trust the default httptest RemoteAddr range (192.0.2.0/24) and 10.0.0.0/8
+	if err := SetTrustedProxyCIDRs([]string{"192.0.2.0/24", "10.0.0.0/8"}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { trustedProxies = saved })
+}
+
 func TestClientIP_CFConnectingIP(t *testing.T) {
+	setupTrustedProxy(t)
+
 	r := httptest.NewRequest("POST", "/", nil)
 	r.Header.Set("CF-Connecting-IP", "1.2.3.4")
 	r.Header.Set("X-Real-IP", "5.6.7.8")
@@ -18,6 +30,8 @@ func TestClientIP_CFConnectingIP(t *testing.T) {
 }
 
 func TestClientIP_XRealIP(t *testing.T) {
+	setupTrustedProxy(t)
+
 	r := httptest.NewRequest("POST", "/", nil)
 	r.Header.Set("X-Real-IP", "5.6.7.8")
 	r.Header.Set("X-Forwarded-For", "9.10.11.12")
@@ -28,6 +42,8 @@ func TestClientIP_XRealIP(t *testing.T) {
 }
 
 func TestClientIP_XForwardedFor_FirstEntry(t *testing.T) {
+	setupTrustedProxy(t)
+
 	r := httptest.NewRequest("POST", "/", nil)
 	r.Header.Set("X-Forwarded-For", "9.10.11.12, 13.14.15.16")
 
@@ -37,6 +53,8 @@ func TestClientIP_XForwardedFor_FirstEntry(t *testing.T) {
 }
 
 func TestClientIP_XForwardedFor_SingleEntry(t *testing.T) {
+	setupTrustedProxy(t)
+
 	r := httptest.NewRequest("POST", "/", nil)
 	r.Header.Set("X-Forwarded-For", "9.10.11.12")
 
@@ -69,6 +87,23 @@ func TestClientIP_RemoteAddr_NoPort(t *testing.T) {
 
 	if got := clientIP(r); got != "192.168.1.1" {
 		t.Errorf("expected 192.168.1.1, got %s", got)
+	}
+}
+
+func TestClientIP_UntrustedProxy_IgnoresHeaders(t *testing.T) {
+	// No trusted proxies configured
+	saved := trustedProxies
+	trustedProxies = nil
+	t.Cleanup(func() { trustedProxies = saved })
+
+	r := httptest.NewRequest("POST", "/", nil)
+	r.RemoteAddr = "203.0.113.1:12345"
+	r.Header.Set("CF-Connecting-IP", "1.2.3.4")
+	r.Header.Set("X-Real-IP", "5.6.7.8")
+	r.Header.Set("X-Forwarded-For", "9.10.11.12")
+
+	if got := clientIP(r); got != "203.0.113.1" {
+		t.Errorf("expected RemoteAddr 203.0.113.1 (untrusted proxy), got %s", got)
 	}
 }
 

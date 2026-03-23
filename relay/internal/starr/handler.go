@@ -9,14 +9,15 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // trackedSlug is stored in the state store as JSON.
@@ -28,8 +29,7 @@ type Handler struct {
 	store   state.Store
 	clients *client.Pool
 	config  *config.StarrConfig
-	mu      sync.Mutex
-	timers  map[string]*time.Timer // "userKey:mapKey" → end timer
+	ender   *lifecycle.Ender
 }
 
 var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
@@ -39,7 +39,10 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.StarrConfig
 		store:   store,
 		clients: clients,
 		config:  cfg,
-		timers:  make(map[string]*time.Timer),
+		ender: lifecycle.NewEnder(clients, store, "starr", lifecycle.EndConfig{
+			EndDelay:       cfg.EndDelay,
+			EndDisplayTime: cfg.EndDisplayTime,
+		}),
 	}
 }
 
@@ -75,81 +78,6 @@ func decodePayload(w http.ResponseWriter, r *http.Request) (json.RawMessage, boo
 		return nil, false
 	}
 	return raw, true
-}
-
-// scheduleEnd schedules a two-phase end for an activity:
-//   - Phase 1 (after EndDelay): ONGOING update with final content
-//   - Phase 2 (EndDisplayTime later): ENDED with same content
-func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Content) {
-	timerKey := userKey + ":" + mapKey
-	cl := h.clients.Get(userKey)
-	endDelay := h.config.EndDelay
-	displayTime := h.config.EndDisplayTime
-
-	h.mu.Lock()
-	if existing, ok := h.timers[timerKey]; ok {
-		existing.Stop()
-	}
-	h.timers[timerKey] = time.AfterFunc(endDelay, func() {
-		// Phase 1: ONGOING with final content
-		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
-		ongoingReq := pushward.UpdateRequest{
-			State:   pushward.StateOngoing,
-			Content: content,
-		}
-		if err := cl.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
-			slog.Error("failed to update activity (end phase 1)", "slug", slug, "error", err)
-		} else {
-			slog.Info("updated activity", "slug", slug, "state", content.State)
-		}
-		cancel1()
-
-		time.Sleep(displayTime)
-
-		// Phase 2: ENDED with same content
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel2()
-		endedReq := pushward.UpdateRequest{
-			State:   pushward.StateEnded,
-			Content: content,
-		}
-		if err := cl.UpdateActivity(ctx2, slug, endedReq); err != nil {
-			slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
-		} else {
-			slog.Info("ended activity", "slug", slug, "state", content.State)
-		}
-
-		// Clean up state store and timer
-		delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer delCancel()
-		_ = h.store.Delete(delCtx, "starr", userKey, mapKey, "")
-
-		h.mu.Lock()
-		delete(h.timers, timerKey)
-		h.mu.Unlock()
-	})
-	h.mu.Unlock()
-}
-
-func truncate(s string, maxLen int) string {
-	if utf8.RuneCountInString(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return string([]rune(s)[:maxLen])
-	}
-	return string([]rune(s)[:maxLen-3]) + "..."
-}
-
-// stopTimer cancels an existing end timer if present.
-func (h *Handler) stopTimer(userKey, mapKey string) {
-	timerKey := userKey + ":" + mapKey
-	h.mu.Lock()
-	if t, ok := h.timers[timerKey]; ok {
-		t.Stop()
-		delete(h.timers, timerKey)
-	}
-	h.mu.Unlock()
 }
 
 // getTrackedSlug retrieves a tracked download slug from the state store.
@@ -200,7 +128,7 @@ func (h *Handler) handleHealth(ctx context.Context, userKey, provider string, p 
 	mapKey := provider + ":health:" + p.Type
 
 	// Cancel any pending HealthRestored end timer for this check type
-	h.stopTimer(userKey, mapKey)
+	h.ender.StopTimer(userKey, mapKey)
 
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
@@ -226,7 +154,7 @@ func (h *Handler) handleHealth(ctx context.Context, userKey, provider string, p 
 		Content: pushward.Content{
 			Template:    "alert",
 			Progress:    1.0,
-			State:       truncate(p.Message, 60),
+			State:       text.Truncate(p.Message, 60),
 			Icon:        icon,
 			Subtitle:    titleCase(provider),
 			AccentColor: accent,
@@ -259,14 +187,14 @@ func (h *Handler) handleHealthRestored(ctx context.Context, userKey, provider st
 	content := pushward.Content{
 		Template:    "alert",
 		Progress:    1.0,
-		State:       truncate(p.Message, 60),
+		State:       text.Truncate(p.Message, 60),
 		Icon:        "checkmark.circle.fill",
 		Subtitle:    titleCase(provider),
 		AccentColor: "#34C759",
 		Severity:    "info",
 	}
 
-	h.scheduleEnd(userKey, mapKey, slug, content)
+	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	slog.Info("health restored", "slug", slug, "provider", provider, "type", p.Type)
 }
 
@@ -289,7 +217,7 @@ func (h *Handler) handleManualInteraction(ctx context.Context, userKey, provider
 		reason = p.DownloadInfo.StatusMessages[0].Messages[0]
 	}
 
-	subtitle := titleCase(provider) + " \u00b7 " + truncate(reason, 50)
+	subtitle := titleCase(provider) + " \u00b7 " + text.Truncate(reason, 50)
 
 	step := 1
 	total := 2

@@ -7,7 +7,6 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
-	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
@@ -16,6 +15,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 type Handler struct {
@@ -95,13 +95,13 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, p *webhookPay
 
 	slug := fmt.Sprintf("overseerr-%s-%s", p.Media.MediaType, p.Media.TmdbID)
 	mapKey := fmt.Sprintf("overseerr:%s:%s", p.Media.MediaType, p.Media.TmdbID)
-	subtitle := "Overseerr · " + truncateField(p.Subject, 50)
+	subtitle := "Overseerr · " + text.TruncateHard(p.Subject, 50)
 
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
-	name := truncateField(p.Subject, 100)
+	name := text.TruncateHard(p.Subject, 100)
 	if name == "" {
 		name = "Media Request"
 	}
@@ -114,7 +114,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, p *webhookPay
 	total := 4
 	content := pushward.Content{
 		Template:    "pipeline",
-		State:       truncateField(stateText, 100),
+		State:       text.TruncateHard(stateText, 100),
 		Icon:        icon,
 		Subtitle:    subtitle,
 		AccentColor: accentColor,
@@ -148,11 +148,4 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, p *webhookPay
 func isNumeric(s string) bool {
 	_, err := strconv.Atoi(s)
 	return err == nil
-}
-
-func truncateField(s string, max int) string {
-	if utf8.RuneCountInString(s) <= max {
-		return s
-	}
-	return string([]rune(s)[:max])
 }

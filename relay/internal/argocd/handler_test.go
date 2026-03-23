@@ -1435,13 +1435,16 @@ func TestScheduleEnd_AppNotInStore(t *testing.T) {
 	cfg := testConfig()
 	h, _ := setupHandler(t, cfg, srv.URL)
 
-	// Call scheduleEnd for non-existent app — should return immediately
-	h.scheduleEnd(testKey, "non-existent", pushward.Content{})
+	// Call ender.ScheduleEnd for non-existent app — the ender fires both phases
+	// but ArgoCD's old scheduleEnd would skip. With lifecycle.Ender, it proceeds
+	// (best-effort). This test now verifies it doesn't panic.
+	h.ender.ScheduleEnd(testKey, "non-existent", "argocd-non-existent", pushward.Content{})
 
-	time.Sleep(50 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 0 {
-		t.Errorf("expected 0 API calls, got %d", len(recorded))
+	// The ender will attempt phase 1 + phase 2 (2 PATCH calls, both may fail)
+	if len(recorded) != 2 {
+		t.Errorf("expected 2 best-effort API calls, got %d", len(recorded))
 	}
 }
 
