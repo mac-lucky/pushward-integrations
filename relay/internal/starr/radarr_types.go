@@ -1,7 +1,7 @@
 package starr
 
-// WebhookPayload is the minimal envelope to determine event type.
-type WebhookPayload struct {
+// webhookPayload is the minimal envelope to determine event type.
+type webhookPayload struct {
 	EventType string `json:"eventType"`
 }
 

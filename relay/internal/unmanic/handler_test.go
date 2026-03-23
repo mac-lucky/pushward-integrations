@@ -17,12 +17,14 @@ import (
 
 func testConfig() *config.UnmanicConfig {
 	return &config.UnmanicConfig{
-		Enabled:        true,
-		Priority:       1,
-		CleanupDelay:   5 * time.Minute,
-		StaleTimeout:   30 * time.Minute,
-		EndDelay:       10 * time.Millisecond,
-		EndDisplayTime: 10 * time.Millisecond,
+		BaseProviderConfig: config.BaseProviderConfig{
+			Enabled:        true,
+			Priority:       1,
+			CleanupDelay:   5 * time.Minute,
+			StaleTimeout:   30 * time.Minute,
+			EndDelay:       10 * time.Millisecond,
+			EndDisplayTime: 10 * time.Millisecond,
+		},
 	}
 }
 

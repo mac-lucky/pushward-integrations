@@ -12,6 +12,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // Handler processes Changedetection.io webhooks.
@@ -37,11 +38,6 @@ func slugForURL(url string) string {
 // ServeHTTP handles incoming Changedetection.io webhook requests.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 
 	var payload webhookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -80,7 +76,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 	if err := pwClient.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
 		slog.Error("failed to create activity", "slug", slug, "error", err)
-		http.Error(w, "failed to create activity", http.StatusInternalServerError)
 		return
 	}
 
@@ -93,8 +88,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		AccentColor:  "#FF9500",
 		Severity:     "info",
 		FiredAt:      firedAtPtr,
-		URL:          payload.DiffURL,
-		SecondaryURL: payload.PreviewURL,
+		URL:          text.SanitizeURL(payload.DiffURL),
+		SecondaryURL: text.SanitizeURL(payload.PreviewURL),
 	}
 
 	ongoingReq := pushward.UpdateRequest{
@@ -103,7 +98,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, ongoingReq); err != nil {
 		slog.Error("failed to update activity to ONGOING", "slug", slug, "error", err)
-		http.Error(w, "failed to update activity", http.StatusInternalServerError)
 		return
 	}
 
@@ -113,7 +107,6 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, endedReq); err != nil {
 		slog.Error("failed to update activity to ENDED", "slug", slug, "error", err)
-		http.Error(w, "failed to end activity", http.StatusInternalServerError)
 		return
 	}
 

@@ -4,6 +4,7 @@ server:
 sabnzbd:
   url: ""               # or set PUSHWARD_SABNZBD_URL
   api_key: ""           # or set PUSHWARD_SABNZBD_API_KEY
+  webhook_secret: ""    # or set PUSHWARD_SABNZBD_WEBHOOK_SECRET
 
 pushward:
   url: ""               # or set PUSHWARD_URL (e.g. https://api.pushward.app)

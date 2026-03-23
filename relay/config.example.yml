@@ -3,6 +3,9 @@ server:
 
 database:
   dsn: "postgres://pushward_relay_user:password@localhost:5432/pushward_relay?sslmode=disable"
+  password_file: ""                       # path to file containing the DB password (optional, overrides password in DSN)
+
+trusted_proxy_cidrs: []                   # CIDRs of trusted reverse proxies (e.g. ["10.0.0.0/8", "172.16.0.0/12"])
 
 providers:
   grafana:

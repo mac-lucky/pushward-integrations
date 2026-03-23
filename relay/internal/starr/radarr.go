@@ -19,7 +19,7 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var envelope WebhookPayload
+	var envelope webhookPayload
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		slog.Error("failed to decode event type", "error", err)
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -152,6 +152,11 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, p *Radar
 }
 
 func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, p *RadarrDownloadPayload) {
+	if p.DownloadID == "" {
+		slog.Warn("download event missing downloadId")
+		return
+	}
+
 	title := movieTitle(p.Movie)
 	mapKey := "radarr:" + p.DownloadID
 
@@ -162,11 +167,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, p *R
 
 	if !tracked {
 		// Untracked download (e.g. bridge restart) — create activity
-		if p.DownloadID != "" {
-			slug = slugForDownload("radarr-", p.DownloadID)
-		} else {
-			slug = slugForDownload("radarr-", fmt.Sprintf("movie-%d", p.Movie.ID))
-		}
+		slug = slugForDownload("radarr-", p.DownloadID)
 
 		if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
 			slog.Error("failed to track download", "slug", slug, "error", err)

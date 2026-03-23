@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -79,7 +78,7 @@ func (c *Client) doWithRetry(ctx context.Context, url, operation string) ([]byte
 		}
 
 		if attempt > 0 {
-			backoff := time.Duration(math.Min(float64(time.Second)*math.Pow(2, float64(attempt-1)), float64(30*time.Second)))
+			backoff := min(time.Second<<(attempt-1), 30*time.Second)
 			slog.Warn("retrying GitHub API call", "operation", operation, "attempt", attempt+1, "backoff", backoff)
 			select {
 			case <-ctx.Done():
@@ -143,7 +142,7 @@ func (c *Client) doRequest(ctx context.Context, url string) ([]byte, error) {
 
 	c.recordRateLimit(resp)
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
 		return nil, err
 	}

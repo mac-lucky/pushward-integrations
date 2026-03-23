@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log/slog"
 	"os"
@@ -58,9 +59,10 @@ func main() {
 
 	slog.Info("pushward-mqtt started", "rules", len(cfg.Rules), "priority", cfg.PushWard.Priority, "update_interval", cfg.Polling.UpdateInterval)
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	<-sigCh
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	<-ctx.Done()
 
 	slog.Info("shutting down")
 	eng.Stop()

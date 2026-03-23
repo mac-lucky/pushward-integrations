@@ -42,11 +42,6 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.BackrestCon
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var payload webhookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		slog.Error("failed to decode webhook payload", "error", err)

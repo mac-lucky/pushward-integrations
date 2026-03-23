@@ -16,7 +16,6 @@ import (
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
-	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // --- Mock OctoPrint API ---
@@ -466,30 +465,6 @@ func TestNormalizeEvent(t *testing.T) {
 			got := normalizeEvent(tt.topic, tt.state)
 			if got != tt.want {
 				t.Errorf("normalizeEvent(%q, %q) = %q, want %q", tt.topic, tt.state, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestTruncate(t *testing.T) {
-	tests := []struct {
-		input  string
-		maxLen int
-		want   string
-	}{
-		{"hello", 10, "hello"},
-		{"hello", 5, "hello"},
-		{"Hello World!", 8, "Hello..."},
-		{"hi", 3, "hi"},
-		{"Hello", 3, "Hel"},
-		{"Hello", 1, "H"},
-	}
-
-	for _, tt := range tests {
-		t.Run(fmt.Sprintf("%s_%d", tt.input, tt.maxLen), func(t *testing.T) {
-			got := text.Truncate(tt.input, tt.maxLen)
-			if got != tt.want {
-				t.Errorf("Truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 			}
 		})
 	}

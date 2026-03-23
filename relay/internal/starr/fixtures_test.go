@@ -24,7 +24,7 @@ func TestFixturesUnmarshal_Radarr(t *testing.T) {
 			}
 
 			// Determine type from eventType field.
-			var envelope WebhookPayload
+			var envelope webhookPayload
 			if err := json.Unmarshal(data, &envelope); err != nil {
 				t.Fatalf("unmarshal envelope: %v", err)
 			}
@@ -89,7 +89,7 @@ func TestFixturesUnmarshal_Sonarr(t *testing.T) {
 				t.Fatalf("reading file: %v", err)
 			}
 
-			var envelope WebhookPayload
+			var envelope webhookPayload
 			if err := json.Unmarshal(data, &envelope); err != nil {
 				t.Fatalf("unmarshal envelope: %v", err)
 			}

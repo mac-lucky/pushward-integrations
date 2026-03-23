@@ -66,11 +66,6 @@ func slugForDownload(prefix, downloadID string) string {
 }
 
 func decodePayload(w http.ResponseWriter, r *http.Request) (json.RawMessage, bool) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return nil, false
-	}
-
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
 	var raw json.RawMessage

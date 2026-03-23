@@ -3,14 +3,8 @@
 /github/pushward-github
 /pushward-sabnzbd
 /sabnzbd/pushward-sabnzbd
-/pushward-grafana
-/grafana/pushward-grafana
-/pushward-argocd
-/argocd/pushward-argocd
 /pushward-bambulab
 /bambulab/pushward-bambulab
-/pushward-starr
-/starr/pushward-starr
 /pushward-mqtt
 /mqtt/pushward-mqtt
 /pushward-relay

@@ -14,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 var severityRank = map[string]int{
@@ -73,11 +74,6 @@ func slugForAlertname(alertname string) string {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var payload webhookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		slog.Error("failed to decode webhook payload", "error", err)
@@ -112,9 +108,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			firedAt = t.Unix()
 		}
 
-		secondaryURL := a.PanelURL
+		secondaryURL := text.SanitizeURL(a.PanelURL)
 		if secondaryURL == "" {
-			secondaryURL = a.DashboardURL
+			secondaryURL = text.SanitizeURL(a.DashboardURL)
 		}
 
 		info := &instanceInfo{
@@ -122,7 +118,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			Summary:      summary,
 			Subtitle:     subtitle,
 			FiredAt:      firedAt,
-			GeneratorURL: a.GeneratorURL,
+			GeneratorURL: text.SanitizeURL(a.GeneratorURL),
 			SecondaryURL: secondaryURL,
 		}
 

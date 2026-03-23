@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -86,77 +87,82 @@ func main() {
 	// Router
 	mux := server.NewMux()
 
-	// Provider handlers — each route is wrapped with IP rate limit → auth → key rate limit
+	// wrapHandler applies the standard middleware chain: IP rate limit → auth → key rate limit.
+	wrapHandler := func(h http.Handler) http.Handler {
+		return ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(h)))
+	}
+
+	// Provider handlers
 	if cfg.Providers.Grafana.Enabled {
 		gh := grafana.NewHandler(store, clients, &cfg.Providers.Grafana)
-		mux.Handle("POST /grafana", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(gh))))
+		mux.Handle("POST /grafana", wrapHandler(gh))
 		slog.Info("enabled provider", "provider", "grafana")
 	}
 
 	if cfg.Providers.ArgoCD.Enabled {
 		ah := argocd.NewHandler(store, clients, &cfg.Providers.ArgoCD)
-		mux.Handle("POST /argocd", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(ah))))
+		mux.Handle("POST /argocd", wrapHandler(ah))
 		slog.Info("enabled provider", "provider", "argocd")
 	}
 
 	if cfg.Providers.Starr.Enabled {
 		sh := starr.NewHandler(store, clients, &cfg.Providers.Starr)
-		mux.Handle("POST /radarr", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(sh.RadarrHandler()))))
-		mux.Handle("POST /sonarr", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(sh.SonarrHandler()))))
+		mux.Handle("POST /radarr", wrapHandler(sh.RadarrHandler()))
+		mux.Handle("POST /sonarr", wrapHandler(sh.SonarrHandler()))
 		slog.Info("enabled provider", "provider", "starr")
 	}
 
 	if cfg.Providers.Jellyfin.Enabled {
 		jh := jellyfin.NewHandler(store, clients, &cfg.Providers.Jellyfin)
-		mux.Handle("POST /jellyfin", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(jh))))
+		mux.Handle("POST /jellyfin", wrapHandler(jh))
 		slog.Info("enabled provider", "provider", "jellyfin")
 	}
 
 	if cfg.Providers.Paperless.Enabled {
 		ph := paperless.NewHandler(store, clients, &cfg.Providers.Paperless)
-		mux.Handle("POST /paperless", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(ph))))
+		mux.Handle("POST /paperless", wrapHandler(ph))
 		slog.Info("enabled provider", "provider", "paperless")
 	}
 
 	if cfg.Providers.Changedetection.Enabled {
 		cdh := changedetection.NewHandler(clients, &cfg.Providers.Changedetection)
-		mux.Handle("POST /changedetection", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(cdh))))
+		mux.Handle("POST /changedetection", wrapHandler(cdh))
 		slog.Info("enabled provider", "provider", "changedetection")
 	}
 
 	if cfg.Providers.Unmanic.Enabled {
 		uh := unmanic.NewHandler(clients, &cfg.Providers.Unmanic)
-		mux.Handle("POST /unmanic", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(uh))))
+		mux.Handle("POST /unmanic", wrapHandler(uh))
 		slog.Info("enabled provider", "provider", "unmanic")
 	}
 
 	if cfg.Providers.Proxmox.Enabled {
 		pxh := proxmox.NewHandler(store, clients, &cfg.Providers.Proxmox)
-		mux.Handle("POST /proxmox", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(pxh))))
+		mux.Handle("POST /proxmox", wrapHandler(pxh))
 		slog.Info("enabled provider", "provider", "proxmox")
 	}
 
 	if cfg.Providers.Overseerr.Enabled {
 		oh := overseerr.NewHandler(store, clients, &cfg.Providers.Overseerr)
-		mux.Handle("POST /overseerr", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(oh))))
+		mux.Handle("POST /overseerr", wrapHandler(oh))
 		slog.Info("enabled provider", "provider", "overseerr")
 	}
 
 	if cfg.Providers.UptimeKuma.Enabled {
 		ukh := uptimekuma.NewHandler(store, clients, &cfg.Providers.UptimeKuma)
-		mux.Handle("POST /uptimekuma", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(ukh))))
+		mux.Handle("POST /uptimekuma", wrapHandler(ukh))
 		slog.Info("enabled provider", "provider", "uptimekuma")
 	}
 
 	if cfg.Providers.Gatus.Enabled {
 		gah := gatus.NewHandler(store, clients, &cfg.Providers.Gatus)
-		mux.Handle("POST /gatus", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(gah))))
+		mux.Handle("POST /gatus", wrapHandler(gah))
 		slog.Info("enabled provider", "provider", "gatus")
 	}
 
 	if cfg.Providers.Backrest.Enabled {
 		bh := backrest.NewHandler(store, clients, &cfg.Providers.Backrest)
-		mux.Handle("POST /backrest", ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(bh))))
+		mux.Handle("POST /backrest", wrapHandler(bh))
 		slog.Info("enabled provider", "provider", "backrest")
 	}
 

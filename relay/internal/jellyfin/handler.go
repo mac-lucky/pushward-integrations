@@ -17,6 +17,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // Handler processes Jellyfin webhooks for multiple tenants.
@@ -104,11 +105,6 @@ func remainingSeconds(p *webhookPayload) int {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	var payload webhookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		slog.Error("failed to decode webhook payload", "error", err)
@@ -181,21 +177,14 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *we
 	data, _ := json.Marshal(map[string]string{"slug": slug})
 	_ = h.store.Set(ctx, "jellyfin", userKey, mapKey, "", data, h.config.StaleTimeout)
 
-	stateText := "Playing on " + p.DeviceName
-	icon := "play.circle.fill"
-	if p.IsPaused {
-		stateText = "Paused on " + p.DeviceName
-		icon = "pause.circle.fill"
-	}
-
 	remaining := remainingSeconds(p)
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template:      "generic",
 			Progress:      playbackProgress(p),
-			State:         stateText,
-			Icon:          icon,
+			State:         "Playing on " + p.DeviceName,
+			Icon:          "play.circle.fill",
 			Subtitle:      playbackSubtitle(p),
 			AccentColor:   "#007AFF",
 			RemainingTime: &remaining,
@@ -211,22 +200,11 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *we
 	h.mu.Lock()
 	debounceKey := userKey + ":" + slug
 	h.lastUpdate[debounceKey] = time.Now()
-	h.lastPaused[debounceKey] = p.IsPaused
-	progress := playbackProgress(p)
-	h.lastProgress[debounceKey] = progress
-	if p.IsPaused && h.config.PauseTimeout > 0 {
-		if existing, ok := h.pauseTimers[debounceKey]; ok {
-			existing.Stop()
-		}
-		deviceName := p.DeviceName
-		subtitle := playbackSubtitle(p)
-		h.pauseTimers[debounceKey] = time.AfterFunc(h.config.PauseTimeout, func() {
-			h.endPaused(userKey, mapKey, slug, deviceName, subtitle, progress, debounceKey)
-		})
-	}
+	h.lastPaused[debounceKey] = false
+	h.lastProgress[debounceKey] = playbackProgress(p)
 	h.mu.Unlock()
 
-	slog.Info("updated activity", "slug", slug, "state", stateText)
+	slog.Info("updated activity", "slug", slug, "state", "Playing on "+p.DeviceName)
 }
 
 func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p *webhookPayload) {
@@ -521,7 +499,7 @@ func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, p *webh
 		Content: pushward.Content{
 			Template:    "alert",
 			Progress:    1.0,
-			State:       "Failed login: " + p.UserName + " from " + p.RemoteEndPoint,
+			State:       "Failed login: " + text.TruncateHard(p.UserName, 40) + " from " + text.TruncateHard(p.RemoteEndPoint, 40),
 			Icon:        "lock.shield.fill",
 			Subtitle:    "Jellyfin",
 			AccentColor: "#FF3B30",

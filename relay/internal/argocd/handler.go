@@ -17,6 +17,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 const totalSteps = 3
@@ -108,8 +109,8 @@ func (h *Handler) contentURLs(appName, repoURL, revision string) (string, string
 	if h.config.URL != "" {
 		url = h.config.URL + "/applications/argocd/" + appName
 	}
-	if repoURL != "" && revision != "" {
-		secondaryURL = strings.TrimSuffix(repoURL, ".git") + "/commit/" + revision
+	if sanitized := text.SanitizeURL(repoURL); sanitized != "" && revision != "" {
+		secondaryURL = strings.TrimSuffix(sanitized, ".git") + "/commit/" + revision
 	}
 	return url, secondaryURL
 }
@@ -127,11 +128,6 @@ func slugForApp(appName string) string {
 // ServeHTTP handles incoming ArgoCD webhook requests.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 
 	var payload webhookPayload
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
@@ -181,7 +177,10 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 		return
 	}
 
-	app, exists, _ := h.loadApp(ctx, userKey, p.App)
+	app, exists, err := h.loadApp(ctx, userKey, p.App)
+	if err != nil {
+		slog.Error("failed to load app state", "app", p.App, "error", err)
+	}
 	needsCreate := !exists || (p.Revision != "" && app.Revision != p.Revision)
 
 	h.ender.StopTimer(userKey, p.App)
@@ -199,17 +198,23 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 			RepoURL:  p.RepoURL,
 			Step:     1,
 		}
-		_ = h.saveApp(ctx, userKey, p.App, app)
+		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
+			slog.Error("failed to save app state", "app", p.App, "error", err)
+		}
 	} else {
 		app.Step = 1
-		_ = h.saveApp(ctx, userKey, p.App, app)
+		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
+			slog.Error("failed to save app state", "app", p.App, "error", err)
+		}
 	}
 
 	// Grace period: defer activity creation for new or still-pending syncs
 	gracePeriod := h.config.SyncGracePeriod
 	if gracePeriod > 0 && (needsCreate || app.Pending) {
 		app.Pending = true
-		_ = h.saveApp(ctx, userKey, p.App, app)
+		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
+			slog.Error("failed to save app state", "app", p.App, "error", err)
+		}
 		if gt, ok := h.graceTimers[tk]; ok {
 			gt.Stop()
 		}
@@ -269,12 +274,17 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *we
 	tk := timerKey(userKey, p.App)
 
 	h.mu.Lock()
-	app, exists, _ := h.loadApp(ctx, userKey, p.App)
+	app, exists, err := h.loadApp(ctx, userKey, p.App)
+	if err != nil {
+		slog.Error("failed to load app state", "app", p.App, "error", err)
+	}
 
 	// Tracked and still in grace period — just advance step, don't touch PushWard
 	if exists && app.Pending {
 		app.Step = 2
-		_ = h.saveApp(ctx, userKey, p.App, app)
+		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
+			slog.Error("failed to save app state", "app", p.App, "error", err)
+		}
 		h.mu.Unlock()
 		slog.Info("sync succeeded (grace period)", "slug", slug, "app", p.App)
 		return
@@ -299,7 +309,9 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *we
 				Step:     2,
 				Pending:  true,
 			}
-			_ = h.saveApp(ctx, userKey, p.App, app)
+			if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
+				slog.Error("failed to save app state", "app", p.App, "error", err)
+			}
 			h.graceTimers[tk] = time.AfterFunc(gracePeriod, func() {
 				h.graceExpired(userKey, p.App)
 			})
@@ -315,7 +327,9 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *we
 			RepoURL:  p.RepoURL,
 			Step:     2,
 		}
-		_ = h.saveApp(ctx, userKey, p.App, app)
+		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
+			slog.Error("failed to save app state", "app", p.App, "error", err)
+		}
 		h.mu.Unlock()
 
 		pw := h.clients.Get(userKey)
@@ -331,7 +345,9 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *we
 		slog.Info("created activity (untracked sync-succeeded)", "slug", slug, "app", p.App)
 	} else {
 		app.Step = 2
-		_ = h.saveApp(ctx, userKey, p.App, app)
+		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
+			slog.Error("failed to save app state", "app", p.App, "error", err)
+		}
 		h.mu.Unlock()
 	}
 
@@ -367,7 +383,10 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhook
 	tk := timerKey(userKey, p.App)
 
 	h.mu.Lock()
-	app, exists, _ := h.loadApp(ctx, userKey, p.App)
+	app, exists, err := h.loadApp(ctx, userKey, p.App)
+	if err != nil {
+		slog.Error("failed to load app state", "app", p.App, "error", err)
+	}
 
 	// Completed during grace period — no-op sync, skip entirely
 	if exists && app.Pending {
@@ -403,7 +422,9 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhook
 			RepoURL:  p.RepoURL,
 			Step:     3,
 		}
-		_ = h.saveApp(ctx, userKey, p.App, app)
+		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
+			slog.Error("failed to save app state", "app", p.App, "error", err)
+		}
 		h.mu.Unlock()
 
 		pw := h.clients.Get(userKey)
@@ -419,7 +440,9 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhook
 		slog.Info("created activity (untracked deployed)", "slug", slug, "app", p.App)
 	} else {
 		app.Step = 3
-		_ = h.saveApp(ctx, userKey, p.App, app)
+		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
+			slog.Error("failed to save app state", "app", p.App, "error", err)
+		}
 		h.mu.Unlock()
 	}
 
@@ -443,12 +466,25 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhook
 	slog.Info("scheduled end", "slug", slug, "state", "Deployed")
 }
 
-func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, p *webhookPayload) {
+// errorPreamble loads app state, clears grace timers if pending, and ensures
+// an activity exists on PushWard. It is the shared entry path for
+// handleSyncFailed and handleHealthDegraded.
+type errorPreambleResult struct {
+	slug        string
+	currentStep int
+	exists      bool
+	wasPending  bool
+}
+
+func (h *Handler) errorPreamble(ctx context.Context, userKey string, p *webhookPayload, event string) (*errorPreambleResult, bool) {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
 	h.mu.Lock()
-	app, exists, _ := h.loadApp(ctx, userKey, p.App)
+	app, exists, err := h.loadApp(ctx, userKey, p.App)
+	if err != nil {
+		slog.Error("failed to load app state", "app", p.App, "error", err)
+	}
 	currentStep := 1
 	wasPending := false
 	if exists {
@@ -460,7 +496,9 @@ func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, p *webho
 				delete(h.graceTimers, tk)
 			}
 			app.Pending = false
-			_ = h.saveApp(ctx, userKey, p.App, app)
+			if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
+				slog.Error("failed to save app state", "app", p.App, "error", err)
+			}
 		}
 	} else {
 		app = &trackedAppState{
@@ -469,7 +507,9 @@ func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, p *webho
 			RepoURL:  p.RepoURL,
 			Step:     1,
 		}
-		_ = h.saveApp(ctx, userKey, p.App, app)
+		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
+			slog.Error("failed to save app state", "app", p.App, "error", err)
+		}
 	}
 	h.mu.Unlock()
 
@@ -483,63 +523,58 @@ func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, p *webho
 			h.mu.Lock()
 			h.deleteApp(ctx, userKey, p.App)
 			h.mu.Unlock()
-			return
+			return nil, false
 		}
-		slog.Info("created activity (sync-failed)", "slug", slug, "app", p.App)
+		slog.Info("created activity ("+event+")", "slug", slug, "app", p.App)
+	}
+
+	return &errorPreambleResult{
+		slug:        slug,
+		currentStep: currentStep,
+		exists:      exists,
+		wasPending:  wasPending,
+	}, true
+}
+
+func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, p *webhookPayload) {
+	res, ok := h.errorPreamble(ctx, userKey, p, "sync-failed")
+	if !ok {
+		return
 	}
 
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	content := pushward.Content{
 		Template:     "pipeline",
-		Progress:     float64(currentStep) / float64(total),
+		Progress:     float64(res.currentStep) / float64(total),
 		State:        "Sync Failed",
 		Icon:         "xmark.circle.fill",
 		Subtitle:     "ArgoCD \u00b7 " + p.App,
 		AccentColor:  "#FF3B30",
-		CurrentStep:  &currentStep,
+		CurrentStep:  &res.currentStep,
 		TotalSteps:   &total,
 		URL:          url,
 		SecondaryURL: secondaryURL,
 	}
 
-	h.ender.ScheduleEnd(userKey, p.App, slug, content)
-	slog.Info("scheduled end", "slug", slug, "state", "Sync Failed")
+	h.ender.ScheduleEnd(userKey, p.App, res.slug, content)
+	slog.Info("scheduled end", "slug", res.slug, "state", "Sync Failed")
 }
 
 func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *webhookPayload) {
 	slug := slugForApp(p.App)
-	tk := timerKey(userKey, p.App)
-
-	h.mu.Lock()
-	app, exists, _ := h.loadApp(ctx, userKey, p.App)
-	currentStep := 1
-	wasPending := false
-	if exists {
-		currentStep = app.Step
-		wasPending = app.Pending
-		if app.Pending {
-			if gt, ok := h.graceTimers[tk]; ok {
-				gt.Stop()
-				delete(h.graceTimers, tk)
-			}
-			app.Pending = false
-			_ = h.saveApp(ctx, userKey, p.App, app)
-		}
-	} else {
-		app = &trackedAppState{
-			Slug:     slug,
-			Revision: p.Revision,
-			RepoURL:  p.RepoURL,
-			Step:     1,
-		}
-		_ = h.saveApp(ctx, userKey, p.App, app)
-	}
-	h.mu.Unlock()
 
 	// Transient degradation during rolling update (step 2, tracked, not pending):
-	// show warning on Dynamic Island but keep the activity alive so deployed can complete it.
-	if exists && !wasPending && currentStep == 2 {
+	// must check before errorPreamble which would create an activity.
+	h.mu.Lock()
+	app, exists, err := h.loadApp(ctx, userKey, p.App)
+	if err != nil {
+		slog.Error("failed to load app state", "app", p.App, "error", err)
+	}
+	isTransient := exists && !app.Pending && app.Step == 2
+	h.mu.Unlock()
+
+	if isTransient {
 		pw := h.clients.Get(userKey)
 		step := 2
 		total := totalSteps
@@ -567,38 +602,28 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *w
 		return
 	}
 
-	// Create activity if untracked or was pending (activity never created on PushWard)
-	if !exists || wasPending {
-		pw := h.clients.Get(userKey)
-		endedTTL := int(h.config.CleanupDelay.Seconds())
-		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create activity", "slug", slug, "error", err)
-			h.mu.Lock()
-			h.deleteApp(ctx, userKey, p.App)
-			h.mu.Unlock()
-			return
-		}
-		slog.Info("created activity (health-degraded)", "slug", slug, "app", p.App)
+	res, ok := h.errorPreamble(ctx, userKey, p, "health-degraded")
+	if !ok {
+		return
 	}
 
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	content := pushward.Content{
 		Template:     "pipeline",
-		Progress:     float64(currentStep) / float64(total),
+		Progress:     float64(res.currentStep) / float64(total),
 		State:        "Degraded",
 		Icon:         "exclamationmark.triangle.fill",
 		Subtitle:     "ArgoCD \u00b7 " + p.App,
 		AccentColor:  "#FF9500",
-		CurrentStep:  &currentStep,
+		CurrentStep:  &res.currentStep,
 		TotalSteps:   &total,
 		URL:          url,
 		SecondaryURL: secondaryURL,
 	}
 
-	h.ender.ScheduleEnd(userKey, p.App, slug, content)
-	slog.Info("scheduled end", "slug", slug, "state", "Degraded")
+	h.ender.ScheduleEnd(userKey, p.App, res.slug, content)
+	slog.Info("scheduled end", "slug", res.slug, "state", "Degraded")
 }
 
 // graceExpired is called when the sync grace period expires. It creates
@@ -607,13 +632,18 @@ func (h *Handler) graceExpired(userKey, appName string) {
 	tk := timerKey(userKey, appName)
 
 	h.mu.Lock()
-	app, ok, _ := h.loadApp(context.Background(), userKey, appName)
+	app, ok, err := h.loadApp(context.Background(), userKey, appName)
+	if err != nil {
+		slog.Error("failed to load app state", "app", appName, "error", err)
+	}
 	if !ok || !app.Pending {
 		h.mu.Unlock()
 		return
 	}
 	app.Pending = false
-	_ = h.saveApp(context.Background(), userKey, appName, app)
+	if err := h.saveApp(context.Background(), userKey, appName, app); err != nil {
+		slog.Error("failed to save app state", "app", appName, "error", err)
+	}
 	delete(h.graceTimers, tk)
 	slug := app.Slug
 	step := app.Step

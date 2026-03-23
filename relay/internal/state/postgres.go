@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -38,7 +39,7 @@ type PostgresStore struct {
 // NewPostgresStore creates a new PostgresStore and runs the migration.
 func NewPostgresStore(ctx context.Context, pool *pgxpool.Pool) (*PostgresStore, error) {
 	if _, err := pool.Exec(ctx, migrationSQL); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("state migrate: %w", err)
 	}
 	return &PostgresStore{pool: pool}, nil
 }
@@ -56,7 +57,10 @@ func (s *PostgresStore) Set(ctx context.Context, provider, userKey, key, subKey 
 		ON CONFLICT (provider, user_key, key, sub_key)
 		DO UPDATE SET value = EXCLUDED.value, expires_at = EXCLUDED.expires_at, updated_at = now()
 	`, provider, userKey, key, subKey, value, expiresAt)
-	return err
+	if err != nil {
+		return fmt.Errorf("state set %s/%s: %w", provider, key, err)
+	}
+	return nil
 }
 
 func (s *PostgresStore) Get(ctx context.Context, provider, userKey, key, subKey string) (json.RawMessage, error) {
@@ -69,7 +73,10 @@ func (s *PostgresStore) Get(ctx context.Context, provider, userKey, key, subKey 
 	if err == pgx.ErrNoRows {
 		return nil, nil
 	}
-	return value, err
+	if err != nil {
+		return nil, fmt.Errorf("state get %s/%s: %w", provider, key, err)
+	}
+	return value, nil
 }
 
 func (s *PostgresStore) GetGroup(ctx context.Context, provider, userKey, key string) (map[string]json.RawMessage, error) {
@@ -79,7 +86,7 @@ func (s *PostgresStore) GetGroup(ctx context.Context, provider, userKey, key str
 		  AND (expires_at IS NULL OR expires_at > now())
 	`, provider, userKey, key)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("state get-group %s/%s: %w", provider, key, err)
 	}
 	defer rows.Close()
 
@@ -88,11 +95,14 @@ func (s *PostgresStore) GetGroup(ctx context.Context, provider, userKey, key str
 		var subKey string
 		var value json.RawMessage
 		if err := rows.Scan(&subKey, &value); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("state get-group %s/%s scan: %w", provider, key, err)
 		}
 		result[subKey] = value
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("state get-group %s/%s rows: %w", provider, key, err)
+	}
+	return result, nil
 }
 
 func (s *PostgresStore) Delete(ctx context.Context, provider, userKey, key, subKey string) error {
@@ -100,7 +110,10 @@ func (s *PostgresStore) Delete(ctx context.Context, provider, userKey, key, subK
 		DELETE FROM relay_state
 		WHERE provider = $1 AND user_key = $2 AND key = $3 AND sub_key = $4
 	`, provider, userKey, key, subKey)
-	return err
+	if err != nil {
+		return fmt.Errorf("state delete %s/%s: %w", provider, key, err)
+	}
+	return nil
 }
 
 func (s *PostgresStore) DeleteGroup(ctx context.Context, provider, userKey, key string) error {
@@ -108,7 +121,10 @@ func (s *PostgresStore) DeleteGroup(ctx context.Context, provider, userKey, key 
 		DELETE FROM relay_state
 		WHERE provider = $1 AND user_key = $2 AND key = $3
 	`, provider, userKey, key)
-	return err
+	if err != nil {
+		return fmt.Errorf("state delete-group %s/%s: %w", provider, key, err)
+	}
+	return nil
 }
 
 func (s *PostgresStore) Exists(ctx context.Context, provider, userKey, key, subKey string) (bool, error) {
@@ -120,7 +136,10 @@ func (s *PostgresStore) Exists(ctx context.Context, provider, userKey, key, subK
 			  AND (expires_at IS NULL OR expires_at > now())
 		)
 	`, provider, userKey, key, subKey).Scan(&exists)
-	return exists, err
+	if err != nil {
+		return false, fmt.Errorf("state exists %s/%s: %w", provider, key, err)
+	}
+	return exists, nil
 }
 
 func (s *PostgresStore) Cleanup(ctx context.Context) (int64, error) {
@@ -128,7 +147,7 @@ func (s *PostgresStore) Cleanup(ctx context.Context) (int64, error) {
 		DELETE FROM relay_state WHERE expires_at IS NOT NULL AND expires_at <= now()
 	`)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("state cleanup: %w", err)
 	}
 	return tag.RowsAffected(), nil
 }

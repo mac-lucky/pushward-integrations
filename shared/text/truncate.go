@@ -4,6 +4,9 @@ import "unicode/utf8"
 
 // Truncate returns s truncated to maxLen runes with a "..." suffix if truncated.
 func Truncate(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
 	if utf8.RuneCountInString(s) <= maxLen {
 		return s
 	}
@@ -15,6 +18,9 @@ func Truncate(s string, maxLen int) string {
 
 // TruncateHard returns s truncated to maxLen runes without any suffix.
 func TruncateHard(s string, maxLen int) string {
+	if maxLen <= 0 {
+		return ""
+	}
 	if utf8.RuneCountInString(s) <= maxLen {
 		return s
 	}

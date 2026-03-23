@@ -42,11 +42,6 @@ func NewHandler(clients *client.Pool, cfg *config.UnmanicConfig) *Handler {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
 	userKey := auth.KeyFromContext(r.Context())
 
 	var p apprisePayload
