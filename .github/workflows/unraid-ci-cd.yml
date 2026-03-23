@@ -1,0 +1,32 @@
+name: CI/CD Unraid
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: ['unraid/**', 'shared/**', '.github/workflows/unraid-ci-cd.yml']
+  pull_request:
+    branches: [main]
+    paths: ['unraid/**', 'shared/**', '.github/workflows/unraid-ci-cd.yml']
+  workflow_dispatch:
+
+jobs:
+  ci-cd:
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      app_name: "pushward-unraid"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-unraid"
+      dockerhub_image: "maclucky/pushward-unraid"
+      push_to_dockerhub: false
+      push_on_main: true
+      main_branch: "main"
+      build_context: "."
+      dockerfile_path: "./unraid/Dockerfile"
+      go_module_path: "./unraid"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit

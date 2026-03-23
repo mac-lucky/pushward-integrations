@@ -11,6 +11,7 @@ import (
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // --- Test helpers ---
@@ -70,36 +71,36 @@ func newTestTracker(printer *mockPrinter, pwClient *pushward.Client, cfg *config
 // --- truncate tests ---
 
 func TestTruncate_Short(t *testing.T) {
-	if got := truncate("hello", 10); got != "hello" {
-		t.Errorf("truncate(hello, 10) = %q, want hello", got)
+	if got := text.Truncate("hello", 10); got != "hello" {
+		t.Errorf("text.Truncate(hello, 10) = %q, want hello", got)
 	}
 }
 
 func TestTruncate_ExactLength(t *testing.T) {
-	if got := truncate("hello", 5); got != "hello" {
-		t.Errorf("truncate(hello, 5) = %q, want hello", got)
+	if got := text.Truncate("hello", 5); got != "hello" {
+		t.Errorf("text.Truncate(hello, 5) = %q, want hello", got)
 	}
 }
 
 func TestTruncate_LongASCII(t *testing.T) {
-	got := truncate("Hello World!", 8)
+	got := text.Truncate("Hello World!", 8)
 	if got != "Hello..." {
-		t.Errorf("truncate(Hello World!, 8) = %q, want Hello...", got)
+		t.Errorf("text.Truncate(Hello World!, 8) = %q, want Hello...", got)
 	}
 }
 
 func TestTruncate_UTF8(t *testing.T) {
 	// 5 rune string: "héllo"
-	got := truncate("héllo world", 8)
+	got := text.Truncate("héllo world", 8)
 	if got != "héllo..." {
-		t.Errorf("truncate(héllo world, 8) = %q, want héllo...", got)
+		t.Errorf("text.Truncate(héllo world, 8) = %q, want héllo...", got)
 	}
 }
 
 func TestTruncate_CJK(t *testing.T) {
 	// CJK characters: each is one rune
 	input := "你好世界测试字符串"
-	got := truncate(input, 6)
+	got := text.Truncate(input, 6)
 	// 6 runes: first 3 + "..."
 	if got != "你好世..." {
 		t.Errorf("truncate CJK = %q, want 你好世...", got)
@@ -107,23 +108,23 @@ func TestTruncate_CJK(t *testing.T) {
 }
 
 func TestTruncate_MaxLen3(t *testing.T) {
-	got := truncate("Hello World", 3)
+	got := text.Truncate("Hello World", 3)
 	// maxLen <= 3: no ellipsis, just first 3 runes
 	if got != "Hel" {
-		t.Errorf("truncate(Hello World, 3) = %q, want Hel", got)
+		t.Errorf("text.Truncate(Hello World, 3) = %q, want Hel", got)
 	}
 }
 
 func TestTruncate_MaxLen1(t *testing.T) {
-	got := truncate("Hello", 1)
+	got := text.Truncate("Hello", 1)
 	if got != "H" {
-		t.Errorf("truncate(Hello, 1) = %q, want H", got)
+		t.Errorf("text.Truncate(Hello, 1) = %q, want H", got)
 	}
 }
 
 func TestTruncate_Emoji(t *testing.T) {
 	input := "🎉🎊🎈🎁🎀🎗"
-	got := truncate(input, 5)
+	got := text.Truncate(input, 5)
 	if got != "🎉🎊..." {
 		t.Errorf("truncate emoji = %q, want 🎉🎊...", got)
 	}

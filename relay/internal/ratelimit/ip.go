@@ -9,25 +9,66 @@ import (
 
 var ipLimiters = newLimiterMap(5, 20, 5_000)
 
-// clientIP extracts the client IP address from the request.
-// Priority: CF-Connecting-IP > X-Real-IP > X-Forwarded-For (first) > RemoteAddr.
-func clientIP(r *http.Request) string {
-	if ip := r.Header.Get("CF-Connecting-IP"); ip != "" {
-		return ip
+// trustedProxies holds parsed CIDRs of trusted reverse proxies.
+var trustedProxies []*net.IPNet
+
+// SetTrustedProxyCIDRs parses and stores trusted proxy CIDRs.
+// Only requests from these CIDRs will have forwarding headers read.
+func SetTrustedProxyCIDRs(cidrs []string) error {
+	var nets []*net.IPNet
+	for _, cidr := range cidrs {
+		_, ipnet, err := net.ParseCIDR(cidr)
+		if err != nil {
+			return err
+		}
+		nets = append(nets, ipnet)
 	}
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
-		return ip
+	trustedProxies = nets
+	return nil
+}
+
+// isTrustedProxy checks whether the given IP falls within any trusted CIDR.
+func isTrustedProxy(ipStr string) bool {
+	if len(trustedProxies) == 0 {
+		return false
 	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		if first, _, _ := strings.Cut(xff, ","); first != "" {
-			return strings.TrimSpace(first)
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	for _, cidr := range trustedProxies {
+		if cidr.Contains(ip) {
+			return true
 		}
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	return false
+}
+
+// clientIP extracts the client IP address from the request.
+// Forwarding headers (CF-Connecting-IP, X-Real-IP, X-Forwarded-For) are only
+// trusted when the direct RemoteAddr falls within a configured trusted proxy CIDR.
+// Falls back to RemoteAddr otherwise.
+func clientIP(r *http.Request) string {
+	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		remoteHost = r.RemoteAddr
 	}
-	return host
+
+	if isTrustedProxy(remoteHost) {
+		if ip := r.Header.Get("CF-Connecting-IP"); ip != "" {
+			return ip
+		}
+		if ip := r.Header.Get("X-Real-IP"); ip != "" {
+			return ip
+		}
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			if first, _, _ := strings.Cut(xff, ","); first != "" {
+				return strings.TrimSpace(first)
+			}
+		}
+	}
+
+	return remoteHost
 }
 
 // IPMiddleware applies per-IP rate limiting. Should run before auth middleware.

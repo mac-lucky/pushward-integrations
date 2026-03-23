@@ -283,8 +283,11 @@ func TestScheduleEnd_CancelledByNewRun(t *testing.T) {
 	// Simulate new run taking over: cancel the timer and replace the entry
 	time.Sleep(10 * time.Millisecond)
 	p.mu.Lock()
-	if t2, ok := p.tracked["owner/repo"]; ok && t2.endTimer != nil {
-		t2.endTimer.Stop()
+	if t2, ok := p.tracked["owner/repo"]; ok && t2.endTimers != nil {
+		t2.endTimers.phase1.Stop()
+		if t2.endTimers.phase2 != nil {
+			t2.endTimers.phase2.Stop()
+		}
 		delete(p.tracked, "owner/repo")
 	}
 	p.tracked["owner/repo"] = &trackedRun{
@@ -1009,10 +1012,10 @@ func TestPollActive_SkipsRepoWithPendingEnd(t *testing.T) {
 	timer := time.AfterFunc(time.Hour, func() {}) // won't fire
 	defer timer.Stop()
 	p.tracked["owner/repo"] = &trackedRun{
-		Repo:     "owner/repo",
-		RunID:    42,
-		Slug:     "gh-repo",
-		endTimer: timer,
+		Repo:      "owner/repo",
+		RunID:     42,
+		Slug:      "gh-repo",
+		endTimers: &timerPair{phase1: timer},
 	}
 
 	if err := p.pollActive(context.Background()); err != nil {
@@ -1314,10 +1317,10 @@ func TestRun_CleansUpTimersOnShutdown(t *testing.T) {
 	// Add a tracked entry with a pending end timer
 	timer := time.AfterFunc(time.Hour, func() {})
 	p.tracked["owner/repo"] = &trackedRun{
-		Repo:     "owner/repo",
-		RunID:    42,
-		Slug:     "gh-repo",
-		endTimer: timer,
+		Repo:      "owner/repo",
+		RunID:     42,
+		Slug:      "gh-repo",
+		endTimers: &timerPair{phase1: timer},
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

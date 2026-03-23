@@ -1,5 +1,5 @@
 mqtt:
-  broker: "tcp://192.168.1.50:1883"    # PUSHWARD_MQTT_BROKER
+  broker: "tcp://mqtt-broker.example.com:1883"  # PUSHWARD_MQTT_BROKER
   username: ""                           # PUSHWARD_MQTT_USERNAME
   password: ""                           # PUSHWARD_MQTT_PASSWORD
   client_id: "pushward-mqtt"            # PUSHWARD_MQTT_CLIENT_ID

@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
@@ -18,6 +17,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 var vmidRe = regexp.MustCompile(`(?:VM|CT)\s+(\d+)`)
@@ -94,7 +94,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, p *webhookPa
 	hash := sha256.Sum256([]byte(p.Hostname + vmid))
 	slug := fmt.Sprintf("proxmox-backup-%x", hash[:4])
 	mapKey := fmt.Sprintf("vzdump:%s:%s", p.Hostname, vmid)
-	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", truncateField(p.Hostname, 50))
+	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
 
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
@@ -105,7 +105,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, p *webhookPa
 
 	if strings.Contains(msgLower, "starting") || strings.Contains(titleLower, "starting") {
 		// Backup starting — create activity + ONGOING
-		if err := cl.CreateActivity(ctx, slug, truncateField(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create proxmox backup activity", "slug", slug, "error", err)
 			return
 		}
@@ -196,7 +196,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, p *webh
 	hash := sha256.Sum256([]byte(p.Hostname + jobID))
 	slug := fmt.Sprintf("proxmox-repl-%x", hash[:4])
 	mapKey := fmt.Sprintf("replication:%s:%s", p.Hostname, jobID)
-	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", truncateField(p.Hostname, 50))
+	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
 
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
@@ -206,7 +206,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, p *webh
 	titleLower := strings.ToLower(p.Title)
 
 	if strings.Contains(msgLower, "starting") || strings.Contains(titleLower, "starting") {
-		if err := cl.CreateActivity(ctx, slug, truncateField(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create proxmox replication activity", "slug", slug, "error", err)
 			return
 		}
@@ -285,13 +285,13 @@ func (h *Handler) handleFencing(ctx context.Context, userKey string, p *webhookP
 	hash := sha256.Sum256([]byte(p.Hostname))
 	slug := fmt.Sprintf("proxmox-fence-%x", hash[:4])
 	mapKey := fmt.Sprintf("fencing:%s", p.Hostname)
-	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", truncateField(p.Hostname, 50))
+	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
 
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
-	if err := cl.CreateActivity(ctx, slug, truncateField(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 		slog.Error("failed to create proxmox fencing activity", "slug", slug, "error", err)
 		return
 	}
@@ -299,7 +299,7 @@ func (h *Handler) handleFencing(ctx context.Context, userKey string, p *webhookP
 	content := pushward.Content{
 		Template:    "alert",
 		Progress:    1.0,
-		State:       truncateField(p.Title, 100),
+		State:       text.TruncateHard(p.Title, 100),
 		Icon:        "exclamationmark.octagon.fill",
 		Subtitle:    subtitle,
 		AccentColor: "#FF3B30",
@@ -323,13 +323,13 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey string, p *webhookP
 	hash := sha256.Sum256([]byte(p.Hostname))
 	slug := fmt.Sprintf("proxmox-updates-%x", hash[:4])
 	mapKey := fmt.Sprintf("updates:%s", p.Hostname)
-	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", truncateField(p.Hostname, 50))
+	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
 
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
-	if err := cl.CreateActivity(ctx, slug, truncateField(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 		slog.Error("failed to create proxmox updates activity", "slug", slug, "error", err)
 		return
 	}
@@ -337,7 +337,7 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey string, p *webhookP
 	content := pushward.Content{
 		Template:    "alert",
 		Progress:    1.0,
-		State:       truncateField(p.Title, 100),
+		State:       text.TruncateHard(p.Title, 100),
 		Icon:        "arrow.down.circle",
 		Subtitle:    subtitle,
 		AccentColor: "#007AFF",
@@ -354,11 +354,4 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey string, p *webhookP
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	slog.Info("proxmox updates event", "slug", slug, "hostname", p.Hostname)
-}
-
-func truncateField(s string, max int) string {
-	if utf8.RuneCountInString(s) <= max {
-		return s
-	}
-	return string([]rune(s)[:max])
 }

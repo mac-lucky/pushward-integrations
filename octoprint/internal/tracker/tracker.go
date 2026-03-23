@@ -10,11 +10,11 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/octoprint/internal/api"
 	"github.com/mac-lucky/pushward-integrations/octoprint/internal/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 const slug = "octoprint"
@@ -40,6 +40,10 @@ type Tracker struct {
 	cancelling bool // set by PrintCancelled webhook to distinguish from success
 	wg         sync.WaitGroup
 	ctx        context.Context
+
+	// Temperature cache: re-fetch only every 3rd tick to reduce API load.
+	tempTickCount int
+	tempCache     string
 }
 
 func New(ctx context.Context, cfg *config.Config, octo OctoPrintAPI, pw *pushward.Client) *Tracker {
@@ -165,6 +169,9 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		return
 	}
 
+	t.tempTickCount = 0
+	t.tempCache = ""
+
 	t.send(ctx, 0.0, "Starting...", "arrow.triangle.2.circlepath", "#007AFF", nil, "", pushward.StateOngoing)
 
 	ticker := time.NewTicker(t.cfg.Polling.Interval)
@@ -183,7 +190,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 			continue
 		}
 
-		filename := truncate(job.Job.File.Name, 30)
+		filename := text.Truncate(job.Job.File.Name, 30)
 
 		switch {
 		case job.State == "Printing" || job.State == "Finishing":
@@ -195,7 +202,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 			stateText := fmt.Sprintf("%.0f%%", progress*100)
 
 			// Build subtitle with filename and nozzle temp
-			subtitle := buildSubtitle(ctx, t.octo, filename)
+			subtitle := t.buildSubtitle(ctx, filename)
 
 			t.send(ctx, progress, stateText, "printer.fill", "#007AFF", job.Progress.PrintTimeLeft, subtitle, pushward.StateOngoing)
 
@@ -204,7 +211,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 			if job.Progress.Completion != nil {
 				progress = *job.Progress.Completion / 100.0
 			}
-			subtitle := buildSubtitle(ctx, t.octo, filename)
+			subtitle := t.buildSubtitle(ctx, filename)
 			t.send(ctx, progress, "Paused", "pause.circle.fill", "#FF9500", nil, subtitle, pushward.StateOngoing)
 
 		case job.State == "Cancelling":
@@ -336,25 +343,22 @@ func isPrinting(state string) bool {
 	return false
 }
 
-func buildSubtitle(ctx context.Context, octo OctoPrintAPI, filename string) string {
-	printer, err := octo.GetPrinter(ctx)
-	if err != nil || printer.Temperature.Tool0 == nil {
-		return filename
+func (t *Tracker) buildSubtitle(ctx context.Context, filename string) string {
+	t.tempTickCount++
+	if t.tempTickCount >= 3 || t.tempCache == "" {
+		t.tempTickCount = 0
+		printer, err := t.octo.GetPrinter(ctx)
+		if err != nil || printer.Temperature.Tool0 == nil {
+			t.tempCache = ""
+		} else if temp := printer.Temperature.Tool0; temp.Actual > 0 {
+			t.tempCache = fmt.Sprintf("%.0f/%.0f°C", temp.Actual, temp.Target)
+		} else {
+			t.tempCache = ""
+		}
 	}
 
-	temp := printer.Temperature.Tool0
-	if temp.Actual > 0 {
-		return fmt.Sprintf("%s · %.0f/%.0f°C", filename, temp.Actual, temp.Target)
+	if t.tempCache != "" {
+		return fmt.Sprintf("%s · %s", filename, t.tempCache)
 	}
 	return filename
-}
-
-func truncate(s string, maxLen int) string {
-	if utf8.RuneCountInString(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return string([]rune(s)[:maxLen])
-	}
-	return string([]rune(s)[:maxLen-3]) + "..."
 }

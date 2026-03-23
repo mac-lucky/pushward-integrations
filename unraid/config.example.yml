@@ -1,5 +1,5 @@
 unraid:
-  host: "tower.local"
+  host: "unraid.example.com"
   port: 3001
   api_key: ""             # Unraid API key
   server_name: "Tower"    # Display name for subtitles

@@ -52,6 +52,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Configure trusted proxy CIDRs for IP rate limiting
+	if len(cfg.TrustedProxyCIDRs) > 0 {
+		if err := ratelimit.SetTrustedProxyCIDRs(cfg.TrustedProxyCIDRs); err != nil {
+			slog.Error("failed to parse trusted proxy CIDRs", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("configured trusted proxy CIDRs", "count", len(cfg.TrustedProxyCIDRs))
+	}
+
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 

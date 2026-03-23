@@ -16,6 +16,7 @@ import (
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // --- Mock OctoPrint API ---
@@ -486,9 +487,9 @@ func TestTruncate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(fmt.Sprintf("%s_%d", tt.input, tt.maxLen), func(t *testing.T) {
-			got := truncate(tt.input, tt.maxLen)
+			got := text.Truncate(tt.input, tt.maxLen)
 			if got != tt.want {
-				t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+				t.Errorf("Truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 			}
 		})
 	}
@@ -502,7 +503,8 @@ func TestBuildSubtitle_WithTemp(t *testing.T) {
 		},
 	})
 
-	got := buildSubtitle(context.Background(), octo, "Benchy.gcode")
+	tr := &Tracker{octo: octo}
+	got := tr.buildSubtitle(context.Background(), "Benchy.gcode")
 	want := "Benchy.gcode · 210/210°C"
 	if got != want {
 		t.Errorf("buildSubtitle = %q, want %q", got, want)
@@ -515,7 +517,8 @@ func TestBuildSubtitle_NoTemp(t *testing.T) {
 		Temperature: api.TemperatureData{},
 	})
 
-	got := buildSubtitle(context.Background(), octo, "Benchy.gcode")
+	tr := &Tracker{octo: octo}
+	got := tr.buildSubtitle(context.Background(), "Benchy.gcode")
 	if got != "Benchy.gcode" {
 		t.Errorf("buildSubtitle = %q, want Benchy.gcode", got)
 	}

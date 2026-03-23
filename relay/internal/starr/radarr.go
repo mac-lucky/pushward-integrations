@@ -10,6 +10,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
@@ -90,7 +91,7 @@ func movieTitle(m RadarrMovie) string {
 }
 
 func radarrSubtitle(title, quality string) string {
-	subtitle := "Radarr · " + truncate(title, 40)
+	subtitle := "Radarr · " + text.Truncate(title, 40)
 	if quality != "" {
 		subtitle += " · " + quality
 	}
@@ -108,7 +109,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, p *Radar
 	mapKey := "radarr:" + p.DownloadID
 
 	// Cancel any existing end timer for this download
-	h.stopTimer(userKey, mapKey)
+	h.ender.StopTimer(userKey, mapKey)
 
 	// Track in state store
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
@@ -155,7 +156,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, p *R
 	mapKey := "radarr:" + p.DownloadID
 
 	// Cancel any existing end timer
-	h.stopTimer(userKey, mapKey)
+	h.ender.StopTimer(userKey, mapKey)
 
 	slug, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
 
@@ -201,6 +202,6 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, p *R
 		TotalSteps:  &total,
 	}
 
-	h.scheduleEnd(userKey, mapKey, slug, content)
+	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	slog.Info("scheduled end", "slug", slug, "state", state)
 }

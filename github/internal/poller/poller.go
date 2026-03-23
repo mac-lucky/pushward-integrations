@@ -40,8 +40,11 @@ func (p *Poller) Run(ctx context.Context) error {
 	defer func() {
 		p.mu.Lock()
 		for _, t := range p.tracked {
-			if t.endTimer != nil {
-				t.endTimer.Stop()
+			if t.endTimers != nil {
+				t.endTimers.phase1.Stop()
+				if t.endTimers.phase2 != nil {
+					t.endTimers.phase2.Stop()
+				}
 			}
 		}
 		p.mu.Unlock()
@@ -131,13 +134,16 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		// Skip repos that already have an active entry (no pending end)
 		p.mu.Lock()
 		existing, ok := p.tracked[repo]
-		if ok && existing.endTimer == nil {
+		if ok && existing.endTimers == nil {
 			p.mu.Unlock()
 			continue
 		}
 		// If existing entry has a pending end timer, cancel it and allow new run
-		if ok && existing.endTimer != nil {
-			existing.endTimer.Stop()
+		if ok && existing.endTimers != nil {
+			existing.endTimers.phase1.Stop()
+			if existing.endTimers.phase2 != nil {
+				existing.endTimers.phase2.Stop()
+			}
 			delete(p.tracked, repo)
 			slog.Info("cancelled pending end for new workflow", "repo", repo, "slug", existing.Slug)
 		}
@@ -342,7 +348,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 	for _, repo := range repos {
 		p.mu.Lock()
 		t, ok := p.tracked[repo]
-		if !ok || t.endTimer != nil {
+		if !ok || t.endTimers != nil {
 			p.mu.Unlock()
 			continue
 		}
@@ -457,7 +463,9 @@ func (p *Poller) scheduleEnd(repo string, content pushward.Content) {
 	runID := t.RunID
 	endDelay := p.cfg.PushWard.EndDelay
 	displayTime := p.cfg.PushWard.EndDisplayTime
-	t.endTimer = time.AfterFunc(endDelay, func() {
+
+	tp := &timerPair{}
+	tp.phase1 = time.AfterFunc(endDelay, func() {
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
 		ongoingReq := pushward.UpdateRequest{
@@ -471,28 +479,35 @@ func (p *Poller) scheduleEnd(repo string, content pushward.Content) {
 		}
 		cancel1()
 
-		time.Sleep(displayTime)
-
-		// Phase 2: ENDED with same content
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel2()
-		endedReq := pushward.UpdateRequest{
-			State:   pushward.StateEnded,
-			Content: content,
-		}
-		if err := p.pw.UpdateActivity(ctx2, slug, endedReq); err != nil {
-			slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
-		} else {
-			slog.Info("ended activity", "slug", slug, "state", content.State)
-		}
-
-		// Server handles cleanup via ended_ttl — just remove from local map
+		// Phase 2: schedule ENDED after display time
 		p.mu.Lock()
-		if current, ok := p.tracked[repo]; ok && current.RunID == runID {
-			delete(p.tracked, repo)
+		if current, ok := p.tracked[repo]; !ok || current.RunID != runID {
+			p.mu.Unlock()
+			return // cancelled between phases
 		}
+		tp.phase2 = time.AfterFunc(displayTime, func() {
+			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel2()
+			endedReq := pushward.UpdateRequest{
+				State:   pushward.StateEnded,
+				Content: content,
+			}
+			if err := p.pw.UpdateActivity(ctx2, slug, endedReq); err != nil {
+				slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
+			} else {
+				slog.Info("ended activity", "slug", slug, "state", content.State)
+			}
+
+			// Server handles cleanup via ended_ttl — just remove from local map
+			p.mu.Lock()
+			if current, ok := p.tracked[repo]; ok && current.RunID == runID {
+				delete(p.tracked, repo)
+			}
+			p.mu.Unlock()
+		})
 		p.mu.Unlock()
 	})
+	t.endTimers = tp
 	p.mu.Unlock()
 }
 

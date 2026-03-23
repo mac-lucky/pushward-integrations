@@ -13,9 +13,10 @@ import (
 
 // Client connects to a BambuLab printer via MQTT and delivers print status updates.
 type Client struct {
-	host       string
-	accessCode string
-	serial     string
+	host               string
+	accessCode         string
+	serial             string
+	insecureSkipVerify bool
 
 	mqttClient mqtt.Client
 	mu         sync.Mutex
@@ -24,12 +25,13 @@ type Client struct {
 }
 
 // NewClient creates a new BambuLab MQTT client.
-func NewClient(host, accessCode, serial string) *Client {
+func NewClient(host, accessCode, serial string, insecureSkipVerify bool) *Client {
 	return &Client{
-		host:       host,
-		accessCode: accessCode,
-		serial:     serial,
-		updateCh:   make(chan struct{}, 1),
+		host:               host,
+		accessCode:         accessCode,
+		serial:             serial,
+		insecureSkipVerify: insecureSkipVerify,
+		updateCh:           make(chan struct{}, 1),
 	}
 }
 
@@ -46,7 +48,7 @@ func (c *Client) Connect() error {
 		SetKeepAlive(60 * time.Second).
 		SetAutoReconnect(true).
 		SetMaxReconnectInterval(30 * time.Second).
-		SetTLSConfig(&tls.Config{InsecureSkipVerify: true}).
+		SetTLSConfig(&tls.Config{InsecureSkipVerify: c.insecureSkipVerify}).
 		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 			slog.Warn("MQTT connection lost", "error", err)
 		}).

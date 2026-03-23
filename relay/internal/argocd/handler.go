@@ -14,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
@@ -37,19 +38,14 @@ type trackedAppState struct {
 	Pending  bool   `json:"pending"`
 }
 
-// timerSet holds in-memory timer references for a tracked app.
-type timerSet struct {
-	graceTimer *time.Timer
-	endTimer   *time.Timer
-}
-
 // Handler processes ArgoCD sync webhooks for multiple tenants.
 type Handler struct {
-	store   state.Store
-	clients *client.Pool
-	config  *config.ArgoCDConfig
-	mu      sync.Mutex
-	timers  map[string]*timerSet // "userKey:appName" → timers
+	store       state.Store
+	clients     *client.Pool
+	config      *config.ArgoCDConfig
+	ender       *lifecycle.Ender
+	mu          sync.Mutex
+	graceTimers map[string]*time.Timer // "userKey:appName" → grace timer
 }
 
 // NewHandler creates a new ArgoCD webhook handler.
@@ -58,21 +54,16 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.ArgoCDConfi
 		store:   store,
 		clients: clients,
 		config:  cfg,
-		timers:  make(map[string]*timerSet),
+		ender: lifecycle.NewEnder(clients, store, "argocd", lifecycle.EndConfig{
+			EndDelay:       cfg.EndDelay,
+			EndDisplayTime: cfg.EndDisplayTime,
+		}),
+		graceTimers: make(map[string]*time.Timer),
 	}
 }
 
 func timerKey(userKey, appName string) string {
 	return userKey + ":" + appName
-}
-
-func (h *Handler) getTimers(key string) *timerSet {
-	ts, ok := h.timers[key]
-	if !ok {
-		ts = &timerSet{}
-		h.timers[key] = ts
-	}
-	return ts
 }
 
 func (h *Handler) saveApp(ctx context.Context, userKey, appName string, app *trackedAppState) error {
@@ -193,14 +184,13 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 	app, exists, _ := h.loadApp(ctx, userKey, p.App)
 	needsCreate := !exists || (p.Revision != "" && app.Revision != p.Revision)
 
+	h.ender.StopTimer(userKey, p.App)
+
 	if needsCreate {
 		if exists {
-			ts := h.getTimers(tk)
-			if ts.graceTimer != nil {
-				ts.graceTimer.Stop()
-			}
-			if ts.endTimer != nil {
-				ts.endTimer.Stop()
+			if gt, ok := h.graceTimers[tk]; ok {
+				gt.Stop()
+				delete(h.graceTimers, tk)
 			}
 		}
 		app = &trackedAppState{
@@ -215,21 +205,15 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 		_ = h.saveApp(ctx, userKey, p.App, app)
 	}
 
-	ts := h.getTimers(tk)
-	if ts.endTimer != nil {
-		ts.endTimer.Stop()
-		ts.endTimer = nil
-	}
-
 	// Grace period: defer activity creation for new or still-pending syncs
 	gracePeriod := h.config.SyncGracePeriod
 	if gracePeriod > 0 && (needsCreate || app.Pending) {
 		app.Pending = true
 		_ = h.saveApp(ctx, userKey, p.App, app)
-		if ts.graceTimer != nil {
-			ts.graceTimer.Stop()
+		if gt, ok := h.graceTimers[tk]; ok {
+			gt.Stop()
 		}
-		ts.graceTimer = time.AfterFunc(gracePeriod, func() {
+		h.graceTimers[tk] = time.AfterFunc(gracePeriod, func() {
 			h.graceExpired(userKey, p.App)
 		})
 		h.mu.Unlock()
@@ -316,8 +300,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *we
 				Pending:  true,
 			}
 			_ = h.saveApp(ctx, userKey, p.App, app)
-			ts := h.getTimers(tk)
-			ts.graceTimer = time.AfterFunc(gracePeriod, func() {
+			h.graceTimers[tk] = time.AfterFunc(gracePeriod, func() {
 				h.graceExpired(userKey, p.App)
 			})
 			h.mu.Unlock()
@@ -388,12 +371,11 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhook
 
 	// Completed during grace period — no-op sync, skip entirely
 	if exists && app.Pending {
-		ts := h.getTimers(tk)
-		if ts.graceTimer != nil {
-			ts.graceTimer.Stop()
+		if gt, ok := h.graceTimers[tk]; ok {
+			gt.Stop()
+			delete(h.graceTimers, tk)
 		}
 		h.deleteApp(ctx, userKey, p.App)
-		delete(h.timers, tk)
 
 		// Record tombstone so a late sync-succeeded is also skipped
 		if h.config.SyncGracePeriod > 0 {
@@ -457,7 +439,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhook
 		SecondaryURL: secondaryURL,
 	}
 
-	h.scheduleEnd(userKey, p.App, content)
+	h.ender.ScheduleEnd(userKey, p.App, slug, content)
 	slog.Info("scheduled end", "slug", slug, "state", "Deployed")
 }
 
@@ -473,10 +455,9 @@ func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, p *webho
 		currentStep = app.Step
 		wasPending = app.Pending
 		if app.Pending {
-			ts := h.getTimers(tk)
-			if ts.graceTimer != nil {
-				ts.graceTimer.Stop()
-				ts.graceTimer = nil
+			if gt, ok := h.graceTimers[tk]; ok {
+				gt.Stop()
+				delete(h.graceTimers, tk)
 			}
 			app.Pending = false
 			_ = h.saveApp(ctx, userKey, p.App, app)
@@ -522,7 +503,7 @@ func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, p *webho
 		SecondaryURL: secondaryURL,
 	}
 
-	h.scheduleEnd(userKey, p.App, content)
+	h.ender.ScheduleEnd(userKey, p.App, slug, content)
 	slog.Info("scheduled end", "slug", slug, "state", "Sync Failed")
 }
 
@@ -538,10 +519,9 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *w
 		currentStep = app.Step
 		wasPending = app.Pending
 		if app.Pending {
-			ts := h.getTimers(tk)
-			if ts.graceTimer != nil {
-				ts.graceTimer.Stop()
-				ts.graceTimer = nil
+			if gt, ok := h.graceTimers[tk]; ok {
+				gt.Stop()
+				delete(h.graceTimers, tk)
 			}
 			app.Pending = false
 			_ = h.saveApp(ctx, userKey, p.App, app)
@@ -617,7 +597,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *w
 		SecondaryURL: secondaryURL,
 	}
 
-	h.scheduleEnd(userKey, p.App, content)
+	h.ender.ScheduleEnd(userKey, p.App, slug, content)
 	slog.Info("scheduled end", "slug", slug, "state", "Degraded")
 }
 
@@ -634,8 +614,7 @@ func (h *Handler) graceExpired(userKey, appName string) {
 	}
 	app.Pending = false
 	_ = h.saveApp(context.Background(), userKey, appName, app)
-	ts := h.getTimers(tk)
-	ts.graceTimer = nil
+	delete(h.graceTimers, tk)
 	slug := app.Slug
 	step := app.Step
 	revision := app.Revision
@@ -692,59 +671,3 @@ func (h *Handler) graceExpired(userKey, appName string) {
 	slog.Info("updated activity", "slug", slug, "step", fmt.Sprintf("%d/%d", step, total), "state", stateText)
 }
 
-// scheduleEnd schedules a two-phase end for an activity:
-//   - Phase 1 (after EndDelay): ONGOING update with final content (visible in Dynamic Island)
-//   - Phase 2 (EndDisplayTime later): ENDED with same content (dismisses Live Activity)
-func (h *Handler) scheduleEnd(userKey, appName string, content pushward.Content) {
-	tk := timerKey(userKey, appName)
-
-	h.mu.Lock()
-	app, ok, _ := h.loadApp(context.Background(), userKey, appName)
-	if !ok {
-		h.mu.Unlock()
-		return
-	}
-	slug := app.Slug
-	endDelay := h.config.EndDelay
-	displayTime := h.config.EndDisplayTime
-
-	ts := h.getTimers(tk)
-	ts.endTimer = time.AfterFunc(endDelay, func() {
-		pw := h.clients.Get(userKey)
-
-		// Phase 1: ONGOING with final content
-		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
-		ongoingReq := pushward.UpdateRequest{
-			State:   pushward.StateOngoing,
-			Content: content,
-		}
-		if err := pw.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
-			slog.Error("failed to update activity (end phase 1)", "slug", slug, "error", err)
-		} else {
-			slog.Info("updated activity", "slug", slug, "state", content.State)
-		}
-		cancel1()
-
-		time.Sleep(displayTime)
-
-		// Phase 2: ENDED with same content
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel2()
-		endedReq := pushward.UpdateRequest{
-			State:   pushward.StateEnded,
-			Content: content,
-		}
-		if err := pw.UpdateActivity(ctx2, slug, endedReq); err != nil {
-			slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
-		} else {
-			slog.Info("ended activity", "slug", slug, "state", content.State)
-		}
-
-		// Server handles cleanup via ended_ttl — just remove from store and timers
-		h.mu.Lock()
-		h.deleteApp(context.Background(), userKey, appName)
-		delete(h.timers, tk)
-		h.mu.Unlock()
-	})
-	h.mu.Unlock()
-}

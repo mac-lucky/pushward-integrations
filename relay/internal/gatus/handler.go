@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
@@ -17,6 +16,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // Handler processes Gatus webhooks for multiple tenants.
@@ -105,7 +105,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 	if existing == nil {
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := pwClient.CreateActivity(ctx, slug, truncateField(p.EndpointName, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.EndpointName, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create activity", "slug", slug, "error", err)
 			_ = h.store.Delete(ctx, "gatus", userKey, mapKey, "")
 			return
@@ -113,9 +113,9 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 		slog.Info("created activity", "slug", slug, "endpoint", p.EndpointName)
 	}
 
-	stateText := truncateField(p.ResultErrors, 100)
+	stateText := text.TruncateHard(p.ResultErrors, 100)
 	if stateText == "" {
-		stateText = truncateField(p.Description, 100)
+		stateText = text.TruncateHard(p.Description, 100)
 	}
 	if stateText == "" {
 		stateText = "Health Check Failed"
@@ -123,9 +123,9 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 
 	firedAt := pushward.Int64Ptr(time.Now().Unix())
 
-	subtitle := "Gatus \u00b7 " + truncateField(p.EndpointName, 50)
+	subtitle := "Gatus \u00b7 " + text.TruncateHard(p.EndpointName, 50)
 	if p.EndpointGroup != "" {
-		subtitle = "Gatus \u00b7 " + truncateField(p.EndpointGroup+"/"+p.EndpointName, 50)
+		subtitle = "Gatus \u00b7 " + text.TruncateHard(p.EndpointGroup+"/"+p.EndpointName, 50)
 	}
 
 	req := pushward.UpdateRequest{
@@ -162,9 +162,9 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *
 	}
 
 	slug, _ := h.slugAndKey(p)
-	subtitle := "Gatus \u00b7 " + truncateField(p.EndpointName, 50)
+	subtitle := "Gatus \u00b7 " + text.TruncateHard(p.EndpointName, 50)
 	if p.EndpointGroup != "" {
-		subtitle = "Gatus \u00b7 " + truncateField(p.EndpointGroup+"/"+p.EndpointName, 50)
+		subtitle = "Gatus \u00b7 " + text.TruncateHard(p.EndpointGroup+"/"+p.EndpointName, 50)
 	}
 
 	content := pushward.Content{
@@ -189,11 +189,4 @@ func sanitizeURL(raw string) string {
 		return ""
 	}
 	return raw
-}
-
-func truncateField(s string, max int) string {
-	if utf8.RuneCountInString(s) <= max {
-		return s
-	}
-	return string([]rune(s)[:max])
 }

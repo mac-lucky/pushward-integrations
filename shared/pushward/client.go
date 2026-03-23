@@ -111,6 +111,7 @@ func (c *Client) doWithRetry(ctx context.Context, method, url string, body inter
 			lastErr = fmt.Errorf("conflict (409)")
 			continue
 		}
+		io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {

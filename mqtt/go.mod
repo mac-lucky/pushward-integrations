@@ -1,9 +1,9 @@
 module github.com/mac-lucky/pushward-integrations/mqtt
 
-go 1.25.7
+go 1.25.8
 
 require (
-	github.com/eclipse/paho.mqtt.golang v1.5.0
+	github.com/eclipse/paho.mqtt.golang v1.5.1
 	github.com/mac-lucky/pushward-integrations/shared v0.0.0
 )
 

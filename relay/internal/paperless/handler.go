@@ -7,12 +7,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sync"
-	"time"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
@@ -22,8 +21,7 @@ type Handler struct {
 	store   state.Store
 	clients *client.Pool
 	config  *config.PaperlessConfig
-	mu      sync.Mutex
-	timers  map[string]*time.Timer // "userKey:mapKey" -> end timer
+	ender   *lifecycle.Ender
 }
 
 // NewHandler creates a new Paperless-ngx webhook handler.
@@ -32,7 +30,10 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.PaperlessCo
 		store:   store,
 		clients: clients,
 		config:  cfg,
-		timers:  make(map[string]*time.Timer),
+		ender: lifecycle.NewEnder(clients, store, "paperless", lifecycle.EndConfig{
+			EndDelay:       cfg.EndDelay,
+			EndDisplayTime: cfg.EndDisplayTime,
+		}),
 	}
 }
 
@@ -119,7 +120,7 @@ func (h *Handler) handleDocument(ctx context.Context, userKey string, p *webhook
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	_ = h.store.Set(ctx, "paperless", userKey, mapKey, "", data, h.config.StaleTimeout)
 
-	h.scheduleEnd(userKey, mapKey, slug, content)
+	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
 	slog.Info("paperless document", "slug", slug, "event", p.Event, "state", stateText)
 }
@@ -167,63 +168,9 @@ func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, 
 	// Schedule two-phase end — the activity will be dismissed after EndDelay + EndDisplayTime.
 	// If a subsequent "added" event arrives for the same document, it creates a new activity
 	// with a doc_id-based slug (different from this filename-based slug).
-	h.scheduleEnd(userKey, mapKey, slug, content)
+	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
 	slog.Info("paperless consumption started", "slug", slug, "filename", p.Filename)
-}
-
-// scheduleEnd schedules a two-phase end for an activity:
-//   - Phase 1 (after EndDelay): ONGOING update with final content
-//   - Phase 2 (EndDisplayTime later): ENDED with same content
-func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Content) {
-	timerKey := userKey + ":" + mapKey
-	cl := h.clients.Get(userKey)
-	endDelay := h.config.EndDelay
-	displayTime := h.config.EndDisplayTime
-
-	h.mu.Lock()
-	if existing, ok := h.timers[timerKey]; ok {
-		existing.Stop()
-	}
-	h.timers[timerKey] = time.AfterFunc(endDelay, func() {
-		// Phase 1: ONGOING with final content
-		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
-		ongoingReq := pushward.UpdateRequest{
-			State:   pushward.StateOngoing,
-			Content: content,
-		}
-		if err := cl.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
-			slog.Error("failed to update activity (end phase 1)", "slug", slug, "error", err)
-		} else {
-			slog.Info("updated activity", "slug", slug, "state", content.State)
-		}
-		cancel1()
-
-		time.Sleep(displayTime)
-
-		// Phase 2: ENDED with same content
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel2()
-		endedReq := pushward.UpdateRequest{
-			State:   pushward.StateEnded,
-			Content: content,
-		}
-		if err := cl.UpdateActivity(ctx2, slug, endedReq); err != nil {
-			slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
-		} else {
-			slog.Info("ended activity", "slug", slug, "state", content.State)
-		}
-
-		// Clean up state store and timer
-		delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer delCancel()
-		_ = h.store.Delete(delCtx, "paperless", userKey, mapKey, "")
-
-		h.mu.Lock()
-		delete(h.timers, timerKey)
-		h.mu.Unlock()
-	})
-	h.mu.Unlock()
 }
 
 // buildSubtitle constructs "Paperless · DocumentType · Correspondent", omitting empty parts.

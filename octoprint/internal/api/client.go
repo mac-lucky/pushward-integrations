@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -86,6 +87,7 @@ func doGet[T any](c *Client, ctx context.Context, path string) (*T, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 

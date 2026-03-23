@@ -15,9 +15,14 @@ type Config struct {
 }
 
 type BambuLabConfig struct {
-	Host       string `yaml:"host"`
-	AccessCode string `yaml:"access_code"`
-	Serial     string `yaml:"serial"`
+	Host       string    `yaml:"host"`
+	AccessCode string    `yaml:"access_code"`
+	Serial     string    `yaml:"serial"`
+	TLS        TLSConfig `yaml:"tls"`
+}
+
+type TLSConfig struct {
+	InsecureSkipVerify bool `yaml:"insecure_skip_verify"`
 }
 
 type PollingConfig struct {
@@ -26,6 +31,11 @@ type PollingConfig struct {
 
 func Load(path string) (*Config, error) {
 	cfg := &Config{
+		BambuLab: BambuLabConfig{
+			TLS: TLSConfig{
+				InsecureSkipVerify: true, // BambuLab printers use self-signed certs
+			},
+		},
 		PushWard: sharedconfig.PushWardConfig{
 			Priority:       1,
 			CleanupDelay:   15 * time.Minute,

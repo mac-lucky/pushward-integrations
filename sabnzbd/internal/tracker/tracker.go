@@ -10,11 +10,10 @@ import (
 	"strings"
 	"sync"
 	"time"
-	"unicode/utf8"
-
 	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/config"
 	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/sabnzbd"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 const slug = "sabnzbd"
@@ -241,7 +240,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		stateStr += " · " + strings.Join(stateParts, " · ")
 	}
 
-	subtitle := truncate(t.getCompletedName(ctx), 30)
+	subtitle := text.Truncate(t.getCompletedName(ctx), 30)
 
 	slog.Info("complete", "total_mb", totalMB, "elapsed", totalElapsed, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed, "state", stateStr, "subtitle", subtitle)
 
@@ -353,7 +352,7 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 		if icon == "" {
 			icon = "archivebox"
 		}
-		subtitle := truncate(ppName, 30)
+		subtitle := text.Truncate(ppName, 30)
 		t.send(ctx, 1.0, ppStatus+"...", icon, "orange", nil, subtitle, pushward.StateOngoing)
 		select {
 		case <-ctx.Done():
@@ -388,9 +387,9 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 	if len(queue.Slots) > 0 {
 		name := queue.Slots[0].Filename
 		if len(queue.Slots) > 1 {
-			subtitle = fmt.Sprintf("%s +%d more", truncate(name, 18), len(queue.Slots)-1)
+			subtitle = fmt.Sprintf("%s +%d more", text.Truncate(name, 18), len(queue.Slots)-1)
 		} else {
-			subtitle = truncate(name, 30)
+			subtitle = text.Truncate(name, 30)
 		}
 	}
 
@@ -456,16 +455,6 @@ func parseTimeLeft(timeleft string) *int {
 	}
 	total := h*3600 + m*60 + s
 	return &total
-}
-
-func truncate(s string, maxLen int) string {
-	if utf8.RuneCountInString(s) <= maxLen {
-		return s
-	}
-	if maxLen <= 3 {
-		return string([]rune(s)[:maxLen])
-	}
-	return string([]rune(s)[:maxLen-3]) + "..."
 }
 
 func formatDuration(seconds int) string {

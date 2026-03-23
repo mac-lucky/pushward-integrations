@@ -9,6 +9,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +94,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, p *Sonar
 	mapKey := "sonarr:" + p.DownloadID
 
 	// Cancel any existing end timer
-	h.stopTimer(userKey, mapKey)
+	h.ender.StopTimer(userKey, mapKey)
 
 	// Track in state store
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
@@ -104,7 +105,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, p *Sonar
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
-	if err := cl.CreateActivity(ctx, slug, truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 		slog.Error("failed to create activity", "slug", slug, "error", err)
 		h.deleteTrackedSlug(ctx, userKey, mapKey)
 		return
@@ -142,7 +143,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, p *S
 	mapKey := "sonarr:" + p.DownloadID
 
 	// Cancel any existing end timer
-	h.stopTimer(userKey, mapKey)
+	h.ender.StopTimer(userKey, mapKey)
 
 	_, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
 
@@ -159,7 +160,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, p *S
 		cl := h.clients.Get(userKey)
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := cl.CreateActivity(ctx, slug, truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
 			return
@@ -186,6 +187,6 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, p *S
 		TotalSteps:  &total,
 	}
 
-	h.scheduleEnd(userKey, mapKey, slug, content)
+	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	slog.Info("download complete", "slug", slug, "state", state, "series", p.Series.Title)
 }

@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"time"
-	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
@@ -17,6 +16,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // Handler processes Uptime Kuma webhooks for multiple tenants.
@@ -102,7 +102,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, pwClient *push
 	if existing == nil {
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := pwClient.CreateActivity(ctx, slug, truncateField(p.Monitor.Name, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.Monitor.Name, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create activity", "slug", slug, "error", err)
 			_ = h.store.Delete(ctx, "uptimekuma", userKey, mapKey, "")
 			return
@@ -110,7 +110,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, pwClient *push
 		slog.Info("created activity", "slug", slug, "monitor", p.Monitor.Name)
 	}
 
-	stateText := truncateField(p.Heartbeat.Msg, 100)
+	stateText := text.TruncateHard(p.Heartbeat.Msg, 100)
 	if stateText == "" {
 		stateText = "Monitor Down"
 	}
@@ -120,7 +120,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, pwClient *push
 		firedAtPtr = pushward.Int64Ptr(t.Unix())
 	}
 
-	subtitle := "Uptime Kuma \u00b7 " + truncateField(p.Monitor.Name, 50)
+	subtitle := "Uptime Kuma \u00b7 " + text.TruncateHard(p.Monitor.Name, 50)
 
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
@@ -156,7 +156,7 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, pwClient *pushwa
 	}
 
 	slug := fmt.Sprintf("uptime-%d", p.Monitor.ID)
-	subtitle := "Uptime Kuma \u00b7 " + truncateField(p.Monitor.Name, 50)
+	subtitle := "Uptime Kuma \u00b7 " + text.TruncateHard(p.Monitor.Name, 50)
 
 	stateText := "Resolved"
 	if p.Heartbeat.Ping != nil {
@@ -191,13 +191,13 @@ func (h *Handler) handlePending(ctx context.Context, userKey string, pwClient *p
 
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
-	if err := pwClient.CreateActivity(ctx, slug, truncateField(p.Monitor.Name, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.Monitor.Name, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 		slog.Error("failed to create activity", "slug", slug, "error", err)
 		return
 	}
 
 	stateText := "Checking..."
-	subtitle := "Uptime Kuma \u00b7 " + truncateField(p.Monitor.Name, 50)
+	subtitle := "Uptime Kuma \u00b7 " + text.TruncateHard(p.Monitor.Name, 50)
 
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
@@ -225,11 +225,4 @@ func sanitizeMonitorURL(raw string) string {
 		return ""
 	}
 	return raw
-}
-
-func truncateField(s string, max int) string {
-	if utf8.RuneCountInString(s) <= max {
-		return s
-	}
-	return string([]rune(s)[:max])
 }

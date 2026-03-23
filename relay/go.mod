@@ -1,10 +1,10 @@
 module github.com/mac-lucky/pushward-integrations/relay
 
-go 1.25.7
+go 1.25.8
 
 require (
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/jackc/pgx/v5 v5.7.5
+	github.com/jackc/pgx/v5 v5.8.0
 	github.com/mac-lucky/pushward-integrations/shared v0.0.0
 	github.com/testcontainers/testcontainers-go v0.41.0
 	github.com/testcontainers/testcontainers-go/modules/postgres v0.41.0

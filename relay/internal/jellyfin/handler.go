@@ -13,6 +13,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -23,8 +24,8 @@ type Handler struct {
 	store        state.Store
 	clients      *client.Pool
 	config       *config.JellyfinConfig
+	ender        *lifecycle.Ender
 	mu           sync.Mutex
-	timers       map[string]*time.Timer // "userKey:mapKey" → end timer
 	pauseTimers  map[string]*time.Timer // debounceKey → pause auto-end timer
 	lastUpdate   map[string]time.Time   // "userKey:slug" → last progress update time
 	lastPaused   map[string]bool        // "userKey:slug" → last IsPaused state
@@ -34,10 +35,13 @@ type Handler struct {
 // NewHandler creates a new Jellyfin webhook handler.
 func NewHandler(store state.Store, clients *client.Pool, cfg *config.JellyfinConfig) *Handler {
 	return &Handler{
-		store:        store,
-		clients:      clients,
-		config:       cfg,
-		timers:       make(map[string]*time.Timer),
+		store:   store,
+		clients: clients,
+		config:  cfg,
+		ender: lifecycle.NewEnder(clients, store, "jellyfin", lifecycle.EndConfig{
+			EndDelay:       cfg.EndDelay,
+			EndDisplayTime: cfg.EndDisplayTime,
+		}),
 		pauseTimers:  make(map[string]*time.Timer),
 		lastUpdate:   make(map[string]time.Time),
 		lastPaused:   make(map[string]bool),
@@ -422,7 +426,7 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, p *webhoo
 	}
 
 	// Immediate two-phase end
-	h.scheduleEnd(userKey, mapKey, slug, content)
+	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	slog.Info("scheduled end", "slug", slug, "state", "Added to library")
 }
 
@@ -495,7 +499,7 @@ func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, p *we
 		StepLabels:  []string{"Running", "Done"},
 	}
 
-	h.scheduleEnd(userKey, mapKey, slug, content)
+	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	slog.Info("scheduled end", "slug", slug, "step", "2/2", "state", stateText)
 }
 
@@ -532,57 +536,13 @@ func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, p *webh
 	slog.Info("auth failure", "slug", slug, "user", p.UserName, "remote", p.RemoteEndPoint)
 }
 
-// scheduleEnd schedules a two-phase end for an activity:
-//   - Phase 1 (after EndDelay): ONGOING update with final content
-//   - Phase 2 (EndDisplayTime later): ENDED with same content
+// scheduleEnd schedules a two-phase end for an activity via lifecycle.Ender,
+// with an onComplete callback that cleans up debounce state.
 func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Content) {
-	timerKey := userKey + ":" + mapKey
-	cl := h.clients.Get(userKey)
-	endDelay := h.config.EndDelay
-	displayTime := h.config.EndDisplayTime
-
-	h.mu.Lock()
-	if existing, ok := h.timers[timerKey]; ok {
-		existing.Stop()
-	}
-	h.timers[timerKey] = time.AfterFunc(endDelay, func() {
-		// Phase 1: ONGOING with final content
-		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
-		ongoingReq := pushward.UpdateRequest{
-			State:   pushward.StateOngoing,
-			Content: content,
-		}
-		if err := cl.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
-			slog.Error("failed to update activity (end phase 1)", "slug", slug, "error", err)
-		} else {
-			slog.Info("updated activity", "slug", slug, "state", content.State)
-		}
-		cancel1()
-
-		time.Sleep(displayTime)
-
-		// Phase 2: ENDED with same content
-		ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel2()
-		endedReq := pushward.UpdateRequest{
-			State:   pushward.StateEnded,
-			Content: content,
-		}
-		if err := cl.UpdateActivity(ctx2, slug, endedReq); err != nil {
-			slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
-		} else {
-			slog.Info("ended activity", "slug", slug, "state", content.State)
-		}
-
-		// Clean up state store and timer
-		delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer delCancel()
-		_ = h.store.Delete(delCtx, "jellyfin", userKey, mapKey, "")
-
-		h.mu.Lock()
-		delete(h.timers, timerKey)
+	debounceKey := userKey + ":" + slug
+	h.ender.ScheduleEnd(userKey, mapKey, slug, content, func() {
 		// Clean up debounce entries for playback slugs
-		debounceKey := userKey + ":" + slug
+		h.mu.Lock()
 		delete(h.lastUpdate, debounceKey)
 		delete(h.lastPaused, debounceKey)
 		delete(h.lastProgress, debounceKey)
@@ -592,7 +552,6 @@ func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Con
 		}
 		h.mu.Unlock()
 	})
-	h.mu.Unlock()
 }
 
 // endPaused is called when the pause timer fires — auto-ends the activity

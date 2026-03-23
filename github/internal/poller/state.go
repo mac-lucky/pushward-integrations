@@ -2,6 +2,12 @@ package poller
 
 import "time"
 
+// timerPair holds both phase-1 and phase-2 timers so they can both be cancelled.
+type timerPair struct {
+	phase1 *time.Timer
+	phase2 *time.Timer
+}
+
 type trackedRun struct {
 	Repo       string
 	RunID      int64
@@ -9,7 +15,7 @@ type trackedRun struct {
 	Slug       string
 	HTMLURL    string
 	LastUpdate time.Time
-	endTimer   *time.Timer
+	endTimers  *timerPair
 
 	// maxTotalSteps tracks the highest TotalSteps seen across polls.
 	// GitHub lazily creates jobs behind unsatisfied needs/if conditions,

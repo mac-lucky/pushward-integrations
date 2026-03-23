@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
@@ -15,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // Handler processes Backrest webhooks for multiple tenants.
@@ -68,10 +68,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "CONDITION_SNAPSHOT_ERROR":
 		stateText := "Failed"
 		if payload.Error != "" {
-			msg := payload.Error
-			if utf8.RuneCountInString(msg) > 50 {
-				msg = string([]rune(msg)[:50])
-			}
+			msg := text.TruncateHard(payload.Error, 50)
 			stateText = "Failed: " + msg
 		}
 		h.handleEnd(ctx, userKey, &payload, stateText, "#FF3B30", "xmark.circle.fill")
@@ -109,7 +106,7 @@ func (h *Handler) handleStart(ctx context.Context, userKey string, p *webhookPay
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
-	name := truncateField(p.Plan, 100)
+	name := text.TruncateHard(p.Plan, 100)
 	if name == "" {
 		name = "Backup"
 	}
@@ -121,10 +118,10 @@ func (h *Handler) handleStart(ctx context.Context, userKey string, p *webhookPay
 
 	subtitle := "Backrest"
 	if p.Plan != "" {
-		subtitle += " · " + truncateField(p.Plan, 50)
+		subtitle += " · " + text.TruncateHard(p.Plan, 50)
 	}
 	if p.Repo != "" {
-		subtitle += " · " + truncateField(p.Repo, 50)
+		subtitle += " · " + text.TruncateHard(p.Repo, 50)
 	}
 
 	content := pushward.Content{
@@ -158,7 +155,7 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, p *webhookPaylo
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
-	name := truncateField(p.Plan, 100)
+	name := text.TruncateHard(p.Plan, 100)
 	if name == "" {
 		name = "Backup"
 	}
@@ -171,10 +168,10 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, p *webhookPaylo
 
 	subtitle := "Backrest"
 	if p.Plan != "" {
-		subtitle += " · " + truncateField(p.Plan, 50)
+		subtitle += " · " + text.TruncateHard(p.Plan, 50)
 	}
 	if p.Repo != "" {
-		subtitle += " · " + truncateField(p.Repo, 50)
+		subtitle += " · " + text.TruncateHard(p.Repo, 50)
 	}
 
 	content := pushward.Content{
@@ -192,13 +189,6 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, p *webhookPaylo
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
 	slog.Info("backrest end scheduled", "slug", slug, "event", p.Event, "state", stateText)
-}
-
-func truncateField(s string, max int) string {
-	if utf8.RuneCountInString(s) <= max {
-		return s
-	}
-	return string([]rune(s)[:max])
 }
 
 func formatBytes(b int64) string {
