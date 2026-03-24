@@ -14,6 +14,8 @@ Each runs as its own container with a dedicated PushWard API key.
 | [pushward-sabnzbd](./sabnzbd/) | SABnzbd download and post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
 | [pushward-bambulab](./bambulab/) | BambuLab 3D printer progress via MQTT | - | `ghcr.io/mac-lucky/pushward-bambulab` |
 | [pushward-mqtt](./mqtt/) | Generic MQTT-to-Live-Activity bridge | - | `ghcr.io/mac-lucky/pushward-mqtt` |
+| [pushward-octoprint](./octoprint/) | OctoPrint 3D printer progress via webhooks + API polling | 8090 | `ghcr.io/mac-lucky/pushward-octoprint` |
+| [pushward-unraid](./unraid/) | Unraid parity checks, array state, disk alerts, and UPS events via GraphQL WebSocket | - | `ghcr.io/mac-lucky/pushward-unraid` |
 
 ### Relay (Multi-Tenant Gateway)
 
@@ -29,6 +31,11 @@ Each runs as its own container with a dedicated PushWard API key.
 | Paperless-ngx | `POST /paperless` | generic | Document consumption and processing |
 | Changedetection.io | `POST /changedetection` | alert | Page change notifications |
 | Unmanic | `POST /unmanic` | generic | Transcoding task completion/failure |
+| Proxmox VE | `POST /proxmox` | pipeline/alert | Backup, replication, fencing, and package update notifications |
+| Overseerr/Jellyseerr | `POST /overseerr` | pipeline | Media request lifecycle (pending → approved → available) |
+| Uptime Kuma | `POST /uptimekuma` | alert | Monitor up/down status changes |
+| Gatus | `POST /gatus` | alert | Endpoint health status changes |
+| Backrest | `POST /backrest` | generic | Backup operation progress and completion |
 
 All relay routes are wrapped with IP rate limiting, auth middleware (`hlk_` key extraction), and per-key rate limiting.
 
@@ -47,22 +54,29 @@ See each integration's README or `config.example.yml` for the full list of confi
 
 ## Project Structure
 
-This is a Go workspace (`go.work`) with a shared module and six integration modules:
+This is a Go workspace (`go.work`) with a shared module and seven integration modules:
 
 ```
 pushward-integrations/
   go.work                    # Go workspace
-  shared/                    # Shared module (API client, config, server, test utils)
+  shared/                    # Shared module (API client, config, server, text, test utils)
   github/                    # GitHub Actions poller
   sabnzbd/                   # SABnzbd webhook + download tracker
   bambulab/                  # BambuLab MQTT client
   mqtt/                      # Generic MQTT bridge
+  octoprint/                 # OctoPrint webhook + REST API poller
+  unraid/                    # Unraid GraphQL WebSocket client
   relay/                     # Multi-tenant webhook gateway (PostgreSQL)
     cmd/pushward-relay/      # Entry point
     internal/
       auth/                  # Auth middleware (hlk_ key extraction)
       client/                # LRU pool of per-tenant PushWard clients
       config/                # YAML config with per-provider settings
+      lifecycle/             # Shared two-phase end logic
+      lrumap/                # Generic LRU map for dedup/state
+      ratelimit/             # IP and per-key rate limiting
+      selftest/              # Webhook self-test support
+      state/                 # PostgreSQL + in-memory state stores
       grafana/               # Grafana alert handler
       argocd/                # ArgoCD sync handler
       starr/                 # Radarr/Sonarr handler (grab, download, health, manual interaction)
@@ -70,8 +84,11 @@ pushward-integrations/
       paperless/             # Paperless-ngx document consumption handler
       changedetection/       # Changedetection.io page change handler
       unmanic/               # Unmanic transcoding task handler
-      ratelimit/             # IP and per-key rate limiting
-      state/                 # PostgreSQL + in-memory state stores
+      proxmox/               # Proxmox VE backup, replication, fencing, and update handler
+      overseerr/             # Overseerr/Jellyseerr media request handler
+      uptimekuma/            # Uptime Kuma monitor status handler
+      gatus/                 # Gatus endpoint health handler
+      backrest/              # Backrest backup operation handler
     testdata/                # Fixture JSON files for all providers
     config.example.yml
     Dockerfile
@@ -87,6 +104,8 @@ go build ./github/cmd/pushward-github
 go build ./sabnzbd/cmd/pushward-sabnzbd
 go build ./bambulab/cmd/pushward-bambulab
 go build ./mqtt/cmd/pushward-mqtt
+go build ./octoprint/cmd/pushward-octoprint
+go build ./unraid/cmd/pushward-unraid
 go build ./relay/cmd/pushward-relay
 ```
 
@@ -97,6 +116,8 @@ Run locally with a config file:
 ./pushward-sabnzbd -config sabnzbd/config.example.yml
 ./pushward-bambulab -config bambulab/config.example.yml
 ./pushward-mqtt -config mqtt/config.example.yml
+./pushward-octoprint -config octoprint/config.example.yml
+./pushward-unraid -config unraid/config.example.yml
 ./pushward-relay -config relay/config.example.yml
 ```
 
@@ -104,7 +125,7 @@ Run tests:
 
 ```bash
 # All tests
-go test ./shared/... ./github/... ./sabnzbd/... ./bambulab/... ./mqtt/... ./relay/... -v -count=1
+go test ./shared/... ./github/... ./sabnzbd/... ./bambulab/... ./mqtt/... ./octoprint/... ./unraid/... ./relay/... -v -count=1
 
 # Relay only (with race detector)
 go test ./relay/... -race -count=1 -v
@@ -117,6 +138,8 @@ docker build -f github/Dockerfile -t pushward-github .
 docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd .
 docker build -f bambulab/Dockerfile -t pushward-bambulab .
 docker build -f mqtt/Dockerfile -t pushward-mqtt .
+docker build -f octoprint/Dockerfile -t pushward-octoprint .
+docker build -f unraid/Dockerfile -t pushward-unraid .
 docker build -f relay/Dockerfile -t pushward-relay .
 ```
 
@@ -124,10 +147,12 @@ docker build -f relay/Dockerfile -t pushward-relay .
 
 Each integration has its own GitHub Actions workflow with path filters so only the changed integration gets built:
 
-- `.github/workflows/github-ci-cd.yml` -- triggers on `github/**` and `shared/**` changes
-- `.github/workflows/sabnzbd-ci-cd.yml` -- triggers on `sabnzbd/**` and `shared/**` changes
-- `.github/workflows/bambulab-ci-cd.yml` -- triggers on `bambulab/**` and `shared/**` changes
-- `.github/workflows/mqtt-ci-cd.yml` -- triggers on `mqtt/**` and `shared/**` changes
-- `.github/workflows/relay-ci-cd.yml` -- triggers on `relay/**` and `shared/**` changes
+- `.github/workflows/github-ci-cd.yml` — triggers on `github/**` and `shared/**` changes
+- `.github/workflows/sabnzbd-ci-cd.yml` — triggers on `sabnzbd/**` and `shared/**` changes
+- `.github/workflows/bambulab-ci-cd.yml` — triggers on `bambulab/**` and `shared/**` changes
+- `.github/workflows/mqtt-ci-cd.yml` — triggers on `mqtt/**` and `shared/**` changes
+- `.github/workflows/octoprint-ci-cd.yml` — triggers on `octoprint/**` and `shared/**` changes
+- `.github/workflows/unraid-ci-cd.yml` — triggers on `unraid/**` and `shared/**` changes
+- `.github/workflows/relay-ci-cd.yml` — triggers on `relay/**` and `shared/**` changes
 
 All use the shared `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml` workflow. Triggers: push to `main`, tags (`v*`), pull requests to `main`, and manual `workflow_dispatch`. Docker images are built and pushed to GHCR on push to main or tags.

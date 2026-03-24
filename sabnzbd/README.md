@@ -42,7 +42,7 @@ All settings can be provided via YAML config file or environment variables. Envi
 | `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Server-side stale TTL (default: `30m`) | No |
 | `PUSHWARD_END_DELAY` | `pushward.end_delay` | Delay before two-phase end Phase 1 (default: `5s`) | No |
 | `PUSHWARD_END_DISPLAY_TIME` | `pushward.end_display_time` | Display time before ENDED dismissal (default: `4s`) | No |
-| `PUSHWARD_POLL_INTERVAL` | `polling.interval` | Poll interval during tracking (default: `1s`) | No |
+| `PUSHWARD_POLL_INTERVAL` | `polling.interval` | Poll interval during tracking (default: `5s`) | No |
 
 > **Note:** `PUSHWARD_CLEANUP_DELAY` is accepted by the shared config but not used by this integration. The activity slug `sabnzbd` is created with `ended_ttl=0` so it persists across sessions for reuse.
 
@@ -86,7 +86,7 @@ Set it to trigger on **NZB added** events.
 2. **Webhook** — SABnzbd sends a POST to `/webhook` when an NZB is added
 3. **Activity creation** — auto-creates the `sabnzbd` activity on PushWard (with `ended_ttl=0` so the slug persists, and `stale_ttl=30m`)
 4. **Wait for start** — polls the queue for up to 60s waiting for an active download
-5. **Download tracking** — polls the queue every 1s, showing progress bar, speed, ETA, and current filename(s)
+5. **Download tracking** — polls the queue every 5s, showing progress bar, speed, ETA, and current filename(s)
 6. **Post-processing** — tracks Verifying, Repairing, Extracting, and Moving phases with status-specific icons
 7. **Queue continuation** — if more downloads appear in the queue, loops back to step 5
 8. **Summary** — shows completion stats (e.g. `Done · 1.2 GB · 45 MB/s avg · unpack 2m 3s`), subtitle shows the downloaded filename
