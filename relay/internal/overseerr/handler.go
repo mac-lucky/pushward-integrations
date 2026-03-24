@@ -113,12 +113,12 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, p *webhookPay
 		Icon:        icon,
 		Subtitle:    subtitle,
 		AccentColor: accentColor,
+		CurrentStep: &step,
+		TotalSteps:  &total,
 	}
 
 	if step > 0 {
 		content.Progress = float64(step) / float64(total)
-		content.CurrentStep = &step
-		content.TotalSteps = &total
 	}
 
 	req := pushward.UpdateRequest{

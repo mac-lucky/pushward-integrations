@@ -100,8 +100,8 @@ func TestTriggered(t *testing.T) {
 	if update.Content.Icon != "exclamationmark.triangle.fill" {
 		t.Errorf("expected icon exclamationmark.triangle.fill, got %s", update.Content.Icon)
 	}
-	if update.Content.Severity != "error" {
-		t.Errorf("expected severity error, got %s", update.Content.Severity)
+	if update.Content.Severity != "critical" {
+		t.Errorf("expected severity critical, got %s", update.Content.Severity)
 	}
 	if update.Content.Subtitle != "Gatus \u00b7 My API" {
 		t.Errorf("expected subtitle 'Gatus \u00b7 My API', got %q", update.Content.Subtitle)

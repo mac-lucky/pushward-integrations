@@ -128,7 +128,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 			Icon:        "exclamationmark.triangle.fill",
 			Subtitle:    subtitle,
 			AccentColor: "#FF3B30",
-			Severity:    "error",
+			Severity:    "critical",
 			FiredAt:     firedAt,
 			URL:         text.SanitizeURL(p.EndpointURL),
 		},

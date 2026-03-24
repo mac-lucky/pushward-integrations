@@ -755,8 +755,8 @@ func TestRadarrHealthError(t *testing.T) {
 
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.Content.Severity != "error" {
-		t.Errorf("expected severity error, got %s", update.Content.Severity)
+	if update.Content.Severity != "critical" {
+		t.Errorf("expected severity critical, got %s", update.Content.Severity)
 	}
 	if update.Content.Icon != "exclamationmark.octagon.fill" {
 		t.Errorf("expected error icon, got %s", update.Content.Icon)

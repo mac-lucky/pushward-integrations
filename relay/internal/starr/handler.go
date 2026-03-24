@@ -141,7 +141,7 @@ func (h *Handler) handleHealth(ctx context.Context, userKey, provider string, p 
 	if p.Level == "error" {
 		icon = "exclamationmark.octagon.fill"
 		accent = "#FF3B30"
-		severity = "error"
+		severity = "critical"
 	}
 
 	req := pushward.UpdateRequest{

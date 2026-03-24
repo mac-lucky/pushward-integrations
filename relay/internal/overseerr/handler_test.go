@@ -296,9 +296,9 @@ func TestMediaDeclined(t *testing.T) {
 		t.Errorf("expected icon xmark.circle.fill, got %s", update.Content.Icon)
 	}
 
-	// Declined has no step (step=0)
-	if update.Content.CurrentStep != nil {
-		t.Errorf("expected nil current_step for declined, got %d", *update.Content.CurrentStep)
+	// Declined starts at step 0
+	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 0 {
+		t.Errorf("expected current_step 0 for declined, got %v", update.Content.CurrentStep)
 	}
 
 	var phase2 pushward.UpdateRequest

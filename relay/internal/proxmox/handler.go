@@ -290,6 +290,7 @@ func (h *Handler) handleFencing(ctx context.Context, userKey string, p *webhookP
 		Icon:        "exclamationmark.octagon.fill",
 		Subtitle:    subtitle,
 		AccentColor: "#FF3B30",
+		Severity:    "critical",
 	}
 
 	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
@@ -327,6 +328,7 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey string, p *webhookP
 		Icon:        "arrow.down.circle",
 		Subtitle:    subtitle,
 		AccentColor: "#007AFF",
+		Severity:    "info",
 	}
 
 	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}

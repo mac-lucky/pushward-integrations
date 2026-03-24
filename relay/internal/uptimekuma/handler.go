@@ -122,7 +122,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, pwClient *push
 			Icon:        "exclamationmark.triangle.fill",
 			Subtitle:    subtitle,
 			AccentColor: "#FF3B30",
-			Severity:    "error",
+			Severity:    "critical",
 			FiredAt:     firedAtPtr,
 			URL:         text.SanitizeURL(p.Monitor.URL),
 		},
@@ -131,7 +131,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, pwClient *push
 		slog.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "error")
+	slog.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "critical")
 }
 
 func (h *Handler) handleUp(ctx context.Context, userKey string, pwClient *pushward.Client, p *webhookPayload) {

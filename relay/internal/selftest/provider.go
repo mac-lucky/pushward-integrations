@@ -146,7 +146,7 @@ var providers = map[string]providerTest{
 			Icon:        "exclamationmark.triangle.fill",
 			Subtitle:    "Uptime Kuma \u00b7 Test Monitor",
 			AccentColor: "#FF3B30",
-			Severity:    "error",
+			Severity:    "critical",
 		},
 	},
 	"gatus": {
@@ -158,7 +158,7 @@ var providers = map[string]providerTest{
 			Icon:        "exclamationmark.triangle.fill",
 			Subtitle:    "Gatus \u00b7 test/api",
 			AccentColor: "#FF3B30",
-			Severity:    "error",
+			Severity:    "critical",
 		},
 	},
 	"backrest": {
