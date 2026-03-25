@@ -100,7 +100,7 @@ func TestPlaybackStart(t *testing.T) {
 	if update.Content.Template != "generic" {
 		t.Errorf("expected template generic, got %s", update.Content.Template)
 	}
-	if update.Content.State != "Playing on Apple TV" {
+	if update.Content.State != "Playing on Apple TV by john" {
 		t.Errorf("expected state 'Playing on Apple TV', got %s", update.Content.State)
 	}
 	if update.Content.Icon != "play.circle.fill" {
@@ -195,7 +195,7 @@ func TestPlaybackStartPausedThenResume(t *testing.T) {
 
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.Content.State != "Playing on Apple TV" {
+	if update.Content.State != "Playing on Apple TV by john" {
 		t.Errorf("expected state 'Playing on Apple TV', got %s", update.Content.State)
 	}
 }
@@ -276,13 +276,13 @@ func TestPlaybackStartAndStop(t *testing.T) {
 		t.Fatalf("expected 4 calls, got %d", len(recorded))
 	}
 
-	// Phase 1: ONGOING with "Watched on Apple TV"
+	// Phase 1: ONGOING with "Watched on Apple TV by john"
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
 	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
-	if phase1.Content.State != "Watched on Apple TV" {
+	if phase1.Content.State != "Watched on Apple TV by john" {
 		t.Errorf("expected state 'Watched on Apple TV', got %s", phase1.Content.State)
 	}
 	if phase1.Content.Icon != "checkmark.circle.fill" {
@@ -292,13 +292,13 @@ func TestPlaybackStartAndStop(t *testing.T) {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
 	}
 
-	// Phase 2: ENDED with "Watched on Apple TV"
+	// Phase 2: ENDED with "Watched on Apple TV by john"
 	var phase2 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
-	if phase2.Content.State != "Watched on Apple TV" {
+	if phase2.Content.State != "Watched on Apple TV by john" {
 		t.Errorf("expected state 'Watched on Apple TV', got %s", phase2.Content.State)
 	}
 }
@@ -391,7 +391,7 @@ func TestPlaybackProgressStateChangeBypassesDebounce(t *testing.T) {
 	// Verify the progress update shows "Paused"
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &update)
-	if update.Content.State != "Paused on Apple TV" {
+	if update.Content.State != "Paused on Apple TV by john" {
 		t.Errorf("expected state 'Paused on Apple TV', got %s", update.Content.State)
 	}
 	if update.Content.Icon != "pause.circle.fill" {
@@ -502,7 +502,7 @@ func TestPlaybackProgressCreatesActivity(t *testing.T) {
 	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
-	if update.Content.State != "Playing on Apple TV" {
+	if update.Content.State != "Playing on Apple TV by john" {
 		t.Errorf("expected state 'Playing on Apple TV', got %s", update.Content.State)
 	}
 }
@@ -628,13 +628,13 @@ func TestPauseAutoEnd(t *testing.T) {
 		t.Fatalf("expected 5 calls (auto-end after pause timeout), got %d", len(recorded))
 	}
 
-	// Phase 1: ONGOING with "Paused on Apple TV"
+	// Phase 1: ONGOING with "Paused on Apple TV by john"
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
 	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
-	if phase1.Content.State != "Paused on Apple TV" {
+	if phase1.Content.State != "Paused on Apple TV by john" {
 		t.Errorf("expected state 'Paused on Apple TV', got %s", phase1.Content.State)
 	}
 	if phase1.Content.Icon != "pause.circle.fill" {
@@ -771,7 +771,7 @@ func TestPauseStopCancelsAutoEnd(t *testing.T) {
 	// Verify it ended with "Watched" (from PlaybackStop), not "Paused"
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
-	if phase1.Content.State != "Watched on Apple TV" {
+	if phase1.Content.State != "Watched on Apple TV by john" {
 		t.Errorf("expected state 'Watched on Apple TV', got %s", phase1.Content.State)
 	}
 }

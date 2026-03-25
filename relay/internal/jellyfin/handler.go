@@ -180,7 +180,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *we
 		Content: pushward.Content{
 			Template:      "generic",
 			Progress:      playbackProgress(p),
-			State:         "Playing on " + p.DeviceName,
+			State:         "Playing on " + p.DeviceName + " by " + p.UserName,
 			Icon:          "play.circle.fill",
 			Subtitle:      playbackSubtitle(p),
 			AccentColor:   "#007AFF",
@@ -201,7 +201,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, p *we
 	h.lastProgress[debounceKey] = playbackProgress(p)
 	h.mu.Unlock()
 
-	slog.Info("updated activity", "slug", slug, "state", "Playing on "+p.DeviceName)
+	slog.Info("updated activity", "slug", slug, "state", "Playing on "+p.DeviceName+" by "+p.UserName)
 }
 
 func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p *webhookPayload) {
@@ -233,9 +233,10 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p 
 					t.Stop()
 				}
 				deviceName := p.DeviceName
+				userName := p.UserName
 				subtitle := playbackSubtitle(p)
 				h.pauseTimers[debounceKey] = time.AfterFunc(h.config.PauseTimeout, func() {
-					h.endPaused(userKey, mapKey, slug, deviceName, subtitle, progress, debounceKey)
+					h.endPaused(userKey, mapKey, slug, deviceName, userName, subtitle, progress, debounceKey)
 				})
 			}
 		}
@@ -259,9 +260,10 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p 
 			t.Stop()
 		}
 		deviceName := p.DeviceName
+		userName := p.UserName
 		subtitle := playbackSubtitle(p)
 		h.pauseTimers[debounceKey] = time.AfterFunc(h.config.PauseTimeout, func() {
-			h.endPaused(userKey, mapKey, slug, deviceName, subtitle, progress, debounceKey)
+			h.endPaused(userKey, mapKey, slug, deviceName, userName, subtitle, progress, debounceKey)
 		})
 	}
 	h.mu.Unlock()
@@ -292,10 +294,10 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, p 
 		_ = h.store.Set(ctx, "jellyfin", userKey, mapKey, "", data, h.config.StaleTimeout)
 	}
 
-	stateText := "Playing on " + p.DeviceName
+	stateText := "Playing on " + p.DeviceName + " by " + p.UserName
 	icon := "play.circle.fill"
 	if p.IsPaused {
-		stateText = "Paused on " + p.DeviceName
+		stateText = "Paused on " + p.DeviceName + " by " + p.UserName
 		icon = "pause.circle.fill"
 	}
 
@@ -346,14 +348,14 @@ func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, p *web
 	content := pushward.Content{
 		Template:    "generic",
 		Progress:    progress,
-		State:       "Watched on " + p.DeviceName,
+		State:       "Watched on " + p.DeviceName + " by " + p.UserName,
 		Icon:        "checkmark.circle.fill",
 		Subtitle:    playbackSubtitle(p),
 		AccentColor: "#34C759",
 	}
 
 	h.scheduleEnd(userKey, mapKey, slug, content)
-	slog.Info("scheduled end", "slug", slug, "state", "Watched on "+p.DeviceName)
+	slog.Info("scheduled end", "slug", slug, "state", "Watched on "+p.DeviceName+" by "+p.UserName)
 }
 
 func (h *Handler) handleItemAdded(ctx context.Context, userKey string, p *webhookPayload) {
@@ -531,7 +533,7 @@ func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Con
 
 // endPaused is called when the pause timer fires — auto-ends the activity
 // because it has been paused with no progress change.
-func (h *Handler) endPaused(userKey, mapKey, slug, deviceName, subtitle string, progress float64, debounceKey string) {
+func (h *Handler) endPaused(userKey, mapKey, slug, deviceName, userName, subtitle string, progress float64, debounceKey string) {
 	h.mu.Lock()
 	delete(h.pauseTimers, debounceKey)
 	h.mu.Unlock()
@@ -539,7 +541,7 @@ func (h *Handler) endPaused(userKey, mapKey, slug, deviceName, subtitle string, 
 	content := pushward.Content{
 		Template:    "generic",
 		Progress:    progress,
-		State:       "Paused on " + deviceName,
+		State:       "Paused on " + deviceName + " by " + userName,
 		Icon:        "pause.circle.fill",
 		Subtitle:    subtitle,
 		AccentColor: "#007AFF",
