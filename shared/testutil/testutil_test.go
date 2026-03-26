@@ -158,13 +158,13 @@ func TestUpdateActivity(t *testing.T) {
 			wantStatus: 400,
 		},
 		{
-			name:       "pipeline missing total_steps",
-			body:       `{"state":"ONGOING","content":{"template":"pipeline","progress":0.5,"current_step":1}}`,
+			name:       "steps missing total_steps",
+			body:       `{"state":"ONGOING","content":{"template":"steps","progress":0.5,"current_step":1}}`,
 			wantStatus: 400,
 		},
 		{
-			name:       "pipeline current_step exceeds total_steps",
-			body:       `{"state":"ONGOING","content":{"template":"pipeline","progress":0.5,"current_step":5,"total_steps":3}}`,
+			name:       "steps current_step exceeds total_steps",
+			body:       `{"state":"ONGOING","content":{"template":"steps","progress":0.5,"current_step":5,"total_steps":3}}`,
 			wantStatus: 400,
 		},
 		{

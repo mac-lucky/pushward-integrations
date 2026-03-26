@@ -220,7 +220,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		if err := p.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 			State: pushward.StateOngoing,
 			Content: pushward.Content{
-				Template:     "pipeline",
+				Template:     "steps",
 				Progress:     0.0,
 				State:        "Starting...",
 				Icon:         "arrow.triangle.branch",
@@ -240,7 +240,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 	return nil
 }
 
-// stepInfo holds computed pipeline step information from a set of jobs.
+// stepInfo holds computed steps template information from a set of jobs.
 type stepInfo struct {
 	TotalSteps      int
 	CurrentStep     int
@@ -253,7 +253,7 @@ type stepInfo struct {
 }
 
 // computeSteps groups jobs by base name (supporting matrix strategies) and
-// computes pipeline step progress information.
+// computes step progress information.
 func computeSteps(jobs []ghclient.Job) stepInfo {
 	type step struct {
 		name      string
@@ -407,7 +407,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			}
 			slog.Info("workflow completed", "run_id", tRunID, "slug", tSlug, "conclusion", conclusion)
 			p.scheduleEnd(repo, pushward.Content{
-				Template:     "pipeline",
+				Template:     "steps",
 				Progress:     1.0,
 				State:        conclusion,
 				Icon:         "arrow.triangle.branch",
@@ -426,7 +426,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		if err := p.pw.UpdateActivity(ctx, tSlug, pushward.UpdateRequest{
 			State: pushward.StateOngoing,
 			Content: pushward.Content{
-				Template:     "pipeline",
+				Template:     "steps",
 				Progress:     info.Progress,
 				State:        info.CurrentStepName,
 				Icon:         "arrow.triangle.branch",

@@ -113,8 +113,8 @@ func TestMediaPending(t *testing.T) {
 	if update.Content.AccentColor != "#FF9500" {
 		t.Errorf("expected orange color, got %s", update.Content.AccentColor)
 	}
-	if update.Content.Template != "pipeline" {
-		t.Errorf("expected template pipeline, got %s", update.Content.Template)
+	if update.Content.Template != "steps" {
+		t.Errorf("expected template steps, got %s", update.Content.Template)
 	}
 	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 1 {
 		t.Errorf("expected current_step 1, got %v", update.Content.CurrentStep)

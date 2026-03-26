@@ -30,7 +30,7 @@ var providers = map[string]providerTest{
 	"argocd": {
 		name: "ArgoCD Test",
 		content: pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    float64(2) / float64(3),
 			State:       "Rolling out...",
 			Icon:        "arrow.triangle.2.circlepath",
@@ -43,7 +43,7 @@ var providers = map[string]providerTest{
 	"radarr": {
 		name: "Radarr Test",
 		content: pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    float64(1) / float64(2),
 			State:       "Grabbed",
 			Icon:        "arrow.down.circle",
@@ -56,7 +56,7 @@ var providers = map[string]providerTest{
 	"sonarr": {
 		name: "Sonarr Test",
 		content: pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    float64(1) / float64(2),
 			State:       "Grabbed",
 			Icon:        "arrow.down.circle",
@@ -114,7 +114,7 @@ var providers = map[string]providerTest{
 	"proxmox": {
 		name: "Proxmox Test",
 		content: pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    float64(1) / float64(2),
 			State:       "Backing up...",
 			Icon:        "externaldrive.fill.badge.timemachine",
@@ -127,7 +127,7 @@ var providers = map[string]providerTest{
 	"overseerr": {
 		name: "Overseerr Test",
 		content: pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    float64(1) / float64(4),
 			State:       "Requested",
 			Icon:        "hourglass",

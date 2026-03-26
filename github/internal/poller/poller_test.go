@@ -135,7 +135,7 @@ func TestScheduleEnd_TwoPhaseSuccess(t *testing.T) {
 	}
 
 	content := pushward.Content{
-		Template:     "pipeline",
+		Template:     "steps",
 		Progress:     1.0,
 		State:        "Success",
 		Icon:         "arrow.triangle.branch",
@@ -213,7 +213,7 @@ func TestScheduleEnd_TwoPhaseFailed(t *testing.T) {
 	}
 
 	content := pushward.Content{
-		Template:     "pipeline",
+		Template:     "steps",
 		Progress:     1.0,
 		State:        "Failed",
 		Icon:         "arrow.triangle.branch",
@@ -274,7 +274,7 @@ func TestScheduleEnd_CancelledByNewRun(t *testing.T) {
 	}
 
 	content := pushward.Content{
-		Template: "pipeline",
+		Template: "steps",
 		State:    "Success",
 	}
 
@@ -434,7 +434,7 @@ func TestScheduleEnd_ContentPreserved(t *testing.T) {
 	}
 
 	content := pushward.Content{
-		Template:     "pipeline",
+		Template:     "steps",
 		Progress:     1.0,
 		State:        "Success",
 		Icon:         "arrow.triangle.branch",
@@ -658,8 +658,8 @@ func TestPollIdle_DiscoversAndTracksWorkflow(t *testing.T) {
 	if req.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING state, got %s", req.State)
 	}
-	if req.Content.Template != "pipeline" {
-		t.Errorf("expected pipeline template, got %s", req.Content.Template)
+	if req.Content.Template != "steps" {
+		t.Errorf("expected steps template, got %s", req.Content.Template)
 	}
 	if req.Content.URL != "https://github.com/owner/repo/actions/runs/42" {
 		t.Errorf("unexpected URL: %s", req.Content.URL)

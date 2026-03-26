@@ -24,15 +24,15 @@ Each runs as its own container with a dedicated PushWard API key.
 | Provider | Route | Template | Description |
 |---|---|---|---|
 | Grafana | `POST /grafana` | alert | Alert firing/resolved lifecycle |
-| ArgoCD | `POST /argocd` | pipeline | 3-step sync pipeline |
+| ArgoCD | `POST /argocd` | steps | 3-step sync pipeline |
 | Radarr | `POST /radarr` | generic | Movie grab/download/health/manual interaction |
 | Sonarr | `POST /sonarr` | generic | TV episode grab/download/health/manual interaction |
 | Jellyfin | `POST /jellyfin` | generic | Playback tracking, library additions, tasks, auth failures |
 | Paperless-ngx | `POST /paperless` | generic | Document consumption and processing |
 | Changedetection.io | `POST /changedetection` | alert | Page change notifications |
 | Unmanic | `POST /unmanic` | generic | Transcoding task completion/failure |
-| Proxmox VE | `POST /proxmox` | pipeline/alert | Backup, replication, fencing, and package update notifications |
-| Overseerr/Jellyseerr | `POST /overseerr` | pipeline | Media request lifecycle (pending → approved → available) |
+| Proxmox VE | `POST /proxmox` | steps/alert | Backup, replication, fencing, and package update notifications |
+| Overseerr/Jellyseerr | `POST /overseerr` | steps | Media request lifecycle (pending → approved → available) |
 | Uptime Kuma | `POST /uptimekuma` | alert | Monitor up/down status changes |
 | Gatus | `POST /gatus` | alert | Endpoint health status changes |
 | Backrest | `POST /backrest` | generic | Backup operation progress and completion |

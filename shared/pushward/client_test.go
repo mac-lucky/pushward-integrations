@@ -384,7 +384,7 @@ func TestUpdateActivity_Success(t *testing.T) {
 	err := c.UpdateActivity(context.Background(), "gh-repo", UpdateRequest{
 		State: StateOngoing,
 		Content: Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    0.5,
 			State:       "Building",
 			CurrentStep: &step,
@@ -397,8 +397,8 @@ func TestUpdateActivity_Success(t *testing.T) {
 	if gotBody.State != StateOngoing {
 		t.Errorf("expected ONGOING, got %s", gotBody.State)
 	}
-	if gotBody.Content.Template != "pipeline" {
-		t.Errorf("expected pipeline template, got %s", gotBody.Content.Template)
+	if gotBody.Content.Template != "steps" {
+		t.Errorf("expected steps template, got %s", gotBody.Content.Template)
 	}
 	if gotBody.Content.Progress != 0.5 {
 		t.Errorf("expected progress 0.5, got %f", gotBody.Content.Progress)

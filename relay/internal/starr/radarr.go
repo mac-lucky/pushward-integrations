@@ -133,7 +133,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, p *Radar
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    float64(step) / float64(total),
 			State:       "Grabbed",
 			Icon:        "arrow.down.circle",
@@ -193,7 +193,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, p *R
 	step := 2
 	total := 2
 	content := pushward.Content{
-		Template:    "pipeline",
+		Template:    "steps",
 		Progress:    1.0,
 		State:       state,
 		Icon:        "checkmark.circle.fill",

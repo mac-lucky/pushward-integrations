@@ -113,8 +113,8 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	if update1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update1.State)
 	}
-	if update1.Content.Template != "pipeline" {
-		t.Errorf("expected template pipeline, got %s", update1.Content.Template)
+	if update1.Content.Template != "steps" {
+		t.Errorf("expected template steps, got %s", update1.Content.Template)
 	}
 	if update1.Content.State != "Syncing..." {
 		t.Errorf("expected state 'Syncing...', got %s", update1.Content.State)

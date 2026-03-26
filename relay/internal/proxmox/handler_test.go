@@ -91,8 +91,8 @@ func TestBackupLifecycle(t *testing.T) {
 	if update.Content.State != "Backing up..." {
 		t.Errorf("expected state 'Backing up...', got %s", update.Content.State)
 	}
-	if update.Content.Template != "pipeline" {
-		t.Errorf("expected template 'pipeline', got %s", update.Content.Template)
+	if update.Content.Template != "steps" {
+		t.Errorf("expected template 'steps', got %s", update.Content.Template)
 	}
 	if update.Content.AccentColor != "#007AFF" {
 		t.Errorf("expected blue accent, got %s", update.Content.AccentColor)
@@ -342,7 +342,7 @@ func TestSystemEventSendsTestNotification(t *testing.T) {
 	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
-	if update.Content.Template != "pipeline" {
-		t.Errorf("expected template pipeline, got %s", update.Content.Template)
+	if update.Content.Template != "steps" {
+		t.Errorf("expected template steps, got %s", update.Content.Template)
 	}
 }

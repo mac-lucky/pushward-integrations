@@ -104,7 +104,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, p *webhookPa
 		step1 := pushward.IntPtr(1)
 		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    0,
 			State:       "Backing up...",
 			Icon:        "externaldrive.fill.badge.timemachine",
@@ -134,7 +134,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, p *webhookPa
 
 		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    1.0,
 			State:       "Backup Complete",
 			Icon:        "checkmark.circle.fill",
@@ -155,7 +155,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, p *webhookPa
 
 		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    1.0,
 			State:       "Backup Failed",
 			Icon:        "xmark.circle.fill",
@@ -202,7 +202,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, p *webh
 		step1 := pushward.IntPtr(1)
 		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    0,
 			State:       "Replicating...",
 			Icon:        "arrow.triangle.2.circlepath",
@@ -232,7 +232,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, p *webh
 
 		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    1.0,
 			State:       "Replication Complete",
 			Icon:        "checkmark.circle.fill",
@@ -253,7 +253,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, p *webh
 
 		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    1.0,
 			State:       "Replication Failed",
 			Icon:        "xmark.circle.fill",

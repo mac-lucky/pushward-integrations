@@ -105,7 +105,7 @@ client.CreateActivity(ctx, "my-slug", "My Activity", 3, 900, 1800)
 client.UpdateActivity(ctx, "my-slug", pushward.UpdateRequest{
     State: pushward.StateOngoing,
     Content: pushward.Content{
-        Template: "pipeline",
+        Template: "steps",
         Progress: 0.5,
         State:    "Building",
     },

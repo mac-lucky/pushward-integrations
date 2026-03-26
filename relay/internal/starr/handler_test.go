@@ -129,8 +129,8 @@ func TestRadarrGrab(t *testing.T) {
 	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
-	if update.Content.Template != "pipeline" {
-		t.Errorf("expected template generic, got %s", update.Content.Template)
+	if update.Content.Template != "steps" {
+		t.Errorf("expected template steps, got %s", update.Content.Template)
 	}
 	if update.Content.State != "Grabbed" {
 		t.Errorf("expected state 'Grabbed', got %s", update.Content.State)

@@ -381,7 +381,7 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, p *webhoo
 	step := 1
 	total := 1
 	content := pushward.Content{
-		Template:    "pipeline",
+		Template:    "steps",
 		Progress:    1.0,
 		State:       "Added to library",
 		Icon:        "plus.circle.fill",
@@ -430,7 +430,7 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, p *webh
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    0,
 			State:       "Running...",
 			Icon:        "arrow.triangle.2.circlepath",
@@ -465,7 +465,7 @@ func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, p *we
 	step := 2
 	total := 2
 	content := pushward.Content{
-		Template:    "pipeline",
+		Template:    "steps",
 		Progress:    1.0,
 		State:       stateText,
 		Icon:        icon,

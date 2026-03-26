@@ -246,7 +246,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
-			Template:     "pipeline",
+			Template:     "steps",
 			Progress:     float64(step) / float64(total),
 			State:        "Syncing...",
 			Icon:         "arrow.triangle.2.circlepath",
@@ -355,7 +355,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *we
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
-			Template:     "pipeline",
+			Template:     "steps",
 			Progress:     float64(step) / float64(total),
 			State:        "Rolling out...",
 			Icon:         "arrow.triangle.2.circlepath",
@@ -447,7 +447,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhook
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, app.RepoURL, app.Revision)
 	content := pushward.Content{
-		Template:     "pipeline",
+		Template:     "steps",
 		Progress:     1.0,
 		State:        "Deployed",
 		Icon:         "checkmark.circle.fill",
@@ -542,7 +542,7 @@ func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, p *webho
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	content := pushward.Content{
-		Template:     "pipeline",
+		Template:     "steps",
 		Progress:     float64(res.currentStep) / float64(total),
 		State:        "Sync Failed",
 		Icon:         "xmark.circle.fill",
@@ -579,7 +579,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *w
 		req := pushward.UpdateRequest{
 			State: pushward.StateOngoing,
 			Content: pushward.Content{
-				Template:     "pipeline",
+				Template:     "steps",
 				Progress:     float64(step) / float64(total),
 				State:        "Degraded",
 				Icon:         "exclamationmark.triangle.fill",
@@ -607,7 +607,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *w
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
 	content := pushward.Content{
-		Template:     "pipeline",
+		Template:     "steps",
 		Progress:     float64(res.currentStep) / float64(total),
 		State:        "Degraded",
 		Icon:         "exclamationmark.triangle.fill",
@@ -678,7 +678,7 @@ func (h *Handler) graceExpired(userKey, appName string) {
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
-			Template:     "pipeline",
+			Template:     "steps",
 			Progress:     float64(step) / float64(total),
 			State:        stateText,
 			Icon:         "arrow.triangle.2.circlepath",

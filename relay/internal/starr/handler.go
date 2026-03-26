@@ -220,7 +220,7 @@ func (h *Handler) handleManualInteraction(ctx context.Context, userKey, provider
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    float64(step) / float64(total),
 			State:       "Import Failed",
 			Icon:        "exclamationmark.triangle.fill",

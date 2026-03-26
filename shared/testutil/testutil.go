@@ -28,7 +28,7 @@ var (
 		"blue": true, "purple": true, "pink": true, "indigo": true,
 		"teal": true, "cyan": true, "mint": true, "brown": true,
 	}
-	validTemplates  = map[string]bool{"generic": true, "alert": true, "pipeline": true, "countdown": true, "gauge": true}
+	validTemplates  = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true}
 	validStates     = map[string]bool{"ONGOING": true, "ENDED": true}
 	validSeverities = map[string]bool{"critical": true, "warning": true, "info": true}
 )
@@ -223,7 +223,7 @@ func validateUpdateRequest(req *updateRequest) error {
 
 func validateContent(c *apiContent) error {
 	if !validTemplates[c.Template] {
-		return fmt.Errorf("template must be one of: generic, alert, pipeline, countdown, gauge")
+		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, gauge")
 	}
 	if c.Progress < 0 || c.Progress > 1 {
 		return fmt.Errorf("progress must be 0.0-1.0")
@@ -264,8 +264,8 @@ func validateContent(c *apiContent) error {
 		if err := validateAlert(c); err != nil {
 			return err
 		}
-	case "pipeline":
-		if err := validatePipeline(c); err != nil {
+	case "steps":
+		if err := validateSteps(c); err != nil {
 			return err
 		}
 	case "countdown":
@@ -291,15 +291,15 @@ func validateAlert(c *apiContent) error {
 	return nil
 }
 
-func validatePipeline(c *apiContent) error {
+func validateSteps(c *apiContent) error {
 	if c.TotalSteps == nil {
-		return fmt.Errorf("total_steps is required for pipeline template")
+		return fmt.Errorf("total_steps is required for steps template")
 	}
 	if *c.TotalSteps < 1 {
 		return fmt.Errorf("total_steps must be >= 1")
 	}
 	if c.CurrentStep == nil {
-		return fmt.Errorf("current_step is required for pipeline template")
+		return fmt.Errorf("current_step is required for steps template")
 	}
 	if *c.CurrentStep < 0 || *c.CurrentStep > *c.TotalSteps {
 		return fmt.Errorf("current_step must be >= 0 and <= total_steps")

@@ -114,7 +114,7 @@ Receives ArgoCD sync webhooks via argocd-notifications. Maps sync progress to a 
 
 | Route | `POST /argocd` |
 |---|---|
-| Template | `pipeline` |
+| Template | `steps` |
 | Auth | `Authorization: Bearer hlk_...` |
 | Slug | `argocd-<sanitized-app-name>` |
 
@@ -128,7 +128,7 @@ Receives Radarr and Sonarr webhooks. Tracks download lifecycle from grab to impo
 
 | Route | `POST /radarr` / `POST /sonarr` |
 |---|---|
-| Template | `pipeline` (downloads), `alert` (health) |
+| Template | `steps` (downloads), `alert` (health) |
 | Auth | Basic Auth with `hlk_` key as password |
 | Slug | `radarr-<downloadId>` / `sonarr-<downloadId>` |
 
@@ -149,7 +149,7 @@ Receives Jellyfin webhook plugin notifications. Tracks playback progress, librar
 
 | Route | `POST /jellyfin` |
 |---|---|
-| Template | `generic` (playback), `pipeline` (items/tasks), `alert` (auth failures) |
+| Template | `generic` (playback), `steps` (items/tasks), `alert` (auth failures) |
 | Auth | `Authorization: Bearer hlk_...` |
 | Slug | `jellyfin-<sha256(ItemId+UserName)[:10]>` (playback), `jellyfin-item-<hash>` (library), `jellyfin-task-<hash>` (tasks), `jellyfin-auth-<hash>` (auth) |
 
@@ -258,7 +258,7 @@ Receives Proxmox VE notification webhooks for backup, replication, fencing, and 
 
 | Route | `POST /proxmox` |
 |---|---|
-| Template | `pipeline` (backup/replication), `alert` (fencing/package-updates) |
+| Template | `steps` (backup/replication), `alert` (fencing/package-updates) |
 | Auth | `Authorization: Bearer hlk_...` |
 | Slug | `proxmox-backup-<hash>`, `proxmox-repl-<hash>`, `proxmox-fence-<hash>`, `proxmox-updates-<hash>` |
 
@@ -284,7 +284,7 @@ Receives Overseerr/Jellyseerr media request webhooks. Tracks request lifecycle f
 
 | Route | `POST /overseerr` |
 |---|---|
-| Template | `pipeline` |
+| Template | `steps` |
 | Auth | `Authorization: Bearer hlk_...` |
 | Slug | `overseerr-<mediaType>-<tmdbId>` |
 

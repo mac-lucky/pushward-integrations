@@ -116,7 +116,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, p *Sonar
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
-			Template:    "pipeline",
+			Template:    "steps",
 			Progress:    float64(step) / float64(total),
 			State:       "Grabbed",
 			Icon:        "arrow.down.circle",
@@ -177,7 +177,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, p *S
 	total := 2
 	subtitle := FormatSubtitle(p.Series, p.Episodes, quality)
 	content := pushward.Content{
-		Template:    "pipeline",
+		Template:    "steps",
 		Progress:    1.0,
 		State:       state,
 		Icon:        "checkmark.circle.fill",

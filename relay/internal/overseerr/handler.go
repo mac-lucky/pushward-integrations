@@ -108,7 +108,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, p *webhookPay
 
 	total := 4
 	content := pushward.Content{
-		Template:    "pipeline",
+		Template:    "steps",
 		State:       text.TruncateHard(stateText, 100),
 		Icon:        icon,
 		Subtitle:    subtitle,
