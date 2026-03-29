@@ -2,7 +2,6 @@ package grafana
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -64,8 +63,7 @@ type instanceInfo struct {
 
 // slugForAlertname derives a stable, URL-safe activity slug from an alert rule name.
 func slugForAlertname(alertname string) string {
-	h := sha256.Sum256([]byte(alertname))
-	return fmt.Sprintf("grafana-%x", h[:6])
+	return text.SlugHash("grafana", alertname, 6)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -80,6 +78,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	userKey := auth.KeyFromContext(ctx)
+	tenant := auth.KeyHash(userKey)
 	pwClient := h.clients.Get(userKey)
 
 	for _, a := range payload.Alerts {
@@ -121,11 +120,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		switch a.Status {
 		case "firing":
-			h.handleFiring(ctx, userKey, pwClient, alertname, a.Fingerprint, info)
+			h.handleFiring(ctx, userKey, tenant, pwClient, alertname, a.Fingerprint, info)
 		case "resolved":
-			h.handleResolved(ctx, userKey, pwClient, alertname, a.Fingerprint, info)
+			h.handleResolved(ctx, userKey, tenant, pwClient, alertname, a.Fingerprint, info)
 		default:
-			slog.Warn("unknown alert status", "status", a.Status, "fingerprint", a.Fingerprint)
+			slog.Warn("unknown alert status", "status", a.Status, "fingerprint", a.Fingerprint, "tenant", tenant)
 		}
 	}
 
@@ -133,17 +132,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handleFiring(ctx context.Context, userKey string, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) {
+func (h *Handler) handleFiring(ctx context.Context, userKey, tenant string, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) {
 	existing, err := h.store.GetGroup(ctx, "grafana", userKey, alertname)
 	if err != nil {
-		slog.Error("failed to get alert group", "alertname", alertname, "error", err)
+		slog.Error("failed to get alert group", "alertname", alertname, "error", err, "tenant", tenant)
 		return
 	}
 	isNew := len(existing) == 0
 
 	data, _ := json.Marshal(info)
 	if err := h.store.Set(ctx, "grafana", userKey, alertname, fingerprint, data, h.config.StaleTimeout); err != nil {
-		slog.Error("failed to store instance", "alertname", alertname, "fingerprint", fingerprint, "error", err)
+		slog.Error("failed to store instance", "alertname", alertname, "fingerprint", fingerprint, "error", err, "tenant", tenant)
 		return
 	}
 
@@ -153,31 +152,33 @@ func (h *Handler) handleFiring(ctx context.Context, userKey string, pwClient *pu
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := pwClient.CreateActivity(ctx, slug, alertname, h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create activity", "slug", slug, "error", err)
-			_ = h.store.DeleteGroup(ctx, "grafana", userKey, alertname)
+			slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+			if err := h.store.DeleteGroup(ctx, "grafana", userKey, alertname); err != nil {
+				slog.Warn("state store delete group failed", "error", err, "provider", "grafana", "alertname", alertname, "tenant", tenant)
+			}
 			return
 		}
-		slog.Info("created activity", "slug", slug, "alertname", alertname)
+		slog.Info("created activity", "slug", slug, "alertname", alertname, "tenant", tenant)
 	}
 
 	instances, err := h.store.GetGroup(ctx, "grafana", userKey, alertname)
 	if err != nil {
-		slog.Error("failed to get instances for update", "alertname", alertname, "error", err)
+		slog.Error("failed to get instances for update", "alertname", alertname, "error", err, "tenant", tenant)
 		return
 	}
 
 	req := h.buildOngoingUpdate(instances)
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err)
+		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", req.Content.Severity)
+	slog.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", req.Content.Severity, "tenant", tenant)
 }
 
-func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) {
+func (h *Handler) handleResolved(ctx context.Context, userKey, tenant string, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) {
 	existing, err := h.store.Get(ctx, "grafana", userKey, alertname, fingerprint)
 	if err != nil {
-		slog.Error("failed to check instance", "alertname", alertname, "fingerprint", fingerprint, "error", err)
+		slog.Error("failed to check instance", "alertname", alertname, "fingerprint", fingerprint, "error", err, "tenant", tenant)
 		return
 	}
 	if existing == nil {
@@ -185,13 +186,13 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *
 	}
 
 	if err := h.store.Delete(ctx, "grafana", userKey, alertname, fingerprint); err != nil {
-		slog.Error("failed to delete instance", "alertname", alertname, "fingerprint", fingerprint, "error", err)
+		slog.Error("failed to delete instance", "alertname", alertname, "fingerprint", fingerprint, "error", err, "tenant", tenant)
 		return
 	}
 
 	remaining, err := h.store.GetGroup(ctx, "grafana", userKey, alertname)
 	if err != nil {
-		slog.Error("failed to get remaining instances", "alertname", alertname, "error", err)
+		slog.Error("failed to get remaining instances", "alertname", alertname, "error", err, "tenant", tenant)
 		return
 	}
 
@@ -205,15 +206,17 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *
 	}
 
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity on resolve", "slug", slug, "error", err)
+		slog.Error("failed to update activity on resolve", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
 
 	if len(remaining) == 0 {
-		slog.Info("ended activity", "slug", slug, "state", pushward.StateEnded)
-		_ = h.store.DeleteGroup(ctx, "grafana", userKey, alertname)
+		slog.Info("ended activity", "slug", slug, "state", pushward.StateEnded, "tenant", tenant)
+		if err := h.store.DeleteGroup(ctx, "grafana", userKey, alertname); err != nil {
+			slog.Warn("state store delete group failed", "error", err, "provider", "grafana", "alertname", alertname, "tenant", tenant)
+		}
 	} else {
-		slog.Info("updated activity after partial resolve", "slug", slug, "remaining", len(remaining))
+		slog.Info("updated activity after partial resolve", "slug", slug, "remaining", len(remaining), "tenant", tenant)
 	}
 }
 
@@ -225,6 +228,18 @@ func (h *Handler) buildOngoingUpdate(instances map[string]json.RawMessage) pushw
 			continue
 		}
 		decoded[fp] = &info
+	}
+
+	if len(decoded) == 0 {
+		return pushward.UpdateRequest{State: pushward.StateOngoing, Content: pushward.Content{
+			Template:    "alert",
+			Progress:    1.0,
+			State:       "Alert firing",
+			Icon:        h.iconForSeverity(h.config.DefaultSeverity),
+			Subtitle:    "Grafana",
+			AccentColor: h.colorForSeverity(h.config.DefaultSeverity),
+			Severity:    h.config.DefaultSeverity,
+		}}
 	}
 
 	worst := h.worstInstance(decoded)
@@ -274,7 +289,7 @@ func buildEndUpdate(info *instanceInfo) pushward.UpdateRequest {
 			State:        info.Summary,
 			Icon:         "checkmark.circle.fill",
 			Subtitle:     info.Subtitle,
-			AccentColor:  "#34C759",
+			AccentColor:  pushward.ColorGreen,
 			Severity:     info.Severity,
 			FiredAt:      firedAtPtr,
 			URL:          info.GeneratorURL,
@@ -312,12 +327,12 @@ func (h *Handler) iconForSeverity(severity string) string {
 func (h *Handler) colorForSeverity(severity string) string {
 	switch severity {
 	case "critical":
-		return "#FF3B30"
+		return pushward.ColorRed
 	case "warning":
-		return "#FF9500"
+		return pushward.ColorOrange
 	case "info":
-		return "#007AFF"
+		return pushward.ColorBlue
 	default:
-		return "#FF9500"
+		return pushward.ColorOrange
 	}
 }

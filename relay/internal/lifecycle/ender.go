@@ -33,6 +33,7 @@ type Ender struct {
 	config   EndConfig
 	mu       sync.Mutex
 	timers   map[string]*timerPair
+	wg       sync.WaitGroup
 }
 
 // NewEnder creates a new Ender. Pass nil for store if no state cleanup is needed.
@@ -58,15 +59,20 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 
 	e.mu.Lock()
 	if existing, ok := e.timers[timerKey]; ok {
-		existing.phase1.Stop()
-		if existing.phase2 != nil {
-			existing.phase2.Stop()
+		if existing.phase1.Stop() {
+			e.wg.Done()
+		}
+		if existing.phase2 != nil && existing.phase2.Stop() {
+			e.wg.Done()
 		}
 	}
 	tp := &timerPair{}
+	e.wg.Add(1)
 	tp.phase1 = time.AfterFunc(e.config.EndDelay, func() {
+		defer e.wg.Done()
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel1()
 		ongoingReq := pushward.UpdateRequest{
 			State:   pushward.StateOngoing,
 			Content: content,
@@ -74,9 +80,8 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 		if err := cl.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
 			slog.Error("failed to update activity (end phase 1)", "slug", slug, "error", err)
 		} else {
-			slog.Info("updated activity", "slug", slug, "state", content.State)
+			slog.Info("updated activity (end phase 1)", "slug", slug, "state", pushward.StateOngoing)
 		}
-		cancel1()
 
 		// Phase 2: schedule ENDED after display time
 		e.mu.Lock()
@@ -84,7 +89,9 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 			e.mu.Unlock()
 			return // StopTimer already cancelled this end sequence
 		}
+		e.wg.Add(1)
 		tp.phase2 = time.AfterFunc(e.config.EndDisplayTime, func() {
+			defer e.wg.Done()
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel2()
 			endedReq := pushward.UpdateRequest{
@@ -101,7 +108,9 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 			if e.store != nil {
 				delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer delCancel()
-				_ = e.store.Delete(delCtx, e.provider, userKey, mapKey, "")
+				if err := e.store.Delete(delCtx, e.provider, userKey, mapKey, ""); err != nil {
+					slog.Warn("state store delete failed", "error", err, "provider", e.provider)
+				}
 			}
 
 			// Clean up timer
@@ -125,11 +134,33 @@ func (e *Ender) StopTimer(userKey, mapKey string) {
 	timerKey := userKey + ":" + mapKey
 	e.mu.Lock()
 	if tp, ok := e.timers[timerKey]; ok {
-		tp.phase1.Stop()
-		if tp.phase2 != nil {
-			tp.phase2.Stop()
+		if tp.phase1.Stop() {
+			e.wg.Done()
+		}
+		if tp.phase2 != nil && tp.phase2.Stop() {
+			e.wg.Done()
 		}
 		delete(e.timers, timerKey)
 	}
 	e.mu.Unlock()
+}
+
+// StopAll cancels all pending ender timers.
+func (e *Ender) StopAll() {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for key, tp := range e.timers {
+		if tp.phase1.Stop() {
+			e.wg.Done() // callback will never run
+		}
+		if tp.phase2 != nil && tp.phase2.Stop() {
+			e.wg.Done() // callback will never run
+		}
+		delete(e.timers, key)
+	}
+}
+
+// Wait blocks until all in-flight ender callbacks complete.
+func (e *Ender) Wait() {
+	e.wg.Wait()
 }

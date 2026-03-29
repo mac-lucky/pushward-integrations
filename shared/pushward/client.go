@@ -102,7 +102,7 @@ func (c *Client) doWithRetry(ctx context.Context, method, url string, body inter
 		}
 
 		if resp.StatusCode == http.StatusConflict && handleConflict != nil {
-			respBody, _ := io.ReadAll(resp.Body)
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			if done, cerr := handleConflict(respBody); done {
 				return cerr
