@@ -96,7 +96,7 @@ func TestSuccess(t *testing.T) {
 	if phase1.Content.Icon != "checkmark.circle.fill" {
 		t.Errorf("expected checkmark icon, got %s", phase1.Content.Icon)
 	}
-	if phase1.Content.AccentColor != "#34C759" {
+	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
 	}
 
@@ -145,7 +145,7 @@ func TestFailure(t *testing.T) {
 	if phase1.Content.Icon != "xmark.circle.fill" {
 		t.Errorf("expected xmark icon, got %s", phase1.Content.Icon)
 	}
-	if phase1.Content.AccentColor != "#FF3B30" {
+	if phase1.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red color, got %s", phase1.Content.AccentColor)
 	}
 

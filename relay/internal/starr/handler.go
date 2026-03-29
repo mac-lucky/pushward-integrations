@@ -2,12 +2,9 @@ package starr
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -32,8 +29,6 @@ type Handler struct {
 	ender   *lifecycle.Ender
 }
 
-var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
-
 func NewHandler(store state.Store, clients *client.Pool, cfg *config.StarrConfig) *Handler {
 	return &Handler{
 		store:   store,
@@ -44,6 +39,10 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.StarrConfig
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
 	}
+}
+
+func (h *Handler) Ender() *lifecycle.Ender {
+	return h.ender
 }
 
 // RadarrHandler returns an http.Handler for Radarr webhooks.
@@ -57,10 +56,7 @@ func (h *Handler) SonarrHandler() http.Handler {
 }
 
 func slugForDownload(prefix, downloadID string) string {
-	s := strings.ToLower(downloadID)
-	s = nonAlphanumeric.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	return prefix + s
+	return text.Slug(prefix, downloadID)
 }
 
 func decodePayload(w http.ResponseWriter, r *http.Request) (json.RawMessage, bool) {
@@ -99,7 +95,9 @@ func (h *Handler) setTrackedSlug(ctx context.Context, userKey, mapKey, slug stri
 
 // deleteTrackedSlug removes a tracked download from the state store.
 func (h *Handler) deleteTrackedSlug(ctx context.Context, userKey, mapKey string) {
-	_ = h.store.Delete(ctx, "starr", userKey, mapKey, "")
+	if err := h.store.Delete(ctx, "starr", userKey, mapKey, ""); err != nil {
+		slog.Warn("state store delete failed", "error", err, "provider", "starr")
+	}
 }
 
 // titleCase capitalises the first rune of a string.
@@ -113,12 +111,11 @@ func titleCase(s string) string {
 
 // healthSlug derives a stable slug from the provider and health check type.
 func healthSlug(provider, checkType string) string {
-	h := sha256.Sum256([]byte(checkType))
-	return fmt.Sprintf("%s-health-%x", provider, h[:4])
+	return text.SlugHash(provider+"-health", checkType, 4)
 }
 
 // handleHealth creates an alert-style activity for a health issue.
-func (h *Handler) handleHealth(ctx context.Context, userKey, provider string, p *HealthPayload) {
+func (h *Handler) handleHealth(ctx context.Context, userKey, tenant, provider string, p *HealthPayload) {
 	slug := healthSlug(provider, p.Type)
 	mapKey := provider + ":health:" + p.Type
 
@@ -131,16 +128,16 @@ func (h *Handler) handleHealth(ctx context.Context, userKey, provider string, p 
 
 	name := titleCase(provider) + " Health"
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create health activity", "slug", slug, "error", err)
+		slog.Error("failed to create health activity", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
 
 	icon := "exclamationmark.triangle.fill"
-	accent := "#FF9500"
+	accent := pushward.ColorOrange
 	severity := "warning"
 	if p.Level == "error" {
 		icon = "exclamationmark.octagon.fill"
-		accent = "#FF3B30"
+		accent = pushward.ColorRed
 		severity = "critical"
 	}
 
@@ -159,20 +156,20 @@ func (h *Handler) handleHealth(ctx context.Context, userKey, provider string, p 
 	}
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update health activity", "slug", slug, "error", err)
+		slog.Error("failed to update health activity", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
 
 	// Track in state store for HealthRestored to find
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
-		slog.Error("failed to track health issue", "slug", slug, "error", err)
+		slog.Error("failed to track health issue", "slug", slug, "error", err, "tenant", tenant)
 	}
 
-	slog.Info("health issue", "slug", slug, "provider", provider, "type", p.Type, "level", p.Level)
+	slog.Info("health issue", "slug", slug, "provider", provider, "type", p.Type, "level", p.Level, "tenant", tenant)
 }
 
 // handleHealthRestored ends the health activity with a resolved state.
-func (h *Handler) handleHealthRestored(ctx context.Context, userKey, provider string, p *HealthRestoredPayload) {
+func (h *Handler) handleHealthRestored(ctx context.Context, userKey, tenant, provider string, p *HealthRestoredPayload) {
 	mapKey := provider + ":health:" + p.Type
 	slug, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
 	if !tracked {
@@ -185,18 +182,18 @@ func (h *Handler) handleHealthRestored(ctx context.Context, userKey, provider st
 		State:       text.Truncate(p.Message, 60),
 		Icon:        "checkmark.circle.fill",
 		Subtitle:    titleCase(provider),
-		AccentColor: "#34C759",
+		AccentColor: pushward.ColorGreen,
 		Severity:    "info",
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-	slog.Info("health restored", "slug", slug, "provider", provider, "type", p.Type)
+	slog.Info("health restored", "slug", slug, "provider", provider, "type", p.Type, "tenant", tenant)
 }
 
 // handleManualInteraction sends an ONGOING warning update on an existing tracked download.
-func (h *Handler) handleManualInteraction(ctx context.Context, userKey, provider string, p *ManualInteractionPayload) {
+func (h *Handler) handleManualInteraction(ctx context.Context, userKey, tenant, provider string, p *ManualInteractionPayload) {
 	if p.DownloadID == "" {
-		slog.Warn("manual interaction missing downloadId", "provider", provider)
+		slog.Warn("manual interaction missing downloadId", "provider", provider, "tenant", tenant)
 		return
 	}
 
@@ -225,15 +222,15 @@ func (h *Handler) handleManualInteraction(ctx context.Context, userKey, provider
 			State:       "Import Failed",
 			Icon:        "exclamationmark.triangle.fill",
 			Subtitle:    subtitle,
-			AccentColor: "#FF9500",
+			AccentColor: pushward.ColorOrange,
 			CurrentStep: &step,
 			TotalSteps:  &total,
 		},
 	}
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity for manual interaction", "slug", slug, "error", err)
+		slog.Error("failed to update activity for manual interaction", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
-	slog.Info("manual interaction required", "slug", slug, "provider", provider, "downloadId", p.DownloadID)
+	slog.Info("manual interaction required", "slug", slug, "provider", provider, "downloadId", p.DownloadID, "tenant", tenant)
 }

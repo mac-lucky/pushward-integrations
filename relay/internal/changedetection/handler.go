@@ -1,9 +1,7 @@
 package changedetection
 
 import (
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -29,8 +27,7 @@ func NewHandler(clients *client.Pool, cfg *config.ChangedetectionConfig) *Handle
 
 // slugForURL derives a stable, URL-safe activity slug from a watched URL.
 func slugForURL(url string) string {
-	h := sha256.Sum256([]byte(url))
-	return fmt.Sprintf("cd-%x", h[:4])
+	return text.SlugHash("cd", url, 4)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -45,6 +42,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	userKey := auth.KeyFromContext(ctx)
+	tenant := auth.KeyHash(userKey)
 	pwClient := h.clients.Get(userKey)
 
 	slug := slugForURL(payload.URL)
@@ -72,7 +70,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 	if err := pwClient.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create activity", "slug", slug, "error", err)
+		slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
 
@@ -82,7 +80,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		State:        stateText,
 		Icon:         "eye.fill",
 		Subtitle:     subtitle,
-		AccentColor:  "#FF9500",
+		AccentColor:  pushward.ColorOrange,
 		Severity:     "info",
 		FiredAt:      firedAtPtr,
 		URL:          text.SanitizeURL(payload.DiffURL),
@@ -94,7 +92,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Content: content,
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, ongoingReq); err != nil {
-		slog.Error("failed to update activity to ONGOING", "slug", slug, "error", err)
+		slog.Error("failed to update activity to ONGOING", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
 
@@ -103,11 +101,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Content: content,
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, endedReq); err != nil {
-		slog.Error("failed to update activity to ENDED", "slug", slug, "error", err)
+		slog.Error("failed to update activity to ENDED", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
 
-	slog.Info("processed changedetection webhook", "slug", slug, "url", payload.URL)
+	slog.Info("processed changedetection webhook", "slug", slug, "url", payload.URL, "tenant", tenant)
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))

@@ -2,9 +2,7 @@ package unmanic
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"path"
@@ -16,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 var filenameRe = regexp.MustCompile(`(?:Successfully processed|Failed to process): (.+)`)
@@ -37,10 +36,15 @@ func NewHandler(clients *client.Pool, cfg *config.UnmanicConfig) *Handler {
 	}
 }
 
+func (h *Handler) Ender() *lifecycle.Ender {
+	return h.ender
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
 	userKey := auth.KeyFromContext(r.Context())
+	tenant := auth.KeyHash(userKey)
 
 	var p apprisePayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
@@ -51,13 +55,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch p.Type {
 	case "success":
-		h.handleResult(r.Context(), userKey, p, true)
+		h.handleResult(r.Context(), userKey, tenant, p, true)
 	case "failure":
-		h.handleResult(r.Context(), userKey, p, false)
+		h.handleResult(r.Context(), userKey, tenant, p, false)
 	case "info":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(r.Context(), cl, "unmanic"); err != nil {
-			slog.Error("test notification failed", "provider", "unmanic", "error", err)
+			slog.Error("test notification failed", "provider", "unmanic", "error", err, "tenant", tenant)
 		}
 	default:
 		slog.Debug("unmanic unknown type", "type", p.Type)
@@ -76,11 +80,10 @@ func parseFilename(message string) string {
 }
 
 func slugForFile(filename string) string {
-	h := sha256.Sum256([]byte(filename))
-	return fmt.Sprintf("unmanic-%x", h[:4])
+	return text.SlugHash("unmanic", filename, 4)
 }
 
-func (h *Handler) handleResult(ctx context.Context, userKey string, p apprisePayload, success bool) {
+func (h *Handler) handleResult(ctx context.Context, userKey, tenant string, p apprisePayload, success bool) {
 	filename := parseFilename(p.Message)
 	slug := slugForFile(filename)
 
@@ -89,7 +92,7 @@ func (h *Handler) handleResult(ctx context.Context, userKey string, p apprisePay
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
 	if err := cl.CreateActivity(ctx, slug, filename, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create unmanic activity", "slug", slug, "error", err)
+		slog.Error("failed to create unmanic activity", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
 
@@ -101,7 +104,7 @@ func (h *Handler) handleResult(ctx context.Context, userKey string, p apprisePay
 			State:       "Complete",
 			Icon:        "checkmark.circle.fill",
 			Subtitle:    "Unmanic \u00b7 " + filename,
-			AccentColor: "#34C759",
+			AccentColor: pushward.ColorGreen,
 		}
 	} else {
 		content = pushward.Content{
@@ -110,10 +113,10 @@ func (h *Handler) handleResult(ctx context.Context, userKey string, p apprisePay
 			State:       "Failed",
 			Icon:        "xmark.circle.fill",
 			Subtitle:    "Unmanic \u00b7 " + filename,
-			AccentColor: "#FF3B30",
+			AccentColor: pushward.ColorRed,
 		}
 	}
 
 	h.ender.ScheduleEnd(userKey, slug, slug, content)
-	slog.Info("unmanic activity", "slug", slug, "type", p.Type, "filename", filename)
+	slog.Info("unmanic activity", "slug", slug, "type", p.Type, "filename", filename, "tenant", tenant)
 }

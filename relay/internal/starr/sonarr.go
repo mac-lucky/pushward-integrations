@@ -28,6 +28,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	userKey := auth.KeyFromContext(ctx)
+	tenant := auth.KeyHash(userKey)
 
 	switch envelope.EventType {
 	case "Grab":
@@ -37,7 +38,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleSonarrGrab(ctx, userKey, &p)
+		h.handleSonarrGrab(ctx, userKey, tenant, &p)
 	case "Download":
 		var p SonarrDownloadPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
@@ -45,11 +46,11 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleSonarrDownload(ctx, userKey, &p)
+		h.handleSonarrDownload(ctx, userKey, tenant, &p)
 	case "Test":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "sonarr"); err != nil {
-			slog.Error("test notification failed", "provider", "sonarr", "error", err)
+			slog.Error("test notification failed", "provider", "sonarr", "error", err, "tenant", tenant)
 		}
 	case "Health":
 		var p HealthPayload
@@ -58,7 +59,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleHealth(ctx, userKey, "sonarr", &p)
+		h.handleHealth(ctx, userKey, tenant, "sonarr", &p)
 	case "HealthRestored":
 		var p HealthRestoredPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
@@ -66,7 +67,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleHealthRestored(ctx, userKey, "sonarr", &p)
+		h.handleHealthRestored(ctx, userKey, tenant, "sonarr", &p)
 	case "ManualInteractionRequired":
 		var p ManualInteractionPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
@@ -74,7 +75,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleManualInteraction(ctx, userKey, "sonarr", &p)
+		h.handleManualInteraction(ctx, userKey, tenant, "sonarr", &p)
 	default:
 		slog.Debug("ignored event", "event_type", envelope.EventType)
 	}
@@ -83,9 +84,9 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, p *SonarrGrabPayload) {
+func (h *Handler) handleSonarrGrab(ctx context.Context, userKey, tenant string, p *SonarrGrabPayload) {
 	if p.DownloadID == "" {
-		slog.Warn("grab event missing downloadId")
+		slog.Warn("grab event missing downloadId", "tenant", tenant)
 		return
 	}
 
@@ -98,7 +99,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, p *Sonar
 
 	// Track in state store
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
-		slog.Error("failed to track download", "slug", slug, "error", err)
+		slog.Error("failed to track download", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
 
@@ -106,7 +107,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, p *Sonar
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 	if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create activity", "slug", slug, "error", err)
+		slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
 		h.deleteTrackedSlug(ctx, userKey, mapKey)
 		return
 	}
@@ -121,21 +122,21 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, p *Sonar
 			State:       "Grabbed",
 			Icon:        "arrow.down.circle",
 			Subtitle:    subtitle,
-			AccentColor: "#007AFF",
+			AccentColor: pushward.ColorBlue,
 			CurrentStep: &step,
 			TotalSteps:  &total,
 		},
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err)
+		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
-	slog.Info("grab received", "slug", slug, "series", p.Series.Title, "downloadId", p.DownloadID)
+	slog.Info("grab received", "slug", slug, "series", p.Series.Title, "downloadId", p.DownloadID, "tenant", tenant)
 }
 
-func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, p *SonarrDownloadPayload) {
+func (h *Handler) handleSonarrDownload(ctx context.Context, userKey, tenant string, p *SonarrDownloadPayload) {
 	if p.DownloadID == "" {
-		slog.Warn("download event missing downloadId")
+		slog.Warn("download event missing downloadId", "tenant", tenant)
 		return
 	}
 
@@ -153,7 +154,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, p *S
 		subtitle := FormatSubtitle(p.Series, p.Episodes, quality)
 
 		if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
-			slog.Error("failed to track download", "slug", slug, "error", err)
+			slog.Error("failed to track download", "slug", slug, "error", err, "tenant", tenant)
 			return
 		}
 
@@ -161,11 +162,11 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, p *S
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create activity", "slug", slug, "error", err)
+			slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
 			return
 		}
-		slog.Info("created activity (download without grab)", "slug", slug)
+		slog.Info("created activity (download without grab)", "slug", slug, "tenant", tenant)
 	}
 
 	state := "Downloaded"
@@ -182,11 +183,11 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, p *S
 		State:       state,
 		Icon:        "checkmark.circle.fill",
 		Subtitle:    subtitle,
-		AccentColor: "#34C759",
+		AccentColor: pushward.ColorGreen,
 		CurrentStep: &step,
 		TotalSteps:  &total,
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-	slog.Info("download complete", "slug", slug, "state", state, "series", p.Series.Title)
+	slog.Info("download complete", "slug", slug, "state", state, "series", p.Series.Title, "tenant", tenant)
 }

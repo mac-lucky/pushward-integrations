@@ -122,7 +122,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	if update1.Content.Icon != "arrow.triangle.2.circlepath" {
 		t.Errorf("expected sync icon, got %s", update1.Content.Icon)
 	}
-	if update1.Content.AccentColor != "#007AFF" {
+	if update1.Content.AccentColor != pushward.ColorBlue {
 		t.Errorf("expected blue color, got %s", update1.Content.AccentColor)
 	}
 	if update1.Content.Subtitle != "ArgoCD \u00b7 pushward-server" {
@@ -215,7 +215,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	if phase2.Content.Icon != "checkmark.circle.fill" {
 		t.Errorf("expected checkmark icon, got %s", phase2.Content.Icon)
 	}
-	if phase2.Content.AccentColor != "#34C759" {
+	if phase2.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase2.Content.AccentColor)
 	}
 	if phase2.Content.CurrentStep == nil || *phase2.Content.CurrentStep != 3 {
@@ -262,7 +262,7 @@ func TestSyncRunning_ThenSyncFailed(t *testing.T) {
 	if failReq.Content.Icon != "xmark.circle.fill" {
 		t.Errorf("expected xmark icon, got %s", failReq.Content.Icon)
 	}
-	if failReq.Content.AccentColor != "#FF3B30" {
+	if failReq.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red color, got %s", failReq.Content.AccentColor)
 	}
 	// sync-running set step=1, sync-failed should use step 1
@@ -304,7 +304,7 @@ func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 	if degradedReq.Content.Icon != "exclamationmark.triangle.fill" {
 		t.Errorf("expected warning icon, got %s", degradedReq.Content.Icon)
 	}
-	if degradedReq.Content.AccentColor != "#FF9500" {
+	if degradedReq.Content.AccentColor != pushward.ColorOrange {
 		t.Errorf("expected orange color, got %s", degradedReq.Content.AccentColor)
 	}
 	if degradedReq.Content.CurrentStep == nil || *degradedReq.Content.CurrentStep != 2 {

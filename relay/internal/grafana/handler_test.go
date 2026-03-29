@@ -156,7 +156,7 @@ func TestFiringSingleAlert(t *testing.T) {
 	if updateReq.Content.Icon != "exclamationmark.octagon.fill" {
 		t.Errorf("expected critical icon, got %s", updateReq.Content.Icon)
 	}
-	if updateReq.Content.AccentColor != "#FF3B30" {
+	if updateReq.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected critical color #FF3B30, got %s", updateReq.Content.AccentColor)
 	}
 	if updateReq.Content.Severity != "critical" {
@@ -246,7 +246,7 @@ func TestResolvedAlert(t *testing.T) {
 	if updateReq.Content.Icon != "checkmark.circle.fill" {
 		t.Errorf("expected resolved icon checkmark.circle.fill, got %s", updateReq.Content.Icon)
 	}
-	if updateReq.Content.AccentColor != "#34C759" {
+	if updateReq.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected resolved color #34C759, got %s", updateReq.Content.AccentColor)
 	}
 	// panelURL was empty, should fall back to dashboardURL
@@ -620,25 +620,25 @@ func TestSeverityMapping(t *testing.T) {
 			name:          "critical",
 			severity:      "critical",
 			expectedIcon:  "exclamationmark.octagon.fill",
-			expectedColor: "#FF3B30",
+			expectedColor: pushward.ColorRed,
 		},
 		{
 			name:          "warning",
 			severity:      "warning",
 			expectedIcon:  "exclamationmark.triangle.fill",
-			expectedColor: "#FF9500",
+			expectedColor: pushward.ColorOrange,
 		},
 		{
 			name:          "info",
 			severity:      "info",
 			expectedIcon:  "info.circle.fill",
-			expectedColor: "#007AFF",
+			expectedColor: pushward.ColorBlue,
 		},
 		{
 			name:          "unknown severity falls back to default",
 			severity:      "low",
 			expectedIcon:  "exclamationmark.triangle.fill",
-			expectedColor: "#FF9500",
+			expectedColor: pushward.ColorOrange,
 		},
 	}
 

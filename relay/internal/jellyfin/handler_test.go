@@ -106,7 +106,7 @@ func TestPlaybackStart(t *testing.T) {
 	if update.Content.Icon != "play.circle.fill" {
 		t.Errorf("expected icon play.circle.fill, got %s", update.Content.Icon)
 	}
-	if update.Content.AccentColor != "#007AFF" {
+	if update.Content.AccentColor != pushward.ColorBlue {
 		t.Errorf("expected blue color, got %s", update.Content.AccentColor)
 	}
 	if update.Content.Progress != 0 {
@@ -288,7 +288,7 @@ func TestPlaybackStartAndStop(t *testing.T) {
 	if phase1.Content.Icon != "checkmark.circle.fill" {
 		t.Errorf("expected checkmark icon, got %s", phase1.Content.Icon)
 	}
-	if phase1.Content.AccentColor != "#34C759" {
+	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
 	}
 
@@ -832,7 +832,7 @@ func TestTaskStartedAndCompleted(t *testing.T) {
 	if phase1.Content.Icon != "checkmark.circle.fill" {
 		t.Errorf("expected checkmark icon, got %s", phase1.Content.Icon)
 	}
-	if phase1.Content.AccentColor != "#34C759" {
+	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
 	}
 

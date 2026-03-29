@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -39,13 +38,24 @@ type trackedAppState struct {
 	Pending  bool   `json:"pending"`
 }
 
+// Lock ordering: appLocks (per-app) → mu (graceTimers). Never acquire mu before appLocks.
 type Handler struct {
 	store       state.Store
 	clients     *client.Pool
 	config      *config.ArgoCDConfig
 	ender       *lifecycle.Ender
-	mu          sync.Mutex
+	mu          sync.Mutex             // protects graceTimers map only
+	appLocks    sync.Map               // "userKey:appName" → *sync.Mutex
 	graceTimers map[string]*time.Timer // "userKey:appName" → grace timer
+}
+
+// lockApp returns an unlock function for per-app serialization.
+func (h *Handler) lockApp(userKey, appName string) func() {
+	key := userKey + ":" + appName
+	val, _ := h.appLocks.LoadOrStore(key, &sync.Mutex{})
+	m := val.(*sync.Mutex)
+	m.Lock()
+	return m.Unlock
 }
 
 func NewHandler(store state.Store, clients *client.Pool, cfg *config.ArgoCDConfig) *Handler {
@@ -59,6 +69,57 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.ArgoCDConfi
 		}),
 		graceTimers: make(map[string]*time.Timer),
 	}
+}
+
+func (h *Handler) Ender() *lifecycle.Ender {
+	return h.ender
+}
+
+// StartCleanup starts a background goroutine that periodically removes stale
+// entries from graceTimers. Since timers self-clean when they fire, this is a
+// safety net for timers whose associated app state is no longer pending.
+func (h *Handler) StartCleanup(ctx context.Context) {
+	go func() {
+		ticker := time.NewTicker(h.config.StaleTimeout)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// Collect candidates under lock
+				h.mu.Lock()
+				candidates := make([]string, 0, len(h.graceTimers))
+				for tk := range h.graceTimers {
+					candidates = append(candidates, tk)
+				}
+				h.mu.Unlock()
+
+				// Check each candidate outside the lock
+				for _, tk := range candidates {
+					parts := strings.SplitN(tk, ":", 2)
+					if len(parts) != 2 {
+						h.mu.Lock()
+						if gt, ok := h.graceTimers[tk]; ok {
+							gt.Stop()
+							delete(h.graceTimers, tk)
+						}
+						h.mu.Unlock()
+						continue
+					}
+					app, ok, _ := h.loadApp(context.Background(), parts[0], parts[1])
+					if !ok || !app.Pending {
+						h.mu.Lock()
+						if gt, ok := h.graceTimers[tk]; ok {
+							gt.Stop()
+							delete(h.graceTimers, tk)
+						}
+						h.mu.Unlock()
+					}
+				}
+			}
+		}
+	}()
 }
 
 func timerKey(userKey, appName string) string {
@@ -89,11 +150,15 @@ func (h *Handler) loadApp(ctx context.Context, userKey, appName string) (*tracke
 }
 
 func (h *Handler) deleteApp(ctx context.Context, userKey, appName string) {
-	_ = h.store.Delete(ctx, "argocd", userKey, appName, "")
+	if err := h.store.Delete(ctx, "argocd", userKey, appName, ""); err != nil {
+		slog.Warn("state store delete failed", "error", err, "provider", "argocd", "tenant", auth.KeyHash(userKey))
+	}
 }
 
 func (h *Handler) setTombstone(ctx context.Context, userKey, appName string) {
-	_ = h.store.Set(ctx, "argocd", userKey, appName, "tombstone", []byte("{}"), h.config.SyncGracePeriod*2)
+	if err := h.store.Set(ctx, "argocd", userKey, appName, "tombstone", []byte("{}"), h.config.SyncGracePeriod*2); err != nil {
+		slog.Warn("state store write failed", "error", err, "provider", "argocd", "tenant", auth.KeyHash(userKey))
+	}
 }
 
 func (h *Handler) hasTombstone(ctx context.Context, userKey, appName string) bool {
@@ -113,14 +178,9 @@ func (h *Handler) contentURLs(appName, repoURL, revision string) (string, string
 	return url, secondaryURL
 }
 
-var nonAlphanumeric = regexp.MustCompile(`[^a-z0-9]+`)
-
 // slugForApp derives a stable, URL-safe activity slug from an ArgoCD app name.
 func slugForApp(appName string) string {
-	s := strings.ToLower(appName)
-	s = nonAlphanumeric.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	return "argocd-" + s
+	return text.Slug("argocd-", appName)
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -139,44 +199,45 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userKey := auth.KeyFromContext(r.Context())
+	tenant := auth.KeyHash(userKey)
 	ctx := r.Context()
 
 	switch payload.Event {
 	case "sync-running":
-		h.handleSyncRunning(ctx, userKey, &payload)
+		h.handleSyncRunning(ctx, userKey, tenant, &payload)
 	case "sync-succeeded":
-		h.handleSyncSucceeded(ctx, userKey, &payload)
+		h.handleSyncSucceeded(ctx, userKey, tenant, &payload)
 	case "deployed":
-		h.handleDeployed(ctx, userKey, &payload)
+		h.handleDeployed(ctx, userKey, tenant, &payload)
 	case "sync-failed":
-		h.handleSyncFailed(ctx, userKey, &payload)
+		h.handleSyncFailed(ctx, userKey, tenant, &payload)
 	case "health-degraded":
-		h.handleHealthDegraded(ctx, userKey, &payload)
+		h.handleHealthDegraded(ctx, userKey, tenant, &payload)
 	default:
-		slog.Warn("unknown event", "event", payload.Event, "app", payload.App)
+		slog.Warn("unknown event", "event", payload.Event, "app", payload.App, "tenant", tenant)
 	}
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webhookPayload) {
+func (h *Handler) handleSyncRunning(ctx context.Context, userKey, tenant string, p *webhookPayload) {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
-	h.mu.Lock()
+	unlock := h.lockApp(userKey, p.App)
+	defer unlock()
 
 	// If a recent-deploy tombstone exists, the sync already completed and this
 	// sync-running arrived out of order — skip it entirely.
 	if h.hasTombstone(ctx, userKey, p.App) {
-		h.mu.Unlock()
-		slog.Info("skipped late sync-running (already deployed)", "slug", slug, "app", p.App)
+		slog.Info("skipped late sync-running (already deployed)", "slug", slug, "app", p.App, "tenant", tenant)
 		return
 	}
 
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
-		slog.Error("failed to load app state", "app", p.App, "error", err)
+		slog.Error("failed to load app state", "app", p.App, "error", err, "tenant", tenant)
 	}
 	needsCreate := !exists || (p.Revision != "" && app.Revision != p.Revision)
 
@@ -184,10 +245,12 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 
 	if needsCreate {
 		if exists {
+			h.mu.Lock()
 			if gt, ok := h.graceTimers[tk]; ok {
 				gt.Stop()
 				delete(h.graceTimers, tk)
 			}
+			h.mu.Unlock()
 		}
 		app = &trackedAppState{
 			Slug:     slug,
@@ -196,12 +259,12 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 			Step:     1,
 		}
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
-			slog.Error("failed to save app state", "app", p.App, "error", err)
+			slog.Error("failed to save app state", "app", p.App, "error", err, "tenant", tenant)
 		}
 	} else {
 		app.Step = 1
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
-			slog.Error("failed to save app state", "app", p.App, "error", err)
+			slog.Error("failed to save app state", "app", p.App, "error", err, "tenant", tenant)
 		}
 	}
 
@@ -210,8 +273,9 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 	if gracePeriod > 0 && (needsCreate || app.Pending) {
 		app.Pending = true
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
-			slog.Error("failed to save app state", "app", p.App, "error", err)
+			slog.Error("failed to save app state", "app", p.App, "error", err, "tenant", tenant)
 		}
+		h.mu.Lock()
 		if gt, ok := h.graceTimers[tk]; ok {
 			gt.Stop()
 		}
@@ -219,11 +283,9 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 			h.graceExpired(userKey, p.App)
 		})
 		h.mu.Unlock()
-		slog.Info("sync started (grace period)", "slug", slug, "app", p.App, "grace", gracePeriod)
+		slog.Info("sync started (grace period)", "slug", slug, "app", p.App, "grace", gracePeriod, "tenant", tenant)
 		return
 	}
-
-	h.mu.Unlock()
 
 	pw := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
@@ -231,13 +293,11 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 
 	if needsCreate {
 		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create activity", "slug", slug, "error", err)
-			h.mu.Lock()
+			slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
 			h.deleteApp(ctx, userKey, p.App)
-			h.mu.Unlock()
 			return
 		}
-		slog.Info("created activity", "slug", slug, "app", p.App)
+		slog.Info("created activity", "slug", slug, "app", p.App, "tenant", tenant)
 	}
 
 	step := 1
@@ -251,7 +311,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 			State:        "Syncing...",
 			Icon:         "arrow.triangle.2.circlepath",
 			Subtitle:     "ArgoCD \u00b7 " + p.App,
-			AccentColor:  "#007AFF",
+			AccentColor:  pushward.ColorBlue,
 			CurrentStep:  &step,
 			TotalSteps:   &total,
 			URL:          url,
@@ -260,30 +320,31 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, p *webh
 	}
 
 	if err := pw.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err)
+		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "step", "1/3", "state", "Syncing...")
+	slog.Info("updated activity", "slug", slug, "step", "1/3", "state", "Syncing...", "tenant", tenant)
 }
 
-func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *webhookPayload) {
+func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey, tenant string, p *webhookPayload) {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
-	h.mu.Lock()
+	unlock := h.lockApp(userKey, p.App)
+	defer unlock()
+
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
-		slog.Error("failed to load app state", "app", p.App, "error", err)
+		slog.Error("failed to load app state", "app", p.App, "error", err, "tenant", tenant)
 	}
 
 	// Tracked and still in grace period — just advance step, don't touch PushWard
 	if exists && app.Pending {
 		app.Step = 2
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
-			slog.Error("failed to save app state", "app", p.App, "error", err)
+			slog.Error("failed to save app state", "app", p.App, "error", err, "tenant", tenant)
 		}
-		h.mu.Unlock()
-		slog.Info("sync succeeded (grace period)", "slug", slug, "app", p.App)
+		slog.Info("sync succeeded (grace period)", "slug", slug, "app", p.App, "tenant", tenant)
 		return
 	}
 
@@ -293,8 +354,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *we
 		if gracePeriod > 0 {
 			// If deployed already arrived (out-of-order events), this is a no-op.
 			if h.hasTombstone(ctx, userKey, p.App) {
-				h.mu.Unlock()
-				slog.Info("skipped no-op sync (deployed arrived first)", "slug", slug, "app", p.App)
+				slog.Info("skipped no-op sync (deployed arrived first)", "slug", slug, "app", p.App, "tenant", tenant)
 				return
 			}
 
@@ -307,13 +367,14 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *we
 				Pending:  true,
 			}
 			if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
-				slog.Error("failed to save app state", "app", p.App, "error", err)
+				slog.Error("failed to save app state", "app", p.App, "error", err, "tenant", tenant)
 			}
+			h.mu.Lock()
 			h.graceTimers[tk] = time.AfterFunc(gracePeriod, func() {
 				h.graceExpired(userKey, p.App)
 			})
 			h.mu.Unlock()
-			slog.Info("sync succeeded (untracked, grace period)", "slug", slug, "app", p.App)
+			slog.Info("sync succeeded (untracked, grace period)", "slug", slug, "app", p.App, "tenant", tenant)
 			return
 		}
 
@@ -325,27 +386,23 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *we
 			Step:     2,
 		}
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
-			slog.Error("failed to save app state", "app", p.App, "error", err)
+			slog.Error("failed to save app state", "app", p.App, "error", err, "tenant", tenant)
 		}
-		h.mu.Unlock()
 
 		pw := h.clients.Get(userKey)
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create activity", "slug", slug, "error", err)
-			h.mu.Lock()
+			slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
 			h.deleteApp(ctx, userKey, p.App)
-			h.mu.Unlock()
 			return
 		}
-		slog.Info("created activity (untracked sync-succeeded)", "slug", slug, "app", p.App)
+		slog.Info("created activity (untracked sync-succeeded)", "slug", slug, "app", p.App, "tenant", tenant)
 	} else {
 		app.Step = 2
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
-			slog.Error("failed to save app state", "app", p.App, "error", err)
+			slog.Error("failed to save app state", "app", p.App, "error", err, "tenant", tenant)
 		}
-		h.mu.Unlock()
 	}
 
 	pw := h.clients.Get(userKey)
@@ -360,7 +417,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *we
 			State:        "Rolling out...",
 			Icon:         "arrow.triangle.2.circlepath",
 			Subtitle:     "ArgoCD \u00b7 " + p.App,
-			AccentColor:  "#007AFF",
+			AccentColor:  pushward.ColorBlue,
 			CurrentStep:  &step,
 			TotalSteps:   &total,
 			URL:          url,
@@ -369,28 +426,32 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, p *we
 	}
 
 	if err := pw.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err)
+		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "step", "2/3", "state", "Rolling out...")
+	slog.Info("updated activity", "slug", slug, "step", "2/3", "state", "Rolling out...", "tenant", tenant)
 }
 
-func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhookPayload) {
+func (h *Handler) handleDeployed(ctx context.Context, userKey, tenant string, p *webhookPayload) {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
-	h.mu.Lock()
+	unlock := h.lockApp(userKey, p.App)
+	defer unlock()
+
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
-		slog.Error("failed to load app state", "app", p.App, "error", err)
+		slog.Error("failed to load app state", "app", p.App, "error", err, "tenant", tenant)
 	}
 
 	// Completed during grace period — no-op sync, skip entirely
 	if exists && app.Pending {
+		h.mu.Lock()
 		if gt, ok := h.graceTimers[tk]; ok {
 			gt.Stop()
 			delete(h.graceTimers, tk)
 		}
+		h.mu.Unlock()
 		h.deleteApp(ctx, userKey, p.App)
 
 		// Record tombstone so a late sync-succeeded is also skipped
@@ -398,8 +459,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhook
 			h.setTombstone(ctx, userKey, p.App)
 		}
 
-		h.mu.Unlock()
-		slog.Info("skipped no-op sync", "slug", slug, "app", p.App)
+		slog.Info("skipped no-op sync", "slug", slug, "app", p.App, "tenant", tenant)
 		return
 	}
 
@@ -407,8 +467,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhook
 		// Untracked deployed
 		if h.config.SyncGracePeriod > 0 {
 			h.setTombstone(ctx, userKey, p.App)
-			h.mu.Unlock()
-			slog.Info("recorded untracked deployed", "slug", slug, "app", p.App)
+			slog.Info("recorded untracked deployed", "slug", slug, "app", p.App, "tenant", tenant)
 			return
 		}
 
@@ -420,27 +479,23 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhook
 			Step:     3,
 		}
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
-			slog.Error("failed to save app state", "app", p.App, "error", err)
+			slog.Error("failed to save app state", "app", p.App, "error", err, "tenant", tenant)
 		}
-		h.mu.Unlock()
 
 		pw := h.clients.Get(userKey)
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create activity", "slug", slug, "error", err)
-			h.mu.Lock()
+			slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
 			h.deleteApp(ctx, userKey, p.App)
-			h.mu.Unlock()
 			return
 		}
-		slog.Info("created activity (untracked deployed)", "slug", slug, "app", p.App)
+		slog.Info("created activity (untracked deployed)", "slug", slug, "app", p.App, "tenant", tenant)
 	} else {
 		app.Step = 3
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
-			slog.Error("failed to save app state", "app", p.App, "error", err)
+			slog.Error("failed to save app state", "app", p.App, "error", err, "tenant", tenant)
 		}
-		h.mu.Unlock()
 	}
 
 	step := 3
@@ -452,7 +507,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhook
 		State:        "Deployed",
 		Icon:         "checkmark.circle.fill",
 		Subtitle:     "ArgoCD \u00b7 " + p.App,
-		AccentColor:  "#34C759",
+		AccentColor:  pushward.ColorGreen,
 		CurrentStep:  &step,
 		TotalSteps:   &total,
 		URL:          url,
@@ -460,7 +515,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, p *webhook
 	}
 
 	h.ender.ScheduleEnd(userKey, p.App, slug, content)
-	slog.Info("scheduled end", "slug", slug, "state", "Deployed")
+	slog.Info("scheduled end", "slug", slug, "state", "Deployed", "tenant", tenant)
 }
 
 // errorPreamble loads app state, clears grace timers if pending, and ensures
@@ -473,14 +528,13 @@ type errorPreambleResult struct {
 	wasPending  bool
 }
 
-func (h *Handler) errorPreamble(ctx context.Context, userKey string, p *webhookPayload, event string) (*errorPreambleResult, bool) {
+func (h *Handler) errorPreamble(ctx context.Context, userKey, tenant string, p *webhookPayload, event string) (*errorPreambleResult, bool) {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
-	h.mu.Lock()
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
-		slog.Error("failed to load app state", "app", p.App, "error", err)
+		slog.Error("failed to load app state", "app", p.App, "error", err, "tenant", tenant)
 	}
 	currentStep := 1
 	wasPending := false
@@ -488,13 +542,15 @@ func (h *Handler) errorPreamble(ctx context.Context, userKey string, p *webhookP
 		currentStep = app.Step
 		wasPending = app.Pending
 		if app.Pending {
+			h.mu.Lock()
 			if gt, ok := h.graceTimers[tk]; ok {
 				gt.Stop()
 				delete(h.graceTimers, tk)
 			}
+			h.mu.Unlock()
 			app.Pending = false
 			if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
-				slog.Error("failed to save app state", "app", p.App, "error", err)
+				slog.Error("failed to save app state", "app", p.App, "error", err, "tenant", tenant)
 			}
 		}
 	} else {
@@ -505,10 +561,9 @@ func (h *Handler) errorPreamble(ctx context.Context, userKey string, p *webhookP
 			Step:     1,
 		}
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
-			slog.Error("failed to save app state", "app", p.App, "error", err)
+			slog.Error("failed to save app state", "app", p.App, "error", err, "tenant", tenant)
 		}
 	}
-	h.mu.Unlock()
 
 	// Create activity if untracked or was pending (activity never created on PushWard)
 	if !exists || wasPending {
@@ -516,13 +571,11 @@ func (h *Handler) errorPreamble(ctx context.Context, userKey string, p *webhookP
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create activity", "slug", slug, "error", err)
-			h.mu.Lock()
+			slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
 			h.deleteApp(ctx, userKey, p.App)
-			h.mu.Unlock()
 			return nil, false
 		}
-		slog.Info("created activity ("+event+")", "slug", slug, "app", p.App)
+		slog.Info("created activity ("+event+")", "slug", slug, "app", p.App, "tenant", tenant)
 	}
 
 	return &errorPreambleResult{
@@ -533,8 +586,11 @@ func (h *Handler) errorPreamble(ctx context.Context, userKey string, p *webhookP
 	}, true
 }
 
-func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, p *webhookPayload) {
-	res, ok := h.errorPreamble(ctx, userKey, p, "sync-failed")
+func (h *Handler) handleSyncFailed(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+	unlock := h.lockApp(userKey, p.App)
+	defer unlock()
+
+	res, ok := h.errorPreamble(ctx, userKey, tenant, p, "sync-failed")
 	if !ok {
 		return
 	}
@@ -547,7 +603,7 @@ func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, p *webho
 		State:        "Sync Failed",
 		Icon:         "xmark.circle.fill",
 		Subtitle:     "ArgoCD \u00b7 " + p.App,
-		AccentColor:  "#FF3B30",
+		AccentColor:  pushward.ColorRed,
 		CurrentStep:  &res.currentStep,
 		TotalSteps:   &total,
 		URL:          url,
@@ -555,21 +611,22 @@ func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, p *webho
 	}
 
 	h.ender.ScheduleEnd(userKey, p.App, res.slug, content)
-	slog.Info("scheduled end", "slug", res.slug, "state", "Sync Failed")
+	slog.Info("scheduled end", "slug", res.slug, "state", "Sync Failed", "tenant", tenant)
 }
 
-func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *webhookPayload) {
+func (h *Handler) handleHealthDegraded(ctx context.Context, userKey, tenant string, p *webhookPayload) {
 	slug := slugForApp(p.App)
+
+	unlock := h.lockApp(userKey, p.App)
+	defer unlock()
 
 	// Transient degradation during rolling update (step 2, tracked, not pending):
 	// must check before errorPreamble which would create an activity.
-	h.mu.Lock()
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
-		slog.Error("failed to load app state", "app", p.App, "error", err)
+		slog.Error("failed to load app state", "app", p.App, "error", err, "tenant", tenant)
 	}
 	isTransient := exists && !app.Pending && app.Step == 2
-	h.mu.Unlock()
 
 	if isTransient {
 		pw := h.clients.Get(userKey)
@@ -584,7 +641,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *w
 				State:        "Degraded",
 				Icon:         "exclamationmark.triangle.fill",
 				Subtitle:     "ArgoCD \u00b7 " + p.App,
-				AccentColor:  "#FF9500",
+				AccentColor:  pushward.ColorOrange,
 				CurrentStep:  &step,
 				TotalSteps:   &total,
 				URL:          url,
@@ -592,14 +649,14 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *w
 			},
 		}
 		if err := pw.UpdateActivity(ctx, slug, req); err != nil {
-			slog.Error("failed to update activity", "slug", slug, "error", err)
+			slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
 			return
 		}
-		slog.Info("updated activity (transient degraded)", "slug", slug, "step", "2/3", "state", "Degraded")
+		slog.Info("updated activity (transient degraded)", "slug", slug, "step", "2/3", "state", "Degraded", "tenant", tenant)
 		return
 	}
 
-	res, ok := h.errorPreamble(ctx, userKey, p, "health-degraded")
+	res, ok := h.errorPreamble(ctx, userKey, tenant, p, "health-degraded")
 	if !ok {
 		return
 	}
@@ -612,7 +669,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *w
 		State:        "Degraded",
 		Icon:         "exclamationmark.triangle.fill",
 		Subtitle:     "ArgoCD \u00b7 " + p.App,
-		AccentColor:  "#FF9500",
+		AccentColor:  pushward.ColorOrange,
 		CurrentStep:  &res.currentStep,
 		TotalSteps:   &total,
 		URL:          url,
@@ -620,7 +677,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *w
 	}
 
 	h.ender.ScheduleEnd(userKey, p.App, res.slug, content)
-	slog.Info("scheduled end", "slug", res.slug, "state", "Degraded")
+	slog.Info("scheduled end", "slug", res.slug, "state", "Degraded", "tenant", tenant)
 }
 
 // graceExpired is called when the sync grace period expires. It creates
@@ -628,25 +685,27 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, p *w
 func (h *Handler) graceExpired(userKey, appName string) {
 	tk := timerKey(userKey, appName)
 
-	h.mu.Lock()
+	unlock := h.lockApp(userKey, appName)
+	defer unlock()
+
 	app, ok, err := h.loadApp(context.Background(), userKey, appName)
 	if err != nil {
 		slog.Error("failed to load app state", "app", appName, "error", err)
 	}
 	if !ok || !app.Pending {
-		h.mu.Unlock()
 		return
 	}
 	app.Pending = false
 	if err := h.saveApp(context.Background(), userKey, appName, app); err != nil {
 		slog.Error("failed to save app state", "app", appName, "error", err)
 	}
+	h.mu.Lock()
 	delete(h.graceTimers, tk)
+	h.mu.Unlock()
 	slug := app.Slug
 	step := app.Step
 	revision := app.Revision
 	repoURL := app.RepoURL
-	h.mu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -656,9 +715,7 @@ func (h *Handler) graceExpired(userKey, appName string) {
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 	if err := pw.CreateActivity(ctx, slug, appName, h.config.Priority, endedTTL, staleTTL); err != nil {
 		slog.Error("failed to create activity", "slug", slug, "error", err)
-		h.mu.Lock()
 		h.deleteApp(ctx, userKey, appName)
-		h.mu.Unlock()
 		return
 	}
 	slog.Info("created activity (grace expired)", "slug", slug, "app", appName, "step", step)
@@ -683,7 +740,7 @@ func (h *Handler) graceExpired(userKey, appName string) {
 			State:        stateText,
 			Icon:         "arrow.triangle.2.circlepath",
 			Subtitle:     "ArgoCD \u00b7 " + appName,
-			AccentColor:  "#007AFF",
+			AccentColor:  pushward.ColorBlue,
 			CurrentStep:  &step,
 			TotalSteps:   &total,
 			URL:          url,
@@ -697,4 +754,3 @@ func (h *Handler) graceExpired(userKey, appName string) {
 	}
 	slog.Info("updated activity", "slug", slug, "step", fmt.Sprintf("%d/%d", step, total), "state", stateText)
 }
-

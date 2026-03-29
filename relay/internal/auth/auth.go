@@ -2,11 +2,19 @@ package auth
 
 import (
 	"context"
+	"crypto/sha256"
+	"fmt"
 	"net/http"
 	"strings"
 )
 
 type contextKey struct{}
+
+// KeyHash returns a short hex hash of an API key for log correlation.
+func KeyHash(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return fmt.Sprintf("%x", h[:4])
+}
 
 // KeyFromContext retrieves the hlk_ integration key from the request context.
 func KeyFromContext(ctx context.Context) string {

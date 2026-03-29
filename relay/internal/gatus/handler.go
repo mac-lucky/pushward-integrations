@@ -2,9 +2,7 @@ package gatus
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -37,6 +35,10 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.GatusConfig
 	}
 }
 
+func (h *Handler) Ender() *lifecycle.Ender {
+	return h.ender
+}
+
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
@@ -49,15 +51,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	userKey := auth.KeyFromContext(ctx)
+	tenant := auth.KeyHash(userKey)
 	pwClient := h.clients.Get(userKey)
 
 	switch payload.Status {
 	case "TRIGGERED":
-		h.handleTriggered(ctx, userKey, pwClient, &payload)
+		h.handleTriggered(ctx, userKey, tenant, pwClient, &payload)
 	case "RESOLVED":
-		h.handleResolved(ctx, userKey, pwClient, &payload)
+		h.handleResolved(ctx, userKey, tenant, pwClient, &payload)
 	default:
-		slog.Warn("unknown gatus status", "status", payload.Status, "endpoint", payload.EndpointName)
+		slog.Warn("unknown gatus status", "status", payload.Status, "endpoint", payload.EndpointName, "tenant", tenant)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -69,13 +72,12 @@ func (h *Handler) slugAndKey(p *webhookPayload) (string, string) {
 	if p.EndpointGroup != "" {
 		identifier = p.EndpointGroup + "/" + p.EndpointName
 	}
-	hash := fmt.Sprintf("%x", sha256.Sum256([]byte(identifier)))[:12]
-	slug := "gatus-" + hash
-	mapKey := "gatus:" + hash
+	slug := text.SlugHash("gatus", identifier, 6)
+	mapKey := "gatus:" + slug[len("gatus-"):]
 	return slug, mapKey
 }
 
-func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient *pushward.Client, p *webhookPayload) {
+func (h *Handler) handleTriggered(ctx context.Context, userKey, tenant string, pwClient *pushward.Client, p *webhookPayload) {
 	slug, mapKey := h.slugAndKey(p)
 
 	// Cancel any pending end timer from a previous RESOLVED event
@@ -83,13 +85,13 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 
 	existing, err := h.store.Get(ctx, "gatus", userKey, mapKey, "")
 	if err != nil {
-		slog.Error("failed to check state", "endpoint", p.EndpointName, "error", err)
+		slog.Error("failed to check state", "endpoint", p.EndpointName, "error", err, "tenant", tenant)
 		return
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "gatus", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		slog.Error("failed to store state", "endpoint", p.EndpointName, "error", err)
+		slog.Error("failed to store state", "endpoint", p.EndpointName, "error", err, "tenant", tenant)
 		return
 	}
 
@@ -97,11 +99,13 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.EndpointName, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create activity", "slug", slug, "error", err)
-			_ = h.store.Delete(ctx, "gatus", userKey, mapKey, "")
+			slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+			if err := h.store.Delete(ctx, "gatus", userKey, mapKey, ""); err != nil {
+				slog.Warn("state store delete failed", "error", err, "provider", "gatus", "slug", slug, "tenant", tenant)
+			}
 			return
 		}
-		slog.Info("created activity", "slug", slug, "endpoint", p.EndpointName)
+		slog.Info("created activity", "slug", slug, "endpoint", p.EndpointName, "tenant", tenant)
 	}
 
 	stateText := text.TruncateHard(p.ResultErrors, 100)
@@ -127,25 +131,25 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, pwClient 
 			State:       stateText,
 			Icon:        "exclamationmark.triangle.fill",
 			Subtitle:    subtitle,
-			AccentColor: "#FF3B30",
+			AccentColor: pushward.ColorRed,
 			Severity:    "critical",
 			FiredAt:     firedAt,
 			URL:         text.SanitizeURL(p.EndpointURL),
 		},
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err)
+		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "error")
+	slog.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "error", "tenant", tenant)
 }
 
-func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *pushward.Client, p *webhookPayload) {
+func (h *Handler) handleResolved(ctx context.Context, userKey, tenant string, pwClient *pushward.Client, p *webhookPayload) {
 	slug, mapKey := h.slugAndKey(p)
 
 	existing, err := h.store.Get(ctx, "gatus", userKey, mapKey, "")
 	if err != nil {
-		slog.Error("failed to check state", "endpoint", p.EndpointName, "error", err)
+		slog.Error("failed to check state", "endpoint", p.EndpointName, "error", err, "tenant", tenant)
 		return
 	}
 	if existing == nil {
@@ -162,13 +166,13 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, pwClient *
 		State:       "Resolved",
 		Icon:        "checkmark.circle.fill",
 		Subtitle:    subtitle,
-		AccentColor: "#34C759",
+		AccentColor: pushward.ColorGreen,
 		Severity:    "info",
 		URL:         text.SanitizeURL(p.EndpointURL),
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
-	slog.Info("scheduled end for activity", "slug", slug, "endpoint", p.EndpointName)
+	slog.Info("scheduled end for activity", "slug", slug, "endpoint", p.EndpointName, "tenant", tenant)
 }
 

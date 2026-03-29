@@ -124,7 +124,7 @@ func (t *Tracker) handleParityCheck(ctx context.Context, status graphql.ArraySta
 			State:       "Parity Valid",
 			Icon:        "checkmark.circle.fill",
 			Subtitle:    "Unraid · " + serverName,
-			AccentColor: "#34C759",
+			AccentColor: pushward.ColorGreen,
 		})
 		return
 	}
@@ -142,7 +142,7 @@ func (t *Tracker) sendParityUpdate(ctx context.Context, slug string, pc *graphql
 		State:       state,
 		Icon:        "arrow.triangle.2.circlepath",
 		Subtitle:    "Unraid · " + serverName,
-		AccentColor: "#007AFF",
+		AccentColor: pushward.ColorBlue,
 	}
 
 	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
@@ -184,7 +184,7 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 				State:       "Starting...",
 				Icon:        "arrow.triangle.2.circlepath",
 				Subtitle:    "Unraid · " + serverName,
-				AccentColor: "#007AFF",
+				AccentColor: pushward.ColorBlue,
 			},
 		}
 		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
@@ -199,7 +199,7 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 				State:       "Array Started",
 				Icon:        "checkmark.circle.fill",
 				Subtitle:    "Unraid · " + serverName,
-				AccentColor: "#34C759",
+				AccentColor: pushward.ColorGreen,
 			})
 		}
 
@@ -215,7 +215,7 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 				State:       "Stopping...",
 				Icon:        "arrow.triangle.2.circlepath",
 				Subtitle:    "Unraid · " + serverName,
-				AccentColor: "#FF9500",
+				AccentColor: pushward.ColorOrange,
 			},
 		}
 		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
@@ -230,7 +230,7 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 				State:       "Array Stopped",
 				Icon:        "checkmark.circle.fill",
 				Subtitle:    "Unraid · " + serverName,
-				AccentColor: "#34C759",
+				AccentColor: pushward.ColorGreen,
 			})
 		}
 	}
@@ -255,7 +255,7 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 			State:       text.TruncateHard(notif.Description, 100),
 			Icon:        "exclamationmark.octagon.fill",
 			Subtitle:    text.TruncateHard("Unraid · "+serverName, 50),
-			AccentColor: "#FF3B30",
+			AccentColor: pushward.ColorRed,
 			Severity:    "error",
 		}
 		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
@@ -273,11 +273,11 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 			slog.Error("failed to create UPS activity", "error", err)
 		}
 
-		accentColor := "#FF9500"
+		accentColor := pushward.ColorOrange
 		icon := "bolt.slash.fill"
 		severity := "warning"
 		if notif.Importance == "alert" {
-			accentColor = "#FF3B30"
+			accentColor = pushward.ColorRed
 			severity = "error"
 		}
 

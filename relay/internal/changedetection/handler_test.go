@@ -97,7 +97,7 @@ func TestPageChanged(t *testing.T) {
 	if ongoing.Content.Icon != "eye.fill" {
 		t.Errorf("expected icon eye.fill, got %s", ongoing.Content.Icon)
 	}
-	if ongoing.Content.AccentColor != "#FF9500" {
+	if ongoing.Content.AccentColor != pushward.ColorOrange {
 		t.Errorf("expected accent color #FF9500, got %s", ongoing.Content.AccentColor)
 	}
 	if ongoing.Content.Subtitle != "Changedetection \u00b7 prices" {

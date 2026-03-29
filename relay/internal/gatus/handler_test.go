@@ -94,7 +94,7 @@ func TestTriggered(t *testing.T) {
 	if update.Content.State != "[STATUS] == 200 (expected 200, got 503)" {
 		t.Errorf("expected state '[STATUS] == 200 (expected 200, got 503)', got %s", update.Content.State)
 	}
-	if update.Content.AccentColor != "#FF3B30" {
+	if update.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red color, got %s", update.Content.AccentColor)
 	}
 	if update.Content.Icon != "exclamationmark.triangle.fill" {
@@ -158,7 +158,7 @@ func TestTriggeredThenResolved(t *testing.T) {
 	if phase1.Content.State != "Resolved" {
 		t.Errorf("expected state 'Resolved', got %q", phase1.Content.State)
 	}
-	if phase1.Content.AccentColor != "#34C759" {
+	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
 	}
 	if phase1.Content.Icon != "checkmark.circle.fill" {

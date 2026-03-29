@@ -80,6 +80,7 @@ func watchPasswordFile(ctx context.Context, pool *pgxpool.Pool, passwordFile str
 		return
 	}
 	slog.Info("watching password file for rotation", "dir", dir)
+	baseName := filepath.Base(passwordFile)
 
 	for {
 		select {
@@ -90,6 +91,9 @@ func watchPasswordFile(ctx context.Context, pool *pgxpool.Pool, passwordFile str
 				return
 			}
 			if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
+				if event.Name != passwordFile && filepath.Base(event.Name) != baseName {
+					continue
+				}
 				slog.Info("password file changed, resetting connection pool", "event", event.Name)
 				pool.Reset()
 			}

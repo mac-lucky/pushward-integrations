@@ -209,7 +209,7 @@ func TestArrayState_StartingToStarted(t *testing.T) {
 	if startingUpdate.Content.State != "Starting..." {
 		t.Errorf("state = %q, want Starting...", startingUpdate.Content.State)
 	}
-	if startingUpdate.Content.AccentColor != "#007AFF" {
+	if startingUpdate.Content.AccentColor != pushward.ColorBlue {
 		t.Errorf("accent = %q, want #007AFF", startingUpdate.Content.AccentColor)
 	}
 
@@ -230,7 +230,7 @@ func TestArrayState_StartingToStarted(t *testing.T) {
 		if req.Content.State == "Array Started" {
 			if req.State == pushward.StateOngoing {
 				foundOngoing = true
-				if req.Content.AccentColor != "#34C759" {
+				if req.Content.AccentColor != pushward.ColorGreen {
 					t.Errorf("started accent = %q, want #34C759", req.Content.AccentColor)
 				}
 			}
@@ -273,7 +273,7 @@ func TestArrayState_StoppingToStopped(t *testing.T) {
 	if stoppingUpdate.Content.State != "Stopping..." {
 		t.Errorf("state = %q, want Stopping...", stoppingUpdate.Content.State)
 	}
-	if stoppingUpdate.Content.AccentColor != "#FF9500" {
+	if stoppingUpdate.Content.AccentColor != pushward.ColorOrange {
 		t.Errorf("accent = %q, want #FF9500", stoppingUpdate.Content.AccentColor)
 	}
 
@@ -356,7 +356,7 @@ func TestNotification_DiskAlert(t *testing.T) {
 	if update.Content.Severity != "error" {
 		t.Errorf("severity = %q, want error", update.Content.Severity)
 	}
-	if update.Content.AccentColor != "#FF3B30" {
+	if update.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("accent = %q, want #FF3B30", update.Content.AccentColor)
 	}
 	if update.Content.Icon != "exclamationmark.octagon.fill" {
@@ -389,7 +389,7 @@ func TestNotification_UPSWarning(t *testing.T) {
 
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.Content.AccentColor != "#FF9500" {
+	if update.Content.AccentColor != pushward.ColorOrange {
 		t.Errorf("accent = %q, want #FF9500 (warning)", update.Content.AccentColor)
 	}
 	if update.Content.Severity != "warning" {
@@ -422,7 +422,7 @@ func TestNotification_UPSAlert(t *testing.T) {
 
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.Content.AccentColor != "#FF3B30" {
+	if update.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("accent = %q, want #FF3B30 (alert)", update.Content.AccentColor)
 	}
 	if update.Content.Severity != "error" {

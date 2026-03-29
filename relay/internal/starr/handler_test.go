@@ -138,7 +138,7 @@ func TestRadarrGrab(t *testing.T) {
 	if update.Content.Icon != "arrow.down.circle" {
 		t.Errorf("expected icon arrow.down.circle, got %s", update.Content.Icon)
 	}
-	if update.Content.AccentColor != "#007AFF" {
+	if update.Content.AccentColor != pushward.ColorBlue {
 		t.Errorf("expected blue color, got %s", update.Content.AccentColor)
 	}
 	if !strings.Contains(update.Content.Subtitle, "Inception (2010)") {
@@ -192,7 +192,7 @@ func TestRadarrGrabAndDownload(t *testing.T) {
 	if phase1.Content.Icon != "checkmark.circle.fill" {
 		t.Errorf("expected checkmark icon, got %s", phase1.Content.Icon)
 	}
-	if phase1.Content.AccentColor != "#34C759" {
+	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
 	}
 
@@ -726,7 +726,7 @@ func TestRadarrHealth(t *testing.T) {
 	if update.Content.Icon != "exclamationmark.triangle.fill" {
 		t.Errorf("expected warning icon, got %s", update.Content.Icon)
 	}
-	if update.Content.AccentColor != "#FF9500" {
+	if update.Content.AccentColor != pushward.ColorOrange {
 		t.Errorf("expected orange color, got %s", update.Content.AccentColor)
 	}
 	if update.Content.URL != "https://wiki.servarr.com/radarr/system#indexers" {
@@ -761,7 +761,7 @@ func TestRadarrHealthError(t *testing.T) {
 	if update.Content.Icon != "exclamationmark.octagon.fill" {
 		t.Errorf("expected error icon, got %s", update.Content.Icon)
 	}
-	if update.Content.AccentColor != "#FF3B30" {
+	if update.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red color, got %s", update.Content.AccentColor)
 	}
 }
@@ -804,7 +804,7 @@ func TestRadarrHealthAndRestored(t *testing.T) {
 	if phase1.Content.Icon != "checkmark.circle.fill" {
 		t.Errorf("expected checkmark icon, got %s", phase1.Content.Icon)
 	}
-	if phase1.Content.AccentColor != "#34C759" {
+	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
 	}
 
@@ -891,7 +891,7 @@ func TestRadarrManualInteraction(t *testing.T) {
 	if update.Content.Icon != "exclamationmark.triangle.fill" {
 		t.Errorf("expected warning icon, got %s", update.Content.Icon)
 	}
-	if update.Content.AccentColor != "#FF9500" {
+	if update.Content.AccentColor != pushward.ColorOrange {
 		t.Errorf("expected orange color, got %s", update.Content.AccentColor)
 	}
 }

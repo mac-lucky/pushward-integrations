@@ -102,7 +102,7 @@ func TestDocumentAdded(t *testing.T) {
 	if update.Content.Icon != "doc.text.fill" {
 		t.Errorf("expected icon doc.text.fill, got %s", update.Content.Icon)
 	}
-	if update.Content.AccentColor != "#34C759" {
+	if update.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", update.Content.AccentColor)
 	}
 	if update.Content.Progress != 1.0 {

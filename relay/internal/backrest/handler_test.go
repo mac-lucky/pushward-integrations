@@ -112,7 +112,7 @@ func TestSnapshotLifecycle(t *testing.T) {
 	if update.Content.Icon != "arrow.triangle.2.circlepath" {
 		t.Errorf("expected icon arrow.triangle.2.circlepath, got %s", update.Content.Icon)
 	}
-	if update.Content.AccentColor != "#007AFF" {
+	if update.Content.AccentColor != pushward.ColorBlue {
 		t.Errorf("expected blue color, got %s", update.Content.AccentColor)
 	}
 	if update.Content.Progress != 0 {
@@ -131,7 +131,7 @@ func TestSnapshotLifecycle(t *testing.T) {
 	if phase1.Content.State != "Complete · 2.3 GB" {
 		t.Errorf("expected state 'Complete · 2.3 GB', got %s", phase1.Content.State)
 	}
-	if phase1.Content.AccentColor != "#34C759" {
+	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
 	}
 	if phase1.Content.Icon != "checkmark.circle.fill" {
@@ -187,7 +187,7 @@ func TestSnapshotError(t *testing.T) {
 	if phase1.Content.State != "Failed: repository not found" {
 		t.Errorf("expected state 'Failed: repository not found', got %s", phase1.Content.State)
 	}
-	if phase1.Content.AccentColor != "#FF3B30" {
+	if phase1.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red color, got %s", phase1.Content.AccentColor)
 	}
 	if phase1.Content.Icon != "xmark.circle.fill" {
@@ -236,7 +236,7 @@ func TestSnapshotWarning(t *testing.T) {
 	if phase1.Content.State != "Complete (warnings)" {
 		t.Errorf("expected state 'Complete (warnings)', got %s", phase1.Content.State)
 	}
-	if phase1.Content.AccentColor != "#FF9500" {
+	if phase1.Content.AccentColor != pushward.ColorOrange {
 		t.Errorf("expected orange color, got %s", phase1.Content.AccentColor)
 	}
 	if phase1.Content.Icon != "exclamationmark.triangle.fill" {
@@ -312,7 +312,7 @@ func TestPruneLifecycle(t *testing.T) {
 	if phase1.Content.State != "Pruned" {
 		t.Errorf("expected state 'Pruned', got %s", phase1.Content.State)
 	}
-	if phase1.Content.AccentColor != "#34C759" {
+	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
 	}
 }
@@ -360,7 +360,7 @@ func TestCheckLifecycle(t *testing.T) {
 	if phase1.Content.State != "Check Passed" {
 		t.Errorf("expected state 'Check Passed', got %s", phase1.Content.State)
 	}
-	if phase1.Content.AccentColor != "#34C759" {
+	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
 	}
 }

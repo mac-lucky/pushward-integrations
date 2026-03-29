@@ -94,7 +94,7 @@ func TestBackupLifecycle(t *testing.T) {
 	if update.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", update.Content.Template)
 	}
-	if update.Content.AccentColor != "#007AFF" {
+	if update.Content.AccentColor != pushward.ColorBlue {
 		t.Errorf("expected blue accent, got %s", update.Content.AccentColor)
 	}
 	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 1 {
@@ -134,7 +134,7 @@ func TestBackupLifecycle(t *testing.T) {
 	if phase1.Content.State != "Backup Complete" {
 		t.Errorf("expected state 'Backup Complete', got %s", phase1.Content.State)
 	}
-	if phase1.Content.AccentColor != "#34C759" {
+	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green accent, got %s", phase1.Content.AccentColor)
 	}
 	if phase1.Content.CurrentStep == nil || *phase1.Content.CurrentStep != 2 {
@@ -191,7 +191,7 @@ func TestBackupFailure(t *testing.T) {
 	if phase1.Content.State != "Backup Failed" {
 		t.Errorf("expected state 'Backup Failed', got %s", phase1.Content.State)
 	}
-	if phase1.Content.AccentColor != "#FF3B30" {
+	if phase1.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red accent, got %s", phase1.Content.AccentColor)
 	}
 
@@ -246,7 +246,7 @@ func TestFencingAlert(t *testing.T) {
 	if update.Content.Icon != "exclamationmark.octagon.fill" {
 		t.Errorf("expected icon exclamationmark.octagon.fill, got %s", update.Content.Icon)
 	}
-	if update.Content.AccentColor != "#FF3B30" {
+	if update.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red accent, got %s", update.Content.AccentColor)
 	}
 	if update.Content.Subtitle != "Proxmox \u00b7 pve2" {
@@ -296,7 +296,7 @@ func TestUpdatesNotification(t *testing.T) {
 	if update.Content.Icon != "arrow.down.circle" {
 		t.Errorf("expected icon arrow.down.circle, got %s", update.Content.Icon)
 	}
-	if update.Content.AccentColor != "#007AFF" {
+	if update.Content.AccentColor != pushward.ColorBlue {
 		t.Errorf("expected blue accent, got %s", update.Content.AccentColor)
 	}
 	if update.Content.State != "5 updates available" {

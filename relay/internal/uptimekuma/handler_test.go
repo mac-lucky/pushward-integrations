@@ -94,7 +94,7 @@ func TestMonitorDown(t *testing.T) {
 	if update.Content.State != "Connection refused" {
 		t.Errorf("expected state 'Connection refused', got %s", update.Content.State)
 	}
-	if update.Content.AccentColor != "#FF3B30" {
+	if update.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red color, got %s", update.Content.AccentColor)
 	}
 	if update.Content.Icon != "exclamationmark.triangle.fill" {
@@ -152,7 +152,7 @@ func TestMonitorDownThenUp(t *testing.T) {
 	if phase1.Content.State != "Resolved \u00b7 42ms" {
 		t.Errorf("expected state 'Resolved \u00b7 42ms', got %q", phase1.Content.State)
 	}
-	if phase1.Content.AccentColor != "#34C759" {
+	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
 	}
 	if phase1.Content.Icon != "checkmark.circle.fill" {
@@ -225,7 +225,7 @@ func TestMonitorPending(t *testing.T) {
 	if update.Content.State != "Checking..." {
 		t.Errorf("expected state 'Checking...', got %s", update.Content.State)
 	}
-	if update.Content.AccentColor != "#FF9500" {
+	if update.Content.AccentColor != pushward.ColorOrange {
 		t.Errorf("expected orange color, got %s", update.Content.AccentColor)
 	}
 	if update.Content.Icon != "hourglass" {

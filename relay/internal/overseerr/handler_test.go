@@ -110,7 +110,7 @@ func TestMediaPending(t *testing.T) {
 	if update.Content.Icon != "hourglass" {
 		t.Errorf("expected icon hourglass, got %s", update.Content.Icon)
 	}
-	if update.Content.AccentColor != "#FF9500" {
+	if update.Content.AccentColor != pushward.ColorOrange {
 		t.Errorf("expected orange color, got %s", update.Content.AccentColor)
 	}
 	if update.Content.Template != "steps" {
@@ -175,7 +175,7 @@ func TestMediaApproved(t *testing.T) {
 	if update.Content.Icon != "checkmark.circle" {
 		t.Errorf("expected icon checkmark.circle, got %s", update.Content.Icon)
 	}
-	if update.Content.AccentColor != "#007AFF" {
+	if update.Content.AccentColor != pushward.ColorBlue {
 		t.Errorf("expected blue color, got %s", update.Content.AccentColor)
 	}
 	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 2 {
@@ -222,7 +222,7 @@ func TestMediaAvailable(t *testing.T) {
 	if update.Content.State != "Available" {
 		t.Errorf("expected state 'Available', got %s", update.Content.State)
 	}
-	if update.Content.AccentColor != "#34C759" {
+	if update.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", update.Content.AccentColor)
 	}
 	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 4 {
@@ -289,7 +289,7 @@ func TestMediaDeclined(t *testing.T) {
 	if update.Content.State != "Declined" {
 		t.Errorf("expected state 'Declined', got %s", update.Content.State)
 	}
-	if update.Content.AccentColor != "#FF3B30" {
+	if update.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red color, got %s", update.Content.AccentColor)
 	}
 	if update.Content.Icon != "xmark.circle.fill" {
@@ -347,7 +347,7 @@ func TestMediaFailed(t *testing.T) {
 	if update.Content.State != "Failed" {
 		t.Errorf("expected state 'Failed', got %s", update.Content.State)
 	}
-	if update.Content.AccentColor != "#FF3B30" {
+	if update.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red color, got %s", update.Content.AccentColor)
 	}
 	if update.Content.Icon != "xmark.circle.fill" {
