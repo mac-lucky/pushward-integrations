@@ -25,8 +25,7 @@ type Map[V any] struct {
 }
 
 // SetOnEvict registers a callback that is invoked when an entry is evicted
-// to make room for a new one. The callback runs under the write lock, so it
-// must not call back into the Map.
+// to make room for a new one. The callback runs outside the write lock.
 func (m *Map[V]) SetOnEvict(fn func(key string, value V)) {
 	m.mu.Lock()
 	m.onEvict = fn
@@ -55,37 +54,45 @@ func (m *Map[V]) GetOrCreate(key string, create func() V) V {
 	m.mu.RUnlock()
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	// Double-check after acquiring write lock.
 	if e, ok := m.entries[key]; ok {
 		e.lastAccess.Store(time.Now().UnixNano())
+		m.mu.Unlock()
 		return e.value
 	}
 
 	// Evict LRU if at capacity.
+	var evictKey string
+	var evictVal V
+	var didEvict bool
 	if len(m.entries) >= m.maxSize {
-		var oldestKey string
 		var oldestTime int64
 		first := true
 		for k, e := range m.entries {
 			access := e.lastAccess.Load()
 			if first || access < oldestTime {
-				oldestKey = k
+				evictKey = k
 				oldestTime = access
 				first = false
 			}
 		}
-		if m.onEvict != nil {
-			m.onEvict(oldestKey, m.entries[oldestKey].value)
-		}
-		delete(m.entries, oldestKey)
+		evictVal = m.entries[evictKey].value
+		delete(m.entries, evictKey)
+		didEvict = true
 	}
 
 	v := create()
 	e := &entry[V]{value: v}
 	e.lastAccess.Store(time.Now().UnixNano())
 	m.entries[key] = e
+	m.mu.Unlock()
+
+	// Call eviction callback outside the lock.
+	if didEvict && m.onEvict != nil {
+		m.onEvict(evictKey, evictVal)
+	}
+
 	return v
 }
 

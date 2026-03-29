@@ -117,24 +117,6 @@ func (h *Handler) StartCleanup(ctx context.Context) {
 						h.mu.Unlock()
 					}
 				}
-
-				// Clean up appLocks for keys that have no active state and no grace timer.
-				h.appLocks.Range(func(key, _ any) bool {
-					k := key.(string)
-					parts := strings.SplitN(k, ":", 2)
-					if len(parts) != 2 {
-						h.appLocks.Delete(k)
-						return true
-					}
-					_, hasState, _ := h.loadApp(context.Background(), parts[0], parts[1])
-					h.mu.Lock()
-					_, hasTimer := h.graceTimers[k]
-					h.mu.Unlock()
-					if !hasState && !hasTimer {
-						h.appLocks.Delete(k)
-					}
-					return true
-				})
 			}
 		}
 	}()
