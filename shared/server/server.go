@@ -8,12 +8,26 @@ import (
 	"time"
 )
 
-// NewMux creates an http.ServeMux with a GET /health endpoint.
-func NewMux() *http.ServeMux {
+// NewMux creates an http.ServeMux with /health (liveness) and /ready (readiness) endpoints.
+// The optional checks are called on /ready requests; if any returns an error, /ready responds 503.
+func NewMux(checks ...func(context.Context) error) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		for _, check := range checks {
+			if err := check(ctx); err != nil {
+				slog.Warn("readiness check failed", "error", err)
+				http.Error(w, "service unavailable", http.StatusServiceUnavailable)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ready"))
 	})
 	return mux
 }
