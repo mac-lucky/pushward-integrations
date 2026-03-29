@@ -28,7 +28,7 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	userKey := auth.KeyFromContext(ctx)
-	tenant := auth.KeyHash(userKey)
+	log := slog.With("tenant", auth.KeyHash(userKey))
 
 	switch envelope.EventType {
 	case "Grab":
@@ -38,7 +38,7 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleRadarrGrab(ctx, userKey, tenant, &p)
+		h.handleRadarrGrab(ctx, userKey, log, &p)
 	case "Download":
 		var p RadarrDownloadPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
@@ -46,11 +46,11 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleRadarrDownload(ctx, userKey, tenant, &p)
+		h.handleRadarrDownload(ctx, userKey, log, &p)
 	case "Test":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "radarr"); err != nil {
-			slog.Error("test notification failed", "provider", "radarr", "error", err, "tenant", tenant)
+			log.Error("test notification failed", "provider", "radarr", "error", err)
 		}
 	case "Health":
 		var p HealthPayload
@@ -59,7 +59,7 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleHealth(ctx, userKey, tenant, "radarr", &p)
+		h.handleHealth(ctx, userKey, log, "radarr", &p)
 	case "HealthRestored":
 		var p HealthRestoredPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
@@ -67,7 +67,7 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleHealthRestored(ctx, userKey, tenant, "radarr", &p)
+		h.handleHealthRestored(ctx, userKey, log, "radarr", &p)
 	case "ManualInteractionRequired":
 		var p ManualInteractionPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
@@ -75,7 +75,7 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleManualInteraction(ctx, userKey, tenant, "radarr", &p)
+		h.handleManualInteraction(ctx, userKey, log, "radarr", &p)
 	default:
 		slog.Debug("ignored event", "event_type", envelope.EventType)
 	}
@@ -99,9 +99,9 @@ func radarrSubtitle(title, quality string) string {
 	return subtitle
 }
 
-func (h *Handler) handleRadarrGrab(ctx context.Context, userKey, tenant string, p *RadarrGrabPayload) {
+func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slog.Logger, p *RadarrGrabPayload) {
 	if p.DownloadID == "" {
-		slog.Warn("grab event missing downloadId", "tenant", tenant)
+		log.Warn("grab event missing downloadId")
 		return
 	}
 
@@ -114,7 +114,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey, tenant string, 
 
 	// Track in state store
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
-		slog.Error("failed to track download", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to track download", "slug", slug, "error", err)
 		return
 	}
 
@@ -123,11 +123,11 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey, tenant string, 
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
 	if err := cl.CreateActivity(ctx, slug, title, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create activity", "slug", slug, "error", err)
 		h.deleteTrackedSlug(ctx, userKey, mapKey)
 		return
 	}
-	slog.Info("created activity", "slug", slug, "title", title, "tenant", tenant)
+	log.Info("created activity", "slug", slug, "title", title)
 
 	step := 1
 	total := 2
@@ -146,15 +146,15 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey, tenant string, 
 	}
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "state", "Grabbed", "tenant", tenant)
+	log.Info("updated activity", "slug", slug, "state", "Grabbed")
 }
 
-func (h *Handler) handleRadarrDownload(ctx context.Context, userKey, tenant string, p *RadarrDownloadPayload) {
+func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log *slog.Logger, p *RadarrDownloadPayload) {
 	if p.DownloadID == "" {
-		slog.Warn("download event missing downloadId", "tenant", tenant)
+		log.Warn("download event missing downloadId")
 		return
 	}
 
@@ -171,7 +171,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey, tenant stri
 		slug = slugForDownload("radarr-", p.DownloadID)
 
 		if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
-			slog.Error("failed to track download", "slug", slug, "error", err, "tenant", tenant)
+			log.Error("failed to track download", "slug", slug, "error", err)
 			return
 		}
 
@@ -179,11 +179,11 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey, tenant stri
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := cl.CreateActivity(ctx, slug, title, h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
 			return
 		}
-		slog.Info("created activity (untracked download)", "slug", slug, "title", title, "tenant", tenant)
+		log.Info("created activity (untracked download)", "slug", slug, "title", title)
 	}
 
 	state := "Imported"
@@ -205,5 +205,5 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey, tenant stri
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-	slog.Info("scheduled end", "slug", slug, "state", state, "tenant", tenant)
+	log.Info("scheduled end", "slug", slug, "state", state)
 }

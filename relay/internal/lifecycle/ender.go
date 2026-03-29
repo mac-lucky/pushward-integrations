@@ -11,6 +11,11 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
+// EnderProvider is implemented by handlers that own a lifecycle.Ender.
+type EnderProvider interface {
+	Ender() *Ender
+}
+
 // EndConfig holds timing configuration for two-phase activity end.
 type EndConfig struct {
 	EndDelay       time.Duration

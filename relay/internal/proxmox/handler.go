@@ -55,22 +55,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userKey := auth.KeyFromContext(r.Context())
-	tenant := auth.KeyHash(userKey)
+	log := slog.With("tenant", auth.KeyHash(userKey))
 	ctx := r.Context()
 
 	switch payload.Type {
 	case "vzdump":
-		h.handleVzdump(ctx, userKey, tenant, &payload)
+		h.handleVzdump(ctx, userKey, log, &payload)
 	case "replication":
-		h.handleReplication(ctx, userKey, tenant, &payload)
+		h.handleReplication(ctx, userKey, log, &payload)
 	case "fencing":
-		h.handleFencing(ctx, userKey, tenant, &payload)
+		h.handleFencing(ctx, userKey, log, &payload)
 	case "package-updates":
-		h.handleUpdates(ctx, userKey, tenant, &payload)
+		h.handleUpdates(ctx, userKey, log, &payload)
 	case "system":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "proxmox"); err != nil {
-			slog.Error("test notification failed", "provider", "proxmox", "error", err, "tenant", tenant)
+			log.Error("test notification failed", "provider", "proxmox", "error", err)
 		}
 	default:
 		slog.Debug("unknown proxmox event type", "type", payload.Type)
@@ -80,7 +80,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handleVzdump(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
 	vmid := "unknown"
 	if m := vmidRe.FindStringSubmatch(p.Message); len(m) > 1 {
 		vmid = m[1]
@@ -100,7 +100,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey, tenant string, p *w
 	if strings.Contains(msgLower, "starting") || strings.Contains(titleLower, "starting") {
 		// Backup starting — create activity + ONGOING
 		if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create proxmox backup activity", "slug", slug, "error", err, "tenant", tenant)
+			log.Error("failed to create proxmox backup activity", "slug", slug, "error", err)
 			return
 		}
 
@@ -119,16 +119,16 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey, tenant string, p *w
 
 		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 		if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-			slog.Error("failed to update proxmox backup activity", "slug", slug, "error", err, "tenant", tenant)
+			log.Error("failed to update proxmox backup activity", "slug", slug, "error", err)
 			return
 		}
 
 		data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 		if err := h.store.Set(ctx, "proxmox", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-			slog.Warn("state store write failed", "error", err, "provider", "proxmox", "slug", slug, "tenant", tenant)
+			log.Warn("state store write failed", "error", err, "provider", "proxmox", "slug", slug)
 		}
 
-		slog.Info("proxmox backup started", "slug", slug, "vmid", vmid, "hostname", p.Hostname, "tenant", tenant)
+		log.Info("proxmox backup started", "slug", slug, "vmid", vmid, "hostname", p.Hostname)
 	} else if strings.Contains(msgLower, "finished successfully") {
 		// Only end if we have a tracked start event
 		existing, _ := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
@@ -150,7 +150,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey, tenant string, p *w
 		}
 
 		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-		slog.Info("proxmox backup completed", "slug", slug, "vmid", vmid, "hostname", p.Hostname, "tenant", tenant)
+		log.Info("proxmox backup completed", "slug", slug, "vmid", vmid, "hostname", p.Hostname)
 	} else if strings.Contains(msgLower, "failed") || strings.Contains(msgLower, "error") {
 		existing, _ := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
 		if existing == nil {
@@ -171,13 +171,13 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey, tenant string, p *w
 		}
 
 		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-		slog.Info("proxmox backup failed", "slug", slug, "vmid", vmid, "hostname", p.Hostname, "tenant", tenant)
+		log.Info("proxmox backup failed", "slug", slug, "vmid", vmid, "hostname", p.Hostname)
 	}
 }
 
 var replicationJobRe = regexp.MustCompile(`(?:job|Job)\s+([\d/]+)`)
 
-func (h *Handler) handleReplication(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+func (h *Handler) handleReplication(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
 	// Extract job ID from message — titles differ between start/finish phases.
 	jobID := "unknown"
 	if m := replicationJobRe.FindStringSubmatch(p.Message); len(m) > 1 {
@@ -199,7 +199,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey, tenant string,
 
 	if strings.Contains(msgLower, "starting") || strings.Contains(titleLower, "starting") {
 		if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create proxmox replication activity", "slug", slug, "error", err, "tenant", tenant)
+			log.Error("failed to create proxmox replication activity", "slug", slug, "error", err)
 			return
 		}
 
@@ -218,16 +218,16 @@ func (h *Handler) handleReplication(ctx context.Context, userKey, tenant string,
 
 		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 		if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-			slog.Error("failed to update proxmox replication activity", "slug", slug, "error", err, "tenant", tenant)
+			log.Error("failed to update proxmox replication activity", "slug", slug, "error", err)
 			return
 		}
 
 		data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 		if err := h.store.Set(ctx, "proxmox", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-			slog.Warn("state store write failed", "error", err, "provider", "proxmox", "slug", slug, "tenant", tenant)
+			log.Warn("state store write failed", "error", err, "provider", "proxmox", "slug", slug)
 		}
 
-		slog.Info("proxmox replication started", "slug", slug, "hostname", p.Hostname, "tenant", tenant)
+		log.Info("proxmox replication started", "slug", slug, "hostname", p.Hostname)
 	} else if strings.Contains(msgLower, "finished successfully") {
 		// Only end if we have a tracked start event
 		existing, _ := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
@@ -249,7 +249,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey, tenant string,
 		}
 
 		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-		slog.Info("proxmox replication completed", "slug", slug, "hostname", p.Hostname, "tenant", tenant)
+		log.Info("proxmox replication completed", "slug", slug, "hostname", p.Hostname)
 	} else if strings.Contains(msgLower, "failed") || strings.Contains(msgLower, "error") {
 		existing, _ := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
 		if existing == nil {
@@ -270,11 +270,11 @@ func (h *Handler) handleReplication(ctx context.Context, userKey, tenant string,
 		}
 
 		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-		slog.Info("proxmox replication failed", "slug", slug, "hostname", p.Hostname, "tenant", tenant)
+		log.Info("proxmox replication failed", "slug", slug, "hostname", p.Hostname)
 	}
 }
 
-func (h *Handler) handleFencing(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+func (h *Handler) handleFencing(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
 	slug := text.SlugHash("proxmox-fence", p.Hostname, 4)
 	mapKey := fmt.Sprintf("fencing:%s", p.Hostname)
 	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
@@ -284,7 +284,7 @@ func (h *Handler) handleFencing(ctx context.Context, userKey, tenant string, p *
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
 	if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create proxmox fencing activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create proxmox fencing activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -300,20 +300,20 @@ func (h *Handler) handleFencing(ctx context.Context, userKey, tenant string, p *
 
 	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update proxmox fencing activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update proxmox fencing activity", "slug", slug, "error", err)
 		return
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "proxmox", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		slog.Warn("state store write failed", "error", err, "provider", "proxmox", "slug", slug, "tenant", tenant)
+		log.Warn("state store write failed", "error", err, "provider", "proxmox", "slug", slug)
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-	slog.Info("proxmox fencing event", "slug", slug, "hostname", p.Hostname, "tenant", tenant)
+	log.Info("proxmox fencing event", "slug", slug, "hostname", p.Hostname)
 }
 
-func (h *Handler) handleUpdates(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+func (h *Handler) handleUpdates(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
 	slug := text.SlugHash("proxmox-updates", p.Hostname, 4)
 	mapKey := fmt.Sprintf("updates:%s", p.Hostname)
 	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
@@ -323,7 +323,7 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey, tenant string, p *
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
 	if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create proxmox updates activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create proxmox updates activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -339,15 +339,15 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey, tenant string, p *
 
 	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update proxmox updates activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update proxmox updates activity", "slug", slug, "error", err)
 		return
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "proxmox", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		slog.Warn("state store write failed", "error", err, "provider", "proxmox", "slug", slug, "tenant", tenant)
+		log.Warn("state store write failed", "error", err, "provider", "proxmox", "slug", slug)
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-	slog.Info("proxmox updates event", "slug", slug, "hostname", p.Hostname, "tenant", tenant)
+	log.Info("proxmox updates event", "slug", slug, "hostname", p.Hostname)
 }

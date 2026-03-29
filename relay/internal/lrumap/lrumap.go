@@ -21,6 +21,16 @@ type Map[V any] struct {
 	mu      sync.RWMutex
 	entries map[string]*entry[V]
 	maxSize int
+	onEvict func(key string, value V)
+}
+
+// SetOnEvict registers a callback that is invoked when an entry is evicted
+// to make room for a new one. The callback runs under the write lock, so it
+// must not call back into the Map.
+func (m *Map[V]) SetOnEvict(fn func(key string, value V)) {
+	m.mu.Lock()
+	m.onEvict = fn
+	m.mu.Unlock()
 }
 
 // New creates a Map that evicts the least-recently-used entry when
@@ -65,6 +75,9 @@ func (m *Map[V]) GetOrCreate(key string, create func() V) V {
 				oldestTime = access
 				first = false
 			}
+		}
+		if m.onEvict != nil {
+			m.onEvict(oldestKey, m.entries[oldestKey].value)
 		}
 		delete(m.entries, oldestKey)
 	}

@@ -52,24 +52,24 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userKey := auth.KeyFromContext(r.Context())
-	tenant := auth.KeyHash(userKey)
+	log := slog.With("tenant", auth.KeyHash(userKey))
 	ctx := r.Context()
 
 	switch payload.NotificationType {
 	case "MEDIA_PENDING":
-		h.handleEvent(ctx, userKey, tenant, &payload, 1, "Requested", "hourglass", pushward.ColorOrange, false)
+		h.handleEvent(ctx, userKey, log, &payload, 1, "Requested", "hourglass", pushward.ColorOrange, false)
 	case "MEDIA_APPROVED", "MEDIA_AUTO_APPROVED":
-		h.handleEvent(ctx, userKey, tenant, &payload, 2, "Approved", "checkmark.circle", pushward.ColorBlue, false)
+		h.handleEvent(ctx, userKey, log, &payload, 2, "Approved", "checkmark.circle", pushward.ColorBlue, false)
 	case "MEDIA_AVAILABLE":
-		h.handleEvent(ctx, userKey, tenant, &payload, 4, "Available", "checkmark.circle.fill", pushward.ColorGreen, true)
+		h.handleEvent(ctx, userKey, log, &payload, 4, "Available", "checkmark.circle.fill", pushward.ColorGreen, true)
 	case "MEDIA_DECLINED":
-		h.handleEvent(ctx, userKey, tenant, &payload, 0, "Declined", "xmark.circle.fill", pushward.ColorRed, true)
+		h.handleEvent(ctx, userKey, log, &payload, 0, "Declined", "xmark.circle.fill", pushward.ColorRed, true)
 	case "MEDIA_FAILED":
-		h.handleEvent(ctx, userKey, tenant, &payload, 0, "Failed", "xmark.circle.fill", pushward.ColorRed, true)
+		h.handleEvent(ctx, userKey, log, &payload, 0, "Failed", "xmark.circle.fill", pushward.ColorRed, true)
 	case "TEST_NOTIFICATION":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "overseerr"); err != nil {
-			slog.Error("test notification failed", "provider", "overseerr", "error", err, "tenant", tenant)
+			log.Error("test notification failed", "provider", "overseerr", "error", err)
 		}
 	default:
 		slog.Debug("unknown overseerr notification type", "type", payload.NotificationType)
@@ -79,17 +79,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handleEvent(ctx context.Context, userKey, tenant string, p *webhookPayload, step int, stateText, icon, accentColor string, terminal bool) {
+func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, step int, stateText, icon, accentColor string, terminal bool) {
 	// Validate media type against allowlist
 	switch p.Media.MediaType {
 	case "movie", "tv":
 	default:
-		slog.Warn("overseerr: invalid media_type", "media_type", p.Media.MediaType, "tenant", tenant)
+		log.Warn("overseerr: invalid media_type", "media_type", p.Media.MediaType)
 		return
 	}
 	// Validate TmdbID is numeric and non-empty
 	if p.Media.TmdbID == "" || !isNumeric(p.Media.TmdbID) {
-		slog.Warn("overseerr: invalid tmdbId", "tmdbId", p.Media.TmdbID, "tenant", tenant)
+		log.Warn("overseerr: invalid tmdbId", "tmdbId", p.Media.TmdbID)
 		return
 	}
 
@@ -107,7 +107,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey, tenant string, p *we
 	}
 
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create overseerr activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create overseerr activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -131,20 +131,20 @@ func (h *Handler) handleEvent(ctx context.Context, userKey, tenant string, p *we
 		Content: content,
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update overseerr activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update overseerr activity", "slug", slug, "error", err)
 		return
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "overseerr", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		slog.Warn("state store write failed", "error", err, "provider", "overseerr", "slug", slug, "tenant", tenant)
+		log.Warn("state store write failed", "error", err, "provider", "overseerr", "slug", slug)
 	}
 
 	if terminal {
 		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	}
 
-	slog.Info("overseerr event", "slug", slug, "type", stateText, "tenant", tenant)
+	log.Info("overseerr event", "slug", slug, "type", stateText)
 }
 
 func isNumeric(s string) bool {

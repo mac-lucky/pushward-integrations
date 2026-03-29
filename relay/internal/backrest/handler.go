@@ -50,36 +50,36 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userKey := auth.KeyFromContext(r.Context())
-	tenant := auth.KeyHash(userKey)
+	log := slog.With("tenant", auth.KeyHash(userKey))
 	ctx := r.Context()
 
 	switch payload.Event {
 	case "CONDITION_SNAPSHOT_START":
-		h.handleStart(ctx, userKey, tenant, &payload, "Backing up...")
+		h.handleStart(ctx, userKey, log, &payload, "Backing up...")
 	case "CONDITION_SNAPSHOT_SUCCESS":
 		stateText := "Complete · " + formatBytes(payload.DataAdded)
-		h.handleEnd(ctx, userKey, tenant, &payload, stateText, pushward.ColorGreen, "checkmark.circle.fill")
+		h.handleEnd(ctx, userKey, log, &payload, stateText, pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_SNAPSHOT_WARNING":
-		h.handleEnd(ctx, userKey, tenant, &payload, "Complete (warnings)", pushward.ColorOrange, "exclamationmark.triangle.fill")
+		h.handleEnd(ctx, userKey, log, &payload, "Complete (warnings)", pushward.ColorOrange, "exclamationmark.triangle.fill")
 	case "CONDITION_SNAPSHOT_ERROR":
 		stateText := "Failed"
 		if payload.Error != "" {
 			msg := text.TruncateHard(payload.Error, 50)
 			stateText = "Failed: " + msg
 		}
-		h.handleEnd(ctx, userKey, tenant, &payload, stateText, pushward.ColorRed, "xmark.circle.fill")
+		h.handleEnd(ctx, userKey, log, &payload, stateText, pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_PRUNE_START":
-		h.handleStart(ctx, userKey, tenant, &payload, "Pruning...")
+		h.handleStart(ctx, userKey, log, &payload, "Pruning...")
 	case "CONDITION_PRUNE_SUCCESS":
-		h.handleEnd(ctx, userKey, tenant, &payload, "Pruned", pushward.ColorGreen, "checkmark.circle.fill")
+		h.handleEnd(ctx, userKey, log, &payload, "Pruned", pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_PRUNE_ERROR":
-		h.handleEnd(ctx, userKey, tenant, &payload, "Prune Failed", pushward.ColorRed, "xmark.circle.fill")
+		h.handleEnd(ctx, userKey, log, &payload, "Prune Failed", pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_CHECK_START":
-		h.handleStart(ctx, userKey, tenant, &payload, "Checking...")
+		h.handleStart(ctx, userKey, log, &payload, "Checking...")
 	case "CONDITION_CHECK_SUCCESS":
-		h.handleEnd(ctx, userKey, tenant, &payload, "Check Passed", pushward.ColorGreen, "checkmark.circle.fill")
+		h.handleEnd(ctx, userKey, log, &payload, "Check Passed", pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_CHECK_ERROR":
-		h.handleEnd(ctx, userKey, tenant, &payload, "Check Failed", pushward.ColorRed, "xmark.circle.fill")
+		h.handleEnd(ctx, userKey, log, &payload, "Check Failed", pushward.ColorRed, "xmark.circle.fill")
 	default:
 		slog.Debug("unknown backrest event", "event", payload.Event)
 	}
@@ -94,7 +94,7 @@ func (h *Handler) slugAndKey(p *webhookPayload) (string, string) {
 	return slug, mapKey
 }
 
-func (h *Handler) handleStart(ctx context.Context, userKey, tenant string, p *webhookPayload, stateText string) {
+func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText string) {
 	slug, mapKey := h.slugAndKey(p)
 
 	cl := h.clients.Get(userKey)
@@ -107,7 +107,7 @@ func (h *Handler) handleStart(ctx context.Context, userKey, tenant string, p *we
 	}
 
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create backrest activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create backrest activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -133,19 +133,19 @@ func (h *Handler) handleStart(ctx context.Context, userKey, tenant string, p *we
 		Content: content,
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update backrest activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update backrest activity", "slug", slug, "error", err)
 		return
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "backrest", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		slog.Warn("state store write failed", "error", err, "provider", "backrest", "slug", slug, "tenant", tenant)
+		log.Warn("state store write failed", "error", err, "provider", "backrest", "slug", slug)
 	}
 
-	slog.Info("backrest started", "slug", slug, "event", p.Event, "state", stateText, "tenant", tenant)
+	log.Info("backrest started", "slug", slug, "event", p.Event, "state", stateText)
 }
 
-func (h *Handler) handleEnd(ctx context.Context, userKey, tenant string, p *webhookPayload, stateText, color, icon string) {
+func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText, color, icon string) {
 	slug, mapKey := h.slugAndKey(p)
 
 	cl := h.clients.Get(userKey)
@@ -159,7 +159,7 @@ func (h *Handler) handleEnd(ctx context.Context, userKey, tenant string, p *webh
 
 	// Create activity in case we missed the start event
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create backrest activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create backrest activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -182,12 +182,12 @@ func (h *Handler) handleEnd(ctx context.Context, userKey, tenant string, p *webh
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "backrest", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		slog.Warn("state store write failed", "error", err, "provider", "backrest", "slug", slug, "tenant", tenant)
+		log.Warn("state store write failed", "error", err, "provider", "backrest", "slug", slug)
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
-	slog.Info("backrest end scheduled", "slug", slug, "event", p.Event, "state", stateText, "tenant", tenant)
+	log.Info("backrest end scheduled", "slug", slug, "event", p.Event, "state", stateText)
 }
 
 func formatBytes(b int64) string {

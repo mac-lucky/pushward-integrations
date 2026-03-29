@@ -50,16 +50,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	userKey := auth.KeyFromContext(r.Context())
-	tenant := auth.KeyHash(userKey)
+	log := slog.With("tenant", auth.KeyHash(userKey))
 	ctx := r.Context()
 
 	switch payload.Event {
 	case "added":
-		h.handleDocument(ctx, userKey, tenant, &payload, "Processed")
+		h.handleDocument(ctx, userKey, log, &payload, "Processed")
 	case "updated":
-		h.handleDocument(ctx, userKey, tenant, &payload, "Updated")
+		h.handleDocument(ctx, userKey, log, &payload, "Updated")
 	case "consumption_started":
-		h.handleConsumptionStarted(ctx, userKey, tenant, &payload)
+		h.handleConsumptionStarted(ctx, userKey, log, &payload)
 	default:
 		slog.Debug("unknown paperless event", "event", payload.Event)
 	}
@@ -69,9 +69,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDocument processes "added" and "updated" events.
-func (h *Handler) handleDocument(ctx context.Context, userKey, tenant string, p *webhookPayload, stateText string) {
+func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText string) {
 	if p.DocID == nil {
-		slog.Warn("document event missing doc_id", "event", p.Event, "tenant", tenant)
+		log.Warn("document event missing doc_id", "event", p.Event)
 		return
 	}
 
@@ -88,7 +88,7 @@ func (h *Handler) handleDocument(ctx context.Context, userKey, tenant string, p 
 	}
 
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create paperless activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create paperless activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -109,23 +109,23 @@ func (h *Handler) handleDocument(ctx context.Context, userKey, tenant string, p 
 		Content: content,
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update paperless activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update paperless activity", "slug", slug, "error", err)
 		return
 	}
 
 	// Store state and schedule two-phase end
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "paperless", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		slog.Warn("state store write failed", "error", err, "provider", "paperless", "slug", slug, "tenant", tenant)
+		log.Warn("state store write failed", "error", err, "provider", "paperless", "slug", slug)
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
-	slog.Info("paperless document", "slug", slug, "event", p.Event, "state", stateText, "tenant", tenant)
+	log.Info("paperless document", "slug", slug, "event", p.Event, "state", stateText)
 }
 
 // handleConsumptionStarted processes "consumption_started" events.
-func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
 	slug := text.SlugHash("paperless", p.Filename, 4)
 	mapKey := slug
 
@@ -139,7 +139,7 @@ func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey, tenant 
 	}
 
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create paperless activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create paperless activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -159,7 +159,7 @@ func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey, tenant 
 		Content: content,
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update paperless activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update paperless activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -168,7 +168,7 @@ func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey, tenant 
 	// with a doc_id-based slug (different from this filename-based slug).
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
-	slog.Info("paperless consumption started", "slug", slug, "filename", p.Filename, "tenant", tenant)
+	log.Info("paperless consumption started", "slug", slug, "filename", p.Filename)
 }
 
 // buildSubtitle constructs "Paperless · DocumentType · Correspondent", omitting empty parts.

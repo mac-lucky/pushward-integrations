@@ -140,37 +140,37 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	userKey := auth.KeyFromContext(ctx)
-	tenant := auth.KeyHash(userKey)
+	log := slog.With("tenant", auth.KeyHash(userKey))
 
 	switch payload.NotificationType {
 	case "PlaybackStart":
-		h.handlePlaybackStart(ctx, userKey, tenant, &payload)
+		h.handlePlaybackStart(ctx, userKey, log, &payload)
 	case "PlaybackProgress":
-		h.handlePlaybackProgress(ctx, userKey, tenant, &payload)
+		h.handlePlaybackProgress(ctx, userKey, log, &payload)
 	case "PlaybackStop":
-		h.handlePlaybackStop(ctx, userKey, tenant, &payload)
+		h.handlePlaybackStop(ctx, userKey, log, &payload)
 	case "ItemAdded":
-		h.handleItemAdded(ctx, userKey, tenant, &payload)
+		h.handleItemAdded(ctx, userKey, log, &payload)
 	case "ScheduledTaskStarted":
-		h.handleTaskStarted(ctx, userKey, tenant, &payload)
+		h.handleTaskStarted(ctx, userKey, log, &payload)
 	case "ScheduledTaskCompleted":
-		h.handleTaskCompleted(ctx, userKey, tenant, &payload)
+		h.handleTaskCompleted(ctx, userKey, log, &payload)
 	case "AuthenticationFailure":
-		h.handleAuthFailure(ctx, userKey, tenant, &payload)
+		h.handleAuthFailure(ctx, userKey, log, &payload)
 	case "GenericUpdateNotification":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "jellyfin"); err != nil {
-			slog.Error("test notification failed", "provider", "jellyfin", "error", err, "tenant", tenant)
+			log.Error("test notification failed", "provider", "jellyfin", "error", err)
 		}
 	default:
-		slog.Warn("unknown notification type", "type", payload.NotificationType, "tenant", tenant)
+		log.Warn("unknown notification type", "type", payload.NotificationType)
 	}
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handlePlaybackStart(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
 	slug := playbackSlug(p.ItemID, p.UserName)
 
 	// Skip paused starts �� Jellyfin fires PlaybackStart with IsPaused=true
@@ -183,7 +183,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey, tenant strin
 		h.lastProgress[debounceKey] = playbackProgress(p)
 		h.lastUpdate[debounceKey] = time.Now()
 		h.mu.Unlock()
-		slog.Info("skipped paused playback start", "slug", slug, "tenant", tenant)
+		log.Info("skipped paused playback start", "slug", slug)
 		return
 	}
 
@@ -195,15 +195,15 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey, tenant strin
 
 	name := mediaName(p)
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("created activity", "slug", slug, "name", name, "tenant", tenant)
+	log.Info("created activity", "slug", slug, "name", name)
 
 	// Store in state store
 	data, _ := json.Marshal(map[string]string{"slug": slug})
 	if err := h.store.Set(ctx, "jellyfin", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		slog.Warn("state store write failed", "error", err, "provider", "jellyfin", "slug", slug, "tenant", tenant)
+		log.Warn("state store write failed", "error", err, "provider", "jellyfin", "slug", slug)
 	}
 
 	remaining := remainingSeconds(p)
@@ -221,7 +221,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey, tenant strin
 	}
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -233,10 +233,10 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey, tenant strin
 	h.lastProgress[debounceKey] = playbackProgress(p)
 	h.mu.Unlock()
 
-	slog.Info("updated activity", "slug", slug, "state", "Playing on "+p.DeviceName+" by "+p.UserName, "tenant", tenant)
+	log.Info("updated activity", "slug", slug, "state", "Playing on "+p.DeviceName+" by "+p.UserName)
 }
 
-func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
 	slug := playbackSlug(p.ItemID, p.UserName)
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
@@ -318,13 +318,13 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey, tenant st
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		name := mediaName(p)
 		if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+			log.Error("failed to create activity", "slug", slug, "error", err)
 			return
 		}
-		slog.Info("created activity (late join)", "slug", slug, "name", name, "tenant", tenant)
+		log.Info("created activity (late join)", "slug", slug, "name", name)
 		data, _ := json.Marshal(map[string]string{"slug": slug})
 		if err := h.store.Set(ctx, "jellyfin", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-			slog.Warn("state store write failed", "error", err, "provider", "jellyfin", "slug", slug, "tenant", tenant)
+			log.Warn("state store write failed", "error", err, "provider", "jellyfin", "slug", slug)
 		}
 	}
 
@@ -350,13 +350,13 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey, tenant st
 	}
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("updated activity (progress)", "slug", slug, "paused", p.IsPaused, "tenant", tenant)
+	log.Info("updated activity (progress)", "slug", slug, "paused", p.IsPaused)
 }
 
-func (h *Handler) handlePlaybackStop(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
 	slug := playbackSlug(p.ItemID, p.UserName)
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
@@ -389,10 +389,10 @@ func (h *Handler) handlePlaybackStop(ctx context.Context, userKey, tenant string
 	}
 
 	h.scheduleEnd(userKey, mapKey, slug, content)
-	slog.Info("scheduled end", "slug", slug, "state", "Watched on "+p.DeviceName+" by "+p.UserName, "tenant", tenant)
+	log.Info("scheduled end", "slug", slug, "state", "Watched on "+p.DeviceName+" by "+p.UserName)
 }
 
-func (h *Handler) handleItemAdded(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
 	slug := itemSlug(p.ItemID)
 	mapKey := "item:" + p.ItemID
 
@@ -402,10 +402,10 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey, tenant string, p
 
 	name := mediaName(p)
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("created activity", "slug", slug, "name", name, "tenant", tenant)
+	log.Info("created activity", "slug", slug, "name", name)
 
 	subtitle := "Jellyfin"
 	if p.ProductionYear > 0 {
@@ -432,16 +432,16 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey, tenant string, p
 		Content: content,
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
 
 	// Immediate two-phase end
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-	slog.Info("scheduled end", "slug", slug, "state", "Added to library", "tenant", tenant)
+	log.Info("scheduled end", "slug", slug, "state", "Added to library")
 }
 
-func (h *Handler) handleTaskStarted(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
 	slug := taskSlug(p.TaskName)
 	mapKey := "task:" + p.TaskName
 
@@ -450,15 +450,15 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey, tenant string,
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
 	if err := cl.CreateActivity(ctx, slug, p.TaskName, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("created activity", "slug", slug, "name", p.TaskName, "tenant", tenant)
+	log.Info("created activity", "slug", slug, "name", p.TaskName)
 
 	// Store in state store
 	data, _ := json.Marshal(map[string]string{"slug": slug})
 	if err := h.store.Set(ctx, "jellyfin", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		slog.Warn("state store write failed", "error", err, "provider", "jellyfin", "slug", slug, "tenant", tenant)
+		log.Warn("state store write failed", "error", err, "provider", "jellyfin", "slug", slug)
 	}
 
 	step := 1
@@ -479,13 +479,13 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey, tenant string,
 	}
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "step", "1/2", "state", "Running...", "tenant", tenant)
+	log.Info("updated activity", "slug", slug, "step", "1/2", "state", "Running...")
 }
 
-func (h *Handler) handleTaskCompleted(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
 	slug := taskSlug(p.TaskName)
 	mapKey := "task:" + p.TaskName
 
@@ -513,10 +513,10 @@ func (h *Handler) handleTaskCompleted(ctx context.Context, userKey, tenant strin
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-	slog.Info("scheduled end", "slug", slug, "step", "2/2", "state", stateText, "tenant", tenant)
+	log.Info("scheduled end", "slug", slug, "step", "2/2", "state", stateText)
 }
 
-func (h *Handler) handleAuthFailure(ctx context.Context, userKey, tenant string, p *webhookPayload) {
+func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
 	slug := authSlug(p.UserName, p.RemoteEndPoint)
 
 	cl := h.clients.Get(userKey)
@@ -524,10 +524,10 @@ func (h *Handler) handleAuthFailure(ctx context.Context, userKey, tenant string,
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
 	if err := cl.CreateActivity(ctx, slug, "Auth Failure", h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("created activity", "slug", slug, "tenant", tenant)
+	log.Info("created activity", "slug", slug)
 
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
@@ -543,10 +543,10 @@ func (h *Handler) handleAuthFailure(ctx context.Context, userKey, tenant string,
 	}
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("auth failure", "slug", slug, "user", p.UserName, "remote", p.RemoteEndPoint, "tenant", tenant)
+	log.Info("auth failure", "slug", slug, "user", p.UserName, "remote", p.RemoteEndPoint)
 }
 
 // scheduleEnd schedules a two-phase end for an activity via lifecycle.Ender,

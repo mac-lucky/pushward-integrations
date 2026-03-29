@@ -78,7 +78,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	userKey := auth.KeyFromContext(ctx)
-	tenant := auth.KeyHash(userKey)
+	log := slog.With("tenant", auth.KeyHash(userKey))
 	pwClient := h.clients.Get(userKey)
 
 	for _, a := range payload.Alerts {
@@ -120,11 +120,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		switch a.Status {
 		case "firing":
-			h.handleFiring(ctx, userKey, tenant, pwClient, alertname, a.Fingerprint, info)
+			h.handleFiring(ctx, userKey, log, pwClient, alertname, a.Fingerprint, info)
 		case "resolved":
-			h.handleResolved(ctx, userKey, tenant, pwClient, alertname, a.Fingerprint, info)
+			h.handleResolved(ctx, userKey, log, pwClient, alertname, a.Fingerprint, info)
 		default:
-			slog.Warn("unknown alert status", "status", a.Status, "fingerprint", a.Fingerprint, "tenant", tenant)
+			log.Warn("unknown alert status", "status", a.Status, "fingerprint", a.Fingerprint)
 		}
 	}
 
@@ -132,17 +132,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handleFiring(ctx context.Context, userKey, tenant string, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) {
+func (h *Handler) handleFiring(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) {
 	existing, err := h.store.GetGroup(ctx, "grafana", userKey, alertname)
 	if err != nil {
-		slog.Error("failed to get alert group", "alertname", alertname, "error", err, "tenant", tenant)
+		log.Error("failed to get alert group", "alertname", alertname, "error", err)
 		return
 	}
 	isNew := len(existing) == 0
 
 	data, _ := json.Marshal(info)
 	if err := h.store.Set(ctx, "grafana", userKey, alertname, fingerprint, data, h.config.StaleTimeout); err != nil {
-		slog.Error("failed to store instance", "alertname", alertname, "fingerprint", fingerprint, "error", err, "tenant", tenant)
+		log.Error("failed to store instance", "alertname", alertname, "fingerprint", fingerprint, "error", err)
 		return
 	}
 
@@ -152,33 +152,30 @@ func (h *Handler) handleFiring(ctx context.Context, userKey, tenant string, pwCl
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := pwClient.CreateActivity(ctx, slug, alertname, h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+			log.Error("failed to create activity", "slug", slug, "error", err)
 			if err := h.store.DeleteGroup(ctx, "grafana", userKey, alertname); err != nil {
-				slog.Warn("state store delete group failed", "error", err, "provider", "grafana", "alertname", alertname, "tenant", tenant)
+				log.Warn("state store delete group failed", "error", err, "provider", "grafana", "alertname", alertname)
 			}
 			return
 		}
-		slog.Info("created activity", "slug", slug, "alertname", alertname, "tenant", tenant)
+		log.Info("created activity", "slug", slug, "alertname", alertname)
 	}
 
-	instances, err := h.store.GetGroup(ctx, "grafana", userKey, alertname)
-	if err != nil {
-		slog.Error("failed to get instances for update", "alertname", alertname, "error", err, "tenant", tenant)
-		return
-	}
+	// Merge newly written instance into the first read to avoid a second DB round-trip.
+	existing[fingerprint] = json.RawMessage(data)
 
-	req := h.buildOngoingUpdate(instances)
+	req := h.buildOngoingUpdate(existing)
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", req.Content.Severity, "tenant", tenant)
+	log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", req.Content.Severity)
 }
 
-func (h *Handler) handleResolved(ctx context.Context, userKey, tenant string, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) {
+func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) {
 	existing, err := h.store.Get(ctx, "grafana", userKey, alertname, fingerprint)
 	if err != nil {
-		slog.Error("failed to check instance", "alertname", alertname, "fingerprint", fingerprint, "error", err, "tenant", tenant)
+		log.Error("failed to check instance", "alertname", alertname, "fingerprint", fingerprint, "error", err)
 		return
 	}
 	if existing == nil {
@@ -186,13 +183,13 @@ func (h *Handler) handleResolved(ctx context.Context, userKey, tenant string, pw
 	}
 
 	if err := h.store.Delete(ctx, "grafana", userKey, alertname, fingerprint); err != nil {
-		slog.Error("failed to delete instance", "alertname", alertname, "fingerprint", fingerprint, "error", err, "tenant", tenant)
+		log.Error("failed to delete instance", "alertname", alertname, "fingerprint", fingerprint, "error", err)
 		return
 	}
 
 	remaining, err := h.store.GetGroup(ctx, "grafana", userKey, alertname)
 	if err != nil {
-		slog.Error("failed to get remaining instances", "alertname", alertname, "error", err, "tenant", tenant)
+		log.Error("failed to get remaining instances", "alertname", alertname, "error", err)
 		return
 	}
 
@@ -206,17 +203,17 @@ func (h *Handler) handleResolved(ctx context.Context, userKey, tenant string, pw
 	}
 
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity on resolve", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity on resolve", "slug", slug, "error", err)
 		return
 	}
 
 	if len(remaining) == 0 {
-		slog.Info("ended activity", "slug", slug, "state", pushward.StateEnded, "tenant", tenant)
+		log.Info("ended activity", "slug", slug, "state", pushward.StateEnded)
 		if err := h.store.DeleteGroup(ctx, "grafana", userKey, alertname); err != nil {
-			slog.Warn("state store delete group failed", "error", err, "provider", "grafana", "alertname", alertname, "tenant", tenant)
+			log.Warn("state store delete group failed", "error", err, "provider", "grafana", "alertname", alertname)
 		}
 	} else {
-		slog.Info("updated activity after partial resolve", "slug", slug, "remaining", len(remaining), "tenant", tenant)
+		log.Info("updated activity after partial resolve", "slug", slug, "remaining", len(remaining))
 	}
 }
 

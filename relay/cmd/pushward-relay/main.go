@@ -96,6 +96,13 @@ func main() {
 	// Provider handlers
 	var enders []*lifecycle.Ender
 
+	// collectEnder appends the handler's Ender if it implements lifecycle.EnderProvider.
+	collectEnder := func(handler any) {
+		if ep, ok := handler.(lifecycle.EnderProvider); ok {
+			enders = append(enders, ep.Ender())
+		}
+	}
+
 	if cfg.Providers.Grafana.Enabled {
 		gh := grafana.NewHandler(store, clients, &cfg.Providers.Grafana)
 		mux.Handle("POST /grafana", wrapHandler(gh))
@@ -105,7 +112,7 @@ func main() {
 	if cfg.Providers.ArgoCD.Enabled {
 		ah := argocd.NewHandler(store, clients, &cfg.Providers.ArgoCD)
 		mux.Handle("POST /argocd", wrapHandler(ah))
-		enders = append(enders, ah.Ender())
+		collectEnder(ah)
 		ah.StartCleanup(ctx)
 		slog.Info("enabled provider", "provider", "argocd")
 	}
@@ -114,14 +121,14 @@ func main() {
 		sh := starr.NewHandler(store, clients, &cfg.Providers.Starr)
 		mux.Handle("POST /radarr", wrapHandler(sh.RadarrHandler()))
 		mux.Handle("POST /sonarr", wrapHandler(sh.SonarrHandler()))
-		enders = append(enders, sh.Ender())
+		collectEnder(sh)
 		slog.Info("enabled provider", "provider", "starr")
 	}
 
 	if cfg.Providers.Jellyfin.Enabled {
 		jh := jellyfin.NewHandler(store, clients, &cfg.Providers.Jellyfin)
 		mux.Handle("POST /jellyfin", wrapHandler(jh))
-		enders = append(enders, jh.Ender())
+		collectEnder(jh)
 		jh.StartCleanup(ctx)
 		slog.Info("enabled provider", "provider", "jellyfin")
 	}
@@ -129,7 +136,7 @@ func main() {
 	if cfg.Providers.Paperless.Enabled {
 		ph := paperless.NewHandler(store, clients, &cfg.Providers.Paperless)
 		mux.Handle("POST /paperless", wrapHandler(ph))
-		enders = append(enders, ph.Ender())
+		collectEnder(ph)
 		slog.Info("enabled provider", "provider", "paperless")
 	}
 
@@ -142,42 +149,42 @@ func main() {
 	if cfg.Providers.Unmanic.Enabled {
 		uh := unmanic.NewHandler(clients, &cfg.Providers.Unmanic)
 		mux.Handle("POST /unmanic", wrapHandler(uh))
-		enders = append(enders, uh.Ender())
+		collectEnder(uh)
 		slog.Info("enabled provider", "provider", "unmanic")
 	}
 
 	if cfg.Providers.Proxmox.Enabled {
 		pxh := proxmox.NewHandler(store, clients, &cfg.Providers.Proxmox)
 		mux.Handle("POST /proxmox", wrapHandler(pxh))
-		enders = append(enders, pxh.Ender())
+		collectEnder(pxh)
 		slog.Info("enabled provider", "provider", "proxmox")
 	}
 
 	if cfg.Providers.Overseerr.Enabled {
 		oh := overseerr.NewHandler(store, clients, &cfg.Providers.Overseerr)
 		mux.Handle("POST /overseerr", wrapHandler(oh))
-		enders = append(enders, oh.Ender())
+		collectEnder(oh)
 		slog.Info("enabled provider", "provider", "overseerr")
 	}
 
 	if cfg.Providers.UptimeKuma.Enabled {
 		ukh := uptimekuma.NewHandler(store, clients, &cfg.Providers.UptimeKuma)
 		mux.Handle("POST /uptimekuma", wrapHandler(ukh))
-		enders = append(enders, ukh.Ender())
+		collectEnder(ukh)
 		slog.Info("enabled provider", "provider", "uptimekuma")
 	}
 
 	if cfg.Providers.Gatus.Enabled {
 		gah := gatus.NewHandler(store, clients, &cfg.Providers.Gatus)
 		mux.Handle("POST /gatus", wrapHandler(gah))
-		enders = append(enders, gah.Ender())
+		collectEnder(gah)
 		slog.Info("enabled provider", "provider", "gatus")
 	}
 
 	if cfg.Providers.Backrest.Enabled {
 		bh := backrest.NewHandler(store, clients, &cfg.Providers.Backrest)
 		mux.Handle("POST /backrest", wrapHandler(bh))
-		enders = append(enders, bh.Ender())
+		collectEnder(bh)
 		slog.Info("enabled provider", "provider", "backrest")
 	}
 

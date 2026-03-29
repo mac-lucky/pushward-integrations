@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"log/slog"
 	"net/http"
 
 	"golang.org/x/time/rate"
@@ -30,6 +31,12 @@ func (m *limiterMap) get(key string) *rate.Limiter {
 }
 
 var keyLimiters = newLimiterMap(1, 10, 10_000)
+
+func init() {
+	keyLimiters.entries.SetOnEvict(func(key string, _ *rate.Limiter) {
+		slog.Warn("rate limiter evicted", "ip_hash", key)
+	})
+}
 
 // Middleware applies per-key rate limiting. Must run after auth.Middleware
 // so that auth.KeyFromContext returns the hlk_ key.

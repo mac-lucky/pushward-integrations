@@ -115,7 +115,7 @@ func healthSlug(provider, checkType string) string {
 }
 
 // handleHealth creates an alert-style activity for a health issue.
-func (h *Handler) handleHealth(ctx context.Context, userKey, tenant, provider string, p *HealthPayload) {
+func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Logger, provider string, p *HealthPayload) {
 	slug := healthSlug(provider, p.Type)
 	mapKey := provider + ":health:" + p.Type
 
@@ -128,7 +128,7 @@ func (h *Handler) handleHealth(ctx context.Context, userKey, tenant, provider st
 
 	name := titleCase(provider) + " Health"
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create health activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create health activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -156,20 +156,20 @@ func (h *Handler) handleHealth(ctx context.Context, userKey, tenant, provider st
 	}
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update health activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update health activity", "slug", slug, "error", err)
 		return
 	}
 
 	// Track in state store for HealthRestored to find
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
-		slog.Error("failed to track health issue", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to track health issue", "slug", slug, "error", err)
 	}
 
-	slog.Info("health issue", "slug", slug, "provider", provider, "type", p.Type, "level", p.Level, "tenant", tenant)
+	log.Info("health issue", "slug", slug, "provider", provider, "type", p.Type, "level", p.Level)
 }
 
 // handleHealthRestored ends the health activity with a resolved state.
-func (h *Handler) handleHealthRestored(ctx context.Context, userKey, tenant, provider string, p *HealthRestoredPayload) {
+func (h *Handler) handleHealthRestored(ctx context.Context, userKey string, log *slog.Logger, provider string, p *HealthRestoredPayload) {
 	mapKey := provider + ":health:" + p.Type
 	slug, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
 	if !tracked {
@@ -187,13 +187,13 @@ func (h *Handler) handleHealthRestored(ctx context.Context, userKey, tenant, pro
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-	slog.Info("health restored", "slug", slug, "provider", provider, "type", p.Type, "tenant", tenant)
+	log.Info("health restored", "slug", slug, "provider", provider, "type", p.Type)
 }
 
 // handleManualInteraction sends an ONGOING warning update on an existing tracked download.
-func (h *Handler) handleManualInteraction(ctx context.Context, userKey, tenant, provider string, p *ManualInteractionPayload) {
+func (h *Handler) handleManualInteraction(ctx context.Context, userKey string, log *slog.Logger, provider string, p *ManualInteractionPayload) {
 	if p.DownloadID == "" {
-		slog.Warn("manual interaction missing downloadId", "provider", provider, "tenant", tenant)
+		log.Warn("manual interaction missing downloadId", "provider", provider)
 		return
 	}
 
@@ -229,8 +229,8 @@ func (h *Handler) handleManualInteraction(ctx context.Context, userKey, tenant, 
 	}
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity for manual interaction", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity for manual interaction", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("manual interaction required", "slug", slug, "provider", provider, "downloadId", p.DownloadID, "tenant", tenant)
+	log.Info("manual interaction required", "slug", slug, "provider", provider, "downloadId", p.DownloadID)
 }

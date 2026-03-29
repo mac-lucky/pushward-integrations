@@ -42,7 +42,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	userKey := auth.KeyFromContext(ctx)
-	tenant := auth.KeyHash(userKey)
+	log := slog.With("tenant", auth.KeyHash(userKey))
 	pwClient := h.clients.Get(userKey)
 
 	slug := slugForURL(payload.URL)
@@ -70,7 +70,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 	if err := pwClient.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -92,7 +92,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Content: content,
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, ongoingReq); err != nil {
-		slog.Error("failed to update activity to ONGOING", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity to ONGOING", "slug", slug, "error", err)
 		return
 	}
 
@@ -101,11 +101,11 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Content: content,
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, endedReq); err != nil {
-		slog.Error("failed to update activity to ENDED", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity to ENDED", "slug", slug, "error", err)
 		return
 	}
 
-	slog.Info("processed changedetection webhook", "slug", slug, "url", payload.URL, "tenant", tenant)
+	log.Info("processed changedetection webhook", "slug", slug, "url", payload.URL)
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))

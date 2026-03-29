@@ -53,29 +53,29 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 	userKey := auth.KeyFromContext(ctx)
-	tenant := auth.KeyHash(userKey)
+	log := slog.With("tenant", auth.KeyHash(userKey))
 	pwClient := h.clients.Get(userKey)
 
 	switch payload.Heartbeat.Status {
 	case 0: // DOWN
-		h.handleDown(ctx, userKey, tenant, pwClient, &payload)
+		h.handleDown(ctx, userKey, log, pwClient, &payload)
 	case 1: // UP
-		h.handleUp(ctx, userKey, tenant, pwClient, &payload)
+		h.handleUp(ctx, userKey, log, pwClient, &payload)
 	case 2: // PENDING
-		h.handlePending(ctx, userKey, tenant, pwClient, &payload)
+		h.handlePending(ctx, userKey, log, pwClient, &payload)
 	case 3: // MAINTENANCE — used as test event
 		if err := selftest.SendTest(ctx, pwClient, "uptimekuma"); err != nil {
-			slog.Error("test notification failed", "provider", "uptimekuma", "error", err, "tenant", tenant)
+			log.Error("test notification failed", "provider", "uptimekuma", "error", err)
 		}
 	default:
-		slog.Warn("unknown heartbeat status", "status", payload.Heartbeat.Status, "monitor_id", payload.Monitor.ID, "tenant", tenant)
+		log.Warn("unknown heartbeat status", "status", payload.Heartbeat.Status, "monitor_id", payload.Monitor.ID)
 	}
 
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handleDown(ctx context.Context, userKey, tenant string, pwClient *pushward.Client, p *webhookPayload) {
+func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) {
 	slug := fmt.Sprintf("uptime-%d", p.Monitor.ID)
 	mapKey := fmt.Sprintf("uptimekuma:%d", p.Monitor.ID)
 
@@ -85,13 +85,13 @@ func (h *Handler) handleDown(ctx context.Context, userKey, tenant string, pwClie
 
 	existing, err := h.store.Get(ctx, "uptimekuma", userKey, mapKey, "")
 	if err != nil {
-		slog.Error("failed to check state", "monitor_id", p.Monitor.ID, "error", err, "tenant", tenant)
+		log.Error("failed to check state", "monitor_id", p.Monitor.ID, "error", err)
 		return
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "uptimekuma", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		slog.Error("failed to store state", "monitor_id", p.Monitor.ID, "error", err, "tenant", tenant)
+		log.Error("failed to store state", "monitor_id", p.Monitor.ID, "error", err)
 		return
 	}
 
@@ -99,13 +99,13 @@ func (h *Handler) handleDown(ctx context.Context, userKey, tenant string, pwClie
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.Monitor.Name, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+			log.Error("failed to create activity", "slug", slug, "error", err)
 			if err := h.store.Delete(ctx, "uptimekuma", userKey, mapKey, ""); err != nil {
-				slog.Warn("state store delete failed", "error", err, "provider", "uptimekuma", "slug", slug, "tenant", tenant)
+				log.Warn("state store delete failed", "error", err, "provider", "uptimekuma", "slug", slug)
 			}
 			return
 		}
-		slog.Info("created activity", "slug", slug, "monitor", p.Monitor.Name, "tenant", tenant)
+		log.Info("created activity", "slug", slug, "monitor", p.Monitor.Name)
 	}
 
 	stateText := text.TruncateHard(p.Heartbeat.Msg, 100)
@@ -135,18 +135,18 @@ func (h *Handler) handleDown(ctx context.Context, userKey, tenant string, pwClie
 		},
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "critical", "tenant", tenant)
+	log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "critical")
 }
 
-func (h *Handler) handleUp(ctx context.Context, userKey, tenant string, pwClient *pushward.Client, p *webhookPayload) {
+func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) {
 	mapKey := fmt.Sprintf("uptimekuma:%d", p.Monitor.ID)
 
 	existing, err := h.store.Get(ctx, "uptimekuma", userKey, mapKey, "")
 	if err != nil {
-		slog.Error("failed to check state", "monitor_id", p.Monitor.ID, "error", err, "tenant", tenant)
+		log.Error("failed to check state", "monitor_id", p.Monitor.ID, "error", err)
 		return
 	}
 	if existing == nil {
@@ -174,23 +174,23 @@ func (h *Handler) handleUp(ctx context.Context, userKey, tenant string, pwClient
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
-	slog.Info("scheduled end for activity", "slug", slug, "monitor", p.Monitor.Name, "tenant", tenant)
+	log.Info("scheduled end for activity", "slug", slug, "monitor", p.Monitor.Name)
 }
 
-func (h *Handler) handlePending(ctx context.Context, userKey, tenant string, pwClient *pushward.Client, p *webhookPayload) {
+func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) {
 	slug := fmt.Sprintf("uptime-%d", p.Monitor.ID)
 	mapKey := fmt.Sprintf("uptimekuma:%d", p.Monitor.ID)
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "uptimekuma", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		slog.Error("failed to store state", "monitor_id", p.Monitor.ID, "error", err, "tenant", tenant)
+		log.Error("failed to store state", "monitor_id", p.Monitor.ID, "error", err)
 		return
 	}
 
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 	if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.Monitor.Name, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -211,8 +211,8 @@ func (h *Handler) handlePending(ctx context.Context, userKey, tenant string, pwC
 		},
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
-		slog.Error("failed to update activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to update activity", "slug", slug, "error", err)
 		return
 	}
-	slog.Info("created pending activity", "slug", slug, "monitor", p.Monitor.Name, "tenant", tenant)
+	log.Info("created pending activity", "slug", slug, "monitor", p.Monitor.Name)
 }

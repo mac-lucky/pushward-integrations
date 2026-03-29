@@ -44,7 +44,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
 	userKey := auth.KeyFromContext(r.Context())
-	tenant := auth.KeyHash(userKey)
+	log := slog.With("tenant", auth.KeyHash(userKey))
 
 	var p apprisePayload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
@@ -55,13 +55,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	switch p.Type {
 	case "success":
-		h.handleResult(r.Context(), userKey, tenant, p, true)
+		h.handleResult(r.Context(), userKey, log, p, true)
 	case "failure":
-		h.handleResult(r.Context(), userKey, tenant, p, false)
+		h.handleResult(r.Context(), userKey, log, p, false)
 	case "info":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(r.Context(), cl, "unmanic"); err != nil {
-			slog.Error("test notification failed", "provider", "unmanic", "error", err, "tenant", tenant)
+			log.Error("test notification failed", "provider", "unmanic", "error", err)
 		}
 	default:
 		slog.Debug("unmanic unknown type", "type", p.Type)
@@ -83,7 +83,7 @@ func slugForFile(filename string) string {
 	return text.SlugHash("unmanic", filename, 4)
 }
 
-func (h *Handler) handleResult(ctx context.Context, userKey, tenant string, p apprisePayload, success bool) {
+func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Logger, p apprisePayload, success bool) {
 	filename := parseFilename(p.Message)
 	slug := slugForFile(filename)
 
@@ -92,7 +92,7 @@ func (h *Handler) handleResult(ctx context.Context, userKey, tenant string, p ap
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
 	if err := cl.CreateActivity(ctx, slug, filename, h.config.Priority, endedTTL, staleTTL); err != nil {
-		slog.Error("failed to create unmanic activity", "slug", slug, "error", err, "tenant", tenant)
+		log.Error("failed to create unmanic activity", "slug", slug, "error", err)
 		return
 	}
 
@@ -118,5 +118,5 @@ func (h *Handler) handleResult(ctx context.Context, userKey, tenant string, p ap
 	}
 
 	h.ender.ScheduleEnd(userKey, slug, slug, content)
-	slog.Info("unmanic activity", "slug", slug, "type", p.Type, "filename", filename, "tenant", tenant)
+	log.Info("unmanic activity", "slug", slug, "type", p.Type, "filename", filename)
 }
