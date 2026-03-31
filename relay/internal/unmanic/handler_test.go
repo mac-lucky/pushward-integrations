@@ -31,7 +31,7 @@ func testConfig() *config.UnmanicConfig {
 func newHandler(t *testing.T, cfg *config.UnmanicConfig) (*Handler, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
 	srv, calls, mu := testutil.MockPushWardServer(t)
-	pool := client.NewPool(srv.URL)
+	pool := client.NewPool(srv.URL, nil)
 	h := NewHandler(pool, cfg)
 	return h, calls, mu
 }

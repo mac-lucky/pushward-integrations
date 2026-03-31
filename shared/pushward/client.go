@@ -37,13 +37,25 @@ type Client struct {
 	apiKey     string
 }
 
+// ClientOption configures a Client.
+type ClientOption func(*Client)
+
+// WithHTTPClient sets a custom HTTP client (e.g. with an instrumented transport).
+func WithHTTPClient(c *http.Client) ClientOption {
+	return func(cl *Client) { cl.httpClient = c }
+}
+
 // NewClient creates a new PushWard API client.
-func NewClient(baseURL, apiKey string) *Client {
-	return &Client{
+func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
+	c := &Client{
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		baseURL:    baseURL,
 		apiKey:     apiKey,
 	}
+	for _, o := range opts {
+		o(c)
+	}
+	return c
 }
 
 // doWithRetry executes an HTTP request with exponential backoff and jitter.

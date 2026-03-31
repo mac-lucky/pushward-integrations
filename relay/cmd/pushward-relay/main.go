@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+
 	"github.com/mac-lucky/pushward-integrations/relay/internal/argocd"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/backrest"
@@ -20,12 +22,14 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/grafana"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/jellyfin"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overseerr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/paperless"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/proxmox"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/ratelimit"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/starr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/telemetry"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/uptimekuma"
 	"github.com/mac-lucky/pushward-integrations/shared/server"
@@ -53,6 +57,27 @@ func main() {
 		slog.Error("pushward URL is required (set PUSHWARD_URL or use -pushward-url)")
 		os.Exit(1)
 	}
+
+	// Initialize OpenTelemetry tracing (noop when endpoint is empty).
+	otelShutdown, err := telemetry.Init(context.Background(), telemetry.Config{
+		Endpoint:    cfg.Telemetry.Endpoint,
+		TLSCertPath: cfg.Telemetry.TLSCertPath,
+		TLSKeyPath:  cfg.Telemetry.TLSKeyPath,
+		ServiceName: "pushward-relay",
+		Environment: "production",
+		SampleRate:  cfg.Telemetry.SampleRate,
+	})
+	if err != nil {
+		slog.Error("failed to initialize telemetry", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := otelShutdown(shutdownCtx); err != nil {
+			slog.Error("telemetry shutdown error", "error", err)
+		}
+	}()
 
 	// Configure trusted proxy CIDRs for IP rate limiting
 	if len(cfg.TrustedProxyCIDRs) > 0 {
@@ -82,11 +107,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Client pool
-	clients := client.NewPool(baseURL)
+	// Client pool — use an instrumented transport when tracing is enabled
+	// so outbound requests propagate trace context to pushward-server.
+	var httpClient *http.Client
+	if cfg.Telemetry.Endpoint != "" {
+		httpClient = &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		}
+	}
+	clients := client.NewPool(baseURL, httpClient)
 
 	// Router
 	mux := server.NewMux(pool.Ping)
+	mux.Handle("GET /metrics", metrics.Handler())
 
 	// wrapHandler applies the standard middleware chain: IP rate limit → auth → key rate limit.
 	wrapHandler := func(h http.Handler) http.Handler {
@@ -188,6 +222,22 @@ func main() {
 		slog.Info("enabled provider", "provider", "backrest")
 	}
 
+	// Wrap mux with metrics middleware and optional OTel tracing.
+	var handler http.Handler = metrics.Middleware(mux)
+	if cfg.Telemetry.Endpoint != "" {
+		handler = otelhttp.NewHandler(handler, "pushward-relay",
+			otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+				if r.Pattern != "" {
+					return r.Pattern
+				}
+				return r.Method
+			}),
+			otelhttp.WithFilter(func(r *http.Request) bool {
+				return r.URL.Path != "/health" && r.URL.Path != "/metrics" && r.URL.Path != "/ready"
+			}),
+		)
+	}
+
 	// Background cleanup goroutine
 	go func() {
 		ticker := time.NewTicker(30 * time.Second)
@@ -206,8 +256,25 @@ func main() {
 		}
 	}()
 
+	// Background goroutine: collect DB connection pool metrics every 15s
+	go func() {
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				stat := pool.Stat()
+				metrics.DBPoolTotalConns.Set(float64(stat.TotalConns()))
+				metrics.DBPoolIdleConns.Set(float64(stat.IdleConns()))
+				metrics.DBPoolAcquiredConns.Set(float64(stat.AcquiredConns()))
+			}
+		}
+	}()
+
 	slog.Info("starting pushward-relay", "address", cfg.Server.Address)
-	if err := server.ListenAndServe(ctx, cfg.Server.Address, mux); err != nil {
+	if err := server.ListenAndServe(ctx, cfg.Server.Address, handler); err != nil {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
 	}

@@ -37,7 +37,7 @@ func testConfig() *config.ArgoCDConfig {
 func setupHandler(t *testing.T, cfg *config.ArgoCDConfig, srvURL string) (*Handler, state.Store) {
 	t.Helper()
 	store := state.NewMemoryStore()
-	pool := client.NewPool(srvURL)
+	pool := client.NewPool(srvURL, nil)
 	h := NewHandler(store, pool, cfg)
 	return h, store
 }

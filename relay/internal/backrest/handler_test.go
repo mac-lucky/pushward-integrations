@@ -33,7 +33,7 @@ func newHandler(t *testing.T, cfg *config.BackrestConfig) (*Handler, *[]testutil
 	t.Helper()
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	store := state.NewMemoryStore()
-	pool := client.NewPool(srv.URL)
+	pool := client.NewPool(srv.URL, nil)
 	h := NewHandler(store, pool, cfg)
 	return h, calls, mu
 }

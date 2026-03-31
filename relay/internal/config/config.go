@@ -14,8 +14,17 @@ import (
 type Config struct {
 	Server            sharedconfig.ServerConfig `yaml:"server"`
 	Database          DatabaseConfig            `yaml:"database"`
+	Telemetry         TelemetryConfig           `yaml:"telemetry"`
 	TrustedProxyCIDRs []string                  `yaml:"trusted_proxy_cidrs"`
 	Providers         ProvidersConfig           `yaml:"providers"`
+}
+
+// TelemetryConfig holds OpenTelemetry tracing configuration.
+type TelemetryConfig struct {
+	Endpoint    string  `yaml:"endpoint"`      // OTLP gRPC endpoint (e.g. "traces.example.com:443"). Empty disables telemetry.
+	TLSCertPath string  `yaml:"tls_cert_path"` // Client certificate PEM for mTLS.
+	TLSKeyPath  string  `yaml:"tls_key_path"`  // Client private key PEM for mTLS.
+	SampleRate  float64 `yaml:"sample_rate"`   // Sampling rate 0.0-1.0 (default: 1.0).
 }
 
 // DatabaseConfig holds the PostgreSQL connection settings.
@@ -283,6 +292,24 @@ func (cfg *Config) applyEnvOverrides() error {
 	}
 	if v := os.Getenv("PUSHWARD_DATABASE_PASSWORD_FILE"); v != "" {
 		cfg.Database.PasswordFile = v
+	}
+
+	// Telemetry overrides
+	if v := os.Getenv("PUSHWARD_OTEL_ENDPOINT"); v != "" {
+		cfg.Telemetry.Endpoint = v
+	}
+	if v := os.Getenv("PUSHWARD_OTEL_TLS_CERT_PATH"); v != "" {
+		cfg.Telemetry.TLSCertPath = v
+	}
+	if v := os.Getenv("PUSHWARD_OTEL_TLS_KEY_PATH"); v != "" {
+		cfg.Telemetry.TLSKeyPath = v
+	}
+	if v := os.Getenv("PUSHWARD_OTEL_SAMPLE_RATE"); v != "" {
+		rate, err := strconv.ParseFloat(v, 64)
+		if err != nil {
+			return fmt.Errorf("parsing PUSHWARD_OTEL_SAMPLE_RATE: %w", err)
+		}
+		cfg.Telemetry.SampleRate = rate
 	}
 	if v := os.Getenv("PUSHWARD_TRUSTED_PROXY_CIDRS"); v != "" {
 		parts := strings.Split(v, ",")

@@ -5,6 +5,12 @@ database:
   dsn: "postgres://pushward_relay_user:password@localhost:5432/pushward_relay?sslmode=disable"
   password_file: ""                       # path to file containing the DB password (optional, overrides password in DSN)
 
+telemetry:
+  endpoint: ""                            # OTLP gRPC endpoint (e.g. "traces-grpc.example.com:8443"). Empty disables tracing.
+  tls_cert_path: ""                       # client certificate PEM for mTLS (both cert and key required)
+  tls_key_path: ""                        # client private key PEM for mTLS
+  sample_rate: 1.0                        # sampling rate 0.0-1.0 (1.0 = sample everything)
+
 trusted_proxy_cidrs: []                   # CIDRs of trusted reverse proxies (e.g. ["10.0.0.0/8", "172.16.0.0/12"])
 
 providers:

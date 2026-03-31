@@ -39,7 +39,7 @@ func setup(t *testing.T) (*state.MemoryStore, http.Handler, *[]testutil.APICall,
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	store := state.NewMemoryStore()
 	cfg := testConfig()
-	pool := client.NewPool(srv.URL)
+	pool := client.NewPool(srv.URL, nil)
 	h := NewHandler(store, pool, cfg)
 	return store, auth.Middleware(h), calls, mu
 }
@@ -48,7 +48,7 @@ func setupWithConfig(t *testing.T, cfg *config.GrafanaConfig) (*state.MemoryStor
 	t.Helper()
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	store := state.NewMemoryStore()
-	pool := client.NewPool(srv.URL)
+	pool := client.NewPool(srv.URL, nil)
 	h := NewHandler(store, pool, cfg)
 	return store, auth.Middleware(h), calls, mu
 }
@@ -1330,7 +1330,7 @@ func TestCreateActivityFailure_CleansUpStore(t *testing.T) {
 
 	store := state.NewMemoryStore()
 	cfg := testConfig()
-	pool := client.NewPool(srv.URL)
+	pool := client.NewPool(srv.URL, nil)
 	h := NewHandler(store, pool, cfg)
 	handler := auth.Middleware(h)
 
@@ -1375,7 +1375,7 @@ func TestUpdateActivityFailure_OnFiring(t *testing.T) {
 
 	store := state.NewMemoryStore()
 	cfg := testConfig()
-	pool := client.NewPool(srv.URL)
+	pool := client.NewPool(srv.URL, nil)
 	h := NewHandler(store, pool, cfg)
 	handler := auth.Middleware(h)
 
@@ -1421,7 +1421,7 @@ func TestUpdateActivityFailure_OnResolve(t *testing.T) {
 
 	store := state.NewMemoryStore()
 	cfg := testConfig()
-	pool := client.NewPool(srv.URL)
+	pool := client.NewPool(srv.URL, nil)
 	h := NewHandler(store, pool, cfg)
 	handler := auth.Middleware(h)
 
