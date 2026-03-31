@@ -318,16 +318,17 @@ func (t *Tracker) scheduleEnd(slug string, content pushward.Content) {
 	tp.phase1 = time.AfterFunc(endDelay, func() {
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel1()
 		if err := t.pw.UpdateActivity(ctx1, slug, pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}); err != nil {
 			slog.Error("failed to update activity (end phase 1)", "slug", slug, "error", err)
 		}
-		cancel1()
 
 		// Phase 2: schedule ENDED after display time
 		t.mu.Lock()
-		if _, ok := t.timers[slug]; !ok {
+		cur, ok := t.timers[slug]
+		if !ok || cur != tp {
 			t.mu.Unlock()
-			return // cancelled between phases
+			return // cancelled or superseded between phases
 		}
 		tp.phase2 = time.AfterFunc(displayTime, func() {
 			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
@@ -361,6 +362,10 @@ func sanitize(s string) string {
 	}
 	if len(result) > 20 {
 		result = result[:20]
+	}
+	// Strip trailing dashes
+	for len(result) > 0 && result[len(result)-1] == '-' {
+		result = result[:len(result)-1]
 	}
 	return string(result)
 }

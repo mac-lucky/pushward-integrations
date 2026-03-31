@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -70,7 +71,7 @@ func (s *PostgresStore) Get(ctx context.Context, provider, userKey, key, subKey 
 		WHERE provider = $1 AND user_key = $2 AND key = $3 AND sub_key = $4
 		  AND (expires_at IS NULL OR expires_at > now())
 	`, provider, userKey, key, subKey).Scan(&value)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {

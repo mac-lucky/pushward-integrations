@@ -104,6 +104,13 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 			return
 		}
 
+		// Write state before UpdateActivity so completion events can find it
+		// even if the update below fails.
+		data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
+		if err := h.store.Set(ctx, "proxmox", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
+			log.Warn("state store write failed", "error", err, "provider", "proxmox", "slug", slug)
+		}
+
 		step1 := pushward.IntPtr(1)
 		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
@@ -121,11 +128,6 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 		if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 			log.Error("failed to update proxmox backup activity", "slug", slug, "error", err)
 			return
-		}
-
-		data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
-		if err := h.store.Set(ctx, "proxmox", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-			log.Warn("state store write failed", "error", err, "provider", "proxmox", "slug", slug)
 		}
 
 		log.Info("proxmox backup started", "slug", slug, "vmid", vmid, "hostname", p.Hostname)
@@ -203,6 +205,11 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, log *sl
 			return
 		}
 
+		data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
+		if err := h.store.Set(ctx, "proxmox", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
+			log.Warn("state store write failed", "error", err, "provider", "proxmox", "slug", slug)
+		}
+
 		step1 := pushward.IntPtr(1)
 		step2 := pushward.IntPtr(2)
 		content := pushward.Content{
@@ -220,11 +227,6 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, log *sl
 		if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 			log.Error("failed to update proxmox replication activity", "slug", slug, "error", err)
 			return
-		}
-
-		data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
-		if err := h.store.Set(ctx, "proxmox", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-			log.Warn("state store write failed", "error", err, "provider", "proxmox", "slug", slug)
 		}
 
 		log.Info("proxmox replication started", "slug", slug, "hostname", p.Hostname)

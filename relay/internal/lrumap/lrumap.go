@@ -86,11 +86,12 @@ func (m *Map[V]) GetOrCreate(key string, create func() V) V {
 	e := &entry[V]{value: v}
 	e.lastAccess.Store(time.Now().UnixNano())
 	m.entries[key] = e
+	onEvict := m.onEvict // capture under lock before releasing
 	m.mu.Unlock()
 
 	// Call eviction callback outside the lock.
-	if didEvict && m.onEvict != nil {
-		m.onEvict(evictKey, evictVal)
+	if didEvict && onEvict != nil {
+		onEvict(evictKey, evictVal)
 	}
 
 	return v

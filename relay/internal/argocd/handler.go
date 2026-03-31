@@ -238,6 +238,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
 		log.Error("failed to load app state", "app", p.App, "error", err)
+		return
 	}
 	needsCreate := !exists || (p.Revision != "" && app.Revision != p.Revision)
 
@@ -336,6 +337,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
 		log.Error("failed to load app state", "app", p.App, "error", err)
+		return
 	}
 
 	// Tracked and still in grace period — just advance step, don't touch PushWard
@@ -442,6 +444,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
 		log.Error("failed to load app state", "app", p.App, "error", err)
+		return
 	}
 
 	// Completed during grace period — no-op sync, skip entirely
@@ -535,6 +538,7 @@ func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.L
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
 		log.Error("failed to load app state", "app", p.App, "error", err)
+		return nil, false
 	}
 	currentStep := 1
 	wasPending := false
@@ -625,6 +629,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, log 
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
 		log.Error("failed to load app state", "app", p.App, "error", err)
+		return
 	}
 	isTransient := exists && !app.Pending && app.Step == 2
 
@@ -692,6 +697,7 @@ func (h *Handler) graceExpired(userKey, appName string) {
 	app, ok, err := h.loadApp(context.Background(), userKey, appName)
 	if err != nil {
 		log.Error("failed to load app state", "app", appName, "error", err)
+		return
 	}
 	if !ok || !app.Pending {
 		return

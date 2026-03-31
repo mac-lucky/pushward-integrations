@@ -313,7 +313,7 @@ func computeSteps(jobs []ghclient.Job) stepInfo {
 		currentStepName = "Queued"
 		for i, s := range steps {
 			if s.completed < s.count {
-				currentStep = i
+				currentStep = i + 1
 				break
 			}
 		}

@@ -140,6 +140,8 @@ func (t *Tracker) startTracking(ctx context.Context, state *bambulab.MergedState
 
 	if err := t.pw.CreateActivity(ctx, t.slug, name, t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
 		slog.Error("failed to create activity", "error", err)
+		t.tracking = false
+		t.lastState = ""
 		return
 	}
 

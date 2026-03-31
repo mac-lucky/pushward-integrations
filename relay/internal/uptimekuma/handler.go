@@ -191,6 +191,9 @@ func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.L
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 	if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.Monitor.Name, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 		log.Error("failed to create activity", "slug", slug, "error", err)
+		if err := h.store.Delete(ctx, "uptimekuma", userKey, mapKey, ""); err != nil {
+			log.Warn("state store delete failed", "error", err, "provider", "uptimekuma", "slug", slug)
+		}
 		return
 	}
 

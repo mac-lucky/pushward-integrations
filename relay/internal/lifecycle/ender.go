@@ -23,9 +23,12 @@ type EndConfig struct {
 }
 
 // timerPair holds both phase-1 and phase-2 timers so StopTimer can cancel both.
+// The gen field is incremented on each ScheduleEnd so that a superseded phase-1
+// goroutine can detect it has been replaced and avoid arming an orphaned phase-2.
 type timerPair struct {
 	phase1 *time.Timer
 	phase2 *time.Timer
+	gen    uint64
 }
 
 // Ender manages two-phase activity end scheduling.
@@ -38,6 +41,7 @@ type Ender struct {
 	config   EndConfig
 	mu       sync.Mutex
 	timers   map[string]*timerPair
+	nextGen  uint64
 	wg       sync.WaitGroup
 }
 
@@ -71,7 +75,9 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 			e.wg.Done()
 		}
 	}
-	tp := &timerPair{}
+	e.nextGen++
+	tp := &timerPair{gen: e.nextGen}
+	myGen := tp.gen
 	e.wg.Add(1)
 	tp.phase1 = time.AfterFunc(e.config.EndDelay, func() {
 		defer e.wg.Done()
@@ -90,9 +96,10 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 
 		// Phase 2: schedule ENDED after display time
 		e.mu.Lock()
-		if _, ok := e.timers[timerKey]; !ok {
+		cur, ok := e.timers[timerKey]
+		if !ok || cur.gen != myGen {
 			e.mu.Unlock()
-			return // StopTimer already cancelled this end sequence
+			return // StopTimer cancelled or ScheduleEnd superseded this sequence
 		}
 		e.wg.Add(1)
 		tp.phase2 = time.AfterFunc(e.config.EndDisplayTime, func() {

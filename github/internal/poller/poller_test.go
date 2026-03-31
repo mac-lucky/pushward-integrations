@@ -43,8 +43,8 @@ func TestComputeSteps_AllQueued(t *testing.T) {
 	if info.CurrentStepName != "Queued" {
 		t.Errorf("expected CurrentStepName=Queued, got %s", info.CurrentStepName)
 	}
-	if info.CurrentStep != 0 {
-		t.Errorf("expected CurrentStep=0, got %d", info.CurrentStep)
+	if info.CurrentStep != 1 {
+		t.Errorf("expected CurrentStep=1, got %d", info.CurrentStep)
 	}
 	if info.AllCompleted {
 		t.Error("expected AllCompleted=false")
@@ -1105,7 +1105,7 @@ func TestRefreshRepos_NoOwner(t *testing.T) {
 
 func TestRefreshRepos_MergesDiscoveredAndConfigured(t *testing.T) {
 	ghMux := http.NewServeMux()
-	ghMux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
+	ghMux.HandleFunc("/users/testowner/repos", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]ghclient.Repository{
 			{FullName: "testowner/discovered1"},
 			{FullName: "testowner/discovered2"},
@@ -1136,7 +1136,7 @@ func TestRefreshRepos_MergesDiscoveredAndConfigured(t *testing.T) {
 func TestRefreshRepos_SkipsCooldown(t *testing.T) {
 	callCount := 0
 	ghMux := http.NewServeMux()
-	ghMux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
+	ghMux.HandleFunc("/users/owner/repos", func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		json.NewEncoder(w).Encode([]ghclient.Repository{})
 	})
@@ -1170,7 +1170,7 @@ func TestRefreshRepos_SkipsCooldown(t *testing.T) {
 
 func TestRefreshRepos_DeduplicatesRepos(t *testing.T) {
 	ghMux := http.NewServeMux()
-	ghMux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
+	ghMux.HandleFunc("/users/owner/repos", func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode([]ghclient.Repository{
 			{FullName: "owner/repo1"},
 			{FullName: "owner/repo2"},
