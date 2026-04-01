@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"github.com/jackc/pgx/v5"
@@ -41,20 +42,61 @@ func NewPool(ctx context.Context, dsn, passwordFile string) (*pgxpool.Pool, erro
 		}
 	}
 
-	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
+	pool, err := connectWithRetry(ctx, poolCfg)
 	if err != nil {
-		return nil, fmt.Errorf("creating database pool: %w", err)
-	}
-
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("pinging database: %w", err)
+		return nil, err
 	}
 
 	if passwordFile != "" {
 		go watchPasswordFile(ctx, pool, passwordFile)
 	}
 
+	return pool, nil
+}
+
+func connectWithRetry(ctx context.Context, poolCfg *pgxpool.Config) (*pgxpool.Pool, error) {
+	const maxRetries = 10
+	delay := time.Second
+	var pool *pgxpool.Pool
+	var err error
+
+	backoff := func(msg string, attempt int, err error) error {
+		if attempt == maxRetries {
+			slog.Error(msg+", giving up", "attempt", attempt, "error", err)
+			return nil
+		}
+		slog.Warn(msg+", retrying...", "attempt", attempt, "max", maxRetries, "error", err)
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("connection cancelled: %w", ctx.Err())
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, 30*time.Second)
+		return nil
+	}
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		pool, err = pgxpool.NewWithConfig(ctx, poolCfg)
+		if err != nil {
+			if waitErr := backoff("failed to create database pool", attempt, err); waitErr != nil {
+				return nil, waitErr
+			}
+			continue
+		}
+
+		if err = pool.Ping(ctx); err != nil {
+			pool.Close()
+			if waitErr := backoff("failed to ping database", attempt, err); waitErr != nil {
+				return nil, waitErr
+			}
+			continue
+		}
+
+		break
+	}
+	if err != nil {
+		return nil, fmt.Errorf("connecting to database after %d attempts: %w", maxRetries, err)
+	}
 	return pool, nil
 }
 
