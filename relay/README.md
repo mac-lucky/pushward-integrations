@@ -124,7 +124,9 @@ Receives ArgoCD sync webhooks via argocd-notifications. Maps sync progress to a 
 
 **Grace period:** Configurable `sync_grace_period` (default 10s) defers activity creation for fast syncs that complete before the grace period expires, preventing unnecessary notifications.
 
-**Setup:** ArgoCD notifications are built-in since v2.3. Configure `argocd-notifications-cm` ConfigMap with a webhook service, Go-templated templates, and trigger expressions. Store the `hlk_` key in `argocd-notifications-secret`. Subscribe applications via annotations like `notifications.argoproj.io/subscribe.on-pushward-deployed.pushward: ""`. See [ArgoCD Notification Docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/services/webhook/) for full configuration.
+**Setup:** ArgoCD notifications are built-in since v2.3. Configure `argocd-notifications-cm` with a webhook service pointing to `POST /argocd`, Go-templated body templates for each event, and trigger expressions. Store the `hlk_` key in `argocd-notifications-secret` and reference it as `$KEY_NAME` in the `Authorization: Bearer` header. Use `oncePer: app.status.operationState.startedAt` so each sync fires all events even when the revision hasn't changed. Subscribe applications via default `subscriptions` in the ConfigMap or per-app annotations. See [ArgoCD Notification Docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/services/webhook/) for full configuration.
+
+**Webhook body:** `{"app":"…","event":"…","revision":"…","repo_url":"…"}` — only these four fields are required.
 
 ### Radarr / Sonarr
 
