@@ -109,6 +109,9 @@ func TestSnapshotLifecycle(t *testing.T) {
 	if update.Content.State != "Backing up..." {
 		t.Errorf("expected state 'Backing up...', got %s", update.Content.State)
 	}
+	if update.Content.Template != "steps" {
+		t.Errorf("expected template 'steps', got %s", update.Content.Template)
+	}
 	if update.Content.Icon != "arrow.triangle.2.circlepath" {
 		t.Errorf("expected icon arrow.triangle.2.circlepath, got %s", update.Content.Icon)
 	}
@@ -121,6 +124,15 @@ func TestSnapshotLifecycle(t *testing.T) {
 	if update.Content.Subtitle != "Backrest · daily-backup · local-repo" {
 		t.Errorf("expected subtitle 'Backrest · daily-backup · local-repo', got %q", update.Content.Subtitle)
 	}
+	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 1 {
+		t.Errorf("expected current_step 1, got %v", update.Content.CurrentStep)
+	}
+	if update.Content.TotalSteps == nil || *update.Content.TotalSteps != 2 {
+		t.Errorf("expected total_steps 2, got %v", update.Content.TotalSteps)
+	}
+	if len(update.Content.StepLabels) != 2 || update.Content.StepLabels[0] != "Running" || update.Content.StepLabels[1] != "Done" {
+		t.Errorf("expected step_labels [Running, Done], got %v", update.Content.StepLabels)
+	}
 
 	// Phase 1: ONGOING with final content (from SUCCESS)
 	var phase1 pushward.UpdateRequest
@@ -131,11 +143,23 @@ func TestSnapshotLifecycle(t *testing.T) {
 	if phase1.Content.State != "Complete · 2.3 GB" {
 		t.Errorf("expected state 'Complete · 2.3 GB', got %s", phase1.Content.State)
 	}
+	if phase1.Content.Template != "steps" {
+		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
+	}
 	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
 	}
 	if phase1.Content.Icon != "checkmark.circle.fill" {
 		t.Errorf("expected icon checkmark.circle.fill, got %s", phase1.Content.Icon)
+	}
+	if phase1.Content.CurrentStep == nil || *phase1.Content.CurrentStep != 2 {
+		t.Errorf("expected current_step 2, got %v", phase1.Content.CurrentStep)
+	}
+	if phase1.Content.TotalSteps == nil || *phase1.Content.TotalSteps != 2 {
+		t.Errorf("expected total_steps 2, got %v", phase1.Content.TotalSteps)
+	}
+	if len(phase1.Content.StepLabels) != 2 || phase1.Content.StepLabels[0] != "Running" || phase1.Content.StepLabels[1] != "Done" {
+		t.Errorf("expected step_labels [Running, Done], got %v", phase1.Content.StepLabels)
 	}
 
 	// Phase 2: ENDED
@@ -187,11 +211,20 @@ func TestSnapshotError(t *testing.T) {
 	if phase1.Content.State != "Failed: repository not found" {
 		t.Errorf("expected state 'Failed: repository not found', got %s", phase1.Content.State)
 	}
+	if phase1.Content.Template != "steps" {
+		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
+	}
 	if phase1.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red color, got %s", phase1.Content.AccentColor)
 	}
 	if phase1.Content.Icon != "xmark.circle.fill" {
 		t.Errorf("expected icon xmark.circle.fill, got %s", phase1.Content.Icon)
+	}
+	if phase1.Content.CurrentStep == nil || *phase1.Content.CurrentStep != 2 {
+		t.Errorf("expected current_step 2, got %v", phase1.Content.CurrentStep)
+	}
+	if phase1.Content.TotalSteps == nil || *phase1.Content.TotalSteps != 2 {
+		t.Errorf("expected total_steps 2, got %v", phase1.Content.TotalSteps)
 	}
 
 	// Phase 2: ENDED
@@ -236,11 +269,20 @@ func TestSnapshotWarning(t *testing.T) {
 	if phase1.Content.State != "Complete (warnings)" {
 		t.Errorf("expected state 'Complete (warnings)', got %s", phase1.Content.State)
 	}
+	if phase1.Content.Template != "steps" {
+		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
+	}
 	if phase1.Content.AccentColor != pushward.ColorOrange {
 		t.Errorf("expected orange color, got %s", phase1.Content.AccentColor)
 	}
 	if phase1.Content.Icon != "exclamationmark.triangle.fill" {
 		t.Errorf("expected icon exclamationmark.triangle.fill, got %s", phase1.Content.Icon)
+	}
+	if phase1.Content.CurrentStep == nil || *phase1.Content.CurrentStep != 2 {
+		t.Errorf("expected current_step 2, got %v", phase1.Content.CurrentStep)
+	}
+	if phase1.Content.TotalSteps == nil || *phase1.Content.TotalSteps != 2 {
+		t.Errorf("expected total_steps 2, got %v", phase1.Content.TotalSteps)
 	}
 }
 
@@ -305,6 +347,18 @@ func TestPruneLifecycle(t *testing.T) {
 	if update.Content.State != "Pruning..." {
 		t.Errorf("expected state 'Pruning...', got %s", update.Content.State)
 	}
+	if update.Content.Template != "steps" {
+		t.Errorf("expected template 'steps', got %s", update.Content.Template)
+	}
+	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 1 {
+		t.Errorf("expected current_step 1, got %v", update.Content.CurrentStep)
+	}
+	if update.Content.TotalSteps == nil || *update.Content.TotalSteps != 2 {
+		t.Errorf("expected total_steps 2, got %v", update.Content.TotalSteps)
+	}
+	if len(update.Content.StepLabels) != 2 || update.Content.StepLabels[0] != "Running" || update.Content.StepLabels[1] != "Done" {
+		t.Errorf("expected step_labels [Running, Done], got %v", update.Content.StepLabels)
+	}
 
 	// Phase 1: Pruned
 	var phase1 pushward.UpdateRequest
@@ -312,8 +366,17 @@ func TestPruneLifecycle(t *testing.T) {
 	if phase1.Content.State != "Pruned" {
 		t.Errorf("expected state 'Pruned', got %s", phase1.Content.State)
 	}
+	if phase1.Content.Template != "steps" {
+		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
+	}
 	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
+	}
+	if phase1.Content.CurrentStep == nil || *phase1.Content.CurrentStep != 2 {
+		t.Errorf("expected current_step 2, got %v", phase1.Content.CurrentStep)
+	}
+	if phase1.Content.TotalSteps == nil || *phase1.Content.TotalSteps != 2 {
+		t.Errorf("expected total_steps 2, got %v", phase1.Content.TotalSteps)
 	}
 }
 
@@ -353,6 +416,18 @@ func TestCheckLifecycle(t *testing.T) {
 	if update.Content.State != "Checking..." {
 		t.Errorf("expected state 'Checking...', got %s", update.Content.State)
 	}
+	if update.Content.Template != "steps" {
+		t.Errorf("expected template 'steps', got %s", update.Content.Template)
+	}
+	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 1 {
+		t.Errorf("expected current_step 1, got %v", update.Content.CurrentStep)
+	}
+	if update.Content.TotalSteps == nil || *update.Content.TotalSteps != 2 {
+		t.Errorf("expected total_steps 2, got %v", update.Content.TotalSteps)
+	}
+	if len(update.Content.StepLabels) != 2 || update.Content.StepLabels[0] != "Running" || update.Content.StepLabels[1] != "Done" {
+		t.Errorf("expected step_labels [Running, Done], got %v", update.Content.StepLabels)
+	}
 
 	// Phase 1: Check Passed
 	var phase1 pushward.UpdateRequest
@@ -360,7 +435,287 @@ func TestCheckLifecycle(t *testing.T) {
 	if phase1.Content.State != "Check Passed" {
 		t.Errorf("expected state 'Check Passed', got %s", phase1.Content.State)
 	}
+	if phase1.Content.Template != "steps" {
+		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
+	}
 	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
+	}
+	if phase1.Content.CurrentStep == nil || *phase1.Content.CurrentStep != 2 {
+		t.Errorf("expected current_step 2, got %v", phase1.Content.CurrentStep)
+	}
+	if phase1.Content.TotalSteps == nil || *phase1.Content.TotalSteps != 2 {
+		t.Errorf("expected total_steps 2, got %v", phase1.Content.TotalSteps)
+	}
+}
+
+func TestForgetLifecycle(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	// Send FORGET_START
+	w := send(t, h, `{
+		"event": "CONDITION_FORGET_START",
+		"plan": "daily-backup",
+		"repo": "local-repo"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	// Send FORGET_SUCCESS
+	w = send(t, h, `{
+		"event": "CONDITION_FORGET_SUCCESS",
+		"plan": "daily-backup",
+		"repo": "local-repo"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// FORGET_START: create + ONGOING = 2
+	// FORGET_SUCCESS: create + phase1(ONGOING) + phase2(ENDED) = 3
+	// Total = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	}
+
+	// Verify FORGET_START ONGOING
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.State != "Forgetting..." {
+		t.Errorf("expected state 'Forgetting...', got %s", update.Content.State)
+	}
+	if update.Content.Template != "steps" {
+		t.Errorf("expected template 'steps', got %s", update.Content.Template)
+	}
+	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 1 {
+		t.Errorf("expected current_step 1, got %v", update.Content.CurrentStep)
+	}
+	if update.Content.TotalSteps == nil || *update.Content.TotalSteps != 2 {
+		t.Errorf("expected total_steps 2, got %v", update.Content.TotalSteps)
+	}
+	if len(update.Content.StepLabels) != 2 || update.Content.StepLabels[0] != "Running" || update.Content.StepLabels[1] != "Done" {
+		t.Errorf("expected step_labels [Running, Done], got %v", update.Content.StepLabels)
+	}
+
+	// Phase 1: Forgotten
+	var phase1f pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[3].Body, &phase1f)
+	if phase1f.Content.State != "Forgotten" {
+		t.Errorf("expected state 'Forgotten', got %s", phase1f.Content.State)
+	}
+	if phase1f.Content.Template != "steps" {
+		t.Errorf("expected template 'steps', got %s", phase1f.Content.Template)
+	}
+	if phase1f.Content.AccentColor != pushward.ColorGreen {
+		t.Errorf("expected green color, got %s", phase1f.Content.AccentColor)
+	}
+	if phase1f.Content.CurrentStep == nil || *phase1f.Content.CurrentStep != 2 {
+		t.Errorf("expected current_step 2, got %v", phase1f.Content.CurrentStep)
+	}
+	if phase1f.Content.TotalSteps == nil || *phase1f.Content.TotalSteps != 2 {
+		t.Errorf("expected total_steps 2, got %v", phase1f.Content.TotalSteps)
+	}
+
+	// Phase 2: ENDED
+	var phase2 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
+	if phase2.State != pushward.StateEnded {
+		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
+	}
+}
+
+func TestForgetError(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	// Send FORGET_START
+	send(t, h, `{
+		"event": "CONDITION_FORGET_START",
+		"plan": "daily-backup",
+		"repo": "local-repo"
+	}`)
+
+	// Send FORGET_ERROR
+	w := send(t, h, `{
+		"event": "CONDITION_FORGET_ERROR",
+		"plan": "daily-backup",
+		"repo": "local-repo",
+		"error": "permission denied"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// FORGET_START: create + ONGOING = 2
+	// FORGET_ERROR: create + phase1(ONGOING) + phase2(ENDED) = 3
+	// Total = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	}
+
+	// Phase 1: red/failed
+	var phase1fe pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[3].Body, &phase1fe)
+	if phase1fe.Content.State != "Forget Failed" {
+		t.Errorf("expected state 'Forget Failed', got %s", phase1fe.Content.State)
+	}
+	if phase1fe.Content.Template != "steps" {
+		t.Errorf("expected template 'steps', got %s", phase1fe.Content.Template)
+	}
+	if phase1fe.Content.AccentColor != pushward.ColorRed {
+		t.Errorf("expected red color, got %s", phase1fe.Content.AccentColor)
+	}
+	if phase1fe.Content.Icon != "xmark.circle.fill" {
+		t.Errorf("expected icon xmark.circle.fill, got %s", phase1fe.Content.Icon)
+	}
+	if phase1fe.Content.CurrentStep == nil || *phase1fe.Content.CurrentStep != 2 {
+		t.Errorf("expected current_step 2, got %v", phase1fe.Content.CurrentStep)
+	}
+	if phase1fe.Content.TotalSteps == nil || *phase1fe.Content.TotalSteps != 2 {
+		t.Errorf("expected total_steps 2, got %v", phase1fe.Content.TotalSteps)
+	}
+
+	// Phase 2: ENDED
+	var phase2 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
+	if phase2.State != pushward.StateEnded {
+		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
+	}
+}
+
+func TestAnyError(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := send(t, h, `{
+		"event": "CONDITION_ANY_ERROR",
+		"plan": "daily-backup",
+		"repo": "local-repo",
+		"error": "repository lock held by PID 1234"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 4
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	}
+
+	// Verify create
+	if recorded[0].Method != "POST" || recorded[0].Path != "/activities" {
+		t.Errorf("expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
+	}
+
+	// Verify ONGOING update
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.State != pushward.StateOngoing {
+		t.Errorf("expected ONGOING, got %s", update.State)
+	}
+	if update.Content.Template != "alert" {
+		t.Errorf("expected template 'alert', got %s", update.Content.Template)
+	}
+	if update.Content.Severity != "critical" {
+		t.Errorf("expected severity 'critical', got %s", update.Content.Severity)
+	}
+	if update.Content.AccentColor != pushward.ColorRed {
+		t.Errorf("expected red color, got %s", update.Content.AccentColor)
+	}
+	if update.Content.Icon != "exclamationmark.triangle.fill" {
+		t.Errorf("expected icon exclamationmark.triangle.fill, got %s", update.Content.Icon)
+	}
+	if update.Content.State != "repository lock held by PID 1234" {
+		t.Errorf("expected state 'repository lock held by PID 1234', got %s", update.Content.State)
+	}
+	if update.Content.Subtitle != "Backrest · daily-backup · local-repo" {
+		t.Errorf("expected subtitle 'Backrest · daily-backup · local-repo', got %q", update.Content.Subtitle)
+	}
+
+	// Phase 1: ONGOING with same content
+	var phase1ae pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[2].Body, &phase1ae)
+	if phase1ae.State != pushward.StateOngoing {
+		t.Errorf("expected ONGOING (phase 1), got %s", phase1ae.State)
+	}
+
+	// Phase 2: ENDED
+	var phase2 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
+	if phase2.State != pushward.StateEnded {
+		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
+	}
+}
+
+func TestSnapshotSkipped(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := send(t, h, `{
+		"event": "CONDITION_SNAPSHOT_SKIPPED",
+		"plan": "daily-backup",
+		"repo": "local-repo"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 4
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	}
+
+	// Verify create
+	if recorded[0].Method != "POST" || recorded[0].Path != "/activities" {
+		t.Errorf("expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
+	}
+
+	// Verify ONGOING update
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.State != pushward.StateOngoing {
+		t.Errorf("expected ONGOING, got %s", update.State)
+	}
+	if update.Content.Template != "alert" {
+		t.Errorf("expected template 'alert', got %s", update.Content.Template)
+	}
+	if update.Content.Severity != "info" {
+		t.Errorf("expected severity 'info', got %s", update.Content.Severity)
+	}
+	if update.Content.AccentColor != pushward.ColorBlue {
+		t.Errorf("expected blue color, got %s", update.Content.AccentColor)
+	}
+	if update.Content.Icon != "info.circle.fill" {
+		t.Errorf("expected icon info.circle.fill, got %s", update.Content.Icon)
+	}
+	if update.Content.State != "Snapshot Skipped" {
+		t.Errorf("expected state 'Snapshot Skipped', got %s", update.Content.State)
+	}
+	if update.Content.Subtitle != "Backrest · daily-backup · local-repo" {
+		t.Errorf("expected subtitle 'Backrest · daily-backup · local-repo', got %q", update.Content.Subtitle)
+	}
+
+	// Phase 1: ONGOING with same content
+	var phase1ss pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[2].Body, &phase1ss)
+	if phase1ss.State != pushward.StateOngoing {
+		t.Errorf("expected ONGOING (phase 1), got %s", phase1ss.State)
+	}
+
+	// Phase 2: ENDED
+	var phase2 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
+	if phase2.State != pushward.StateEnded {
+		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
 }

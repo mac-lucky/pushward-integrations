@@ -16,6 +16,8 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
+var stepLabels = []string{"Running", "Done"}
+
 type Handler struct {
 	store   state.Store
 	clients *client.Pool
@@ -64,8 +66,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "CONDITION_SNAPSHOT_ERROR":
 		stateText := "Failed"
 		if payload.Error != "" {
-			msg := text.TruncateHard(payload.Error, 50)
-			stateText = "Failed: " + msg
+			stateText = "Failed: " + text.TruncateHard(payload.Error, 50)
 		}
 		h.handleEnd(ctx, userKey, log, &payload, stateText, pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_PRUNE_START":
@@ -80,6 +81,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleEnd(ctx, userKey, log, &payload, "Check Passed", pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_CHECK_ERROR":
 		h.handleEnd(ctx, userKey, log, &payload, "Check Failed", pushward.ColorRed, "xmark.circle.fill")
+	case "CONDITION_FORGET_START":
+		h.handleStart(ctx, userKey, log, &payload, "Forgetting...")
+	case "CONDITION_FORGET_SUCCESS":
+		h.handleEnd(ctx, userKey, log, &payload, "Forgotten", pushward.ColorGreen, "checkmark.circle.fill")
+	case "CONDITION_FORGET_ERROR":
+		h.handleEnd(ctx, userKey, log, &payload, "Forget Failed", pushward.ColorRed, "xmark.circle.fill")
+	case "CONDITION_ANY_ERROR":
+		h.handleAlert(ctx, userKey, log, &payload, "Error", pushward.ColorRed, "critical")
+	case "CONDITION_SNAPSHOT_SKIPPED":
+		h.handleAlert(ctx, userKey, log, &payload, "Snapshot Skipped", pushward.ColorBlue, "info")
 	default:
 		slog.Debug("unknown backrest event", "event", payload.Event)
 	}
@@ -94,9 +105,18 @@ func (h *Handler) slugAndKey(p *webhookPayload) (string, string) {
 	return slug, mapKey
 }
 
-func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText string) {
-	slug, mapKey := h.slugAndKey(p)
+func (h *Handler) subtitle(p *webhookPayload) string {
+	subtitle := "Backrest"
+	if p.Plan != "" {
+		subtitle += " · " + text.TruncateHard(p.Plan, 50)
+	}
+	if p.Repo != "" {
+		subtitle += " · " + text.TruncateHard(p.Repo, 50)
+	}
+	return subtitle
+}
 
+func (h *Handler) createActivity(ctx context.Context, userKey string, log *slog.Logger, slug string, p *webhookPayload) *pushward.Client {
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
@@ -108,24 +128,31 @@ func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Log
 
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
 		log.Error("failed to create backrest activity", "slug", slug, "error", err)
+		return nil
+	}
+	return cl
+}
+
+func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText string) {
+	slug, mapKey := h.slugAndKey(p)
+
+	cl := h.createActivity(ctx, userKey, log, slug, p)
+	if cl == nil {
 		return
 	}
 
-	subtitle := "Backrest"
-	if p.Plan != "" {
-		subtitle += " · " + text.TruncateHard(p.Plan, 50)
-	}
-	if p.Repo != "" {
-		subtitle += " · " + text.TruncateHard(p.Repo, 50)
-	}
-
+	step := 1
+	total := 2
 	content := pushward.Content{
-		Template:    "generic",
+		Template:    "steps",
 		Progress:    0,
 		State:       stateText,
 		Icon:        "arrow.triangle.2.circlepath",
-		Subtitle:    subtitle,
+		Subtitle:    h.subtitle(p),
 		AccentColor: pushward.ColorBlue,
+		CurrentStep: &step,
+		TotalSteps:  &total,
+		StepLabels:  stepLabels,
 	}
 
 	req := pushward.UpdateRequest{
@@ -148,36 +175,23 @@ func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Log
 func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText, color, icon string) {
 	slug, mapKey := h.slugAndKey(p)
 
-	cl := h.clients.Get(userKey)
-	endedTTL := int(h.config.CleanupDelay.Seconds())
-	staleTTL := int(h.config.StaleTimeout.Seconds())
-
-	name := text.TruncateHard(p.Plan, 100)
-	if name == "" {
-		name = "Backup"
-	}
-
-	// Create activity in case we missed the start event
-	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		log.Error("failed to create backrest activity", "slug", slug, "error", err)
+	cl := h.createActivity(ctx, userKey, log, slug, p)
+	if cl == nil {
 		return
 	}
 
-	subtitle := "Backrest"
-	if p.Plan != "" {
-		subtitle += " · " + text.TruncateHard(p.Plan, 50)
-	}
-	if p.Repo != "" {
-		subtitle += " · " + text.TruncateHard(p.Repo, 50)
-	}
-
+	step := 2
+	total := 2
 	content := pushward.Content{
-		Template:    "generic",
+		Template:    "steps",
 		Progress:    1.0,
 		State:       stateText,
 		Icon:        icon,
-		Subtitle:    subtitle,
+		Subtitle:    h.subtitle(p),
 		AccentColor: color,
+		CurrentStep: &step,
+		TotalSteps:  &total,
+		StepLabels:  stepLabels,
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
@@ -186,8 +200,49 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-
 	log.Info("backrest end scheduled", "slug", slug, "event", p.Event, "state", stateText)
+}
+
+func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText, color, severity string) {
+	slug := text.SlugHash("backrest-alert", p.Plan+p.Repo+p.Event, 4)
+	mapKey := fmt.Sprintf("backrest:alert:%s:%s:%s", p.Plan, p.Repo, p.Event)
+
+	cl := h.createActivity(ctx, userKey, log, slug, p)
+	if cl == nil {
+		return
+	}
+
+	state := stateText
+	if p.Error != "" {
+		state = text.TruncateHard(p.Error, 60)
+	}
+
+	icon := "exclamationmark.triangle.fill"
+	if severity == "info" {
+		icon = "info.circle.fill"
+	}
+
+	content := pushward.Content{
+		Template:    "alert",
+		Progress:    1.0,
+		State:       state,
+		Icon:        icon,
+		Subtitle:    h.subtitle(p),
+		AccentColor: color,
+		Severity:    severity,
+	}
+
+	req := pushward.UpdateRequest{
+		State:   pushward.StateOngoing,
+		Content: content,
+	}
+	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
+		log.Error("failed to update backrest alert activity", "slug", slug, "error", err)
+		return
+	}
+
+	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
+	log.Info("backrest alert", "slug", slug, "event", p.Event, "state", state)
 }
 
 func formatBytes(b int64) string {

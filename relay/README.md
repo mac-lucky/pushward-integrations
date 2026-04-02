@@ -108,6 +108,8 @@ Receives Grafana alert webhooks. Groups alerts by `alertname`, worst severity dr
 
 **Events:** `firing` → ONGOING (red/orange/blue by severity), `resolved` → ENDED (green checkmark)
 
+**Setup:** In Grafana, go to Alerts & IRM > Alerting > Contact points. Add a contact point with integration type "Webhook". Set URL to `https://relay.example.com/grafana`. Under Optional settings, set Authorization header scheme to `Bearer` and credentials to your `hlk_` key. Adding a `severity` label (critical/warning/info) to alert rules enables severity-based display.
+
 ### ArgoCD
 
 Receives ArgoCD sync webhooks via argocd-notifications. Maps sync progress to a 3-step pipeline.
@@ -121,6 +123,8 @@ Receives ArgoCD sync webhooks via argocd-notifications. Maps sync progress to a 
 **Events:** `sync-running` → Step 1/3 Syncing, `sync-succeeded` → Step 2/3 Rolling out, `deployed` → Step 3/3 Deployed, `sync-failed` → Sync Failed, `health-degraded` → Degraded (transient warning during rollout)
 
 **Grace period:** Configurable `sync_grace_period` (default 10s) defers activity creation for fast syncs that complete before the grace period expires, preventing unnecessary notifications.
+
+**Setup:** ArgoCD notifications are built-in since v2.3. Configure `argocd-notifications-cm` ConfigMap with a webhook service, Go-templated templates, and trigger expressions. Store the `hlk_` key in `argocd-notifications-secret`. Subscribe applications via annotations like `notifications.argoproj.io/subscribe.on-pushward-deployed.pushward: ""`. See [ArgoCD Notification Docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/services/webhook/) for full configuration.
 
 ### Radarr / Sonarr
 
@@ -142,6 +146,8 @@ Receives Radarr and Sonarr webhooks. Tracks download lifecycle from grab to impo
 | `Health` | (health message) | `exclamationmark.triangle.fill` / `.octagon.fill` | orange / red |
 | `HealthRestored` | (restored message) | `checkmark.circle.fill` | green |
 | `Test` | (provider-specific test activity) | varies | varies |
+
+**Setup:** In Radarr/Sonarr, go to Settings > Connect > + > Webhook. Set URL to `https://relay.example.com/radarr` (or `/sonarr`). Leave Username as any value, set Password to your `hlk_` key (Basic Auth). Enable triggers: On Grab, On Import, On Health Issue, On Health Restored. Click Test, then Save.
 
 ### Jellyfin
 
@@ -170,7 +176,7 @@ Receives Jellyfin webhook plugin notifications. Tracks playback progress, librar
 
 **Pause timeout:** After `pause_timeout` (default 5m) of being paused with no progress change, the activity is auto-ended.
 
-**Setup:** In Jellyfin, install the Webhook plugin. Add a Generic destination with URL `https://relay.example.com/jellyfin`. Under **Add Request Header**, set Key to `Authorization` and Value to `Bearer hlk_...`.
+**Setup:** Install the [Webhook plugin](https://github.com/jellyfin/jellyfin-plugin-webhook) from the Jellyfin plugin catalog. Go to Dashboard > Plugins > Webhook. Add a Generic destination with URL `https://relay.example.com/jellyfin`. Under **Add Request Header**, set Key to `Authorization` and Value to `Bearer hlk_...`. Select notification types: Playback Start, Playback Progress, Playback Stop, Item Added, Task Started, Task Completed, Authentication Failure.
 
 ### Paperless-ngx
 
@@ -190,10 +196,18 @@ Receives document consumption webhooks. Users configure the JSON body via a Jinj
 | `updated` | Updated | `doc.text.fill` | green |
 | `consumption_started` | Processing... | `arrow.triangle.2.circlepath` | blue |
 
-**Setup:** In Paperless-ngx, go to Admin > Workflows. Create a workflow with trigger "Document Added" and action "Webhook". Set the URL to `https://relay.example.com/paperless`. Add an `Authorization: Bearer hlk_...` header. Use this body template:
+**Setup:** In Paperless-ngx, go to Settings > Workflows. Create a separate workflow for each event type. Set the action to "Webhook" with URL `https://relay.example.com/paperless`, encoding "JSON", body type "Text". Add an `Authorization: Bearer hlk_...` header.
+
+Body template for **Document Added** (also use for Updated, with `"event":"updated"`):
 
 ```
-{"event":"added","doc_id":{{doc_id}},"title":{{doc_title|tojson}},"correspondent":{{correspondent|tojson}},"document_type":{{document_type|tojson}},"doc_url":{{doc_url|tojson}},"filename":{{original_filename|tojson}},"tags":{{tag_name_list|tojson}}}
+{"event":"added","doc_id":{{doc_id}},"title":{{doc_title|tojson}},"correspondent":{{correspondent|tojson}},"document_type":{{document_type|tojson}},"doc_url":{{doc_url|tojson}},"filename":{{original_filename|tojson}}}
+```
+
+Body template for **Consumption Started** (only `original_filename` is available at this stage):
+
+```
+{"event":"consumption_started","filename":{{original_filename|tojson}}}
 ```
 
 ### Changedetection.io
@@ -276,7 +290,19 @@ Receives Proxmox VE notification webhooks for backup, replication, fencing, and 
 | `package-updates` | (title from notification) | `arrow.down.circle` | blue |
 | `system` | (test notification) | varies | varies |
 
-**Setup:** In Proxmox VE, go to Datacenter > Notifications. Add a webhook target with URL `https://relay.example.com/proxmox`. Set the `Authorization` header to `Bearer hlk_...`.
+**Setup:** In Proxmox VE, go to Datacenter > Notifications. Add a webhook target:
+
+- **URL:** `https://relay.example.com/proxmox`
+- **Method:** POST
+- **Headers:** `Content-Type: application/json` and `Authorization: Bearer {{ secrets.token }}`
+- **Secrets:** Add key `token` with your `hlk_` integration key
+- **Body:**
+
+```
+{"type":"{{ fields.type }}","title":"{{ escape title }}","message":"{{ escape message }}","severity":"{{ severity }}","hostname":"{{ fields.hostname }}"}
+```
+
+Create a Matcher to route notifications (vzdump, replication, fencing, package-updates) to this target.
 
 ### Overseerr / Jellyseerr
 
@@ -299,7 +325,21 @@ Receives Overseerr/Jellyseerr media request webhooks. Tracks request lifecycle f
 | `MEDIA_FAILED` | Failed | - | red |
 | `TEST_NOTIFICATION` | (test notification) | - | varies |
 
-**Setup:** In Overseerr/Jellyseerr, go to Settings > Notifications > Webhook. Set the Webhook URL to `https://relay.example.com/overseerr`. Set the `Authorization` header to `Bearer hlk_...`.
+**Setup:** In Overseerr/Jellyseerr, go to Settings > Notifications > Webhook. Set the Webhook URL to `https://relay.example.com/overseerr`. Set the Authorization Header to `Bearer hlk_...`. Set the JSON Payload to:
+
+```json
+{
+  "notification_type": "{{notification_type}}",
+  "subject": "{{subject}}",
+  "message": "{{message}}",
+  "image": "{{image}}",
+  "{{media}}": {},
+  "{{request}}": {},
+  "{{extra}}": []
+}
+```
+
+Enable notification types: Request Pending, Approved, Available, Declined, Failed.
 
 ### Uptime Kuma
 
@@ -320,7 +360,7 @@ Receives Uptime Kuma monitor status webhooks. Maps monitor heartbeat status to a
 | `2` (PENDING) | Checking... | `hourglass` | orange |
 | `3` (MAINTENANCE) | (test notification) | varies | varies |
 
-**Setup:** In Uptime Kuma, go to Settings > Notifications. Add a notification of type "Webhook" with URL `https://relay.example.com/uptimekuma`. Set the `Authorization` header to `Bearer hlk_...`.
+**Setup:** In Uptime Kuma, go to Settings > Notifications > Setup Notification. Set type to "Webhook", Post URL to `https://relay.example.com/uptimekuma`, Request Body to "JSON". In Additional Headers, enter `{"Authorization": "Bearer hlk_..."}`. Check "Default Enabled" to apply to all monitors.
 
 ### Gatus
 
@@ -368,7 +408,7 @@ Receives Backrest backup operation webhooks for snapshot, prune, and check opera
 
 | Route | `POST /backrest` |
 |---|---|
-| Template | `generic` |
+| Template | `steps` (operations), `alert` (errors/skipped) |
 | Auth | `Authorization: Bearer hlk_...` |
 | Slug | `backrest-<sha256(plan+repo)[:8]>` |
 
@@ -386,8 +426,25 @@ Receives Backrest backup operation webhooks for snapshot, prune, and check opera
 | `CONDITION_CHECK_START` | Checking... | `arrow.triangle.2.circlepath` | blue |
 | `CONDITION_CHECK_SUCCESS` | Check Passed | `checkmark.circle.fill` | green |
 | `CONDITION_CHECK_ERROR` | Check Failed | `xmark.circle.fill` | red |
+| `CONDITION_FORGET_START` | Forgetting... | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_FORGET_SUCCESS` | Forgotten | `checkmark.circle.fill` | green |
+| `CONDITION_FORGET_ERROR` | Forget Failed | `xmark.circle.fill` | red |
+| `CONDITION_ANY_ERROR` | (error message) | `exclamationmark.triangle.fill` | red |
+| `CONDITION_SNAPSHOT_SKIPPED` | Snapshot Skipped | `info.circle.fill` | blue |
 
-**Setup:** In Backrest, go to Settings > Notifications. Add a webhook with URL `https://relay.example.com/backrest`. Set the `Authorization` header to `Bearer hlk_...`.
+**Setup:** In Backrest, go to the Plan or Repo you want to monitor. Under Hooks, click **+ Add Hook** and select **Shoutrrr**. Select these 15 conditions: `CONDITION_SNAPSHOT_START`, `CONDITION_SNAPSHOT_SUCCESS`, `CONDITION_SNAPSHOT_WARNING`, `CONDITION_SNAPSHOT_ERROR`, `CONDITION_PRUNE_START`, `CONDITION_PRUNE_SUCCESS`, `CONDITION_PRUNE_ERROR`, `CONDITION_CHECK_START`, `CONDITION_CHECK_SUCCESS`, `CONDITION_CHECK_ERROR`, `CONDITION_FORGET_START`, `CONDITION_FORGET_SUCCESS`, `CONDITION_FORGET_ERROR`, `CONDITION_ANY_ERROR`, `CONDITION_SNAPSHOT_SKIPPED`. Set On Error to "Ignore".
+
+Set the **Shoutrrr URL** to (the `@authorization` param adds the Authorization header):
+
+```
+generic+https://relay.example.com/backrest?@authorization=Bearer+hlk_YOUR_KEY&contenttype=application/json
+```
+
+Set the **Template** to (Go template that renders the JSON body):
+
+```
+{"event":"{{ .Event }}","plan":"{{ .Plan.Id }}","repo":"{{ .Repo.Id }}","snapshot_id":"{{ .SnapshotId }}","data_added":{{ if .SnapshotStats }}{{ .SnapshotStats.DataAdded }}{{ else }}0{{ end }},"error":"{{ .Error }}"}
+```
 
 ## Configuration
 
