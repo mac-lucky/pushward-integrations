@@ -11,6 +11,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
@@ -31,6 +32,7 @@ func testConfig() *config.BackrestConfig {
 
 func newHandler(t *testing.T, cfg *config.BackrestConfig) (*Handler, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
+	lifecycle.SetRetryDelay(10 * time.Millisecond)
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	store := state.NewMemoryStore()
 	pool := client.NewPool(srv.URL, nil)
@@ -717,5 +719,27 @@ func TestSnapshotSkipped(t *testing.T) {
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
+	}
+}
+
+func TestSnapshotStart_APIFailure_Returns502(t *testing.T) {
+	// Server returns 400 for all requests (not retried by client).
+	lifecycle.SetRetryDelay(10 * time.Millisecond)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+
+	store := state.NewMemoryStore()
+	pool := client.NewPool(srv.URL, nil)
+	h := NewHandler(store, pool, testConfig())
+
+	w := send(t, h, `{
+		"event": "CONDITION_SNAPSHOT_START",
+		"plan": "daily-backup",
+		"repo": "local-repo"
+	}`)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -54,47 +55,53 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	userKey := auth.KeyFromContext(r.Context())
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	ctx := r.Context()
+	ctx = metrics.WithProvider(ctx, "backrest")
 
+	var err error
 	switch payload.Event {
 	case "CONDITION_SNAPSHOT_START":
-		h.handleStart(ctx, userKey, log, &payload, "Backing up...")
+		err = h.handleStart(ctx, userKey, log, &payload, "Backing up...")
 	case "CONDITION_SNAPSHOT_SUCCESS":
 		stateText := "Complete · " + formatBytes(payload.DataAdded)
-		h.handleEnd(ctx, userKey, log, &payload, stateText, pushward.ColorGreen, "checkmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, &payload, stateText, pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_SNAPSHOT_WARNING":
-		h.handleEnd(ctx, userKey, log, &payload, "Complete (warnings)", pushward.ColorOrange, "exclamationmark.triangle.fill")
+		err = h.handleEnd(ctx, userKey, log, &payload, "Complete (warnings)", pushward.ColorOrange, "exclamationmark.triangle.fill")
 	case "CONDITION_SNAPSHOT_ERROR":
 		stateText := "Failed"
 		if payload.Error != "" {
 			stateText = "Failed: " + text.TruncateHard(payload.Error, 50)
 		}
-		h.handleEnd(ctx, userKey, log, &payload, stateText, pushward.ColorRed, "xmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, &payload, stateText, pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_PRUNE_START":
-		h.handleStart(ctx, userKey, log, &payload, "Pruning...")
+		err = h.handleStart(ctx, userKey, log, &payload, "Pruning...")
 	case "CONDITION_PRUNE_SUCCESS":
-		h.handleEnd(ctx, userKey, log, &payload, "Pruned", pushward.ColorGreen, "checkmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, &payload, "Pruned", pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_PRUNE_ERROR":
-		h.handleEnd(ctx, userKey, log, &payload, "Prune Failed", pushward.ColorRed, "xmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, &payload, "Prune Failed", pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_CHECK_START":
-		h.handleStart(ctx, userKey, log, &payload, "Checking...")
+		err = h.handleStart(ctx, userKey, log, &payload, "Checking...")
 	case "CONDITION_CHECK_SUCCESS":
-		h.handleEnd(ctx, userKey, log, &payload, "Check Passed", pushward.ColorGreen, "checkmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, &payload, "Check Passed", pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_CHECK_ERROR":
-		h.handleEnd(ctx, userKey, log, &payload, "Check Failed", pushward.ColorRed, "xmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, &payload, "Check Failed", pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_FORGET_START":
-		h.handleStart(ctx, userKey, log, &payload, "Forgetting...")
+		err = h.handleStart(ctx, userKey, log, &payload, "Forgetting...")
 	case "CONDITION_FORGET_SUCCESS":
-		h.handleEnd(ctx, userKey, log, &payload, "Forgotten", pushward.ColorGreen, "checkmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, &payload, "Forgotten", pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_FORGET_ERROR":
-		h.handleEnd(ctx, userKey, log, &payload, "Forget Failed", pushward.ColorRed, "xmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, &payload, "Forget Failed", pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_ANY_ERROR":
-		h.handleAlert(ctx, userKey, log, &payload, "Error", pushward.ColorRed, "critical")
+		err = h.handleAlert(ctx, userKey, log, &payload, "Error", pushward.ColorRed, "critical")
 	case "CONDITION_SNAPSHOT_SKIPPED":
-		h.handleAlert(ctx, userKey, log, &payload, "Snapshot Skipped", pushward.ColorBlue, "info")
+		err = h.handleAlert(ctx, userKey, log, &payload, "Snapshot Skipped", pushward.ColorBlue, "info")
 	default:
 		slog.Debug("unknown backrest event", "event", payload.Event)
 	}
 
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
@@ -116,7 +123,7 @@ func (h *Handler) subtitle(p *webhookPayload) string {
 	return subtitle
 }
 
-func (h *Handler) createActivity(ctx context.Context, userKey string, log *slog.Logger, slug string, p *webhookPayload) *pushward.Client {
+func (h *Handler) createActivity(ctx context.Context, userKey string, log *slog.Logger, slug string, p *webhookPayload) (*pushward.Client, error) {
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
@@ -128,17 +135,17 @@ func (h *Handler) createActivity(ctx context.Context, userKey string, log *slog.
 
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
 		log.Error("failed to create backrest activity", "slug", slug, "error", err)
-		return nil
+		return nil, err
 	}
-	return cl
+	return cl, nil
 }
 
-func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText string) {
+func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText string) error {
 	slug, mapKey := h.slugAndKey(p)
 
-	cl := h.createActivity(ctx, userKey, log, slug, p)
-	if cl == nil {
-		return
+	cl, err := h.createActivity(ctx, userKey, log, slug, p)
+	if err != nil {
+		return err
 	}
 
 	step := 1
@@ -161,7 +168,7 @@ func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Log
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update backrest activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
@@ -170,14 +177,14 @@ func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Log
 	}
 
 	log.Info("backrest started", "slug", slug, "event", p.Event, "state", stateText)
+	return nil
 }
 
-func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText, color, icon string) {
+func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText, color, icon string) error {
 	slug, mapKey := h.slugAndKey(p)
 
-	cl := h.createActivity(ctx, userKey, log, slug, p)
-	if cl == nil {
-		return
+	if _, err := h.createActivity(ctx, userKey, log, slug, p); err != nil {
+		return err
 	}
 
 	step := 2
@@ -201,15 +208,16 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	log.Info("backrest end scheduled", "slug", slug, "event", p.Event, "state", stateText)
+	return nil
 }
 
-func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText, color, severity string) {
+func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText, color, severity string) error {
 	slug := text.SlugHash("backrest-alert", p.Plan+p.Repo+p.Event, 4)
 	mapKey := fmt.Sprintf("backrest:alert:%s:%s:%s", p.Plan, p.Repo, p.Event)
 
-	cl := h.createActivity(ctx, userKey, log, slug, p)
-	if cl == nil {
-		return
+	cl, err := h.createActivity(ctx, userKey, log, slug, p)
+	if err != nil {
+		return err
 	}
 
 	state := stateText
@@ -238,11 +246,12 @@ func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Log
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update backrest alert activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	log.Info("backrest alert", "slug", slug, "event", p.Event, "state", state)
+	return nil
 }
 
 func formatBytes(b int64) string {

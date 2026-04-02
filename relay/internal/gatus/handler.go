@@ -11,6 +11,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -50,19 +51,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	ctx = metrics.WithProvider(ctx, "gatus")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	pwClient := h.clients.Get(userKey)
 
+	var err error
 	switch payload.Status {
 	case "TRIGGERED":
-		h.handleTriggered(ctx, userKey, log, pwClient, &payload)
+		err = h.handleTriggered(ctx, userKey, log, pwClient, &payload)
 	case "RESOLVED":
-		h.handleResolved(ctx, userKey, log, pwClient, &payload)
+		err = h.handleResolved(ctx, userKey, log, pwClient, &payload)
 	default:
 		log.Warn("unknown gatus status", "status", payload.Status, "endpoint", payload.EndpointName)
 	}
 
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
@@ -77,7 +84,7 @@ func (h *Handler) slugAndKey(p *webhookPayload) (string, string) {
 	return slug, mapKey
 }
 
-func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) {
+func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) error {
 	slug, mapKey := h.slugAndKey(p)
 
 	// Cancel any pending end timer from a previous RESOLVED event
@@ -86,13 +93,13 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 	existing, err := h.store.Get(ctx, "gatus", userKey, mapKey, "")
 	if err != nil {
 		log.Error("failed to check state", "endpoint", p.EndpointName, "error", err)
-		return
+		return nil
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "gatus", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
 		log.Error("failed to store state", "endpoint", p.EndpointName, "error", err)
-		return
+		return nil
 	}
 
 	if existing == nil {
@@ -103,7 +110,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 			if err := h.store.Delete(ctx, "gatus", userKey, mapKey, ""); err != nil {
 				log.Warn("state store delete failed", "error", err, "provider", "gatus", "slug", slug)
 			}
-			return
+			return err
 		}
 		log.Info("created activity", "slug", slug, "endpoint", p.EndpointName)
 	}
@@ -139,21 +146,22 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 	log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "error")
+	return nil
 }
 
-func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) {
+func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) error {
 	slug, mapKey := h.slugAndKey(p)
 
 	existing, err := h.store.Get(ctx, "gatus", userKey, mapKey, "")
 	if err != nil {
 		log.Error("failed to check state", "endpoint", p.EndpointName, "error", err)
-		return
+		return nil
 	}
 	if existing == nil {
-		return // No prior TRIGGERED — skip routine RESOLVED
+		return nil // No prior TRIGGERED — skip routine RESOLVED
 	}
 	subtitle := "Gatus \u00b7 " + text.TruncateHard(p.EndpointName, 50)
 	if p.EndpointGroup != "" {
@@ -174,5 +182,6 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
 	log.Info("scheduled end for activity", "slug", slug, "endpoint", p.EndpointName)
+	return nil
 }
 

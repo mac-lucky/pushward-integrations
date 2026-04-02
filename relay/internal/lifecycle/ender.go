@@ -11,6 +11,14 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
+// enderRetryDelay is the pause between the two outer attempts in updateWithRetry.
+// Tests override this via SetRetryDelay to keep execution fast.
+var enderRetryDelay = 5 * time.Second
+
+// SetRetryDelay overrides the pause between outer retry attempts in
+// updateWithRetry. Intended for use in tests only.
+func SetRetryDelay(d time.Duration) { enderRetryDelay = d }
+
 // EnderProvider is implemented by handlers that own a lifecycle.Ender.
 type EnderProvider interface {
 	Ender() *Ender
@@ -82,13 +90,11 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 	tp.phase1 = time.AfterFunc(e.config.EndDelay, func() {
 		defer e.wg.Done()
 		// Phase 1: ONGOING with final content
-		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel1()
 		ongoingReq := pushward.UpdateRequest{
 			State:   pushward.StateOngoing,
 			Content: content,
 		}
-		if err := cl.UpdateActivity(ctx1, slug, ongoingReq); err != nil {
+		if err := updateWithRetry(cl, slug, ongoingReq, 30*time.Second); err != nil {
 			slog.Error("failed to update activity (end phase 1)", "slug", slug, "error", err)
 		} else {
 			slog.Info("updated activity (end phase 1)", "slug", slug, "state", pushward.StateOngoing)
@@ -104,13 +110,11 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 		e.wg.Add(1)
 		tp.phase2 = time.AfterFunc(e.config.EndDisplayTime, func() {
 			defer e.wg.Done()
-			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel2()
 			endedReq := pushward.UpdateRequest{
 				State:   pushward.StateEnded,
 				Content: content,
 			}
-			if err := cl.UpdateActivity(ctx2, slug, endedReq); err != nil {
+			if err := updateWithRetry(cl, slug, endedReq, 30*time.Second); err != nil {
 				slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
 			} else {
 				slog.Info("ended activity", "slug", slug, "state", content.State)
@@ -175,4 +179,29 @@ func (e *Ender) StopAll() {
 // Wait blocks until all in-flight ender callbacks complete.
 func (e *Ender) Wait() {
 	e.wg.Wait()
+}
+
+// updateWithRetry attempts an UpdateActivity call and retries once after
+// enderRetryDelay on failure. Each UpdateActivity call already does up to 5
+// internal retries, so worst case is:
+// attempt (5 retries) → 5s wait → attempt (5 retries).
+func updateWithRetry(cl *pushward.Client, slug string, req pushward.UpdateRequest, perAttemptTimeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(context.Background(), perAttemptTimeout)
+	defer cancel()
+
+	err := cl.UpdateActivity(ctx, slug, req)
+	if err == nil {
+		return nil
+	}
+	slog.Warn("ender update failed, retrying in 5s", "slug", slug, "error", err)
+
+	select {
+	case <-time.After(enderRetryDelay):
+	case <-ctx.Done():
+		return err
+	}
+
+	ctx2, cancel2 := context.WithTimeout(context.Background(), perAttemptTimeout)
+	defer cancel2()
+	return cl.UpdateActivity(ctx2, slug, req)
 }

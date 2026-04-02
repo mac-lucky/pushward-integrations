@@ -115,7 +115,7 @@ func healthSlug(provider, checkType string) string {
 }
 
 // handleHealth creates an alert-style activity for a health issue.
-func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Logger, provider string, p *HealthPayload) {
+func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Logger, provider string, p *HealthPayload) error {
 	slug := healthSlug(provider, p.Type)
 	mapKey := provider + ":health:" + p.Type
 
@@ -129,7 +129,7 @@ func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Lo
 	name := titleCase(provider) + " Health"
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
 		log.Error("failed to create health activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	icon := "exclamationmark.triangle.fill"
@@ -157,7 +157,7 @@ func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Lo
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update health activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	// Track in state store for HealthRestored to find
@@ -166,10 +166,11 @@ func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Lo
 	}
 
 	log.Info("health issue", "slug", slug, "provider", provider, "type", p.Type, "level", p.Level)
+	return nil
 }
 
 // handleHealthRestored ends the health activity with a resolved state.
-func (h *Handler) handleHealthRestored(ctx context.Context, userKey string, log *slog.Logger, provider string, p *HealthRestoredPayload) {
+func (h *Handler) handleHealthRestored(ctx context.Context, userKey string, log *slog.Logger, provider string, p *HealthRestoredPayload) error {
 	mapKey := provider + ":health:" + p.Type
 	slug, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
 	if !tracked {
@@ -188,20 +189,21 @@ func (h *Handler) handleHealthRestored(ctx context.Context, userKey string, log 
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	log.Info("health restored", "slug", slug, "provider", provider, "type", p.Type)
+	return nil
 }
 
 // handleManualInteraction sends an ONGOING warning update on an existing tracked download.
-func (h *Handler) handleManualInteraction(ctx context.Context, userKey string, log *slog.Logger, provider string, p *ManualInteractionPayload) {
+func (h *Handler) handleManualInteraction(ctx context.Context, userKey string, log *slog.Logger, provider string, p *ManualInteractionPayload) error {
 	if p.DownloadID == "" {
 		log.Warn("manual interaction missing downloadId", "provider", provider)
-		return
+		return nil
 	}
 
 	mapKey := provider + ":" + p.DownloadID
 	slug, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
 	if !tracked {
 		slog.Debug("manual interaction for untracked download", "provider", provider, "downloadId", p.DownloadID)
-		return
+		return nil
 	}
 
 	reason := "Import requires manual interaction"
@@ -230,7 +232,8 @@ func (h *Handler) handleManualInteraction(ctx context.Context, userKey string, l
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity for manual interaction", "slug", slug, "error", err)
-		return
+		return err
 	}
 	log.Info("manual interaction required", "slug", slug, "provider", provider, "downloadId", p.DownloadID)
+	return nil
 }

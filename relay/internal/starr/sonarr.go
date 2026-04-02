@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -27,9 +28,11 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	ctx = metrics.WithProvider(ctx, "starr")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
 
+	var apiErr error
 	switch envelope.EventType {
 	case "Grab":
 		var p SonarrGrabPayload
@@ -38,7 +41,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleSonarrGrab(ctx, userKey, log, &p)
+		apiErr = h.handleSonarrGrab(ctx, userKey, log, &p)
 	case "Download":
 		var p SonarrDownloadPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
@@ -46,7 +49,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleSonarrDownload(ctx, userKey, log, &p)
+		apiErr = h.handleSonarrDownload(ctx, userKey, log, &p)
 	case "Test":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "sonarr"); err != nil {
@@ -59,7 +62,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleHealth(ctx, userKey, log, "sonarr", &p)
+		apiErr = h.handleHealth(ctx, userKey, log, "sonarr", &p)
 	case "HealthRestored":
 		var p HealthRestoredPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
@@ -67,7 +70,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleHealthRestored(ctx, userKey, log, "sonarr", &p)
+		apiErr = h.handleHealthRestored(ctx, userKey, log, "sonarr", &p)
 	case "ManualInteractionRequired":
 		var p ManualInteractionPayload
 		if err := json.Unmarshal(raw, &p); err != nil {
@@ -75,19 +78,23 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid payload", http.StatusBadRequest)
 			return
 		}
-		h.handleManualInteraction(ctx, userKey, log, "sonarr", &p)
+		apiErr = h.handleManualInteraction(ctx, userKey, log, "sonarr", &p)
 	default:
 		slog.Debug("ignored event", "event_type", envelope.EventType)
 	}
 
+	if apiErr != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slog.Logger, p *SonarrGrabPayload) {
+func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slog.Logger, p *SonarrGrabPayload) error {
 	if p.DownloadID == "" {
 		log.Warn("grab event missing downloadId")
-		return
+		return nil
 	}
 
 	slug := slugForDownload("sonarr-", p.DownloadID)
@@ -100,7 +107,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 	// Track in state store
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
 		log.Error("failed to track download", "slug", slug, "error", err)
-		return
+		return nil
 	}
 
 	cl := h.clients.Get(userKey)
@@ -109,7 +116,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 	if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 		log.Error("failed to create activity", "slug", slug, "error", err)
 		h.deleteTrackedSlug(ctx, userKey, mapKey)
-		return
+		return err
 	}
 
 	step := 1
@@ -129,15 +136,16 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 	log.Info("grab received", "slug", slug, "series", p.Series.Title, "downloadId", p.DownloadID)
+	return nil
 }
 
-func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log *slog.Logger, p *SonarrDownloadPayload) {
+func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log *slog.Logger, p *SonarrDownloadPayload) error {
 	if p.DownloadID == "" {
 		log.Warn("download event missing downloadId")
-		return
+		return nil
 	}
 
 	slug := slugForDownload("sonarr-", p.DownloadID)
@@ -155,7 +163,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 
 		if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
 			log.Error("failed to track download", "slug", slug, "error", err)
-			return
+			return nil
 		}
 
 		cl := h.clients.Get(userKey)
@@ -164,7 +172,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 		if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
-			return
+			return err
 		}
 		log.Info("created activity (download without grab)", "slug", slug)
 	}
@@ -190,4 +198,5 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	log.Info("download complete", "slug", slug, "state", state, "series", p.Series.Title)
+	return nil
 }

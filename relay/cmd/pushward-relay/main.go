@@ -32,6 +32,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/telemetry"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/uptimekuma"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/server"
 )
 
@@ -116,7 +117,12 @@ func main() {
 			Transport: otelhttp.NewTransport(http.DefaultTransport),
 		}
 	}
-	clients := client.NewPool(baseURL, httpClient)
+	breaker := pushward.NewCircuitBreaker(cfg.CircuitBreaker.Threshold, cfg.CircuitBreaker.Cooldown)
+	clients := client.NewPool(baseURL, httpClient,
+		pushward.WithOnResult(metrics.RecordAPICall),
+		pushward.WithCircuitBreaker(breaker),
+	)
+	slog.Info("circuit breaker configured", "threshold", cfg.CircuitBreaker.Threshold, "cooldown", cfg.CircuitBreaker.Cooldown)
 
 	// Router
 	mux := server.NewMux(pool.Ping)
@@ -256,7 +262,7 @@ func main() {
 		}
 	}()
 
-	// Background goroutine: collect DB connection pool metrics every 15s
+	// Background goroutine: collect DB + circuit breaker metrics every 15s
 	go func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
@@ -269,6 +275,11 @@ func main() {
 				metrics.DBPoolTotalConns.Set(float64(stat.TotalConns()))
 				metrics.DBPoolIdleConns.Set(float64(stat.IdleConns()))
 				metrics.DBPoolAcquiredConns.Set(float64(stat.AcquiredConns()))
+				val := 0.0
+				if breaker.IsOpen() {
+					val = 1
+				}
+				metrics.CircuitBreakerOpen.Set(val)
 			}
 		}
 	}()

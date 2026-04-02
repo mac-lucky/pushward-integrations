@@ -1,6 +1,7 @@
 package changedetection
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
@@ -41,6 +43,17 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	ctx = metrics.WithProvider(ctx, "changedetection")
+
+	if err := h.handleChange(ctx, &payload); err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("ok"))
+}
+
+func (h *Handler) handleChange(ctx context.Context, payload *webhookPayload) error {
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	pwClient := h.clients.Get(userKey)
@@ -71,7 +84,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 	if err := pwClient.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
 		log.Error("failed to create activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	content := pushward.Content{
@@ -93,7 +106,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, ongoingReq); err != nil {
 		log.Error("failed to update activity to ONGOING", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	endedReq := pushward.UpdateRequest{
@@ -102,11 +115,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, endedReq); err != nil {
 		log.Error("failed to update activity to ENDED", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	log.Info("processed changedetection webhook", "slug", slug, "url", payload.URL)
-
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
+	return nil
 }

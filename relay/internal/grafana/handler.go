@@ -11,6 +11,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -77,13 +78,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	ctx = metrics.WithProvider(ctx, "grafana")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	pwClient := h.clients.Get(userKey)
 
+	var apiErr error
 	for _, a := range payload.Alerts {
 		severity := a.Labels[h.config.SeverityLabel]
-		if severity == "" {
+		if _, ok := severityRank[severity]; !ok {
 			severity = h.config.DefaultSeverity
 		}
 
@@ -120,30 +123,38 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 		switch a.Status {
 		case "firing":
-			h.handleFiring(ctx, userKey, log, pwClient, alertname, a.Fingerprint, info)
+			if err := h.handleFiring(ctx, userKey, log, pwClient, alertname, a.Fingerprint, info); err != nil {
+				apiErr = err
+			}
 		case "resolved":
-			h.handleResolved(ctx, userKey, log, pwClient, alertname, a.Fingerprint, info)
+			if err := h.handleResolved(ctx, userKey, log, pwClient, alertname, a.Fingerprint, info); err != nil {
+				apiErr = err
+			}
 		default:
 			log.Warn("unknown alert status", "status", a.Status, "fingerprint", a.Fingerprint)
 		}
 	}
 
+	if apiErr != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handleFiring(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) {
+func (h *Handler) handleFiring(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) error {
 	existing, err := h.store.GetGroup(ctx, "grafana", userKey, alertname)
 	if err != nil {
 		log.Error("failed to get alert group", "alertname", alertname, "error", err)
-		return
+		return nil
 	}
 	isNew := len(existing) == 0
 
 	data, _ := json.Marshal(info)
 	if err := h.store.Set(ctx, "grafana", userKey, alertname, fingerprint, data, h.config.StaleTimeout); err != nil {
 		log.Error("failed to store instance", "alertname", alertname, "fingerprint", fingerprint, "error", err)
-		return
+		return nil
 	}
 
 	slug := slugForAlertname(alertname)
@@ -156,7 +167,7 @@ func (h *Handler) handleFiring(ctx context.Context, userKey string, log *slog.Lo
 			if err := h.store.DeleteGroup(ctx, "grafana", userKey, alertname); err != nil {
 				log.Warn("state store delete group failed", "error", err, "provider", "grafana", "alertname", alertname)
 			}
-			return
+			return err
 		}
 		log.Info("created activity", "slug", slug, "alertname", alertname)
 	}
@@ -167,30 +178,31 @@ func (h *Handler) handleFiring(ctx context.Context, userKey string, log *slog.Lo
 	req := h.buildOngoingUpdate(existing)
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 	log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", req.Content.Severity)
+	return nil
 }
 
-func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) {
+func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, alertname, fingerprint string, info *instanceInfo) error {
 	existing, err := h.store.Get(ctx, "grafana", userKey, alertname, fingerprint)
 	if err != nil {
 		log.Error("failed to check instance", "alertname", alertname, "fingerprint", fingerprint, "error", err)
-		return
+		return nil
 	}
 	if existing == nil {
-		return
+		return nil
 	}
 
 	if err := h.store.Delete(ctx, "grafana", userKey, alertname, fingerprint); err != nil {
 		log.Error("failed to delete instance", "alertname", alertname, "fingerprint", fingerprint, "error", err)
-		return
+		return nil
 	}
 
 	remaining, err := h.store.GetGroup(ctx, "grafana", userKey, alertname)
 	if err != nil {
 		log.Error("failed to get remaining instances", "alertname", alertname, "error", err)
-		return
+		return nil
 	}
 
 	slug := slugForAlertname(alertname)
@@ -204,7 +216,7 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity on resolve", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	if len(remaining) == 0 {
@@ -215,6 +227,7 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 	} else {
 		log.Info("updated activity after partial resolve", "slug", slug, "remaining", len(remaining))
 	}
+	return nil
 }
 
 func (h *Handler) buildOngoingUpdate(instances map[string]json.RawMessage) pushward.UpdateRequest {

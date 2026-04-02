@@ -14,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -201,27 +202,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	userKey := auth.KeyFromContext(r.Context())
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	ctx := r.Context()
+	ctx = metrics.WithProvider(ctx, "argocd")
 
+	var err error
 	switch payload.Event {
 	case "sync-running":
-		h.handleSyncRunning(ctx, userKey, log, &payload)
+		err = h.handleSyncRunning(ctx, userKey, log, &payload)
 	case "sync-succeeded":
-		h.handleSyncSucceeded(ctx, userKey, log, &payload)
+		err = h.handleSyncSucceeded(ctx, userKey, log, &payload)
 	case "deployed":
-		h.handleDeployed(ctx, userKey, log, &payload)
+		err = h.handleDeployed(ctx, userKey, log, &payload)
 	case "sync-failed":
-		h.handleSyncFailed(ctx, userKey, log, &payload)
+		err = h.handleSyncFailed(ctx, userKey, log, &payload)
 	case "health-degraded":
-		h.handleHealthDegraded(ctx, userKey, log, &payload)
+		err = h.handleHealthDegraded(ctx, userKey, log, &payload)
 	default:
 		log.Warn("unknown event", "event", payload.Event, "app", payload.App)
 	}
 
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
+func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
@@ -232,13 +239,13 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 	// sync-running arrived out of order — skip it entirely.
 	if h.hasTombstone(ctx, userKey, p.App) {
 		log.Info("skipped late sync-running (already deployed)", "slug", slug, "app", p.App)
-		return
+		return nil
 	}
 
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
 		log.Error("failed to load app state", "app", p.App, "error", err)
-		return
+		return nil
 	}
 	needsCreate := !exists || (p.Revision != "" && app.Revision != p.Revision)
 
@@ -285,7 +292,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 		})
 		h.mu.Unlock()
 		log.Info("sync started (grace period)", "slug", slug, "app", p.App, "grace", gracePeriod)
-		return
+		return nil
 	}
 
 	pw := h.clients.Get(userKey)
@@ -296,7 +303,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteApp(ctx, log, userKey, p.App)
-			return
+			return err
 		}
 		log.Info("created activity", "slug", slug, "app", p.App)
 	}
@@ -322,12 +329,13 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 
 	if err := pw.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 	log.Info("updated activity", "slug", slug, "step", "1/3", "state", "Syncing...")
+	return nil
 }
 
-func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
+func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
@@ -337,7 +345,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
 		log.Error("failed to load app state", "app", p.App, "error", err)
-		return
+		return nil
 	}
 
 	// Tracked and still in grace period — just advance step, don't touch PushWard
@@ -347,7 +355,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 			log.Error("failed to save app state", "app", p.App, "error", err)
 		}
 		log.Info("sync succeeded (grace period)", "slug", slug, "app", p.App)
-		return
+		return nil
 	}
 
 	if !exists {
@@ -357,7 +365,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 			// If deployed already arrived (out-of-order events), this is a no-op.
 			if h.hasTombstone(ctx, userKey, p.App) {
 				log.Info("skipped no-op sync (deployed arrived first)", "slug", slug, "app", p.App)
-				return
+				return nil
 			}
 
 			// Start grace period at step 2 — if deployed comes quickly, skip
@@ -377,7 +385,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 			})
 			h.mu.Unlock()
 			log.Info("sync succeeded (untracked, grace period)", "slug", slug, "app", p.App)
-			return
+			return nil
 		}
 
 		// No grace period — create and send step 2 (original behavior)
@@ -397,7 +405,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteApp(ctx, log, userKey, p.App)
-			return
+			return err
 		}
 		log.Info("created activity (untracked sync-succeeded)", "slug", slug, "app", p.App)
 	} else {
@@ -429,12 +437,13 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 
 	if err := pw.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 	log.Info("updated activity", "slug", slug, "step", "2/3", "state", "Rolling out...")
+	return nil
 }
 
-func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
+func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
@@ -444,7 +453,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
 		log.Error("failed to load app state", "app", p.App, "error", err)
-		return
+		return nil
 	}
 
 	// Completed during grace period — no-op sync, skip entirely
@@ -463,7 +472,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.
 		}
 
 		log.Info("skipped no-op sync", "slug", slug, "app", p.App)
-		return
+		return nil
 	}
 
 	if !exists {
@@ -471,7 +480,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.
 		if h.config.SyncGracePeriod > 0 {
 			h.setTombstone(ctx, log, userKey, p.App)
 			log.Info("recorded untracked deployed", "slug", slug, "app", p.App)
-			return
+			return nil
 		}
 
 		// No grace period — create and immediately end (original behavior)
@@ -491,7 +500,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.
 		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteApp(ctx, log, userKey, p.App)
-			return
+			return err
 		}
 		log.Info("created activity (untracked deployed)", "slug", slug, "app", p.App)
 	} else {
@@ -519,6 +528,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.
 
 	h.ender.ScheduleEnd(userKey, p.App, slug, content)
 	log.Info("scheduled end", "slug", slug, "state", "Deployed")
+	return nil
 }
 
 // errorPreamble loads app state, clears grace timers if pending, and ensures
@@ -531,14 +541,14 @@ type errorPreambleResult struct {
 	wasPending  bool
 }
 
-func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, event string) (*errorPreambleResult, bool) {
+func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, event string) (*errorPreambleResult, error) {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
 		log.Error("failed to load app state", "app", p.App, "error", err)
-		return nil, false
+		return nil, nil
 	}
 	currentStep := 1
 	wasPending := false
@@ -577,7 +587,7 @@ func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.L
 		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteApp(ctx, log, userKey, p.App)
-			return nil, false
+			return nil, err
 		}
 		log.Info("created activity ("+event+")", "slug", slug, "app", p.App)
 	}
@@ -587,16 +597,16 @@ func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.L
 		currentStep: currentStep,
 		exists:      exists,
 		wasPending:  wasPending,
-	}, true
+	}, nil
 }
 
-func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
+func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
 	unlock := h.lockApp(userKey, p.App)
 	defer unlock()
 
-	res, ok := h.errorPreamble(ctx, userKey, log, p, "sync-failed")
-	if !ok {
-		return
+	res, err := h.errorPreamble(ctx, userKey, log, p, "sync-failed")
+	if res == nil {
+		return err
 	}
 
 	total := totalSteps
@@ -616,9 +626,10 @@ func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, log *slo
 
 	h.ender.ScheduleEnd(userKey, p.App, res.slug, content)
 	log.Info("scheduled end", "slug", res.slug, "state", "Sync Failed")
+	return nil
 }
 
-func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
+func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
 	slug := slugForApp(p.App)
 
 	unlock := h.lockApp(userKey, p.App)
@@ -629,7 +640,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, log 
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
 		log.Error("failed to load app state", "app", p.App, "error", err)
-		return
+		return nil
 	}
 	isTransient := exists && !app.Pending && app.Step == 2
 
@@ -655,15 +666,15 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, log 
 		}
 		if err := pw.UpdateActivity(ctx, slug, req); err != nil {
 			log.Error("failed to update activity", "slug", slug, "error", err)
-			return
+			return err
 		}
 		log.Info("updated activity (transient degraded)", "slug", slug, "step", "2/3", "state", "Degraded")
-		return
+		return nil
 	}
 
-	res, ok := h.errorPreamble(ctx, userKey, log, p, "health-degraded")
-	if !ok {
-		return
+	res, err := h.errorPreamble(ctx, userKey, log, p, "health-degraded")
+	if res == nil {
+		return err
 	}
 
 	total := totalSteps
@@ -683,6 +694,7 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, log 
 
 	h.ender.ScheduleEnd(userKey, p.App, res.slug, content)
 	log.Info("scheduled end", "slug", res.slug, "state", "Degraded")
+	return nil
 }
 
 // graceExpired is called when the sync grace period expires. It creates

@@ -11,6 +11,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
@@ -30,6 +31,7 @@ func testConfig() *config.UnmanicConfig {
 
 func newHandler(t *testing.T, cfg *config.UnmanicConfig) (*Handler, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
+	lifecycle.SetRetryDelay(10 * time.Millisecond)
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	pool := client.NewPool(srv.URL, nil)
 	h := NewHandler(pool, cfg)

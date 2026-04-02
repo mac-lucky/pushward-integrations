@@ -14,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
@@ -36,6 +37,7 @@ func testConfig() *config.ArgoCDConfig {
 
 func setupHandler(t *testing.T, cfg *config.ArgoCDConfig, srvURL string) (*Handler, state.Store) {
 	t.Helper()
+	lifecycle.SetRetryDelay(10 * time.Millisecond)
 	store := state.NewMemoryStore()
 	pool := client.NewPool(srvURL, nil)
 	h := NewHandler(store, pool, cfg)
@@ -1230,8 +1232,8 @@ func TestCreateActivityFails_SyncRunning(t *testing.T) {
 	h, _ := setupHandler(t, cfg, srv.URL)
 
 	w := sendWebhook(t, h, `{"app":"fail-create","event":"sync-running","revision":"r1"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 
 	if appExists(t, h, "fail-create") {
@@ -1245,8 +1247,8 @@ func TestCreateActivityFails_UntrackedSyncSucceeded(t *testing.T) {
 	h, _ := setupHandler(t, cfg, srv.URL)
 
 	w := sendWebhook(t, h, `{"app":"fail-create","event":"sync-succeeded","revision":"r1"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 
 	if appExists(t, h, "fail-create") {
@@ -1260,8 +1262,8 @@ func TestCreateActivityFails_UntrackedDeployed(t *testing.T) {
 	h, _ := setupHandler(t, cfg, srv.URL)
 
 	w := sendWebhook(t, h, `{"app":"fail-create","event":"deployed","revision":"r1"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 
 	if appExists(t, h, "fail-create") {
@@ -1275,8 +1277,8 @@ func TestCreateActivityFails_SyncFailed(t *testing.T) {
 	h, _ := setupHandler(t, cfg, srv.URL)
 
 	w := sendWebhook(t, h, `{"app":"fail-create","event":"sync-failed","revision":"r1"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 
 	if appExists(t, h, "fail-create") {
@@ -1290,8 +1292,8 @@ func TestCreateActivityFails_HealthDegraded(t *testing.T) {
 	h, _ := setupHandler(t, cfg, srv.URL)
 
 	w := sendWebhook(t, h, `{"app":"fail-create","event":"health-degraded","revision":"r1"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 
 	if appExists(t, h, "fail-create") {
@@ -1337,8 +1339,8 @@ func TestUpdateActivityFails_SyncRunning(t *testing.T) {
 	h, _ := setupHandler(t, cfg, srv.URL)
 
 	w := sendWebhook(t, h, `{"app":"fail-update","event":"sync-running","revision":"r1"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
@@ -1361,8 +1363,8 @@ func TestUpdateActivityFails_SyncSucceeded(t *testing.T) {
 	sendWebhook(t, h, `{"app":"fail-update","event":"sync-running","revision":"r1"}`)
 	// sync-succeeded: PATCH(update) fail
 	w := sendWebhook(t, h, `{"app":"fail-update","event":"sync-succeeded","revision":"r1"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
@@ -1398,8 +1400,8 @@ func TestTransientHealthDegraded_UpdateFails(t *testing.T) {
 	sendWebhook(t, h, `{"app":"deg-fail","event":"sync-running","revision":"r1"}`)
 	sendWebhook(t, h, `{"app":"deg-fail","event":"sync-succeeded","revision":"r1"}`)
 	w := sendWebhook(t, h, `{"app":"deg-fail","event":"health-degraded","revision":"r1"}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 
 	mu.Lock()
@@ -1425,9 +1427,9 @@ func TestScheduleEnd_AppNotInStore(t *testing.T) {
 
 	time.Sleep(200 * time.Millisecond)
 	recorded := testutil.GetCalls(calls, mu)
-	// The ender will attempt phase 1 + phase 2 (2 PATCH calls, both may fail)
-	if len(recorded) != 2 {
-		t.Errorf("expected 2 best-effort API calls, got %d", len(recorded))
+	// The ender will attempt phase 1 + phase 2 (each retried once = 4 PATCH calls total)
+	if len(recorded) != 4 {
+		t.Errorf("expected 4 best-effort API calls (2 phases x 2 attempts), got %d", len(recorded))
 	}
 }
 
@@ -1512,5 +1514,25 @@ func TestGraceExpired_DefaultStep(t *testing.T) {
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
 	if update.Content.State != "Step 5" {
 		t.Errorf("expected 'Step 5', got %s", update.Content.State)
+	}
+}
+
+func TestSyncRunning_APIFailure_Returns502(t *testing.T) {
+	// Server returns 400 for all requests (not retried by client).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+
+	cfg := testConfig()
+	h, _ := setupHandler(t, cfg, srv.URL)
+
+	w := sendWebhook(t, h, `{
+		"app": "test-502",
+		"event": "sync-running",
+		"revision": "abc123"
+	}`)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 }

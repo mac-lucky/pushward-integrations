@@ -11,6 +11,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -52,27 +53,33 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	userKey := auth.KeyFromContext(r.Context())
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	ctx := r.Context()
+	ctx = metrics.WithProvider(ctx, "paperless")
 
+	var err error
 	switch payload.Event {
 	case "added":
-		h.handleDocument(ctx, userKey, log, &payload, "Processed")
+		err = h.handleDocument(ctx, userKey, log, &payload, "Processed")
 	case "updated":
-		h.handleDocument(ctx, userKey, log, &payload, "Updated")
+		err = h.handleDocument(ctx, userKey, log, &payload, "Updated")
 	case "consumption_started":
-		h.handleConsumptionStarted(ctx, userKey, log, &payload)
+		err = h.handleConsumptionStarted(ctx, userKey, log, &payload)
 	default:
 		slog.Debug("unknown paperless event", "event", payload.Event)
 	}
 
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
 
 // handleDocument processes "added" and "updated" events.
-func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText string) {
+func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText string) error {
 	if p.DocID == nil {
 		log.Warn("document event missing doc_id", "event", p.Event)
-		return
+		return nil
 	}
 
 	slug := fmt.Sprintf("paperless-%d", *p.DocID)
@@ -89,7 +96,7 @@ func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.
 
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
 		log.Error("failed to create paperless activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	subtitle := buildSubtitle(p.DocumentType, p.Correspondent)
@@ -110,7 +117,7 @@ func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update paperless activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	// Store state and schedule two-phase end
@@ -122,10 +129,11 @@ func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
 	log.Info("paperless document", "slug", slug, "event", p.Event, "state", stateText)
+	return nil
 }
 
 // handleConsumptionStarted processes "consumption_started" events.
-func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
+func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
 	slug := text.SlugHash("paperless", p.Filename, 4)
 	mapKey := slug
 
@@ -140,7 +148,7 @@ func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, 
 
 	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
 		log.Error("failed to create paperless activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	subtitle := buildSubtitle(p.DocumentType, p.Correspondent)
@@ -160,7 +168,7 @@ func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, 
 	}
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update paperless activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	// Schedule two-phase end — the activity will be dismissed after EndDelay + EndDisplayTime.
@@ -169,6 +177,7 @@ func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
 	log.Info("paperless consumption started", "slug", slug, "filename", p.Filename)
+	return nil
 }
 
 // buildSubtitle constructs "Paperless · DocumentType · Correspondent", omitting empty parts.

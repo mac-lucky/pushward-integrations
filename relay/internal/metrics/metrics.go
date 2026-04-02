@@ -1,11 +1,13 @@
 package metrics
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/httputil"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -51,11 +53,50 @@ var (
 		Name:      "acquired_conns",
 		Help:      "Number of currently acquired connections.",
 	})
+
+	APICallsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "pushward_relay",
+		Name:      "api_calls_total",
+		Help:      "Total PushWard API calls by provider, operation, and result.",
+	}, []string{"provider", "operation", "result"})
+
+	APICallRetriesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "pushward_relay",
+		Name:      "api_call_retries_total",
+		Help:      "Total retries for PushWard API calls.",
+	}, []string{"provider", "operation"})
+
+	APICallDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "pushward_relay",
+		Name:      "api_call_duration_seconds",
+		Help:      "Duration of PushWard API calls including retries.",
+		Buckets:   prometheus.DefBuckets,
+	}, []string{"provider", "operation"})
+
+	CircuitBreakerOpen = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: "pushward_relay",
+		Name:      "circuit_breaker_open",
+		Help:      "Whether the circuit breaker is open (1) or closed (0).",
+	})
 )
 
 // Handler returns the Prometheus metrics HTTP handler.
 func Handler() http.Handler {
 	return promhttp.Handler()
+}
+
+// RecordAPICall records PushWard API call metrics from a ResultInfo callback.
+func RecordAPICall(ctx context.Context, info pushward.ResultInfo) {
+	provider := ProviderFromContext(ctx)
+	result := "success"
+	if info.Err != nil {
+		result = "failed"
+	}
+	APICallsTotal.WithLabelValues(provider, info.Operation, result).Inc()
+	if info.Attempts > 1 {
+		APICallRetriesTotal.WithLabelValues(provider, info.Operation).Add(float64(info.Attempts - 1))
+	}
+	APICallDuration.WithLabelValues(provider, info.Operation).Observe(info.Duration.Seconds())
 }
 
 // Middleware records HTTP request metrics (duration, count, in-flight).

@@ -68,7 +68,7 @@ func TestDoWithRetry_Success(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "test-key")
-	err := c.doWithRetry(context.Background(), http.MethodGet, srv.URL+"/test", nil, nil)
+	err := c.doWithRetry(context.Background(), "test", http.MethodGet, srv.URL+"/test", nil, nil)
 	if err != nil {
 		t.Fatalf("expected nil, got %v", err)
 	}
@@ -83,7 +83,7 @@ func TestDoWithRetry_SetsAuthHeader(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "hlk_secret")
-	c.doWithRetry(context.Background(), http.MethodGet, srv.URL+"/test", nil, nil)
+	c.doWithRetry(context.Background(), "test", http.MethodGet, srv.URL+"/test", nil, nil)
 	if gotAuth != "Bearer hlk_secret" {
 		t.Errorf("expected 'Bearer hlk_secret', got %q", gotAuth)
 	}
@@ -98,7 +98,7 @@ func TestDoWithRetry_SetsContentType(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "key")
-	c.doWithRetry(context.Background(), http.MethodPost, srv.URL+"/test", map[string]string{"a": "b"}, nil)
+	c.doWithRetry(context.Background(), "test", http.MethodPost, srv.URL+"/test", map[string]string{"a": "b"}, nil)
 	if gotCT != "application/json" {
 		t.Errorf("expected 'application/json', got %q", gotCT)
 	}
@@ -113,7 +113,7 @@ func TestDoWithRetry_NoContentTypeWithoutBody(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "key")
-	c.doWithRetry(context.Background(), http.MethodGet, srv.URL+"/test", nil, nil)
+	c.doWithRetry(context.Background(), "test", http.MethodGet, srv.URL+"/test", nil, nil)
 	if gotCT != "" {
 		t.Errorf("expected empty Content-Type, got %q", gotCT)
 	}
@@ -128,7 +128,7 @@ func TestDoWithRetry_ClientError_NoRetry(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "key")
-	err := c.doWithRetry(context.Background(), http.MethodGet, srv.URL+"/test", nil, nil)
+	err := c.doWithRetry(context.Background(), "test", http.MethodGet, srv.URL+"/test", nil, nil)
 	if err == nil {
 		t.Fatal("expected error for 400")
 	}
@@ -150,7 +150,7 @@ func TestDoWithRetry_ServerError_Retries(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "key")
-	err := c.doWithRetry(context.Background(), http.MethodGet, srv.URL+"/test", nil, nil)
+	err := c.doWithRetry(context.Background(), "test", http.MethodGet, srv.URL+"/test", nil, nil)
 	if err != nil {
 		t.Fatalf("expected success after retries, got %v", err)
 	}
@@ -174,7 +174,7 @@ func TestDoWithRetry_429_RetriesWithRetryAfter(t *testing.T) {
 
 	c := NewClient(srv.URL, "key")
 	start := time.Now()
-	err := c.doWithRetry(context.Background(), http.MethodGet, srv.URL+"/test", nil, nil)
+	err := c.doWithRetry(context.Background(), "test", http.MethodGet, srv.URL+"/test", nil, nil)
 	elapsed := time.Since(start)
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
@@ -195,7 +195,7 @@ func TestDoWithRetry_Conflict_HandleConflictDone(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "key")
-	err := c.doWithRetry(context.Background(), http.MethodPost, srv.URL+"/test", nil,
+	err := c.doWithRetry(context.Background(), "test", http.MethodPost, srv.URL+"/test", nil,
 		func(body []byte) (bool, error) {
 			return true, nil // done, no error
 		})
@@ -212,7 +212,7 @@ func TestDoWithRetry_Conflict_HandleConflictError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "key")
-	err := c.doWithRetry(context.Background(), http.MethodPost, srv.URL+"/test", nil,
+	err := c.doWithRetry(context.Background(), "test", http.MethodPost, srv.URL+"/test", nil,
 		func(body []byte) (bool, error) {
 			return true, fmt.Errorf("activity limit reached")
 		})
@@ -235,7 +235,7 @@ func TestDoWithRetry_Conflict_NotDone_Retries(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "key")
-	err := c.doWithRetry(context.Background(), http.MethodPost, srv.URL+"/test", nil,
+	err := c.doWithRetry(context.Background(), "test", http.MethodPost, srv.URL+"/test", nil,
 		func(body []byte) (bool, error) {
 			return false, nil // not done, retry
 		})
@@ -254,7 +254,7 @@ func TestDoWithRetry_MaxRetries(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "key")
-	err := c.doWithRetry(context.Background(), http.MethodGet, srv.URL+"/test", nil, nil)
+	err := c.doWithRetry(context.Background(), "test", http.MethodGet, srv.URL+"/test", nil, nil)
 	if err == nil {
 		t.Fatal("expected error after max retries")
 	}
@@ -278,7 +278,7 @@ func TestDoWithRetry_ContextCancelled(t *testing.T) {
 		cancel()
 	}()
 
-	err := c.doWithRetry(ctx, http.MethodGet, srv.URL+"/test", nil, nil)
+	err := c.doWithRetry(ctx, "test", http.MethodGet, srv.URL+"/test", nil, nil)
 	if err != context.Canceled {
 		t.Fatalf("expected context.Canceled, got %v", err)
 	}
@@ -287,7 +287,7 @@ func TestDoWithRetry_ContextCancelled(t *testing.T) {
 func TestDoWithRetry_MarshalError(t *testing.T) {
 	c := NewClient("http://localhost", "key")
 	// Channels cannot be marshaled to JSON
-	err := c.doWithRetry(context.Background(), http.MethodPost, "http://localhost/test", make(chan int), nil)
+	err := c.doWithRetry(context.Background(), "test", http.MethodPost, "http://localhost/test", make(chan int), nil)
 	if err == nil {
 		t.Fatal("expected marshal error")
 	}
@@ -423,5 +423,95 @@ func TestNewClient(t *testing.T) {
 	}
 	if c.httpClient.Timeout != 10*time.Second {
 		t.Errorf("expected 10s timeout, got %v", c.httpClient.Timeout)
+	}
+}
+
+// --- onResult callback ---
+
+func TestDoWithRetry_CallsOnResult(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var got ResultInfo
+	c := NewClient(srv.URL, "key", WithOnResult(func(_ context.Context, info ResultInfo) {
+		got = info
+	}))
+	err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", nil, nil)
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if got.Operation != "create" {
+		t.Errorf("expected operation 'create', got %q", got.Operation)
+	}
+	if got.Attempts != 1 {
+		t.Errorf("expected 1 attempt, got %d", got.Attempts)
+	}
+	if got.Err != nil {
+		t.Errorf("expected nil error, got %v", got.Err)
+	}
+	if got.Duration <= 0 {
+		t.Errorf("expected positive duration, got %v", got.Duration)
+	}
+}
+
+func TestDoWithRetry_OnResultReceivesRetryCount(t *testing.T) {
+	var count atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if count.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	var got ResultInfo
+	c := NewClient(srv.URL, "key", WithOnResult(func(_ context.Context, info ResultInfo) {
+		got = info
+	}))
+	err := c.doWithRetry(context.Background(), "update", http.MethodPatch, srv.URL+"/test", nil, nil)
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if got.Attempts != 2 {
+		t.Errorf("expected 2 attempts, got %d", got.Attempts)
+	}
+	if got.Err != nil {
+		t.Errorf("expected nil error after retry success, got %v", got.Err)
+	}
+}
+
+func TestDoWithRetry_CircuitOpenReturnsError(t *testing.T) {
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cb := NewCircuitBreaker(1, time.Minute)
+	cb.RecordFailure() // trip the breaker
+
+	var got ResultInfo
+	c := NewClient(srv.URL, "key",
+		WithCircuitBreaker(cb),
+		WithOnResult(func(_ context.Context, info ResultInfo) {
+			got = info
+		}),
+	)
+	err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", nil, nil)
+	if err != ErrCircuitOpen {
+		t.Fatalf("expected ErrCircuitOpen, got %v", err)
+	}
+	if called {
+		t.Error("expected no HTTP call when circuit is open")
+	}
+	if got.Err != ErrCircuitOpen {
+		t.Errorf("expected onResult to receive ErrCircuitOpen, got %v", got.Err)
+	}
+	if got.Attempts != 0 {
+		t.Errorf("expected 0 attempts, got %d", got.Attempts)
 	}
 }

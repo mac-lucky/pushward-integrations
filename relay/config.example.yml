@@ -11,6 +11,10 @@ telemetry:
   tls_key_path: ""                        # client private key PEM for mTLS
   sample_rate: 1.0                        # sampling rate 0.0-1.0 (1.0 = sample everything)
 
+circuit_breaker:
+  threshold: 5                              # consecutive API failures before opening the breaker
+  cooldown: 30s                             # how long the breaker stays open before allowing a probe
+
 trusted_proxy_cidrs: []                   # CIDRs of trusted reverse proxies (e.g. ["10.0.0.0/8", "172.16.0.0/12"])
 
 providers:

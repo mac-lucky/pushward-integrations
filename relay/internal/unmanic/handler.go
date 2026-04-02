@@ -12,6 +12,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -43,7 +44,9 @@ func (h *Handler) Ender() *lifecycle.Ender {
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 
-	userKey := auth.KeyFromContext(r.Context())
+	ctx := r.Context()
+	ctx = metrics.WithProvider(ctx, "unmanic")
+	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
 
 	var p apprisePayload
@@ -53,20 +56,25 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	var apiErr error
 	switch p.Type {
 	case "success":
-		h.handleResult(r.Context(), userKey, log, p, true)
+		apiErr = h.handleResult(ctx, userKey, log, p, true)
 	case "failure":
-		h.handleResult(r.Context(), userKey, log, p, false)
+		apiErr = h.handleResult(ctx, userKey, log, p, false)
 	case "info":
 		cl := h.clients.Get(userKey)
-		if err := selftest.SendTest(r.Context(), cl, "unmanic"); err != nil {
+		if err := selftest.SendTest(ctx, cl, "unmanic"); err != nil {
 			log.Error("test notification failed", "provider", "unmanic", "error", err)
 		}
 	default:
 		slog.Debug("unmanic unknown type", "type", p.Type)
 	}
 
+	if apiErr != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
@@ -83,7 +91,7 @@ func slugForFile(filename string) string {
 	return text.SlugHash("unmanic", filename, 4)
 }
 
-func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Logger, p apprisePayload, success bool) {
+func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Logger, p apprisePayload, success bool) error {
 	filename := parseFilename(p.Message)
 	slug := slugForFile(filename)
 
@@ -93,7 +101,7 @@ func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Lo
 
 	if err := cl.CreateActivity(ctx, slug, filename, h.config.Priority, endedTTL, staleTTL); err != nil {
 		log.Error("failed to create unmanic activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 
 	var content pushward.Content
@@ -119,4 +127,5 @@ func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Lo
 
 	h.ender.ScheduleEnd(userKey, slug, slug, content)
 	log.Info("unmanic activity", "slug", slug, "type", p.Type, "filename", filename)
+	return nil
 }

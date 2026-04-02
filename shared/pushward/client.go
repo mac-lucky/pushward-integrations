@@ -30,11 +30,21 @@ func parseRetryAfter(header string) time.Duration {
 	return 0
 }
 
+// ResultInfo is passed to the onResult callback after each API call completes.
+type ResultInfo struct {
+	Operation string        // "create" or "update"
+	Attempts  int           // 1 = no retries
+	Err       error
+	Duration  time.Duration
+}
+
 // Client is the PushWard API client used by all integrations.
 type Client struct {
 	httpClient *http.Client
 	baseURL    string
 	apiKey     string
+	onResult   func(context.Context, ResultInfo)
+	breaker    *CircuitBreaker
 }
 
 // ClientOption configures a Client.
@@ -43,6 +53,16 @@ type ClientOption func(*Client)
 // WithHTTPClient sets a custom HTTP client (e.g. with an instrumented transport).
 func WithHTTPClient(c *http.Client) ClientOption {
 	return func(cl *Client) { cl.httpClient = c }
+}
+
+// WithOnResult registers a callback invoked after each API call completes.
+func WithOnResult(fn func(context.Context, ResultInfo)) ClientOption {
+	return func(cl *Client) { cl.onResult = fn }
+}
+
+// WithCircuitBreaker attaches a circuit breaker to the client.
+func WithCircuitBreaker(cb *CircuitBreaker) ClientOption {
+	return func(cl *Client) { cl.breaker = cb }
 }
 
 // NewClient creates a new PushWard API client.
@@ -64,7 +84,17 @@ func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 // The handleConflict callback, if non-nil, is invoked on 409 responses; it
 // receives the response body and returns (done bool, err error). If done is
 // true, doWithRetry returns err immediately.
-func (c *Client) doWithRetry(ctx context.Context, method, url string, body interface{}, handleConflict func([]byte) (bool, error)) error {
+func (c *Client) doWithRetry(ctx context.Context, operation, method, url string, body interface{}, handleConflict func([]byte) (bool, error)) error {
+	if c.breaker != nil && !c.breaker.Allow() {
+		err := ErrCircuitOpen
+		if c.onResult != nil {
+			c.onResult(ctx, ResultInfo{Operation: operation, Attempts: 0, Err: err})
+		}
+		return err
+	}
+
+	start := time.Now()
+
 	var reqBody []byte
 	if body != nil {
 		var err error
@@ -76,6 +106,7 @@ func (c *Client) doWithRetry(ctx context.Context, method, url string, body inter
 
 	var lastErr error
 	var retryAfterOverride time.Duration
+	attempts := 0
 	for attempt := 0; attempt < 5; attempt++ {
 		if attempt > 0 {
 			backoff := retryAfterOverride
@@ -92,6 +123,8 @@ func (c *Client) doWithRetry(ctx context.Context, method, url string, body inter
 			case <-time.After(backoff):
 			}
 		}
+
+		attempts++
 
 		var bodyReader io.Reader
 		if reqBody != nil {
@@ -117,6 +150,7 @@ func (c *Client) doWithRetry(ctx context.Context, method, url string, body inter
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 			resp.Body.Close()
 			if done, cerr := handleConflict(respBody); done {
+				c.recordResult(ctx, operation, attempts, start, cerr, false)
 				return cerr
 			}
 			// If handleConflict says not done, fall through to default handling
@@ -127,6 +161,7 @@ func (c *Client) doWithRetry(ctx context.Context, method, url string, body inter
 		resp.Body.Close()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			c.recordResult(ctx, operation, attempts, start, nil, false)
 			return nil
 		}
 		if resp.StatusCode == http.StatusTooManyRequests {
@@ -137,16 +172,41 @@ func (c *Client) doWithRetry(ctx context.Context, method, url string, body inter
 		}
 		lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			return lastErr // Don't retry client errors
+			// 4xx client errors are not retryable and don't trip the breaker.
+			c.recordResult(ctx, operation, attempts, start, lastErr, false)
+			return lastErr
 		}
 	}
-	return fmt.Errorf("max retries exceeded: %w", lastErr)
+	err := fmt.Errorf("max retries exceeded: %w", lastErr)
+	c.recordResult(ctx, operation, attempts, start, err, true)
+	return err
+}
+
+// recordResult records the breaker outcome and fires the onResult callback.
+// Only retryable failures (5xx/network exhaustion) trip the breaker; 4xx client
+// errors, conflict resolutions, and circuit-open short-circuits do not.
+func (c *Client) recordResult(ctx context.Context, operation string, attempts int, start time.Time, err error, retryable bool) {
+	if c.breaker != nil {
+		if err == nil {
+			c.breaker.RecordSuccess()
+		} else if retryable {
+			c.breaker.RecordFailure()
+		}
+	}
+	if c.onResult != nil {
+		c.onResult(ctx, ResultInfo{
+			Operation: operation,
+			Attempts:  attempts,
+			Err:       err,
+			Duration:  time.Since(start),
+		})
+	}
 }
 
 // CreateActivity creates a new activity via POST /activities.
 // Returns nil on 2xx or 409 "already exists". Returns error on 409 "limit".
 func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority, endedTTL, staleTTL int) error {
-	return c.doWithRetry(ctx, http.MethodPost, fmt.Sprintf("%s/activities", c.baseURL),
+	return c.doWithRetry(ctx, "create", http.MethodPost, fmt.Sprintf("%s/activities", c.baseURL),
 		CreateActivityRequest{
 			Slug:     slug,
 			Name:     name,
@@ -165,5 +225,5 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 
 // UpdateActivity updates an activity via PATCH /activity/{slug}.
 func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequest) error {
-	return c.doWithRetry(ctx, http.MethodPatch, fmt.Sprintf("%s/activity/%s", c.baseURL, slug), req, nil)
+	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activity/%s", c.baseURL, slug), req, nil)
 }

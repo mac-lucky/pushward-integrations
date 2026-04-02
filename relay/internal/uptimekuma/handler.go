@@ -12,6 +12,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -52,17 +53,19 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	ctx = metrics.WithProvider(ctx, "uptimekuma")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	pwClient := h.clients.Get(userKey)
 
+	var err error
 	switch payload.Heartbeat.Status {
 	case 0: // DOWN
-		h.handleDown(ctx, userKey, log, pwClient, &payload)
+		err = h.handleDown(ctx, userKey, log, pwClient, &payload)
 	case 1: // UP
-		h.handleUp(ctx, userKey, log, pwClient, &payload)
+		err = h.handleUp(ctx, userKey, log, pwClient, &payload)
 	case 2: // PENDING
-		h.handlePending(ctx, userKey, log, pwClient, &payload)
+		err = h.handlePending(ctx, userKey, log, pwClient, &payload)
 	case 3: // MAINTENANCE — used as test event
 		if err := selftest.SendTest(ctx, pwClient, "uptimekuma"); err != nil {
 			log.Error("test notification failed", "provider", "uptimekuma", "error", err)
@@ -71,11 +74,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Warn("unknown heartbeat status", "status", payload.Heartbeat.Status, "monitor_id", payload.Monitor.ID)
 	}
 
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("ok"))
 }
 
-func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) {
+func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) error {
 	slug := fmt.Sprintf("uptime-%d", p.Monitor.ID)
 	mapKey := fmt.Sprintf("uptimekuma:%d", p.Monitor.ID)
 
@@ -86,13 +93,13 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 	existing, err := h.store.Get(ctx, "uptimekuma", userKey, mapKey, "")
 	if err != nil {
 		log.Error("failed to check state", "monitor_id", p.Monitor.ID, "error", err)
-		return
+		return nil
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "uptimekuma", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
 		log.Error("failed to store state", "monitor_id", p.Monitor.ID, "error", err)
-		return
+		return nil
 	}
 
 	if existing == nil {
@@ -103,7 +110,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 			if err := h.store.Delete(ctx, "uptimekuma", userKey, mapKey, ""); err != nil {
 				log.Warn("state store delete failed", "error", err, "provider", "uptimekuma", "slug", slug)
 			}
-			return
+			return err
 		}
 		log.Info("created activity", "slug", slug, "monitor", p.Monitor.Name)
 	}
@@ -136,21 +143,22 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 	log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "critical")
+	return nil
 }
 
-func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) {
+func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) error {
 	mapKey := fmt.Sprintf("uptimekuma:%d", p.Monitor.ID)
 
 	existing, err := h.store.Get(ctx, "uptimekuma", userKey, mapKey, "")
 	if err != nil {
 		log.Error("failed to check state", "monitor_id", p.Monitor.ID, "error", err)
-		return
+		return nil
 	}
 	if existing == nil {
-		return // No prior DOWN — skip routine UP checks
+		return nil // No prior DOWN — skip routine UP checks
 	}
 
 	slug := fmt.Sprintf("uptime-%d", p.Monitor.ID)
@@ -175,16 +183,17 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
 	log.Info("scheduled end for activity", "slug", slug, "monitor", p.Monitor.Name)
+	return nil
 }
 
-func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) {
+func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) error {
 	slug := fmt.Sprintf("uptime-%d", p.Monitor.ID)
 	mapKey := fmt.Sprintf("uptimekuma:%d", p.Monitor.ID)
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "uptimekuma", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
 		log.Error("failed to store state", "monitor_id", p.Monitor.ID, "error", err)
-		return
+		return nil
 	}
 
 	endedTTL := int(h.config.CleanupDelay.Seconds())
@@ -194,7 +203,7 @@ func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.L
 		if err := h.store.Delete(ctx, "uptimekuma", userKey, mapKey, ""); err != nil {
 			log.Warn("state store delete failed", "error", err, "provider", "uptimekuma", "slug", slug)
 		}
-		return
+		return err
 	}
 
 	stateText := "Checking..."
@@ -215,7 +224,8 @@ func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.L
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
-		return
+		return err
 	}
 	log.Info("created pending activity", "slug", slug, "monitor", p.Monitor.Name)
+	return nil
 }

@@ -183,6 +183,21 @@ func TestFiringSingleAlert(t *testing.T) {
 func TestResolvedAlert(t *testing.T) {
 	store, handler, calls, mu := setup(t)
 
+	// Fire a preliminary alert to create the activity slug in the mock server
+	sendWebhook(t, handler, `{
+		"status": "firing",
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "DiskSpaceLow", "severity": "warning"},
+			"annotations": {"summary": "test"},
+			"startsAt": "2026-02-18T10:00:00Z",
+			"fingerprint": "f1e2d3c4b5a6"
+		}]
+	}`)
+	mu.Lock()
+	*calls = (*calls)[:0]
+	mu.Unlock()
+
 	seedInstance(t, store, "DiskSpaceLow", "f1e2d3c4b5a6", instanceInfo{
 		Severity:     "warning",
 		FiredAt:      time.Date(2026, 2, 18, 10, 0, 0, 0, time.UTC).Unix(),
@@ -525,6 +540,21 @@ func TestMultipleAlertsInSinglePayload_GroupedByAlertname(t *testing.T) {
 
 func TestPartialResolve_ActivityContinues(t *testing.T) {
 	store, handler, calls, mu := setup(t)
+
+	// Fire a preliminary alert to create the activity slug in the mock server
+	sendWebhook(t, handler, `{
+		"status": "firing",
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "NodeDown", "severity": "critical"},
+			"annotations": {"summary": "node-1 down"},
+			"startsAt": "2026-02-18T12:00:00Z",
+			"fingerprint": "fp-aaa"
+		}]
+	}`)
+	mu.Lock()
+	*calls = (*calls)[:0]
+	mu.Unlock()
 
 	// Pre-seed 2 firing instances of the same alert
 	seedInstance(t, store, "NodeDown", "fp-aaa", instanceInfo{
@@ -1168,6 +1198,22 @@ func TestRealisticGrafanaPayload_PrometheusAlertmanager(t *testing.T) {
 func TestRealisticGrafanaPayload_MultiAlertGroup(t *testing.T) {
 	store, handler, calls, mu := setup(t)
 
+	// Fire a preliminary alert to create the activity slug in the mock server
+	sendWebhook(t, handler, `{
+		"status": "firing",
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "TargetDown", "severity": "warning"},
+			"annotations": {"summary": "node-exporter target was down"},
+			"startsAt": "2026-02-18T07:00:00Z",
+			"fingerprint": "resolved0000"
+		}]
+	}`)
+	// Clear recorded calls; we only care about the multi-alert payload below
+	mu.Lock()
+	*calls = (*calls)[:0]
+	mu.Unlock()
+
 	// Pre-seed a tracked alert instance that will be resolved in this webhook
 	seedInstance(t, store, "TargetDown", "resolved0000", instanceInfo{
 		Severity: "warning",
@@ -1351,8 +1397,8 @@ func TestCreateActivityFailure_CleansUpStore(t *testing.T) {
 
 	w := sendWebhook(t, handler, payload)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200 (handler still returns OK), got %d", w.Code)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 
 	// Store should be cleaned up after create failure
@@ -1396,9 +1442,8 @@ func TestUpdateActivityFailure_OnFiring(t *testing.T) {
 
 	w := sendWebhook(t, handler, payload)
 
-	// Handler still returns OK (errors are logged, not surfaced to webhook sender)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 
 	// Instance should still exist in store (only create failure removes it)
@@ -1447,8 +1492,8 @@ func TestUpdateActivityFailure_OnResolve(t *testing.T) {
 
 	w := sendWebhook(t, handler, payload)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 }
 
@@ -1536,6 +1581,21 @@ func TestEmptyStartsAt_FiredAtOmitted(t *testing.T) {
 func TestResolvedAlert_ZeroStartsAt_FiredAtOmitted(t *testing.T) {
 	store, handler, calls, mu := setup(t)
 
+	// Fire a preliminary alert to create the activity slug in the mock server
+	sendWebhook(t, handler, `{
+		"status": "firing",
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "TestResolve", "severity": "warning"},
+			"annotations": {"summary": "test"},
+			"startsAt": "0001-01-01T00:00:00Z",
+			"fingerprint": "fp-zero"
+		}]
+	}`)
+	mu.Lock()
+	*calls = (*calls)[:0]
+	mu.Unlock()
+
 	// Seed an instance with FiredAt=0 (simulating zero time parse)
 	seedInstance(t, store, "TestResolve", "fp-zero", instanceInfo{
 		Severity: "warning",
@@ -1572,5 +1632,34 @@ func TestResolvedAlert_ZeroStartsAt_FiredAtOmitted(t *testing.T) {
 	}
 	if update.Content.FiredAt != nil {
 		t.Errorf("expected FiredAt to be nil for zero FiredAt, got %d", *update.Content.FiredAt)
+	}
+}
+
+func TestFiring_APIFailure_Returns502(t *testing.T) {
+	// Server returns 400 for all requests (not retried by client).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	t.Cleanup(srv.Close)
+
+	store := state.NewMemoryStore()
+	cfg := testConfig()
+	pool := client.NewPool(srv.URL, nil)
+	h := NewHandler(store, pool, cfg)
+	handler := auth.Middleware(h)
+
+	w := sendWebhook(t, handler, `{
+		"status": "firing",
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "TestAlert502", "severity": "critical"},
+			"annotations": {"summary": "test"},
+			"startsAt": "2026-02-18T10:30:00Z",
+			"fingerprint": "f502"
+		}],
+		"groupLabels": {"alertname": "TestAlert502"}
+	}`)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d", w.Code)
 	}
 }

@@ -15,8 +15,15 @@ type Config struct {
 	Server            sharedconfig.ServerConfig `yaml:"server"`
 	Database          DatabaseConfig            `yaml:"database"`
 	Telemetry         TelemetryConfig           `yaml:"telemetry"`
+	CircuitBreaker    CircuitBreakerConfig      `yaml:"circuit_breaker"`
 	TrustedProxyCIDRs []string                  `yaml:"trusted_proxy_cidrs"`
 	Providers         ProvidersConfig           `yaml:"providers"`
+}
+
+// CircuitBreakerConfig controls the circuit breaker for outbound PushWard API calls.
+type CircuitBreakerConfig struct {
+	Threshold int           `yaml:"threshold"` // Consecutive failures to open (default 5).
+	Cooldown  time.Duration `yaml:"cooldown"`  // How long to stay open (default 30s).
 }
 
 // TelemetryConfig holds OpenTelemetry tracing configuration.
@@ -138,6 +145,10 @@ func Load(path string) (*Config, error) {
 	cfg := &Config{
 		Server: sharedconfig.ServerConfig{
 			Address: ":8090",
+		},
+		CircuitBreaker: CircuitBreakerConfig{
+			Threshold: 5,
+			Cooldown:  30 * time.Second,
 		},
 		Providers: ProvidersConfig{
 			Grafana: GrafanaConfig{
@@ -279,6 +290,13 @@ func Load(path string) (*Config, error) {
 
 	if err := cfg.validatePriorities(); err != nil {
 		return nil, err
+	}
+
+	if cfg.CircuitBreaker.Threshold < 1 {
+		return nil, fmt.Errorf("circuit_breaker.threshold must be >= 1, got %d", cfg.CircuitBreaker.Threshold)
+	}
+	if cfg.CircuitBreaker.Cooldown < time.Second {
+		return nil, fmt.Errorf("circuit_breaker.cooldown must be >= 1s, got %s", cfg.CircuitBreaker.Cooldown)
 	}
 
 	return cfg, nil
