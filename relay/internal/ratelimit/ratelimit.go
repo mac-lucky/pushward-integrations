@@ -34,7 +34,7 @@ var keyLimiters = newLimiterMap(1, 10, 10_000)
 
 func init() {
 	keyLimiters.entries.SetOnEvict(func(key string, _ *rate.Limiter) {
-		slog.Warn("rate limiter evicted", "ip_hash", key)
+		slog.Warn("rate limiter evicted", "limiter_key", key)
 	})
 }
 
@@ -49,7 +49,7 @@ func Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		limiter := keyLimiters.get(lrumap.KeyHash(key))
+		limiter := keyLimiters.get(r.Pattern + lrumap.KeyHash(key))
 		if !limiter.Allow() {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "1")
