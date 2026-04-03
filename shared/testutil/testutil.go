@@ -249,6 +249,15 @@ func validateContent(c *apiContent) error {
 	if err := validateURL(c.SecondaryURL, "secondary_url"); err != nil {
 		return err
 	}
+	// URL links are only supported on steps and alert templates.
+	if c.Template != "steps" && c.Template != "alert" {
+		if c.URL != "" {
+			return fmt.Errorf("url is not supported for %q template, only for steps and alert", c.Template)
+		}
+		if c.SecondaryURL != "" {
+			return fmt.Errorf("secondary_url is not supported for %q template, only for steps and alert", c.Template)
+		}
+	}
 	if err := validateColor(c.AccentColor, "accent_color"); err != nil {
 		return err
 	}

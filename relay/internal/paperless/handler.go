@@ -108,7 +108,6 @@ func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.
 		Icon:        "doc.text.fill",
 		Subtitle:    subtitle,
 		AccentColor: pushward.ColorGreen,
-		URL:         p.DocURL,
 	}
 
 	req := pushward.UpdateRequest{

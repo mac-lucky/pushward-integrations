@@ -113,8 +113,8 @@ func TestDocumentAdded(t *testing.T) {
 	if update.Content.Subtitle != "Paperless \u00b7 Invoice \u00b7 Acme Corp" {
 		t.Errorf("expected subtitle 'Paperless \u00b7 Invoice \u00b7 Acme Corp', got %q", update.Content.Subtitle)
 	}
-	if update.Content.URL != "https://paperless.example.com/documents/42/details" {
-		t.Errorf("expected doc_url in URL, got %s", update.Content.URL)
+	if update.Content.URL != "" {
+		t.Errorf("expected empty URL for generic template, got %s", update.Content.URL)
 	}
 
 	// Phase 1: ONGOING with final content
