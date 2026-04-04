@@ -19,6 +19,7 @@ type SABnzbdConfig struct {
 	URL           string `yaml:"url"`
 	APIKey        string `yaml:"api_key"`
 	WebhookSecret string `yaml:"webhook_secret"`
+	Template      string `yaml:"template"`
 }
 
 type PollingConfig struct {
@@ -56,6 +57,12 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("PUSHWARD_SABNZBD_WEBHOOK_SECRET"); v != "" {
 		cfg.SABnzbd.WebhookSecret = v
+	}
+	if v := os.Getenv("PUSHWARD_SABNZBD_TEMPLATE"); v != "" {
+		cfg.SABnzbd.Template = v
+	}
+	if cfg.SABnzbd.Template == "" {
+		cfg.SABnzbd.Template = "generic"
 	}
 	if v := os.Getenv("PUSHWARD_POLL_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)

@@ -26,6 +26,8 @@ type History struct {
 }
 
 type HistorySlot struct {
-	Status string `json:"status"`
-	Name   string `json:"name"`
+	Status       string `json:"status"`
+	Name         string `json:"name"`
+	Bytes        int64  `json:"bytes"`
+	DownloadTime int    `json:"download_time"`
 }

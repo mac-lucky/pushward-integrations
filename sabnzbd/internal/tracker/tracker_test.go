@@ -21,8 +21,9 @@ import (
 func testConfig() *config.Config {
 	return &config.Config{
 		SABnzbd: config.SABnzbdConfig{
-			URL:    "http://placeholder",
-			APIKey: "test-key",
+			URL:      "http://placeholder",
+			APIKey:   "test-key",
+			Template: "generic",
 		},
 		PushWard: sharedconfig.PushWardConfig{
 			Priority:       1,
@@ -436,7 +437,7 @@ func TestTrackingLifecycle_Download_PP_Complete(t *testing.T) {
 
 	// Transition: PP done → completed
 	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "ubuntu-24.04"}},
+		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "ubuntu-24.04", Bytes: 524288000, DownloadTime: 10}},
 	})
 
 	tr.Wait()
@@ -505,7 +506,7 @@ func TestResumeIfActive_ActiveDownload(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
 	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file"}},
+		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 104857600, DownloadTime: 5}},
 	})
 
 	tr.Wait()
@@ -536,7 +537,7 @@ func TestResumeIfActive_ActivePostProcessing(t *testing.T) {
 	// Transition: PP done
 	time.Sleep(50 * time.Millisecond)
 	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file"}},
+		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 104857600, DownloadTime: 5}},
 	})
 
 	tr.Wait()
@@ -580,7 +581,7 @@ func TestSendDownloadProgress_Paused(t *testing.T) {
 		Slots:    []sabnzbd.QueueSlot{{Filename: "test.nzb"}},
 	}
 
-	result := tr.sendDownloadProgress(ctx, queue, time.Now())
+	result := tr.sendDownloadProgress(ctx, queue)
 	if !result {
 		t.Fatal("expected sendDownloadProgress to return true for Paused")
 	}
@@ -610,7 +611,7 @@ func TestSendDownloadProgress_Idle_ReturnsFalse(t *testing.T) {
 		MBLeft: "0",
 	}
 
-	result := tr.sendDownloadProgress(ctx, queue, time.Now())
+	result := tr.sendDownloadProgress(ctx, queue)
 	if result {
 		t.Fatal("expected sendDownloadProgress to return false for Idle")
 	}
@@ -636,7 +637,7 @@ func TestSendDownloadProgress_MultipleSlots(t *testing.T) {
 		},
 	}
 
-	result := tr.sendDownloadProgress(ctx, queue, time.Now())
+	result := tr.sendDownloadProgress(ctx, queue)
 	if !result {
 		t.Fatal("expected true for active download")
 	}
@@ -662,7 +663,7 @@ func TestResumedTracking_SkipsTwoPhaseEnd(t *testing.T) {
 	// Queue idle from start so tracking ends immediately
 	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
 	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file"}},
+		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 104857600, DownloadTime: 5}},
 	})
 
 	cfg := testConfig()
@@ -703,5 +704,245 @@ func TestResumedTracking_SkipsTwoPhaseEnd(t *testing.T) {
 	// Resumed sessions should send exactly 1 ENDED (not 2 like two-phase)
 	if endedCount != 1 {
 		t.Errorf("resumed session: expected exactly 1 ENDED call, got %d", endedCount)
+	}
+}
+
+// --- Timeline template tests ---
+
+func TestSendDownloadProgress_Timeline_SendsValueAndUnit(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	cfg.SABnzbd.Template = "timeline"
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(ctx, cfg, nil, pw)
+
+	queue := &sabnzbd.Queue{
+		Status:   "Downloading",
+		MB:       "1000",
+		MBLeft:   "500",
+		KBPerSec: "51200", // 50 MB/s
+		TimeLeft: "0:00:10",
+		Slots:    []sabnzbd.QueueSlot{{Filename: "test.nzb"}},
+	}
+
+	result := tr.sendDownloadProgress(ctx, queue)
+	if !result {
+		t.Fatal("expected true for active download")
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+
+	if req.Content.Template != "timeline" {
+		t.Errorf("expected template timeline, got %s", req.Content.Template)
+	}
+	if req.Content.Value == nil {
+		t.Fatal("expected value to be set for timeline")
+	}
+	expectedSpeed := 50.0
+	if *req.Content.Value != expectedSpeed {
+		t.Errorf("expected value %.1f, got %.1f", expectedSpeed, *req.Content.Value)
+	}
+	if req.Content.Unit != "MB/s" {
+		t.Errorf("expected unit MB/s, got %s", req.Content.Unit)
+	}
+}
+
+func TestSendDownloadProgress_Generic_NoValueOrUnit(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	// Template is "generic" by default from testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(ctx, cfg, nil, pw)
+
+	queue := &sabnzbd.Queue{
+		Status:   "Downloading",
+		MB:       "1000",
+		MBLeft:   "500",
+		KBPerSec: "51200",
+		TimeLeft: "0:00:10",
+		Slots:    []sabnzbd.QueueSlot{{Filename: "test.nzb"}},
+	}
+
+	tr.sendDownloadProgress(ctx, queue)
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+
+	if req.Content.Template != "generic" {
+		t.Errorf("expected template generic, got %s", req.Content.Template)
+	}
+	if req.Content.Value != nil {
+		t.Errorf("expected no value for generic template, got %v", *req.Content.Value)
+	}
+	if req.Content.Unit != "" {
+		t.Errorf("expected no unit for generic template, got %s", req.Content.Unit)
+	}
+}
+
+func TestTimeline_NonDownloadPhase_UsesGeneric(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	cfg.SABnzbd.Template = "timeline"
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(ctx, cfg, nil, pw)
+
+	// Non-download sends (e.g. "Starting...", PP) pass nil for value → should use generic
+	tr.send(ctx, 0.0, "Starting...", "arrow.down.circle", "blue", nil, "", pushward.StateOngoing, nil)
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+
+	if req.Content.Template != "generic" {
+		t.Errorf("expected generic template for non-download phase, got %s", req.Content.Template)
+	}
+	if req.Content.Value != nil {
+		t.Errorf("expected no value for generic template, got %v", *req.Content.Value)
+	}
+	if req.Content.Unit != "" {
+		t.Errorf("expected no unit for generic template, got %s", req.Content.Unit)
+	}
+}
+
+func TestSendDownloadProgress_Timeline_Paused_SendsZeroValue(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	cfg.SABnzbd.Template = "timeline"
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(ctx, cfg, nil, pw)
+
+	queue := &sabnzbd.Queue{
+		Status:   "Paused",
+		MB:       "1000",
+		MBLeft:   "500",
+		KBPerSec: "0",
+		TimeLeft: "0:00:00",
+		Slots:    []sabnzbd.QueueSlot{{Filename: "test.nzb"}},
+	}
+
+	result := tr.sendDownloadProgress(ctx, queue)
+	if !result {
+		t.Fatal("expected true for paused download")
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+
+	if req.Content.Template != "timeline" {
+		t.Errorf("expected timeline template for paused download, got %s", req.Content.Template)
+	}
+	if req.Content.Value == nil {
+		t.Fatal("expected value to be set for timeline paused")
+	}
+	if *req.Content.Value != 0 {
+		t.Errorf("expected value 0 for paused, got %f", *req.Content.Value)
+	}
+	if req.Content.Unit != "MB/s" {
+		t.Errorf("expected unit MB/s, got %s", req.Content.Unit)
+	}
+}
+
+func TestTimeline_FullLifecycle(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+
+	sabMk.setQueue(sabnzbd.Queue{
+		Status:   "Downloading",
+		MB:       "500",
+		MBLeft:   "250",
+		KBPerSec: "51200",
+		TimeLeft: "0:00:05",
+		Slots:    []sabnzbd.QueueSlot{{Filename: "test.nzb"}},
+	})
+	sabMk.setHistory(sabnzbd.History{})
+
+	cfg := testConfig()
+	cfg.SABnzbd.URL = sabSrv.URL
+	cfg.SABnzbd.Template = "timeline"
+	sab := sabnzbd.NewClient(sabSrv.URL, "test-key")
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tr := New(ctx, cfg, sab, pw)
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
+	w := httptest.NewRecorder()
+	tr.HandleWebhook(w, req)
+
+	// Let download tracking run briefly
+	time.Sleep(80 * time.Millisecond)
+
+	// Transition: download done → completed
+	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
+	sabMk.setHistory(sabnzbd.History{
+		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 524288000, DownloadTime: 10}},
+	})
+
+	tr.Wait()
+
+	got := testutil.GetCalls(calls, mu)
+
+	// Verify mix of templates: download-phase uses timeline, rest uses generic
+	var hasTimeline, hasGeneric bool
+	for _, c := range got {
+		if c.Method == "PATCH" {
+			var r pushward.UpdateRequest
+			testutil.UnmarshalBody(t, c.Body, &r)
+			switch r.Content.Template {
+			case "timeline":
+				hasTimeline = true
+				if r.Content.Value == nil {
+					t.Error("timeline update should have value set")
+				}
+				if r.Content.Unit != "MB/s" {
+					t.Errorf("timeline update should have unit MB/s, got %s", r.Content.Unit)
+				}
+			case "generic":
+				hasGeneric = true
+				if r.Content.Value != nil {
+					t.Errorf("generic update should not have value, got %v", *r.Content.Value)
+				}
+			default:
+				t.Errorf("unexpected template %s", r.Content.Template)
+			}
+		}
+	}
+	if !hasTimeline {
+		t.Error("expected at least one timeline update (download phase)")
+	}
+	if !hasGeneric {
+		t.Error("expected at least one generic update (non-download phase)")
+	}
+
+	// Last ENDED update should use generic (summary phase)
+	last := got[len(got)-1]
+	var lastReq pushward.UpdateRequest
+	testutil.UnmarshalBody(t, last.Body, &lastReq)
+	if lastReq.State != pushward.StateEnded {
+		t.Errorf("last update should be ENDED, got %s", lastReq.State)
+	}
+	if lastReq.Content.Template != "generic" {
+		t.Errorf("summary ENDED should use generic, got %s", lastReq.Content.Template)
 	}
 }

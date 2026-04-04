@@ -102,7 +102,7 @@ func TestGetQueue_ContextCancelled(t *testing.T) {
 func TestGetHistory_Success(t *testing.T) {
 	expected := History{
 		Slots: []HistorySlot{
-			{Status: "Completed", Name: "ubuntu-24.04"},
+			{Status: "Completed", Name: "ubuntu-24.04", Bytes: 524288000, DownloadTime: 10},
 			{Status: "Extracting", Name: "fedora-40"},
 		},
 	}

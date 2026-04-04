@@ -149,12 +149,22 @@ func (t *Tracker) launchTracker(resumed bool) {
 	}()
 }
 
-func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string) {
+func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string, value *float64) {
+	// Use configured template only during download phases (when value is provided);
+	// all other phases (starting, PP, summary, end) use generic.
+	template := "generic"
+	if value != nil && t.cfg.SABnzbd.Template == "timeline" {
+		template = "timeline"
+	}
 	content := pushward.Content{
-		Template:    "generic",
+		Template:    template,
 		Progress:    progress,
 		State:       state,
 		AccentColor: accentColor,
+	}
+	if template == "timeline" {
+		content.Value = value
+		content.Unit = "MB/s"
 	}
 	if icon != "" {
 		content.Icon = icon
@@ -185,23 +195,20 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 
 	// Phase 1: Wait for SABnzbd to start downloading
 	slog.Info("waiting for download to start")
-	t.send(ctx, 0.0, "Starting...", "arrow.down.circle", "blue", nil, "", pushward.StateOngoing)
+	t.send(ctx, 0.0, "Starting...", "arrow.down.circle", "blue", nil, "", pushward.StateOngoing, nil)
 
 	if !t.waitForQueueActive(ctx, 60) {
 		slog.Warn("SABnzbd never started downloading, giving up")
-		t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", "green", nil, "", pushward.StateEnded)
+		t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", "green", nil, "", pushward.StateEnded, nil)
 		return
 	}
 
-	startTime := time.Now()
-	var totalMB float64
 	var totalPPElapsed time.Duration
 
 	// Main loop: download → post-processing → check for more
 	for {
 		// Download phase
-		roundMB := t.trackDownloads(ctx)
-		totalMB += roundMB
+		t.trackDownloads(ctx)
 
 		// Post-processing phase
 		ppDuration := t.trackPostProcessing(ctx)
@@ -214,14 +221,15 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		slog.Info("more downloads in queue, continuing")
 	}
 
-	totalElapsed := int(time.Since(startTime).Seconds())
-	downloadElapsed := totalElapsed - int(totalPPElapsed.Seconds())
 	ppSecs := int(totalPPElapsed.Seconds())
 
-	// Summary
+	// Read stats from SABnzbd history API instead of calculating locally
+	totalBytes, totalDownloadTime := t.getCompletedStats(ctx)
+	totalMB := float64(totalBytes) / (1024 * 1024)
+
 	avgSpeed := float64(0)
-	if downloadElapsed > 0 {
-		avgSpeed = totalMB / float64(downloadElapsed)
+	if totalDownloadTime > 0 {
+		avgSpeed = totalMB / float64(totalDownloadTime)
 	}
 
 	// Build state line: "Complete · 1.2 GB · 45 MB/s avg · unpack 1m 30s"
@@ -242,11 +250,11 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 
 	subtitle := text.Truncate(t.getCompletedName(ctx), 30)
 
-	slog.Info("complete", "total_mb", totalMB, "elapsed", totalElapsed, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed, "state", stateStr, "subtitle", subtitle)
+	slog.Info("complete", "total_mb", totalMB, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed, "state", stateStr, "subtitle", subtitle)
 
 	// Two-phase end: ONGOING with final content → short display → ENDED
 	if resumed {
-		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, pushward.StateEnded)
+		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, pushward.StateEnded, nil)
 		slog.Info("tracking complete (resumed, skipping two-phase end)")
 	} else {
 		endDelay := t.cfg.PushWard.EndDelay
@@ -258,7 +266,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 			return
 		case <-time.After(endDelay):
 		}
-		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, pushward.StateOngoing)
+		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, pushward.StateOngoing, nil)
 		slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
 
 		// Phase 2: ENDED (dismisses Live Activity)
@@ -267,7 +275,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 			return
 		case <-time.After(displayTime):
 		}
-		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, pushward.StateEnded)
+		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, pushward.StateEnded, nil)
 		slog.Info("tracking complete")
 	}
 }
@@ -299,10 +307,8 @@ func (t *Tracker) waitForQueueActive(ctx context.Context, maxPolls int) bool {
 	return false
 }
 
-// trackDownloads polls the queue until it goes idle. Returns total MB seen.
-func (t *Tracker) trackDownloads(ctx context.Context) float64 {
-	var totalMB float64
-	startTime := time.Now()
+// trackDownloads polls the queue until it goes idle.
+func (t *Tracker) trackDownloads(ctx context.Context) {
 	slog.Info("tracking downloads")
 
 	for {
@@ -311,36 +317,30 @@ func (t *Tracker) trackDownloads(ctx context.Context) float64 {
 			slog.Warn("failed to fetch queue", "error", err)
 			select {
 			case <-ctx.Done():
-				return totalMB
+				return
 			case <-time.After(t.cfg.Polling.Interval):
 			}
 			continue
 		}
 
-		queueMB, _ := strconv.ParseFloat(queue.MB, 64)
-		if queueMB > totalMB {
-			totalMB = queueMB
-		}
-
-		if !t.sendDownloadProgress(ctx, queue, startTime) {
+		if !t.sendDownloadProgress(ctx, queue) {
 			break
 		}
 		select {
 		case <-ctx.Done():
-			return totalMB
+			return
 		case <-time.After(t.cfg.Polling.Interval):
 		}
 	}
 
-	slog.Info("downloads finished", "total_mb", totalMB)
-	return totalMB
+	slog.Info("downloads finished")
 }
 
 // trackPostProcessing polls history for active PP statuses and sends updates.
 // Returns total post-processing duration.
 func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 	slog.Info("tracking post-processing")
-	t.send(ctx, 1.0, "Unpacking...", "archivebox", "orange", nil, "", pushward.StateOngoing)
+	t.send(ctx, 1.0, "Unpacking...", "archivebox", "orange", nil, "", pushward.StateOngoing, nil)
 	ppStart := time.Now()
 
 	for {
@@ -353,7 +353,7 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 			icon = "archivebox"
 		}
 		subtitle := text.Truncate(ppName, 30)
-		t.send(ctx, 1.0, ppStatus+"...", icon, "orange", nil, subtitle, pushward.StateOngoing)
+		t.send(ctx, 1.0, ppStatus+"...", icon, "orange", nil, subtitle, pushward.StateOngoing, nil)
 		select {
 		case <-ctx.Done():
 			return time.Since(ppStart)
@@ -366,7 +366,7 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 	return elapsed
 }
 
-func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue, startTime time.Time) bool {
+func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue) bool {
 	status := queue.Status
 	mbLeft, _ := strconv.ParseFloat(queue.MBLeft, 64)
 	mbTotal, _ := strconv.ParseFloat(queue.MB, 64)
@@ -394,21 +394,14 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 	}
 
 	if status == "Paused" {
-		t.send(ctx, progress, "Paused", "pause.circle.fill", "blue", nil, subtitle, pushward.StateOngoing)
+		t.send(ctx, progress, "Paused", "pause.circle.fill", "blue", nil, subtitle, pushward.StateOngoing, pushward.Float64Ptr(0))
 		return true
 	}
 
 	remainingSeconds := parseTimeLeft(queue.TimeLeft)
-
 	stateStr := fmt.Sprintf("%.1f MB/s", speedMB)
-	elapsed := time.Since(startTime).Seconds()
-	downloaded := mbTotal - mbLeft
-	if elapsed > 2 && downloaded > 0 {
-		avgMB := downloaded / elapsed
-		stateStr += fmt.Sprintf(" · avg %.0f", avgMB)
-	}
 
-	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", "blue", remainingSeconds, subtitle, pushward.StateOngoing)
+	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", "blue", remainingSeconds, subtitle, pushward.StateOngoing, pushward.Float64Ptr(speedMB))
 	return true
 }
 
@@ -426,6 +419,23 @@ func (t *Tracker) getPPStatus(ctx context.Context) (string, string) {
 		}
 	}
 	return "", ""
+}
+
+// getCompletedStats reads the SABnzbd history API and returns aggregate bytes
+// and download time (seconds) for recently completed slots.
+func (t *Tracker) getCompletedStats(ctx context.Context) (totalBytes int64, totalDownloadTime int) {
+	history, err := t.sab.GetHistory(ctx, 10)
+	if err != nil {
+		slog.Warn("failed to fetch history for stats", "error", err)
+		return 0, 0
+	}
+	for _, slot := range history.Slots {
+		if slot.Status == "Completed" {
+			totalBytes += slot.Bytes
+			totalDownloadTime += slot.DownloadTime
+		}
+	}
+	return
 }
 
 // getCompletedName returns the name of the most recently completed history item.

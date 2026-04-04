@@ -28,7 +28,7 @@ var (
 		"blue": true, "purple": true, "pink": true, "indigo": true,
 		"teal": true, "cyan": true, "mint": true, "brown": true,
 	}
-	validTemplates  = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true}
+	validTemplates  = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true, "timeline": true}
 	validStates     = map[string]bool{"ONGOING": true, "ENDED": true}
 	validSeverities = map[string]bool{"critical": true, "warning": true, "info": true}
 )
@@ -69,10 +69,22 @@ type apiContent struct {
 	EndDate           *int64   `json:"end_date,omitempty"`
 	StartDate         *int64   `json:"start_date,omitempty"`
 	WarningThreshold  *int     `json:"warning_threshold,omitempty"`
-	Value             *float64 `json:"value,omitempty"`
-	MinValue          *float64 `json:"min_value,omitempty"`
-	MaxValue          *float64 `json:"max_value,omitempty"`
-	Unit              string   `json:"unit,omitempty"`
+	Value             *float64           `json:"value,omitempty"`
+	MinValue          *float64           `json:"min_value,omitempty"`
+	MaxValue          *float64           `json:"max_value,omitempty"`
+	Unit              string             `json:"unit,omitempty"`
+	Scale             string             `json:"scale,omitempty"`
+	Decimals          *int               `json:"decimals,omitempty"`
+	Smoothing         *bool              `json:"smoothing,omitempty"`
+	Thresholds        []testThreshold    `json:"thresholds,omitempty"`
+	Values            map[string]float64 `json:"values,omitempty"`
+	Duration          *string            `json:"duration,omitempty"`
+}
+
+type testThreshold struct {
+	Value float64 `json:"value"`
+	Color string  `json:"color,omitempty"`
+	Label string  `json:"label,omitempty"`
 }
 
 // MockPushWardServer starts an httptest server that records all requests and
@@ -223,7 +235,7 @@ func validateUpdateRequest(req *updateRequest) error {
 
 func validateContent(c *apiContent) error {
 	if !validTemplates[c.Template] {
-		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, gauge")
+		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, gauge, timeline")
 	}
 	if c.Progress < 0 || c.Progress > 1 {
 		return fmt.Errorf("progress must be 0.0-1.0")
@@ -283,6 +295,10 @@ func validateContent(c *apiContent) error {
 		}
 	case "gauge":
 		if err := validateGauge(c); err != nil {
+			return err
+		}
+	case "timeline":
+		if err := validateTimeline(c); err != nil {
 			return err
 		}
 	}
@@ -375,6 +391,45 @@ func validateGauge(c *apiContent) error {
 	}
 	if utf8.RuneCountInString(c.Unit) > 32 {
 		return fmt.Errorf("unit must be at most 32 runes")
+	}
+	return nil
+}
+
+func validateTimeline(c *apiContent) error {
+	if c.Value == nil && len(c.Values) == 0 {
+		return fmt.Errorf("value or values is required for timeline template")
+	}
+	if c.Scale != "" {
+		switch c.Scale {
+		case "linear", "logarithmic":
+		default:
+			return fmt.Errorf("scale must be \"linear\" or \"logarithmic\", got %q", c.Scale)
+		}
+	}
+	if c.Decimals != nil && (*c.Decimals < 0 || *c.Decimals > 10) {
+		return fmt.Errorf("decimals must be between 0 and 10, got %d", *c.Decimals)
+	}
+	if utf8.RuneCountInString(c.Unit) > 32 {
+		return fmt.Errorf("unit must be at most 32 runes")
+	}
+	if len(c.Thresholds) > 5 {
+		return fmt.Errorf("thresholds must have at most 5 entries, got %d", len(c.Thresholds))
+	}
+	for i, th := range c.Thresholds {
+		if err := validateColor(th.Color, fmt.Sprintf("thresholds[%d].color", i)); err != nil {
+			return err
+		}
+		if utf8.RuneCountInString(th.Label) > 12 {
+			return fmt.Errorf("thresholds[%d].label must be at most 12 runes", i)
+		}
+	}
+	if len(c.Values) > 4 {
+		return fmt.Errorf("values must have at most 4 series, got %d", len(c.Values))
+	}
+	for k := range c.Values {
+		if utf8.RuneCountInString(k) > 32 {
+			return fmt.Errorf("values key %q must be at most 32 characters", k)
+		}
 	}
 	return nil
 }
