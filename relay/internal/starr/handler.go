@@ -55,6 +55,11 @@ func (h *Handler) SonarrHandler() http.Handler {
 	return http.HandlerFunc(h.handleSonarrWebhook)
 }
 
+// ProwlarrHandler returns an http.Handler for Prowlarr webhooks.
+func (h *Handler) ProwlarrHandler() http.Handler {
+	return http.HandlerFunc(h.handleProwlarrWebhook)
+}
+
 func slugForDownload(prefix, downloadID string) string {
 	return text.Slug(prefix, downloadID)
 }

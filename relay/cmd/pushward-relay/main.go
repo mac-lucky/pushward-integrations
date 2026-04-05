@@ -161,6 +161,7 @@ func main() {
 		sh := starr.NewHandler(store, clients, &cfg.Providers.Starr)
 		mux.Handle("POST /radarr", wrapHandler(sh.RadarrHandler()))
 		mux.Handle("POST /sonarr", wrapHandler(sh.SonarrHandler()))
+		mux.Handle("POST /prowlarr", wrapHandler(sh.ProwlarrHandler()))
 		collectEnder(sh)
 		slog.Info("enabled provider", "provider", "starr")
 	}
