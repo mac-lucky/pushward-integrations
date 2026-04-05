@@ -67,6 +67,7 @@ type Content struct {
 	Smoothing  *bool              `json:"smoothing,omitempty"`
 	Thresholds []Threshold        `json:"thresholds,omitempty"`
 	Values     map[string]float64 `json:"values,omitempty"`
+	Units      map[string]string  `json:"units,omitempty"`
 }
 
 // CreateActivityRequest is the body for POST /activities.
