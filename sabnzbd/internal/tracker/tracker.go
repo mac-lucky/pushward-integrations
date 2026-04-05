@@ -244,6 +244,10 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	}
 
 	subtitle := text.Truncate(t.getCompletedName(ctx), 30)
+	if t.cfg.SABnzbd.Template == "timeline" && subtitle != "" {
+		stateStr = subtitle + " · " + stateStr
+		subtitle = ""
+	}
 
 	slog.Info("complete", "total_mb", totalMB, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed, "state", stateStr, "subtitle", subtitle)
 
@@ -348,7 +352,11 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 			icon = "archivebox"
 		}
 		subtitle := text.Truncate(ppName, 30)
-		t.send(ctx, 1.0, ppStatus+"...", icon, "orange", nil, subtitle, pushward.StateOngoing, nil)
+		stateStr := ppStatus + "..."
+		if t.cfg.SABnzbd.Template == "timeline" && subtitle != "" {
+			stateStr = ppStatus + " · " + subtitle
+		}
+		t.send(ctx, 1.0, stateStr, icon, "orange", nil, subtitle, pushward.StateOngoing, nil)
 		select {
 		case <-ctx.Done():
 			return time.Since(ppStart)
@@ -395,6 +403,11 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 
 	remainingSeconds := parseTimeLeft(queue.TimeLeft)
 	stateStr := fmt.Sprintf("%.1f MB/s", speedMB)
+
+	// Timeline: show filename in state since the chart already visualizes speed
+	if t.cfg.SABnzbd.Template == "timeline" && len(queue.Slots) > 0 {
+		stateStr = subtitle
+	}
 
 	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", "blue", remainingSeconds, subtitle, pushward.StateOngoing, pushward.Float64Ptr(speedMB))
 	return true

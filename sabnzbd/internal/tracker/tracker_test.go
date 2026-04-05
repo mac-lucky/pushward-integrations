@@ -751,6 +751,9 @@ func TestSendDownloadProgress_Timeline_SendsValueAndUnit(t *testing.T) {
 	if req.Content.Unit != "MB/s" {
 		t.Errorf("expected unit MB/s, got %s", req.Content.Unit)
 	}
+	if req.Content.State != "test.nzb" {
+		t.Errorf("expected state to be filename for timeline, got %s", req.Content.State)
+	}
 }
 
 func TestSendDownloadProgress_Generic_NoValueOrUnit(t *testing.T) {
@@ -788,9 +791,12 @@ func TestSendDownloadProgress_Generic_NoValueOrUnit(t *testing.T) {
 	if req.Content.Unit != "" {
 		t.Errorf("expected no unit for generic template, got %s", req.Content.Unit)
 	}
+	if req.Content.State != "50.0 MB/s" {
+		t.Errorf("expected state to be speed for generic, got %s", req.Content.State)
+	}
 }
 
-func TestTimeline_NonDownloadPhase_UsesGeneric(t *testing.T) {
+func TestTimeline_NonDownloadPhase_OmitsValueAndUnit(t *testing.T) {
 	pwSrv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SABnzbd.Template = "timeline"
@@ -798,7 +804,7 @@ func TestTimeline_NonDownloadPhase_UsesGeneric(t *testing.T) {
 	ctx := context.Background()
 	tr := New(ctx, cfg, nil, pw)
 
-	// Non-download sends (e.g. "Starting...", PP) pass nil for value → should use generic
+	// Non-download sends (e.g. "Starting...", PP) pass nil for value → no value/unit set
 	tr.send(ctx, 0.0, "Starting...", "arrow.down.circle", "blue", nil, "", pushward.StateOngoing, nil)
 
 	got := testutil.GetCalls(calls, mu)
@@ -808,14 +814,14 @@ func TestTimeline_NonDownloadPhase_UsesGeneric(t *testing.T) {
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req)
 
-	if req.Content.Template != "generic" {
-		t.Errorf("expected generic template for non-download phase, got %s", req.Content.Template)
+	if req.Content.Template != "timeline" {
+		t.Errorf("expected timeline template, got %s", req.Content.Template)
 	}
 	if req.Content.Value != nil {
-		t.Errorf("expected no value for generic template, got %v", *req.Content.Value)
+		t.Errorf("expected no value for non-download phase, got %v", *req.Content.Value)
 	}
 	if req.Content.Unit != "" {
-		t.Errorf("expected no unit for generic template, got %s", req.Content.Unit)
+		t.Errorf("expected no unit for non-download phase, got %s", req.Content.Unit)
 	}
 }
 
@@ -860,6 +866,9 @@ func TestSendDownloadProgress_Timeline_Paused_SendsZeroValue(t *testing.T) {
 	if req.Content.Unit != "MB/s" {
 		t.Errorf("expected unit MB/s, got %s", req.Content.Unit)
 	}
+	if req.Content.State != "Paused" {
+		t.Errorf("expected state Paused for timeline paused, got %s", req.Content.State)
+	}
 }
 
 func TestTimeline_FullLifecycle(t *testing.T) {
@@ -903,46 +912,43 @@ func TestTimeline_FullLifecycle(t *testing.T) {
 
 	got := testutil.GetCalls(calls, mu)
 
-	// Verify mix of templates: download-phase uses timeline, rest uses generic
-	var hasTimeline, hasGeneric bool
+	// All phases use timeline template; download phase includes value/unit
+	var hasDownloadValue, hasNonDownloadNoValue bool
 	for _, c := range got {
 		if c.Method == "PATCH" {
 			var r pushward.UpdateRequest
 			testutil.UnmarshalBody(t, c.Body, &r)
-			switch r.Content.Template {
-			case "timeline":
-				hasTimeline = true
-				if r.Content.Value == nil {
-					t.Error("timeline update should have value set")
-				}
+			if r.Content.Template != "timeline" {
+				t.Errorf("expected timeline template, got %s", r.Content.Template)
+			}
+			if r.Content.Value != nil {
+				hasDownloadValue = true
 				if r.Content.Unit != "MB/s" {
-					t.Errorf("timeline update should have unit MB/s, got %s", r.Content.Unit)
+					t.Errorf("timeline download update should have unit MB/s, got %s", r.Content.Unit)
 				}
-			case "generic":
-				hasGeneric = true
-				if r.Content.Value != nil {
-					t.Errorf("generic update should not have value, got %v", *r.Content.Value)
-				}
-			default:
-				t.Errorf("unexpected template %s", r.Content.Template)
+			} else {
+				hasNonDownloadNoValue = true
 			}
 		}
 	}
-	if !hasTimeline {
-		t.Error("expected at least one timeline update (download phase)")
+	if !hasDownloadValue {
+		t.Error("expected at least one timeline update with value (download phase)")
 	}
-	if !hasGeneric {
-		t.Error("expected at least one generic update (non-download phase)")
+	if !hasNonDownloadNoValue {
+		t.Error("expected at least one timeline update without value (non-download phase)")
 	}
 
-	// Last ENDED update should use generic (summary phase)
+	// Last ENDED update should include filename in state
 	last := got[len(got)-1]
 	var lastReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, last.Body, &lastReq)
 	if lastReq.State != pushward.StateEnded {
 		t.Errorf("last update should be ENDED, got %s", lastReq.State)
 	}
-	if lastReq.Content.Template != "generic" {
-		t.Errorf("summary ENDED should use generic, got %s", lastReq.Content.Template)
+	if lastReq.Content.Template != "timeline" {
+		t.Errorf("summary ENDED should use timeline, got %s", lastReq.Content.Template)
+	}
+	if !strings.Contains(lastReq.Content.State, "test-file") {
+		t.Errorf("timeline completion state should include filename, got %s", lastReq.Content.State)
 	}
 }
