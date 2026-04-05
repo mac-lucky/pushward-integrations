@@ -54,7 +54,7 @@ func New(ctx context.Context, cfg *config.Config, sab *sabnzbd.Client, pw *pushw
 func (t *Tracker) Cleanup(ctx context.Context) {
 	req := pushward.UpdateRequest{
 		State:   pushward.StateEnded,
-		Content: pushward.Content{Template: "generic", Progress: 0, State: "Dismissed"},
+		Content: pushward.Content{Template: t.cfg.SABnzbd.Template, Progress: 0, State: "Dismissed"},
 	}
 	if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
 		slog.Info("no stale activity to clean up")
@@ -150,19 +150,14 @@ func (t *Tracker) launchTracker(resumed bool) {
 }
 
 func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string, value *float64) {
-	// Use configured template only during download phases (when value is provided);
-	// all other phases (starting, PP, summary, end) use generic.
-	template := "generic"
-	if value != nil && t.cfg.SABnzbd.Template == "timeline" {
-		template = "timeline"
-	}
+	template := t.cfg.SABnzbd.Template
 	content := pushward.Content{
 		Template:    template,
 		Progress:    progress,
 		State:       state,
 		AccentColor: accentColor,
 	}
-	if template == "timeline" {
+	if template == "timeline" && value != nil {
 		content.Value = value
 		content.Unit = "MB/s"
 	}
