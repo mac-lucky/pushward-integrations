@@ -10,11 +10,12 @@ import (
 
 // Config is the top-level configuration for pushward-grafana.
 type Config struct {
-	Server   sharedconfig.ServerConfig   `yaml:"server"`
-	PushWard sharedconfig.PushWardConfig `yaml:"pushward"`
-	Metrics  MetricsConfig              `yaml:"metrics"`
-	Grafana  GrafanaConfig              `yaml:"grafana"`
-	Timeline TimelineConfig             `yaml:"timeline"`
+	Server       sharedconfig.ServerConfig   `yaml:"server"`
+	PushWard     sharedconfig.PushWardConfig `yaml:"pushward"`
+	Metrics      MetricsConfig              `yaml:"metrics"`
+	Grafana      GrafanaConfig              `yaml:"grafana"`
+	Timeline     TimelineConfig             `yaml:"timeline"`
+	WebhookToken string                     `yaml:"webhook_token"`
 }
 
 // MetricsConfig holds the Prometheus/VictoriaMetrics connection details.
@@ -126,6 +127,9 @@ func applyEnvOverrides(cfg *Config) error {
 			return fmt.Errorf("invalid PUSHWARD_POLL_INTERVAL %q: %w", v, err)
 		}
 		cfg.Timeline.PollInterval = d
+	}
+	if v := os.Getenv("PUSHWARD_WEBHOOK_TOKEN"); v != "" {
+		cfg.WebhookToken = v
 	}
 	return nil
 }

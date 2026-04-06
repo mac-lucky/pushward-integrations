@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/handler"
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/poller"
+	sharedauth "github.com/mac-lucky/pushward-integrations/shared/auth"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/server"
 )
@@ -67,7 +69,12 @@ func main() {
 	h.StartSweeper(ctx, cfg.PushWard.StaleTimeout)
 
 	mux := server.NewMux()
-	mux.Handle("POST /webhook", h)
+	var webhookHandler http.Handler = h
+	if cfg.WebhookToken != "" {
+		webhookHandler = sharedauth.RequireHeader("Authorization", "Bearer "+cfg.WebhookToken)(h)
+		slog.Info("webhook bearer auth enabled")
+	}
+	mux.Handle("POST /webhook", webhookHandler)
 
 	slog.Info("starting pushward-grafana",
 		"address", cfg.Server.Address,
@@ -82,7 +89,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	slog.Info("stopping pollers")
+	slog.Info("shutting down")
+	h.WaitIdle()
 	p.StopAll()
 	p.Wait()
 	slog.Info("shutdown complete")

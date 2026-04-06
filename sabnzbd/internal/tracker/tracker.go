@@ -2,7 +2,6 @@ package tracker
 
 import (
 	"context"
-	"crypto/subtle"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -10,8 +9,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+
 	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/config"
 	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/sabnzbd"
+	sharedauth "github.com/mac-lucky/pushward-integrations/shared/auth"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
@@ -111,8 +112,7 @@ func (t *Tracker) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Webhook secret validation
 	if t.cfg.SABnzbd.WebhookSecret != "" {
-		got := r.Header.Get("X-Webhook-Secret")
-		if subtle.ConstantTimeCompare([]byte(got), []byte(t.cfg.SABnzbd.WebhookSecret)) != 1 {
+		if !sharedauth.CheckHeader(r, "X-Webhook-Secret", t.cfg.SABnzbd.WebhookSecret) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

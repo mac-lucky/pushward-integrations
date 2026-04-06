@@ -68,7 +68,7 @@ func fireWebhook(t *testing.T, h *Handler, body string) *httptest.ResponseRecord
 	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(body))
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	h.waitIdle()
+	h.WaitIdle()
 	return rec
 }
 

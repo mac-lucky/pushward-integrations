@@ -15,6 +15,8 @@ func TestExtractRuleUID(t *testing.T) {
 		{"https://grafana.example.com/alerting/abc123/edit", "abc123"},
 		{"https://grafana.example.com/alerting/1afz29v7z/edit", "1afz29v7z"},
 		{"https://grafana.example.com/alerting/rule-uid/view", "rule-uid"},
+		{"https://grafana.example.com/alerting/grafana/abc123/view", "abc123"},
+		{"https://grafana.example.com/alerting/grafana/rule-uid/view?tab=query", "rule-uid"},
 		{"", ""},
 		{"https://grafana.example.com/dashboards", ""},
 		{"https://grafana.example.com/alerting//edit", ""},

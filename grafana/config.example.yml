@@ -3,6 +3,12 @@
 # queries Prometheus/VictoriaMetrics for metric history,
 # and pushes timeline sparklines to PushWard Live Activities.
 
+# Optional: Shared secret for authenticating Grafana webhook requests.
+# Can also be set via PUSHWARD_WEBHOOK_TOKEN env var.
+# Configure the matching token in your Grafana contact point under
+# Authorization: Bearer <token>.
+# webhook_token: ""
+
 server:
   address: ":8090"
 

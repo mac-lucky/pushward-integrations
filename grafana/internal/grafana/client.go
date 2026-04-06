@@ -44,8 +44,9 @@ func NewClient(baseURL, apiToken string) *Client {
 }
 
 // ruleUIDPattern extracts the rule UID from a generatorURL like
-// "https://grafana.example.com/alerting/<uid>/edit"
-var ruleUIDPattern = regexp.MustCompile(`/alerting/([^/]+)/(?:edit|view)`)
+// "https://grafana.example.com/alerting/<uid>/edit"           (Grafana <11)
+// "https://grafana.example.com/alerting/grafana/<uid>/view"   (Grafana 11+)
+var ruleUIDPattern = regexp.MustCompile(`/alerting/(?:grafana/)?([^/]+)/(?:edit|view)`)
 
 // ExtractRuleUID parses the rule UID from a Grafana generatorURL.
 // Returns empty string if the URL doesn't match the expected pattern

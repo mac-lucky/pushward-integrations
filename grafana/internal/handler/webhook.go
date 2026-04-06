@@ -375,8 +375,8 @@ func (h *Handler) sweepStale(maxAge time.Duration) {
 	h.mu.Unlock()
 }
 
-// waitIdle blocks until all in-flight async webhook goroutines complete.
-func (h *Handler) waitIdle() { h.wg.Wait() }
+// WaitIdle blocks until all in-flight async webhook goroutines complete.
+func (h *Handler) WaitIdle() { h.wg.Wait() }
 
 func (h *Handler) activeAlerts() []string {
 	h.mu.Lock()
