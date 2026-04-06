@@ -322,27 +322,9 @@ func (h *Handler) worstInstance(instances map[string]*instanceInfo) *instanceInf
 }
 
 func (h *Handler) iconForSeverity(severity string) string {
-	switch severity {
-	case "critical":
-		return "exclamationmark.octagon.fill"
-	case "warning":
-		return h.config.DefaultIcon
-	case "info":
-		return "info.circle.fill"
-	default:
-		return h.config.DefaultIcon
-	}
+	return pushward.SeverityIcon(severity, h.config.DefaultIcon)
 }
 
 func (h *Handler) colorForSeverity(severity string) string {
-	switch severity {
-	case "critical":
-		return pushward.ColorRed
-	case "warning":
-		return pushward.ColorOrange
-	case "info":
-		return pushward.ColorBlue
-	default:
-		return pushward.ColorOrange
-	}
+	return pushward.SeverityColor(severity)
 }

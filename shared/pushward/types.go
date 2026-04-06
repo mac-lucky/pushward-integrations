@@ -15,6 +15,12 @@ func Int64Ptr(v int64) *int64 { return &v }
 // Float64Ptr returns a pointer to the given float64 value.
 func Float64Ptr(v float64) *float64 { return &v }
 
+// HistoryPoint is a single timestamped value in a timeline series.
+type HistoryPoint struct {
+	T int64   `json:"t"` // Unix timestamp (seconds)
+	V float64 `json:"v"` // Value
+}
+
 // Threshold defines a horizontal reference line on a timeline sparkline.
 type Threshold struct {
 	Value float64 `json:"value"`
@@ -62,12 +68,13 @@ type Content struct {
 	Unit     string   `json:"unit,omitempty"`
 
 	// Timeline template
-	Scale      string             `json:"scale,omitempty"`
-	Decimals   *int               `json:"decimals,omitempty"`
-	Smoothing  *bool              `json:"smoothing,omitempty"`
-	Thresholds []Threshold        `json:"thresholds,omitempty"`
-	Values     map[string]float64 `json:"values,omitempty"`
-	Units      map[string]string  `json:"units,omitempty"`
+	Scale      string                       `json:"scale,omitempty"`
+	Decimals   *int                         `json:"decimals,omitempty"`
+	Smoothing  *bool                        `json:"smoothing,omitempty"`
+	Thresholds []Threshold                  `json:"thresholds,omitempty"`
+	Values     map[string]float64           `json:"values,omitempty"`
+	Units      map[string]string            `json:"units,omitempty"`
+	History    map[string][]HistoryPoint    `json:"history,omitempty"`
 }
 
 // CreateActivityRequest is the body for POST /activities.

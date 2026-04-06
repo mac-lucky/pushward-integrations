@@ -1,0 +1,53 @@
+# pushward-grafana configuration
+# Runs as a sidecar next to Grafana, receives alert webhooks,
+# queries Prometheus/VictoriaMetrics for metric history,
+# and pushes timeline sparklines to PushWard Live Activities.
+
+server:
+  address: ":8090"
+
+# PushWard API connection
+pushward:
+  url: "https://api.pushward.app"
+  api_key: "hlk_..."
+  priority: 5
+  cleanup_delay: 15m
+  stale_timeout: 24h
+
+# Prometheus or VictoriaMetrics — queried directly for metric history
+metrics:
+  url: "http://prometheus:9090"
+  # Optional auth (uncomment if your Prometheus/VM requires it):
+  # username: ""
+  # password: ""
+  # bearer_token: ""
+
+# Optional: Grafana API for auto-extracting PromQL from alert rules.
+# Requires an Editor-role service account token.
+# When configured, no per-rule annotations are needed.
+# grafana:
+#   url: "http://grafana:3000"
+#   api_token: "glsa_..."
+
+# Timeline sparkline defaults
+timeline:
+  history_window: 30m    # How far back to query on alert fire
+  poll_interval: 30s     # How often to poll for fresh data points
+  smoothing: true        # Curve smoothing on sparkline
+  scale: "linear"        # "linear" or "logarithmic"
+  decimals: 1            # Value precision
+  severity_label: "severity"
+  default_severity: "warning"
+
+# --- Per-rule configuration via Grafana alert rule annotations ---
+#
+# Instead of configuring rules here, add annotations to your
+# Grafana alert rules:
+#
+#   pushward_query:     The PromQL expression for history backfill
+#   pushward_unit:      Unit label (e.g., "%", "°C", "ms")
+#   pushward_threshold: Threshold value shown as dashed line
+#   pushward_ref_id:    Which values{} key to use (default: first)
+#
+# If grafana.url + grafana.api_token are set, the query is
+# auto-extracted from the alert rule — no annotations needed.

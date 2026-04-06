@@ -15,3 +15,5 @@ use ./relay
 use ./unraid
 
 use ./octoprint
+
+use ./grafana
