@@ -6,6 +6,12 @@ const (
 	StateEnded   = "ENDED"
 )
 
+// Notification interruption level constants.
+const (
+	LevelActive  = "active"
+	LevelPassive = "passive"
+)
+
 // IntPtr returns a pointer to the given int value.
 func IntPtr(v int) *int { return &v }
 

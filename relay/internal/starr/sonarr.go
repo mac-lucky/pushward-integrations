@@ -19,9 +19,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var envelope struct {
-		EventType string `json:"eventType"`
-	}
+	var envelope webhookPayload
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return
@@ -35,50 +33,76 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 	var apiErr error
 	switch envelope.EventType {
 	case "Grab":
-		var p SonarrGrabPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode Grab payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[SonarrGrabPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleSonarrGrab(ctx, userKey, log, &p)
+		apiErr = h.handleSonarrGrab(ctx, userKey, log, p)
 	case "Download":
-		var p SonarrDownloadPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode Download payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[SonarrDownloadPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleSonarrDownload(ctx, userKey, log, &p)
+		apiErr = h.handleSonarrDownload(ctx, userKey, log, p)
 	case "Test":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "sonarr"); err != nil {
 			log.Error("test notification failed", "provider", "sonarr", "error", err)
 		}
 	case "Health":
-		var p HealthPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode health payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[HealthPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleHealth(ctx, userKey, log, "sonarr", &p)
+		apiErr = h.handleHealth(ctx, userKey, log, "sonarr", p)
 	case "HealthRestored":
-		var p HealthRestoredPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode health restored payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[HealthRestoredPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleHealthRestored(ctx, userKey, log, "sonarr", &p)
+		apiErr = h.handleHealthRestored(ctx, userKey, log, "sonarr", p)
 	case "ManualInteractionRequired":
-		var p ManualInteractionPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode manual interaction payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[ManualInteractionPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleManualInteraction(ctx, userKey, log, "sonarr", &p)
+		apiErr = h.handleManualInteraction(ctx, userKey, log, "sonarr", p)
+	case "Rename":
+		p, ok := unmarshalPayload[SonarrSeriesEventPayload](raw, w)
+		if !ok {
+			return
+		}
+		apiErr = h.handleSonarrRename(ctx, userKey, log, p)
+	case "SeriesAdd":
+		p, ok := unmarshalPayload[SonarrSeriesEventPayload](raw, w)
+		if !ok {
+			return
+		}
+		apiErr = h.handleSonarrSeriesAdd(ctx, userKey, log, p)
+	case "SeriesDelete":
+		p, ok := unmarshalPayload[SonarrSeriesDeletePayload](raw, w)
+		if !ok {
+			return
+		}
+		apiErr = h.handleSonarrSeriesDelete(ctx, userKey, log, p)
+	case "EpisodeFileDelete":
+		p, ok := unmarshalPayload[SonarrEpisodeFileDeletePayload](raw, w)
+		if !ok {
+			return
+		}
+		apiErr = h.handleSonarrEpisodeFileDelete(ctx, userKey, log, p)
+	case "ApplicationUpdate":
+		p, ok := unmarshalPayload[ApplicationUpdatePayload](raw, w)
+		if !ok {
+			return
+		}
+		apiErr = h.handleApplicationUpdate(ctx, userKey, log, "sonarr", p)
+	case "ImportComplete":
+		p, ok := unmarshalPayload[SonarrImportCompletePayload](raw, w)
+		if !ok {
+			return
+		}
+		apiErr = h.handleSonarrImportComplete(ctx, userKey, log, p)
 	default:
 		slog.Debug("ignored event", "event_type", envelope.EventType)
 	}
@@ -113,7 +137,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 		Body:       "Grabbed · " + p.Release.Quality,
 		ThreadID:   "sonarr",
 		CollapseID: "sonarr-grab",
-		Level:      "active",
+		Level:      pushward.LevelActive,
 		Category:   "grab",
 		Source:     "sonarr",
 		Push:       h.shouldNotify("Grab"),
@@ -193,7 +217,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 		Body:       state,
 		ThreadID:   "sonarr",
 		CollapseID: "sonarr-download",
-		Level:      "active",
+		Level:      pushward.LevelActive,
 		Category:   "download",
 		Source:     "sonarr",
 		Push:       h.shouldNotify("Download"),
@@ -242,4 +266,56 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	log.Info("download complete", "slug", slug, "state", state, "series", p.Series.Title)
 	return nil
+}
+
+func (h *Handler) handleSonarrRename(ctx context.Context, userKey string, log *slog.Logger, p *SonarrSeriesEventPayload) error {
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Files renamed",
+		ThreadID: "sonarr", CollapseID: "sonarr-rename",
+		Level: pushward.LevelPassive, Category: "rename", Source: "sonarr", Push: true,
+	})
+}
+
+func (h *Handler) handleSonarrSeriesAdd(ctx context.Context, userKey string, log *slog.Logger, p *SonarrSeriesEventPayload) error {
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Added to library",
+		ThreadID: "sonarr", CollapseID: "sonarr-series-add",
+		Level: pushward.LevelActive, Category: "series-add", Source: "sonarr", Push: true,
+	})
+}
+
+func (h *Handler) handleSonarrSeriesDelete(ctx context.Context, userKey string, log *slog.Logger, p *SonarrSeriesDeletePayload) error {
+	body := "Removed"
+	if p.DeletedFiles {
+		body = "Removed (files deleted)"
+	}
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title: "Sonarr", Subtitle: p.Series.Title, Body: body,
+		ThreadID: "sonarr", CollapseID: "sonarr-series-delete",
+		Level: pushward.LevelActive, Category: "series-delete", Source: "sonarr", Push: true,
+	})
+}
+
+func (h *Handler) handleSonarrEpisodeFileDelete(ctx context.Context, userKey string, log *slog.Logger, p *SonarrEpisodeFileDeletePayload) error {
+	body := "File deleted"
+	if p.DeleteReason != "" {
+		body += " · " + deleteReasonText(p.DeleteReason)
+	}
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title: "Sonarr", Subtitle: text.Truncate(FormatSubtitle(p.Series, p.Episodes, ""), 100), Body: body,
+		ThreadID: "sonarr", CollapseID: "sonarr-file-delete",
+		Level: pushward.LevelPassive, Category: "file-delete", Source: "sonarr", Push: true,
+	})
+}
+
+func (h *Handler) handleSonarrImportComplete(ctx context.Context, userKey string, log *slog.Logger, p *SonarrImportCompletePayload) error {
+	body := "Import complete"
+	if p.IsUpgrade {
+		body = "Upgrade complete"
+	}
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title: "Sonarr", Subtitle: text.Truncate(FormatSubtitle(p.Series, p.Episodes, ""), 100), Body: body,
+		ThreadID: "sonarr", CollapseID: "sonarr-import-complete",
+		Level: pushward.LevelActive, Category: "import-complete", Source: "sonarr", Push: true,
+	})
 }

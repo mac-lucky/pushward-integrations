@@ -45,3 +45,25 @@ type RadarrMovieFile struct {
 	Quality      string `json:"quality"`
 	Size         int64  `json:"size"`
 }
+
+// RadarrMovieEventPayload is used for events that carry only the movie
+// (Rename, MovieAdded).
+type RadarrMovieEventPayload struct {
+	EventType string      `json:"eventType"`
+	Movie     RadarrMovie `json:"movie"`
+}
+
+// RadarrMovieDeletePayload is sent when a movie is deleted from Radarr.
+type RadarrMovieDeletePayload struct {
+	EventType    string      `json:"eventType"`
+	Movie        RadarrMovie `json:"movie"`
+	DeletedFiles bool        `json:"deletedFiles"`
+}
+
+// RadarrMovieFileDeletePayload is sent when a movie file is deleted.
+type RadarrMovieFileDeletePayload struct {
+	EventType    string          `json:"eventType"`
+	Movie        RadarrMovie     `json:"movie"`
+	MovieFile    RadarrMovieFile `json:"movieFile"`
+	DeleteReason string          `json:"deleteReason"`
+}

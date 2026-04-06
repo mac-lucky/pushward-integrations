@@ -3,6 +3,7 @@ package starr
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -87,6 +88,16 @@ func decodePayload(w http.ResponseWriter, r *http.Request) (json.RawMessage, boo
 		return nil, false
 	}
 	return raw, true
+}
+
+func unmarshalPayload[T any](raw json.RawMessage, w http.ResponseWriter) (*T, bool) {
+	var p T
+	if err := json.Unmarshal(raw, &p); err != nil {
+		slog.Error("failed to decode payload", "type", fmt.Sprintf("%T", p), "error", err)
+		http.Error(w, "invalid payload", http.StatusBadRequest)
+		return nil, false
+	}
+	return &p, true
 }
 
 // getTrackedSlug retrieves a tracked download slug from the state store.
@@ -254,4 +265,44 @@ func (h *Handler) handleManualInteraction(ctx context.Context, userKey string, l
 	}
 	log.Info("manual interaction required", "slug", slug, "provider", provider, "downloadId", p.DownloadID)
 	return nil
+}
+
+func (h *Handler) sendNotification(ctx context.Context, userKey string, log *slog.Logger, req pushward.SendNotificationRequest) error {
+	cl := h.clients.Get(userKey)
+	if err := cl.SendNotification(ctx, req); err != nil {
+		log.Error("failed to send notification", "category", req.Category, "error", err)
+		return err
+	}
+	log.Info("notification sent", "category", req.Category, "subtitle", req.Subtitle)
+	return nil
+}
+
+func (h *Handler) handleApplicationUpdate(ctx context.Context, userKey string, log *slog.Logger, provider string, p *ApplicationUpdatePayload) error {
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title:      titleCase(provider),
+		Subtitle:   p.PreviousVersion + " → " + p.NewVersion,
+		Body:       "Updated",
+		ThreadID:   provider,
+		CollapseID: provider + "-update",
+		Level:      pushward.LevelPassive,
+		Category:   "update",
+		Source:     provider,
+		Push:       true,
+	})
+}
+
+// deleteReasonText converts a Radarr/Sonarr delete reason to human-readable text.
+func deleteReasonText(reason string) string {
+	switch reason {
+	case "upgrade":
+		return "Upgrade"
+	case "manual":
+		return "Manual"
+	case "missingFromDisk":
+		return "Missing from disk"
+	case "noLinkedEpisodes":
+		return "No linked episodes"
+	default:
+		return titleCase(reason)
+	}
 }

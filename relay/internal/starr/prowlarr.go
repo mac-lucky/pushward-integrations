@@ -40,37 +40,29 @@ func (h *Handler) handleProwlarrWebhook(w http.ResponseWriter, r *http.Request) 
 			log.Error("test notification failed", "provider", "prowlarr", "error", err)
 		}
 	case "Grab":
-		var p ProwlarrGrabPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode grab payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[ProwlarrGrabPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleProwlarrGrab(ctx, userKey, log, &p)
+		apiErr = h.handleProwlarrGrab(ctx, userKey, log, p)
 	case "Health":
-		var p HealthPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode health payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[HealthPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleHealth(ctx, userKey, log, "prowlarr", &p)
+		apiErr = h.handleHealth(ctx, userKey, log, "prowlarr", p)
 	case "HealthRestored":
-		var p HealthRestoredPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode health restored payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[HealthRestoredPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleHealthRestored(ctx, userKey, log, "prowlarr", &p)
+		apiErr = h.handleHealthRestored(ctx, userKey, log, "prowlarr", p)
 	case "ApplicationUpdate":
-		var p ApplicationUpdatePayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode application update payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[ApplicationUpdatePayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleProwlarrApplicationUpdate(ctx, userKey, log, &p)
+		apiErr = h.handleProwlarrApplicationUpdate(ctx, userKey, log, p)
 	default:
 		slog.Debug("ignored event", "event_type", envelope.EventType)
 	}

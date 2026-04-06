@@ -35,50 +35,70 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 	var apiErr error
 	switch envelope.EventType {
 	case "Grab":
-		var p RadarrGrabPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode grab payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[RadarrGrabPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleRadarrGrab(ctx, userKey, log, &p)
+		apiErr = h.handleRadarrGrab(ctx, userKey, log, p)
 	case "Download":
-		var p RadarrDownloadPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode download payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[RadarrDownloadPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleRadarrDownload(ctx, userKey, log, &p)
+		apiErr = h.handleRadarrDownload(ctx, userKey, log, p)
 	case "Test":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "radarr"); err != nil {
 			log.Error("test notification failed", "provider", "radarr", "error", err)
 		}
 	case "Health":
-		var p HealthPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode health payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[HealthPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleHealth(ctx, userKey, log, "radarr", &p)
+		apiErr = h.handleHealth(ctx, userKey, log, "radarr", p)
 	case "HealthRestored":
-		var p HealthRestoredPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode health restored payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[HealthRestoredPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleHealthRestored(ctx, userKey, log, "radarr", &p)
+		apiErr = h.handleHealthRestored(ctx, userKey, log, "radarr", p)
 	case "ManualInteractionRequired":
-		var p ManualInteractionPayload
-		if err := json.Unmarshal(raw, &p); err != nil {
-			slog.Error("failed to decode manual interaction payload", "error", err)
-			http.Error(w, "invalid payload", http.StatusBadRequest)
+		p, ok := unmarshalPayload[ManualInteractionPayload](raw, w)
+		if !ok {
 			return
 		}
-		apiErr = h.handleManualInteraction(ctx, userKey, log, "radarr", &p)
+		apiErr = h.handleManualInteraction(ctx, userKey, log, "radarr", p)
+	case "Rename":
+		p, ok := unmarshalPayload[RadarrMovieEventPayload](raw, w)
+		if !ok {
+			return
+		}
+		apiErr = h.handleRadarrRename(ctx, userKey, log, p)
+	case "MovieAdded":
+		p, ok := unmarshalPayload[RadarrMovieEventPayload](raw, w)
+		if !ok {
+			return
+		}
+		apiErr = h.handleRadarrMovieAdded(ctx, userKey, log, p)
+	case "MovieDelete":
+		p, ok := unmarshalPayload[RadarrMovieDeletePayload](raw, w)
+		if !ok {
+			return
+		}
+		apiErr = h.handleRadarrMovieDelete(ctx, userKey, log, p)
+	case "MovieFileDelete":
+		p, ok := unmarshalPayload[RadarrMovieFileDeletePayload](raw, w)
+		if !ok {
+			return
+		}
+		apiErr = h.handleRadarrMovieFileDelete(ctx, userKey, log, p)
+	case "ApplicationUpdate":
+		p, ok := unmarshalPayload[ApplicationUpdatePayload](raw, w)
+		if !ok {
+			return
+		}
+		apiErr = h.handleApplicationUpdate(ctx, userKey, log, "radarr", p)
 	default:
 		slog.Debug("ignored event", "event_type", envelope.EventType)
 	}
@@ -128,7 +148,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 		Body:       "Grabbed · " + p.Release.Quality,
 		ThreadID:   "radarr",
 		CollapseID: "radarr-grab",
-		Level:      "active",
+		Level:      pushward.LevelActive,
 		Category:   "grab",
 		Source:     "radarr",
 		Push:       h.shouldNotify("Grab"),
@@ -209,7 +229,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 		Body:       state,
 		ThreadID:   "radarr",
 		CollapseID: "radarr-download",
-		Level:      "active",
+		Level:      pushward.LevelActive,
 		Category:   "download",
 		Source:     "radarr",
 		Push:       h.shouldNotify("Download"),
@@ -260,4 +280,44 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	log.Info("scheduled end", "slug", slug, "state", state)
 	return nil
+}
+
+func (h *Handler) handleRadarrRename(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieEventPayload) error {
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: "Files renamed",
+		ThreadID: "radarr", CollapseID: "radarr-rename",
+		Level: pushward.LevelPassive, Category: "rename", Source: "radarr", Push: true,
+	})
+}
+
+func (h *Handler) handleRadarrMovieAdded(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieEventPayload) error {
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: "Added to library",
+		ThreadID: "radarr", CollapseID: "radarr-movie-added",
+		Level: pushward.LevelActive, Category: "movie-added", Source: "radarr", Push: true,
+	})
+}
+
+func (h *Handler) handleRadarrMovieDelete(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieDeletePayload) error {
+	body := "Removed"
+	if p.DeletedFiles {
+		body = "Removed (files deleted)"
+	}
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: body,
+		ThreadID: "radarr", CollapseID: "radarr-movie-delete",
+		Level: pushward.LevelActive, Category: "movie-delete", Source: "radarr", Push: true,
+	})
+}
+
+func (h *Handler) handleRadarrMovieFileDelete(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieFileDeletePayload) error {
+	body := "File deleted"
+	if p.DeleteReason != "" {
+		body += " · " + deleteReasonText(p.DeleteReason)
+	}
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: body,
+		ThreadID: "radarr", CollapseID: "radarr-file-delete",
+		Level: pushward.LevelPassive, Category: "file-delete", Source: "radarr", Push: true,
+	})
 }

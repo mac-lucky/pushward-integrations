@@ -47,3 +47,33 @@ type SonarrDownloadPayload struct {
 	DownloadClient string            `json:"downloadClient"`
 	DownloadID     string            `json:"downloadId"`
 }
+
+// SonarrSeriesEventPayload is used for events that carry only the series
+// (Rename, SeriesAdd).
+type SonarrSeriesEventPayload struct {
+	EventType string       `json:"eventType"`
+	Series    SonarrSeries `json:"series"`
+}
+
+// SonarrSeriesDeletePayload is sent when a series is deleted from Sonarr.
+type SonarrSeriesDeletePayload struct {
+	EventType    string       `json:"eventType"`
+	Series       SonarrSeries `json:"series"`
+	DeletedFiles bool         `json:"deletedFiles"`
+}
+
+// SonarrEpisodeFileDeletePayload is sent when an episode file is deleted.
+type SonarrEpisodeFileDeletePayload struct {
+	EventType    string          `json:"eventType"`
+	Series       SonarrSeries    `json:"series"`
+	Episodes     []SonarrEpisode `json:"episodes"`
+	DeleteReason string          `json:"deleteReason"`
+}
+
+// SonarrImportCompletePayload is sent when a download import is fully complete (Sonarr v4+).
+type SonarrImportCompletePayload struct {
+	EventType string          `json:"eventType"`
+	Series    SonarrSeries    `json:"series"`
+	Episodes  []SonarrEpisode `json:"episodes"`
+	IsUpgrade bool            `json:"isUpgrade"`
+}
