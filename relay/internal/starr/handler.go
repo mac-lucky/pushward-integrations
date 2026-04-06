@@ -60,6 +60,19 @@ func (h *Handler) ProwlarrHandler() http.Handler {
 	return http.HandlerFunc(h.handleProwlarrWebhook)
 }
 
+// shouldNotify returns true if the given event type should send a push notification
+// instead of (or in addition to) creating a Live Activity.
+func (h *Handler) shouldNotify(eventType string) bool {
+	switch h.config.Mode {
+	case "", config.ModeActivity:
+		return false
+	case config.ModeNotify:
+		return true
+	default: // smart
+		return eventType == "Grab" || eventType == "Download"
+	}
+}
+
 func slugForDownload(prefix, downloadID string) string {
 	return text.Slug(prefix, downloadID)
 }

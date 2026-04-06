@@ -39,6 +39,7 @@ providers:
 
   starr:
     enabled: true
+    # mode: smart                             # activity (default) | notify | smart
     priority: 1
     cleanup_delay: 15m
     stale_timeout: 30m

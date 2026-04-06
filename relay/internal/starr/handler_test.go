@@ -105,16 +105,21 @@ func TestRadarrGrab(t *testing.T) {
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls (create + update), got %d", len(recorded))
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls (notify + create + update), got %d", len(recorded))
+	}
+
+	// Verify notification
+	if recorded[0].Method != "POST" || recorded[0].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s %s", recorded[0].Method, recorded[0].Path)
 	}
 
 	// Verify create
-	if recorded[0].Method != "POST" || recorded[0].Path != "/activities" {
-		t.Errorf("expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
+	if recorded[1].Method != "POST" || recorded[1].Path != "/activities" {
+		t.Errorf("expected POST /activities, got %s %s", recorded[1].Method, recorded[1].Path)
 	}
 	var createReq pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
+	testutil.UnmarshalBody(t, recorded[1].Body, &createReq)
 	if createReq.Slug != slugForDownload("radarr-", "SABnzbd_nzo_abc123") {
 		t.Errorf("expected slug %s, got %s", slugForDownload("radarr-", "SABnzbd_nzo_abc123"), createReq.Slug)
 	}
@@ -127,7 +132,7 @@ func TestRadarrGrab(t *testing.T) {
 
 	// Verify ONGOING update
 	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
 	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
@@ -177,14 +182,14 @@ func TestRadarrGrabAndDownload(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + grab_update + phase1(ONGOING) + phase2(ENDED) = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	// grab_notify + create + grab_update + download_notify + phase1(ONGOING) + phase2(ENDED) = 6
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
 
 	// Phase 1: ONGOING with "Imported"
 	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
+	testutil.UnmarshalBody(t, recorded[4].Body, &phase1)
 	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
@@ -200,7 +205,7 @@ func TestRadarrGrabAndDownload(t *testing.T) {
 
 	// Phase 2: ENDED with "Imported"
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[5].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
@@ -232,12 +237,12 @@ func TestRadarrGrabAndDownload_IsUpgrade(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
 
 	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
+	testutil.UnmarshalBody(t, recorded[4].Body, &phase1)
 	if phase1.Content.State != "Upgraded" {
 		t.Errorf("expected state 'Upgraded', got %s", phase1.Content.State)
 	}
@@ -265,16 +270,16 @@ func TestRadarrConcurrentDownloads(t *testing.T) {
 	}`)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// 2 creates + 2 updates = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	// 2 * (notify + create + update) = 6
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
 
-	// Verify different slugs were used
+	// Verify different slugs were used (creates are at index 1 and 4)
 	var create1 pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &create1)
+	testutil.UnmarshalBody(t, recorded[1].Body, &create1)
 	var create2 pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &create2)
+	testutil.UnmarshalBody(t, recorded[4].Body, &create2)
 	if create1.Slug == create2.Slug {
 		t.Errorf("expected different slugs, both got %s", create1.Slug)
 	}
@@ -292,9 +297,9 @@ func TestRadarrConcurrentDownloads(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded = testutil.GetCalls(calls, mu)
-	// 4 + phase1 + phase2 = 6
-	if len(recorded) != 6 {
-		t.Fatalf("expected 6 calls, got %d", len(recorded))
+	// 6 + download_notify + phase1 + phase2 = 9
+	if len(recorded) != 9 {
+		t.Fatalf("expected 9 calls, got %d", len(recorded))
 	}
 
 	// Movie 2 should still be tracked in state store
@@ -319,25 +324,30 @@ func TestRadarrDownloadWithoutGrab(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + phase1(ONGOING) + phase2(ENDED) = 3
-	if len(recorded) != 3 {
-		t.Fatalf("expected 3 calls, got %d", len(recorded))
+	// notify + create + phase1(ONGOING) + phase2(ENDED) = 4
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	}
+
+	// Verify notification
+	if recorded[0].Method != "POST" || recorded[0].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s %s", recorded[0].Method, recorded[0].Path)
 	}
 
 	// Verify create was called
-	if recorded[0].Method != "POST" || recorded[0].Path != "/activities" {
-		t.Errorf("expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
+	if recorded[1].Method != "POST" || recorded[1].Path != "/activities" {
+		t.Errorf("expected POST /activities, got %s %s", recorded[1].Method, recorded[1].Path)
 	}
 
 	var createReq pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
+	testutil.UnmarshalBody(t, recorded[1].Body, &createReq)
 	if createReq.Name != "Inception (2010)" {
 		t.Errorf("expected name 'Inception (2010)', got %s", createReq.Name)
 	}
 
 	// Phase 2 should be ENDED
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", phase2.State)
 	}
@@ -362,8 +372,8 @@ func TestRadarrBasicAuth_KeyInPassword(t *testing.T) {
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls (notify + create + update), got %d", len(recorded))
 	}
 }
 
@@ -403,26 +413,31 @@ func TestSonarrGrab(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	got := testutil.GetCalls(calls, mu)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 calls (create + update), got %d", len(got))
+	if len(got) != 3 {
+		t.Fatalf("expected 3 calls (notify + create + update), got %d", len(got))
 	}
 
-	// Call 1: create activity
-	if got[0].Method != "POST" || got[0].Path != "/activities" {
-		t.Errorf("call 0: expected POST /activities, got %s %s", got[0].Method, got[0].Path)
+	// Call 1: notification
+	if got[0].Method != "POST" || got[0].Path != "/notifications" {
+		t.Errorf("call 0: expected POST /notifications, got %s %s", got[0].Method, got[0].Path)
+	}
+
+	// Call 2: create activity
+	if got[1].Method != "POST" || got[1].Path != "/activities" {
+		t.Errorf("call 1: expected POST /activities, got %s %s", got[1].Method, got[1].Path)
 	}
 	var create pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, got[0].Body, &create)
+	testutil.UnmarshalBody(t, got[1].Body, &create)
 	if create.Slug != "sonarr-abc-123" {
 		t.Errorf("expected slug sonarr-abc-123, got %s", create.Slug)
 	}
 
-	// Call 2: ONGOING update
-	if got[1].Method != "PATCH" || got[1].Path != "/activity/sonarr-abc-123" {
-		t.Errorf("call 1: expected PATCH /activity/sonarr-abc-123, got %s %s", got[1].Method, got[1].Path)
+	// Call 3: ONGOING update
+	if got[2].Method != "PATCH" || got[2].Path != "/activity/sonarr-abc-123" {
+		t.Errorf("call 2: expected PATCH /activity/sonarr-abc-123, got %s %s", got[2].Method, got[2].Path)
 	}
 	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, got[1].Body, &update)
+	testutil.UnmarshalBody(t, got[2].Body, &update)
 	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
@@ -462,14 +477,14 @@ func TestSonarrGrabAndDownload(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	got := testutil.GetCalls(calls, mu)
-	// create + grabbed + end-phase1 (ONGOING) + end-phase2 (ENDED) = 4
-	if len(got) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(got))
+	// grab_notify + create + grabbed + download_notify + end-phase1 (ONGOING) + end-phase2 (ENDED) = 6
+	if len(got) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(got))
 	}
 
 	// Phase 1: ONGOING with final state
 	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, got[2].Body, &phase1)
+	testutil.UnmarshalBody(t, got[4].Body, &phase1)
 	if phase1.State != pushward.StateOngoing {
 		t.Errorf("phase 1: expected ONGOING, got %s", phase1.State)
 	}
@@ -482,7 +497,7 @@ func TestSonarrGrabAndDownload(t *testing.T) {
 
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, got[3].Body, &phase2)
+	testutil.UnmarshalBody(t, got[5].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("phase 2: expected ENDED, got %s", phase2.State)
 	}
@@ -516,8 +531,8 @@ func TestSonarrGrabAndDownload_IsUpgrade(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	got := testutil.GetCalls(calls, mu)
-	if len(got) < 3 {
-		t.Fatalf("expected at least 3 calls, got %d", len(got))
+	if len(got) < 5 {
+		t.Fatalf("expected at least 5 calls, got %d", len(got))
 	}
 
 	// Find the ENDED call and check its state is "Upgraded"
@@ -553,13 +568,14 @@ func TestSonarrConcurrentDownloads(t *testing.T) {
 
 	// Both should have created separate activities
 	got := testutil.GetCalls(calls, mu)
-	if len(got) != 4 {
-		t.Fatalf("expected 4 calls (2x create + 2x update), got %d", len(got))
+	// 2 * (notify + create + update) = 6
+	if len(got) != 6 {
+		t.Fatalf("expected 6 calls (2x (notify + create + update)), got %d", len(got))
 	}
 
 	slugs := map[string]bool{}
 	for _, c := range got {
-		if c.Method == "POST" {
+		if c.Method == "POST" && c.Path == "/activities" {
 			var create pushward.CreateActivityRequest
 			testutil.UnmarshalBody(t, c.Body, &create)
 			slugs[create.Slug] = true
@@ -592,9 +608,9 @@ func TestSonarrConcurrentDownloads(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	got = testutil.GetCalls(calls, mu)
-	// 4 (grabs) + 2x2 (two-phase end each) = 8
-	if len(got) != 8 {
-		t.Fatalf("expected 8 calls total, got %d", len(got))
+	// 6 (grabs) + 2 * (notify + phase1 + phase2) = 12
+	if len(got) != 12 {
+		t.Fatalf("expected 12 calls total, got %d", len(got))
 	}
 
 	// Verify both ended
@@ -632,24 +648,29 @@ func TestSonarrDownloadWithoutGrab(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	got := testutil.GetCalls(calls, mu)
-	// create + end-phase1 (ONGOING) + end-phase2 (ENDED) = 3
-	if len(got) != 3 {
-		t.Fatalf("expected 3 calls, got %d", len(got))
+	// notify + create + end-phase1 (ONGOING) + end-phase2 (ENDED) = 4
+	if len(got) != 4 {
+		t.Fatalf("expected 4 calls, got %d", len(got))
+	}
+
+	// Notification
+	if got[0].Method != "POST" || got[0].Path != "/notifications" {
+		t.Errorf("call 0: expected POST /notifications, got %s %s", got[0].Method, got[0].Path)
 	}
 
 	// Create
-	if got[0].Method != "POST" || got[0].Path != "/activities" {
-		t.Errorf("call 0: expected POST /activities, got %s %s", got[0].Method, got[0].Path)
+	if got[1].Method != "POST" || got[1].Path != "/activities" {
+		t.Errorf("call 1: expected POST /activities, got %s %s", got[1].Method, got[1].Path)
 	}
 	var create pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, got[0].Body, &create)
+	testutil.UnmarshalBody(t, got[1].Body, &create)
 	if create.Slug != "sonarr-no-grab-1" {
 		t.Errorf("expected slug sonarr-no-grab-1, got %s", create.Slug)
 	}
 
 	// Phase 2: ENDED with Downloaded
 	var endReq pushward.UpdateRequest
-	testutil.UnmarshalBody(t, got[2].Body, &endReq)
+	testutil.UnmarshalBody(t, got[3].Body, &endReq)
 	if endReq.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", endReq.State)
 	}
@@ -876,14 +897,14 @@ func TestRadarrManualInteraction(t *testing.T) {
 	}`)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + grab_update + manual_update = 3
-	if len(recorded) != 3 {
-		t.Fatalf("expected 3 calls, got %d", len(recorded))
+	// grab_notify + create + grab_update + manual_update = 4
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 calls, got %d", len(recorded))
 	}
 
 	// Verify manual interaction update
 	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &update)
+	testutil.UnmarshalBody(t, recorded[3].Body, &update)
 	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
@@ -959,14 +980,14 @@ func TestRadarrGrabManualInteractionDownload(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + grab_update + manual_update + phase1(ONGOING) + phase2(ENDED) = 5
-	if len(recorded) != 5 {
-		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	// grab_notify + create + grab_update + manual_update + download_notify + phase1(ONGOING) + phase2(ENDED) = 7
+	if len(recorded) != 7 {
+		t.Fatalf("expected 7 calls, got %d", len(recorded))
 	}
 
 	// Phase 2 should be ENDED with "Imported"
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[6].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", phase2.State)
 	}
@@ -1013,7 +1034,215 @@ func TestSonarrBasicAuth_KeyInPassword(t *testing.T) {
 
 	time.Sleep(50 * time.Millisecond)
 	got := testutil.GetCalls(calls, mu)
-	if len(got) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(got))
+	if len(got) != 3 {
+		t.Fatalf("expected 3 calls (notify + create + update), got %d", len(got))
 	}
+}
+
+// ============================================================
+// Smart Mode Tests
+// ============================================================
+
+func smartConfig() *config.StarrConfig {
+	cfg := testConfig()
+	cfg.Mode = config.ModeSmart
+	return cfg
+}
+
+func notifyConfig() *config.StarrConfig {
+	cfg := testConfig()
+	cfg.Mode = config.ModeNotify
+	return cfg
+}
+
+func TestRadarrGrab_SmartMode_SendsNotification(t *testing.T) {
+	h, calls, mu := newHandler(t, smartConfig())
+
+	w := sendRadarr(t, h, `{
+		"eventType": "Grab",
+		"movie": {"id": 1, "title": "Inception", "year": 2010},
+		"release": {"quality": "Bluray-1080p", "size": 5368709120, "indexer": "NZBgeek", "releaseTitle": "Inception.2010.1080p.BluRay"},
+		"downloadClient": "SABnzbd",
+		"downloadId": "SABnzbd_nzo_smart1"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	// Smart mode: should send notification only, no activity creation
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call (notification only), got %d: %+v", len(recorded), pathsOf(recorded))
+	}
+	if recorded[0].Method != "POST" || recorded[0].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s %s", recorded[0].Method, recorded[0].Path)
+	}
+
+	var req pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req)
+	if req.Title != "Radarr" {
+		t.Errorf("expected title Radarr, got %s", req.Title)
+	}
+	if req.Subtitle != "Inception (2010)" {
+		t.Errorf("expected subtitle 'Inception (2010)', got %s", req.Subtitle)
+	}
+	if !req.Push {
+		t.Error("expected push=true in smart mode for Grab")
+	}
+	if req.ThreadID != "radarr" {
+		t.Errorf("expected thread_id radarr, got %s", req.ThreadID)
+	}
+}
+
+func TestRadarrGrab_ActivityMode_CreatesActivity(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig()) // default = activity mode
+
+	w := sendRadarr(t, h, `{
+		"eventType": "Grab",
+		"movie": {"id": 1, "title": "Inception", "year": 2010},
+		"release": {"quality": "Bluray-1080p", "size": 5368709120, "indexer": "NZBgeek", "releaseTitle": "Inception.2010.1080p.BluRay"},
+		"downloadClient": "SABnzbd",
+		"downloadId": "SABnzbd_nzo_activity1"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	// Activity mode: notification + create activity + update activity = 3 calls
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls (notify + create + update), got %d: %+v", len(recorded), pathsOf(recorded))
+	}
+	if recorded[0].Path != "/notifications" {
+		t.Errorf("first call should be notification, got %s", recorded[0].Path)
+	}
+	if recorded[1].Path != "/activities" {
+		t.Errorf("second call should be create activity, got %s", recorded[1].Path)
+	}
+
+	// Verify notification has push=false in activity mode
+	var notifReq pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &notifReq)
+	if notifReq.Push {
+		t.Error("expected push=false in activity mode for Grab")
+	}
+}
+
+func TestRadarrDownload_SmartMode_SendsNotification(t *testing.T) {
+	h, calls, mu := newHandler(t, smartConfig())
+
+	w := sendRadarr(t, h, `{
+		"eventType": "Download",
+		"movie": {"id": 1, "title": "Inception", "year": 2010},
+		"movieFile": {"quality": "Bluray-1080p"},
+		"downloadClient": "SABnzbd",
+		"downloadId": "SABnzbd_nzo_smart2",
+		"isUpgrade": false
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call (notification only), got %d: %+v", len(recorded), pathsOf(recorded))
+	}
+	if recorded[0].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s", recorded[0].Path)
+	}
+
+	var req pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req)
+	if req.Body != "Imported" {
+		t.Errorf("expected body 'Imported', got %s", req.Body)
+	}
+}
+
+func TestSonarrGrab_SmartMode_SendsNotification(t *testing.T) {
+	h, calls, mu := newHandler(t, smartConfig())
+
+	w := sendSonarr(t, h, `{
+		"eventType": "Grab",
+		"series": {"id": 1, "title": "Breaking Bad", "tvdbId": 81189},
+		"episodes": [{"id": 1, "episodeNumber": 5, "seasonNumber": 2, "title": "Breakage"}],
+		"release": {"quality": "HDTV-720p", "size": 500000000, "indexer": "NZBgeek", "releaseTitle": "Breaking.Bad.S02E05.720p"},
+		"downloadClient": "SABnzbd",
+		"downloadId": "SABnzbd_nzo_sonarr_smart1"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call (notification only), got %d: %+v", len(recorded), pathsOf(recorded))
+	}
+	if recorded[0].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s", recorded[0].Path)
+	}
+
+	var req pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req)
+	if req.Title != "Sonarr" {
+		t.Errorf("expected title Sonarr, got %s", req.Title)
+	}
+	if req.ThreadID != "sonarr" {
+		t.Errorf("expected thread_id sonarr, got %s", req.ThreadID)
+	}
+}
+
+func TestHealth_SmartMode_CreatesActivity(t *testing.T) {
+	h, calls, mu := newHandler(t, smartConfig())
+
+	w := sendRadarr(t, h, `{
+		"eventType": "Health",
+		"level": "warning",
+		"message": "Disk space low",
+		"type": "DiskSpace",
+		"wikiUrl": "https://wiki.servarr.com/radarr/system#disk-space"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	// Health in smart mode should still create activity (NOT notification-only)
+	if len(recorded) < 2 {
+		t.Fatalf("expected at least 2 calls (create + update), got %d: %+v", len(recorded), pathsOf(recorded))
+	}
+	if recorded[0].Path != "/activities" {
+		t.Errorf("first call should be create activity, got %s %s", recorded[0].Method, recorded[0].Path)
+	}
+}
+
+func TestRadarrGrab_NotifyMode_SendsNotification(t *testing.T) {
+	h, calls, mu := newHandler(t, notifyConfig())
+
+	w := sendRadarr(t, h, `{
+		"eventType": "Grab",
+		"movie": {"id": 1, "title": "Matrix", "year": 1999},
+		"release": {"quality": "1080p"},
+		"downloadClient": "SABnzbd",
+		"downloadId": "SABnzbd_nzo_notify1"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call, got %d: %+v", len(recorded), pathsOf(recorded))
+	}
+	if recorded[0].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s", recorded[0].Path)
+	}
+}
+
+// pathsOf is a test helper that extracts paths from API calls for error messages.
+func pathsOf(calls []testutil.APICall) []string {
+	paths := make([]string, len(calls))
+	for i, c := range calls {
+		paths[i] = c.Method + " " + c.Path
+	}
+	return paths
 }

@@ -84,3 +84,16 @@ type UpdateRequest struct {
 	State   string  `json:"state"`
 	Content Content `json:"content"`
 }
+
+// SendNotificationRequest is the body for POST /notifications.
+type SendNotificationRequest struct {
+	Title      string `json:"title"`
+	Subtitle   string `json:"subtitle,omitempty"`
+	Body       string `json:"body"`
+	ThreadID   string `json:"thread_id,omitempty"`
+	CollapseID string `json:"collapse_id,omitempty"`
+	Level      string `json:"level,omitempty"`
+	Category   string `json:"category,omitempty"`
+	Source     string `json:"source,omitempty"`
+	Push       bool   `json:"push"`
+}

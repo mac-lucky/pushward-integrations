@@ -152,6 +152,31 @@ func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex
 		w.WriteHeader(http.StatusOK)
 	})
 
+	mux.HandleFunc("POST /notifications", func(w http.ResponseWriter, r *http.Request) {
+		body := recordCall(&calls, &mu, r)
+
+		var req struct {
+			Title string `json:"title"`
+			Body  string `json:"body"`
+			Push  bool   `json:"push"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+		if req.Title == "" {
+			respondError(w, http.StatusBadRequest, "title is required")
+			return
+		}
+		if req.Body == "" {
+			respondError(w, http.StatusBadRequest, "body is required")
+			return
+		}
+
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{"id": 1, "pushed": req.Push})
+	})
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		recordCall(&calls, &mu, r)
 		w.WriteHeader(http.StatusOK)

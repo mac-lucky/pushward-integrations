@@ -119,13 +119,36 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 	// Cancel any existing end timer for this download
 	h.ender.StopTimer(userKey, mapKey)
 
-	// Track in state store
+	cl := h.clients.Get(userKey)
+
+	// Always send notification record
+	if err := cl.SendNotification(ctx, pushward.SendNotificationRequest{
+		Title:      "Radarr",
+		Subtitle:   title,
+		Body:       "Grabbed · " + p.Release.Quality,
+		ThreadID:   "radarr",
+		CollapseID: "radarr-grab",
+		Level:      "active",
+		Category:   "grab",
+		Source:     "radarr",
+		Push:       h.shouldNotify("Grab"),
+	}); err != nil {
+		log.Error("failed to send notification", "slug", slug, "error", err)
+		// Non-fatal: continue to activity creation if applicable
+	}
+
+	// In notify/smart mode for Grab, skip Live Activity
+	if h.shouldNotify("Grab") {
+		log.Info("grab notification sent", "slug", slug, "title", title, "mode", h.config.Mode)
+		return nil
+	}
+
+	// Activity mode: create Live Activity (existing behavior)
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
 		log.Error("failed to track download", "slug", slug, "error", err)
 		return nil
 	}
 
-	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
@@ -172,10 +195,38 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 	// Cancel any existing end timer
 	h.ender.StopTimer(userKey, mapKey)
 
+	cl := h.clients.Get(userKey)
+
+	state := "Imported"
+	if p.IsUpgrade {
+		state = "Upgraded"
+	}
+
+	// Always send notification record
+	if err := cl.SendNotification(ctx, pushward.SendNotificationRequest{
+		Title:      "Radarr",
+		Subtitle:   title,
+		Body:       state,
+		ThreadID:   "radarr",
+		CollapseID: "radarr-download",
+		Level:      "active",
+		Category:   "download",
+		Source:     "radarr",
+		Push:       h.shouldNotify("Download"),
+	}); err != nil {
+		log.Error("failed to send notification", "error", err)
+	}
+
+	// In notify/smart mode for Download, skip Live Activity
+	if h.shouldNotify("Download") {
+		log.Info("download notification sent", "slug", slugForDownload("radarr-", p.DownloadID), "title", title, "mode", h.config.Mode)
+		return nil
+	}
+
+	// Activity mode: existing behavior
 	slug, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
 
 	if !tracked {
-		// Untracked download (e.g. bridge restart) — create activity
 		slug = slugForDownload("radarr-", p.DownloadID)
 
 		if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
@@ -183,7 +234,6 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 			return nil
 		}
 
-		cl := h.clients.Get(userKey)
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := cl.CreateActivity(ctx, slug, title, h.config.Priority, endedTTL, staleTTL); err != nil {
@@ -192,11 +242,6 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 			return err
 		}
 		log.Info("created activity (untracked download)", "slug", slug, "title", title)
-	}
-
-	state := "Imported"
-	if p.IsUpgrade {
-		state = "Upgraded"
 	}
 
 	step := 2

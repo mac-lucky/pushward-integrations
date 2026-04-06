@@ -227,3 +227,9 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequest) error {
 	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activity/%s", c.baseURL, slug), req, nil)
 }
+
+// SendNotification creates a notification record and optionally pushes an APNs alert.
+func (c *Client) SendNotification(ctx context.Context, req SendNotificationRequest) error {
+	return c.doWithRetry(ctx, "notify", http.MethodPost,
+		fmt.Sprintf("%s/notifications", c.baseURL), req, nil)
+}

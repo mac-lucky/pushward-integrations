@@ -104,13 +104,35 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 	// Cancel any existing end timer
 	h.ender.StopTimer(userKey, mapKey)
 
-	// Track in state store
+	cl := h.clients.Get(userKey)
+
+	// Always send notification record
+	if err := cl.SendNotification(ctx, pushward.SendNotificationRequest{
+		Title:      "Sonarr",
+		Subtitle:   text.Truncate(subtitle, 100),
+		Body:       "Grabbed · " + p.Release.Quality,
+		ThreadID:   "sonarr",
+		CollapseID: "sonarr-grab",
+		Level:      "active",
+		Category:   "grab",
+		Source:     "sonarr",
+		Push:       h.shouldNotify("Grab"),
+	}); err != nil {
+		log.Error("failed to send notification", "slug", slug, "error", err)
+	}
+
+	// In notify/smart mode for Grab, skip Live Activity
+	if h.shouldNotify("Grab") {
+		log.Info("grab notification sent", "slug", slug, "series", p.Series.Title, "mode", h.config.Mode)
+		return nil
+	}
+
+	// Activity mode: existing behavior
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
 		log.Error("failed to track download", "slug", slug, "error", err)
 		return nil
 	}
 
-	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 	if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
@@ -154,19 +176,46 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 	// Cancel any existing end timer
 	h.ender.StopTimer(userKey, mapKey)
 
+	cl := h.clients.Get(userKey)
+	quality := p.EpisodeFile.Quality
+
+	state := "Downloaded"
+	if p.IsUpgrade {
+		state = "Upgraded"
+	}
+
+	subtitle := FormatSubtitle(p.Series, p.Episodes, quality)
+
+	// Always send notification record
+	if err := cl.SendNotification(ctx, pushward.SendNotificationRequest{
+		Title:      "Sonarr",
+		Subtitle:   text.Truncate(subtitle, 100),
+		Body:       state,
+		ThreadID:   "sonarr",
+		CollapseID: "sonarr-download",
+		Level:      "active",
+		Category:   "download",
+		Source:     "sonarr",
+		Push:       h.shouldNotify("Download"),
+	}); err != nil {
+		log.Error("failed to send notification", "error", err)
+	}
+
+	// In notify/smart mode for Download, skip Live Activity
+	if h.shouldNotify("Download") {
+		log.Info("download notification sent", "slug", slug, "series", p.Series.Title, "mode", h.config.Mode)
+		return nil
+	}
+
+	// Activity mode: existing behavior
 	_, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
 
-	quality := p.EpisodeFile.Quality
 	if !tracked {
-		// Download without a prior Grab — create activity now
-		subtitle := FormatSubtitle(p.Series, p.Episodes, quality)
-
 		if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
 			log.Error("failed to track download", "slug", slug, "error", err)
 			return nil
 		}
 
-		cl := h.clients.Get(userKey)
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
@@ -177,14 +226,8 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 		log.Info("created activity (download without grab)", "slug", slug)
 	}
 
-	state := "Downloaded"
-	if p.IsUpgrade {
-		state = "Upgraded"
-	}
-
 	step := 2
 	total := 2
-	subtitle := FormatSubtitle(p.Series, p.Episodes, quality)
 	content := pushward.Content{
 		Template:    "steps",
 		Progress:    1.0,

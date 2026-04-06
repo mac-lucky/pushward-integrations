@@ -83,12 +83,22 @@ type ArgoCDConfig struct {
 	SyncGracePeriod    time.Duration `yaml:"sync_grace_period"`
 }
 
+// NotificationMode controls how a provider routes events.
+type NotificationMode string
+
+const (
+	ModeActivity NotificationMode = "activity" // All events → Live Activity (default, current behavior)
+	ModeNotify   NotificationMode = "notify"   // All events → push notification
+	ModeSmart    NotificationMode = "smart"     // Handler decides per event type
+)
+
 // StarrConfig holds Radarr/Sonarr-specific settings.
 //
 // In the relay, Radarr/Sonarr send the hlk_ integration key as the Basic Auth
 // password (extracted by the relay auth middleware). The username field is ignored.
 type StarrConfig struct {
 	BaseProviderConfig `yaml:",inline"`
+	Mode               NotificationMode `yaml:"mode"`
 }
 
 // JellyfinConfig holds Jellyfin-specific settings.
@@ -292,6 +302,10 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
+	if err := cfg.validateModes(); err != nil {
+		return nil, err
+	}
+
 	if cfg.CircuitBreaker.Threshold < 1 {
 		return nil, fmt.Errorf("circuit_breaker.threshold must be >= 1, got %d", cfg.CircuitBreaker.Threshold)
 	}
@@ -359,6 +373,9 @@ func (cfg *Config) applyEnvOverrides() error {
 		}
 		cfg.Providers.Starr.Enabled = b
 	}
+	if v := os.Getenv("PUSHWARD_STARR_MODE"); v != "" {
+		cfg.Providers.Starr.Mode = NotificationMode(v)
+	}
 	// Grafana overrides
 	if v := os.Getenv("PUSHWARD_GRAFANA_SEVERITY_LABEL"); v != "" {
 		cfg.Providers.Grafana.SeverityLabel = v
@@ -414,6 +431,14 @@ func (cfg *Config) validatePriorities() error {
 		if p.priority < 0 || p.priority > 10 {
 			return fmt.Errorf("providers.%s.priority: must be 0-10, got %d", p.name, p.priority)
 		}
+	}
+	return nil
+}
+
+func (cfg *Config) validateModes() error {
+	validModes := map[NotificationMode]bool{"": true, ModeActivity: true, ModeNotify: true, ModeSmart: true}
+	if !validModes[cfg.Providers.Starr.Mode] {
+		return fmt.Errorf("providers.starr.mode: must be activity, notify, or smart, got %q", cfg.Providers.Starr.Mode)
 	}
 	return nil
 }
