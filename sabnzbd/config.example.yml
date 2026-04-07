@@ -6,6 +6,10 @@ sabnzbd:
   api_key: ""           # or set PUSHWARD_SABNZBD_API_KEY
   webhook_secret: ""    # or set PUSHWARD_SABNZBD_WEBHOOK_SECRET
   template: "generic"   # or set PUSHWARD_SABNZBD_TEMPLATE ("generic" or "timeline")
+  timeline:             # only used when template is "timeline"
+    smoothing: true     # smooth sparkline curve interpolation
+    scale: "linear"     # "linear" or "logarithmic"
+    decimals: 0         # 0-10, controls value label precision
 
 pushward:
   url: ""               # or set PUSHWARD_URL (e.g. https://api.pushward.app)

@@ -16,10 +16,17 @@ type Config struct {
 }
 
 type SABnzbdConfig struct {
-	URL           string `yaml:"url"`
-	APIKey        string `yaml:"api_key"`
-	WebhookSecret string `yaml:"webhook_secret"`
-	Template      string `yaml:"template"`
+	URL           string         `yaml:"url"`
+	APIKey        string         `yaml:"api_key"`
+	WebhookSecret string         `yaml:"webhook_secret"`
+	Template      string         `yaml:"template"`
+	Timeline      TimelineConfig `yaml:"timeline"`
+}
+
+type TimelineConfig struct {
+	Smoothing *bool  `yaml:"smoothing"`
+	Scale     string `yaml:"scale"`
+	Decimals  *int   `yaml:"decimals"`
 }
 
 type PollingConfig struct {
@@ -63,6 +70,17 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.SABnzbd.Template == "" {
 		cfg.SABnzbd.Template = "generic"
+	}
+	if cfg.SABnzbd.Timeline.Smoothing == nil {
+		smoothing := true
+		cfg.SABnzbd.Timeline.Smoothing = &smoothing
+	}
+	if cfg.SABnzbd.Timeline.Scale == "" {
+		cfg.SABnzbd.Timeline.Scale = "linear"
+	}
+	if cfg.SABnzbd.Timeline.Decimals == nil {
+		decimals := 0
+		cfg.SABnzbd.Timeline.Decimals = &decimals
 	}
 	if v := os.Getenv("PUSHWARD_POLL_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)

@@ -18,6 +18,7 @@ import (
 )
 
 const slug = "sabnzbd"
+const seriesKey = "Download" // timeline values/units/history map key
 
 var ppStatuses = map[string]bool{
 	"Queued":     true,
@@ -38,13 +39,14 @@ var ppIcons = map[string]string{
 }
 
 type Tracker struct {
-	cfg    *config.Config
-	sab    *sabnzbd.Client
-	pw     *pushward.Client
-	mu     sync.Mutex
-	active bool
-	wg     sync.WaitGroup
-	ctx    context.Context
+	cfg         *config.Config
+	sab         *sabnzbd.Client
+	pw          *pushward.Client
+	mu          sync.Mutex
+	active      bool
+	wg          sync.WaitGroup
+	ctx         context.Context
+	historySent bool
 }
 
 func New(ctx context.Context, cfg *config.Config, sab *sabnzbd.Client, pw *pushward.Client) *Tracker {
@@ -157,9 +159,28 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 		State:       state,
 		AccentColor: accentColor,
 	}
-	if template == "timeline" && value != nil {
-		content.Value = value
-		content.Unit = "MB/s"
+	if template == "timeline" {
+		v := float64(0)
+		if value != nil {
+			v = *value
+		}
+		content.Values = map[string]float64{seriesKey: v}
+		content.Units = map[string]string{seriesKey: "MB/s"}
+		content.Smoothing = t.cfg.SABnzbd.Timeline.Smoothing
+		content.Scale = t.cfg.SABnzbd.Timeline.Scale
+		content.Decimals = t.cfg.SABnzbd.Timeline.Decimals
+
+		// Seed sparkline history on first download update
+		if !t.historySent && value != nil && *value > 0 {
+			now := time.Now().Unix()
+			content.History = map[string][]pushward.HistoryPoint{
+				seriesKey: {
+					{T: now - 10, V: *value},
+					{T: now - 5, V: *value},
+				},
+			}
+			t.historySent = true
+		}
 	}
 	if icon != "" {
 		content.Icon = icon
@@ -181,6 +202,8 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 }
 
 func (t *Tracker) track(ctx context.Context, resumed bool) {
+	t.historySent = false
+
 	// Ensure activity exists (no ended_ttl so the slug persists)
 	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
 	if err := t.pw.CreateActivity(ctx, slug, "SABnzbd", t.cfg.PushWard.Priority, 0, staleTTL); err != nil {
@@ -244,10 +267,6 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	}
 
 	subtitle := text.Truncate(t.getCompletedName(ctx), 30)
-	if t.cfg.SABnzbd.Template == "timeline" && subtitle != "" {
-		stateStr = subtitle + " · " + stateStr
-		subtitle = ""
-	}
 
 	slog.Info("complete", "total_mb", totalMB, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed, "state", stateStr, "subtitle", subtitle)
 
@@ -353,9 +372,6 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 		}
 		subtitle := text.Truncate(ppName, 30)
 		stateStr := ppStatus + "..."
-		if t.cfg.SABnzbd.Template == "timeline" && subtitle != "" {
-			stateStr = ppStatus + " · " + subtitle
-		}
 		t.send(ctx, 1.0, stateStr, icon, "orange", nil, subtitle, pushward.StateOngoing, nil)
 		select {
 		case <-ctx.Done():
@@ -403,11 +419,6 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 
 	remainingSeconds := parseTimeLeft(queue.TimeLeft)
 	stateStr := fmt.Sprintf("%.1f MB/s", speedMB)
-
-	// Timeline: show filename in state since the chart already visualizes speed
-	if t.cfg.SABnzbd.Template == "timeline" && len(queue.Slots) > 0 {
-		stateStr = subtitle
-	}
 
 	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", "blue", remainingSeconds, subtitle, pushward.StateOngoing, pushward.Float64Ptr(speedMB))
 	return true
