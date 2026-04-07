@@ -25,7 +25,7 @@ func testConfig() *config.Config {
 			URL:      "http://placeholder",
 			APIKey:   "test-key",
 			Template: "generic",
-			Timeline: config.TimelineConfig{
+			Timeline: sharedconfig.TimelineConfig{
 				Smoothing: pushward.BoolPtr(true),
 				Scale:     "linear",
 				Decimals:  pushward.IntPtr(0),
@@ -1020,7 +1020,7 @@ func TestTimeline_DisplaySettings(t *testing.T) {
 	pwSrv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SABnzbd.Template = "timeline"
-	cfg.SABnzbd.Timeline = config.TimelineConfig{
+	cfg.SABnzbd.Timeline = sharedconfig.TimelineConfig{
 		Smoothing: pushward.BoolPtr(true),
 		Scale:     "logarithmic",
 		Decimals:  pushward.IntPtr(2),

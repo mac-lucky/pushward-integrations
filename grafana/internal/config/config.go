@@ -32,15 +32,13 @@ type GrafanaConfig struct {
 	APIToken string `yaml:"api_token"` // Editor-role service account token
 }
 
-// TimelineConfig holds defaults for the timeline template.
+// TimelineConfig embeds shared visual settings and adds Grafana-specific fields.
 type TimelineConfig struct {
-	HistoryWindow   time.Duration `yaml:"history_window"`
-	PollInterval    time.Duration `yaml:"poll_interval"`
-	Smoothing       *bool         `yaml:"smoothing"`
-	Scale           string        `yaml:"scale"`
-	Decimals        *int          `yaml:"decimals"`
-	SeverityLabel   string        `yaml:"severity_label"`
-	DefaultSeverity string        `yaml:"default_severity"`
+	sharedconfig.TimelineConfig `yaml:",inline"`
+	HistoryWindow               time.Duration `yaml:"history_window"`
+	PollInterval                time.Duration `yaml:"poll_interval"`
+	SeverityLabel               string        `yaml:"severity_label"`
+	DefaultSeverity             string        `yaml:"default_severity"`
 }
 
 // Load reads the config file and applies environment variable overrides.
@@ -57,11 +55,13 @@ func Load(path string) (*Config, error) {
 			StaleTimeout: 24 * time.Hour,
 		},
 		Timeline: TimelineConfig{
+			TimelineConfig: sharedconfig.TimelineConfig{
+				Smoothing: &smoothing,
+				Scale:     "linear",
+				Decimals:  &decimals,
+			},
 			HistoryWindow:   30 * time.Minute,
 			PollInterval:    30 * time.Second,
-			Smoothing:       &smoothing,
-			Scale:           "linear",
-			Decimals:        &decimals,
 			SeverityLabel:   "severity",
 			DefaultSeverity: "warning",
 		},

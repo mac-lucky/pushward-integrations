@@ -16,17 +16,11 @@ type Config struct {
 }
 
 type SABnzbdConfig struct {
-	URL           string         `yaml:"url"`
-	APIKey        string         `yaml:"api_key"`
-	WebhookSecret string         `yaml:"webhook_secret"`
-	Template      string         `yaml:"template"`
-	Timeline      TimelineConfig `yaml:"timeline"`
-}
-
-type TimelineConfig struct {
-	Smoothing *bool  `yaml:"smoothing"`
-	Scale     string `yaml:"scale"`
-	Decimals  *int   `yaml:"decimals"`
+	URL           string                    `yaml:"url"`
+	APIKey        string                    `yaml:"api_key"`
+	WebhookSecret string                    `yaml:"webhook_secret"`
+	Template      string                    `yaml:"template"`
+	Timeline      sharedconfig.TimelineConfig `yaml:"timeline"`
 }
 
 type PollingConfig struct {
