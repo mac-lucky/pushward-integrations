@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
@@ -126,6 +128,24 @@ func radarrSubtitle(title, quality string) string {
 	return subtitle
 }
 
+// posterURL returns the remote URL of the first poster image, or empty string.
+func posterURL(images []StarrImage) string {
+	for _, img := range images {
+		if strings.EqualFold(img.CoverType, "poster") && img.RemoteURL != "" {
+			return img.RemoteURL
+		}
+	}
+	return ""
+}
+
+// radarrMovieURL constructs a deep link to a movie in the Radarr UI.
+func radarrMovieURL(appURL string, tmdbID int) string {
+	if appURL == "" || tmdbID == 0 {
+		return ""
+	}
+	return strings.TrimRight(appURL, "/") + "/movie/" + strconv.Itoa(tmdbID)
+}
+
 func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slog.Logger, p *RadarrGrabPayload) error {
 	if p.DownloadID == "" {
 		log.Warn("grab event missing downloadId")
@@ -142,7 +162,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 	cl := h.clients.Get(userKey)
 
 	// Always send notification record
-	if err := cl.SendNotification(ctx, pushward.SendNotificationRequest{
+	grabReq := pushward.SendNotificationRequest{
 		Title:      "Radarr",
 		Subtitle:   title,
 		Body:       "Grabbed · " + p.Release.Quality,
@@ -152,7 +172,21 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 		Category:   "grab",
 		Source:     "radarr",
 		Push:       h.shouldNotify("Grab"),
-	}); err != nil {
+		URL:        radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID),
+		ImageURL:   posterURL(p.Movie.Images),
+	}
+	meta := map[string]string{"quality": p.Release.Quality}
+	if p.Release.Indexer != "" {
+		meta["indexer"] = p.Release.Indexer
+	}
+	if p.Release.ReleaseGroup != "" {
+		meta["release_group"] = p.Release.ReleaseGroup
+	}
+	if p.Release.Size > 0 {
+		meta["size"] = text.FormatBytes(p.Release.Size)
+	}
+	grabReq.Metadata = meta
+	if err := cl.SendNotification(ctx, grabReq); err != nil {
 		log.Error("failed to send notification", "slug", slug, "error", err)
 		// Non-fatal: continue to activity creation if applicable
 	}
@@ -223,7 +257,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 	}
 
 	// Always send notification record
-	if err := cl.SendNotification(ctx, pushward.SendNotificationRequest{
+	dlReq := pushward.SendNotificationRequest{
 		Title:      "Radarr",
 		Subtitle:   title,
 		Body:       state,
@@ -233,7 +267,15 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 		Category:   "download",
 		Source:     "radarr",
 		Push:       h.shouldNotify("Download"),
-	}); err != nil {
+		URL:        radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID),
+		ImageURL:   posterURL(p.Movie.Images),
+	}
+	dlMeta := map[string]string{"quality": p.MovieFile.Quality}
+	if p.MovieFile.Size > 0 {
+		dlMeta["size"] = text.FormatBytes(p.MovieFile.Size)
+	}
+	dlReq.Metadata = dlMeta
+	if err := cl.SendNotification(ctx, dlReq); err != nil {
 		log.Error("failed to send notification", "error", err)
 	}
 
@@ -287,6 +329,7 @@ func (h *Handler) handleRadarrRename(ctx context.Context, userKey string, log *s
 		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: "Files renamed",
 		ThreadID: "radarr", CollapseID: "radarr-rename",
 		Level: pushward.LevelPassive, Category: "rename", Source: "radarr", Push: true,
+		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
 	})
 }
 
@@ -295,6 +338,7 @@ func (h *Handler) handleRadarrMovieAdded(ctx context.Context, userKey string, lo
 		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: "Added to library",
 		ThreadID: "radarr", CollapseID: "radarr-movie-added",
 		Level: pushward.LevelActive, Category: "movie-added", Source: "radarr", Push: true,
+		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
 	})
 }
 
@@ -307,6 +351,7 @@ func (h *Handler) handleRadarrMovieDelete(ctx context.Context, userKey string, l
 		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: body,
 		ThreadID: "radarr", CollapseID: "radarr-movie-delete",
 		Level: pushward.LevelActive, Category: "movie-delete", Source: "radarr", Push: true,
+		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
 	})
 }
 
@@ -319,5 +364,6 @@ func (h *Handler) handleRadarrMovieFileDelete(ctx context.Context, userKey strin
 		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: body,
 		ThreadID: "radarr", CollapseID: "radarr-file-delete",
 		Level: pushward.LevelPassive, Category: "file-delete", Source: "radarr", Push: true,
+		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
 	})
 }

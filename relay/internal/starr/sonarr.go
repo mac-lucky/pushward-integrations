@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
@@ -115,6 +116,14 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("ok"))
 }
 
+// sonarrSeriesURL constructs a deep link to a series in the Sonarr UI.
+func sonarrSeriesURL(appURL, titleSlug string) string {
+	if appURL == "" || titleSlug == "" {
+		return ""
+	}
+	return strings.TrimRight(appURL, "/") + "/series/" + titleSlug
+}
+
 func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slog.Logger, p *SonarrGrabPayload) error {
 	if p.DownloadID == "" {
 		log.Warn("grab event missing downloadId")
@@ -131,7 +140,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 	cl := h.clients.Get(userKey)
 
 	// Always send notification record
-	if err := cl.SendNotification(ctx, pushward.SendNotificationRequest{
+	sgReq := pushward.SendNotificationRequest{
 		Title:      "Sonarr",
 		Subtitle:   text.Truncate(subtitle, 100),
 		Body:       "Grabbed · " + p.Release.Quality,
@@ -141,7 +150,24 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 		Category:   "grab",
 		Source:     "sonarr",
 		Push:       h.shouldNotify("Grab"),
-	}); err != nil {
+		URL:        sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug),
+		ImageURL:   posterURL(p.Series.Images),
+	}
+	sgMeta := map[string]string{"quality": p.Release.Quality}
+	if p.Release.Indexer != "" {
+		sgMeta["indexer"] = p.Release.Indexer
+	}
+	if p.Release.ReleaseGroup != "" {
+		sgMeta["release_group"] = p.Release.ReleaseGroup
+	}
+	if p.Release.Size > 0 {
+		sgMeta["size"] = text.FormatBytes(p.Release.Size)
+	}
+	if len(p.Episodes) > 0 && p.Episodes[0].Title != "" {
+		sgMeta["episode_title"] = p.Episodes[0].Title
+	}
+	sgReq.Metadata = sgMeta
+	if err := cl.SendNotification(ctx, sgReq); err != nil {
 		log.Error("failed to send notification", "slug", slug, "error", err)
 	}
 
@@ -211,7 +237,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 	subtitle := FormatSubtitle(p.Series, p.Episodes, quality)
 
 	// Always send notification record
-	if err := cl.SendNotification(ctx, pushward.SendNotificationRequest{
+	sdReq := pushward.SendNotificationRequest{
 		Title:      "Sonarr",
 		Subtitle:   text.Truncate(subtitle, 100),
 		Body:       state,
@@ -221,7 +247,18 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 		Category:   "download",
 		Source:     "sonarr",
 		Push:       h.shouldNotify("Download"),
-	}); err != nil {
+		URL:        sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug),
+		ImageURL:   posterURL(p.Series.Images),
+	}
+	sdMeta := map[string]string{"quality": quality}
+	if p.EpisodeFile.Size > 0 {
+		sdMeta["size"] = text.FormatBytes(p.EpisodeFile.Size)
+	}
+	if len(p.Episodes) > 0 && p.Episodes[0].Title != "" {
+		sdMeta["episode_title"] = p.Episodes[0].Title
+	}
+	sdReq.Metadata = sdMeta
+	if err := cl.SendNotification(ctx, sdReq); err != nil {
 		log.Error("failed to send notification", "error", err)
 	}
 
@@ -273,6 +310,7 @@ func (h *Handler) handleSonarrRename(ctx context.Context, userKey string, log *s
 		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Files renamed",
 		ThreadID: "sonarr", CollapseID: "sonarr-rename",
 		Level: pushward.LevelPassive, Category: "rename", Source: "sonarr", Push: true,
+		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
 	})
 }
 
@@ -281,6 +319,7 @@ func (h *Handler) handleSonarrSeriesAdd(ctx context.Context, userKey string, log
 		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Added to library",
 		ThreadID: "sonarr", CollapseID: "sonarr-series-add",
 		Level: pushward.LevelActive, Category: "series-add", Source: "sonarr", Push: true,
+		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
 	})
 }
 
@@ -293,6 +332,7 @@ func (h *Handler) handleSonarrSeriesDelete(ctx context.Context, userKey string, 
 		Title: "Sonarr", Subtitle: p.Series.Title, Body: body,
 		ThreadID: "sonarr", CollapseID: "sonarr-series-delete",
 		Level: pushward.LevelActive, Category: "series-delete", Source: "sonarr", Push: true,
+		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
 	})
 }
 
@@ -305,6 +345,7 @@ func (h *Handler) handleSonarrEpisodeFileDelete(ctx context.Context, userKey str
 		Title: "Sonarr", Subtitle: text.Truncate(FormatSubtitle(p.Series, p.Episodes, ""), 100), Body: body,
 		ThreadID: "sonarr", CollapseID: "sonarr-file-delete",
 		Level: pushward.LevelPassive, Category: "file-delete", Source: "sonarr", Push: true,
+		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
 	})
 }
 
@@ -317,5 +358,6 @@ func (h *Handler) handleSonarrImportComplete(ctx context.Context, userKey string
 		Title: "Sonarr", Subtitle: text.Truncate(FormatSubtitle(p.Series, p.Episodes, ""), 100), Body: body,
 		ThreadID: "sonarr", CollapseID: "sonarr-import-complete",
 		Level: pushward.LevelActive, Category: "import-complete", Source: "sonarr", Push: true,
+		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
 	})
 }

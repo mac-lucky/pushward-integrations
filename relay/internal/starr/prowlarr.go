@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
@@ -80,6 +81,17 @@ func (h *Handler) handleProwlarrGrab(ctx context.Context, userKey string, log *s
 		body += " → " + p.Source
 	}
 
+	meta := map[string]string{"indexer": p.Release.Indexer}
+	if p.InstanceName != "" {
+		meta["instance_name"] = p.InstanceName
+	}
+	if p.Release.Size != nil && *p.Release.Size > 0 {
+		meta["size"] = text.FormatBytes(*p.Release.Size)
+	}
+	if len(p.Release.Categories) > 0 {
+		meta["categories"] = strings.Join(p.Release.Categories, ", ")
+	}
+
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      "Prowlarr",
 		Subtitle:   text.Truncate(p.Release.ReleaseTitle, 80),
@@ -90,5 +102,6 @@ func (h *Handler) handleProwlarrGrab(ctx context.Context, userKey string, log *s
 		Category:   "grab",
 		Source:     "prowlarr",
 		Push:       true,
+		Metadata:   meta,
 	})
 }

@@ -145,7 +145,7 @@ func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Lo
 		body = "Critical"
 	}
 
-	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+	req := pushward.SendNotificationRequest{
 		Title:      titleCase(provider) + " Health",
 		Subtitle:   text.Truncate(p.Message, 80),
 		Body:       body,
@@ -155,7 +155,14 @@ func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Lo
 		Category:   "health",
 		Source:     provider,
 		Push:       true,
-	})
+		URL:        p.WikiURL,
+	}
+	meta := map[string]string{"level": p.Level}
+	if p.Type != "" {
+		meta["type"] = p.Type
+	}
+	req.Metadata = meta
+	return h.sendNotification(ctx, userKey, log, req)
 }
 
 // handleHealthRestored sends a push notification when a health issue resolves.
@@ -204,6 +211,10 @@ func (h *Handler) sendNotification(ctx context.Context, userKey string, log *slo
 }
 
 func (h *Handler) handleApplicationUpdate(ctx context.Context, userKey string, log *slog.Logger, provider string, p *ApplicationUpdatePayload) error {
+	meta := map[string]string{
+		"previous_version": p.PreviousVersion,
+		"new_version":      p.NewVersion,
+	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      titleCase(provider),
 		Subtitle:   p.PreviousVersion + " → " + p.NewVersion,
@@ -214,6 +225,7 @@ func (h *Handler) handleApplicationUpdate(ctx context.Context, userKey string, l
 		Category:   "update",
 		Source:     provider,
 		Push:       true,
+		Metadata:   meta,
 	})
 }
 

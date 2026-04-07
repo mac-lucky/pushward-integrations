@@ -38,6 +38,10 @@ type alert struct {
 	GeneratorURL string            `json:"generatorURL"`
 	DashboardURL string            `json:"dashboardURL"`
 	PanelURL     string            `json:"panelURL"`
+	SilenceURL   string            `json:"silenceURL"`
+	Values       map[string]any    `json:"values"`
+	ValueString  string            `json:"valueString"`
+	ImageURL     string            `json:"imageURL"`
 }
 
 func isKnownSeverity(s string) bool {
@@ -103,6 +107,46 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			log.Warn("unknown alert status", "status", a.Status, "fingerprint", a.Fingerprint)
 			continue
+		}
+
+		// URL: pick first non-empty dashboard/panel/generator URL
+		switch {
+		case a.DashboardURL != "":
+			req.URL = a.DashboardURL
+		case a.PanelURL != "":
+			req.URL = a.PanelURL
+		case a.GeneratorURL != "":
+			req.URL = a.GeneratorURL
+		}
+
+		// Image: panel screenshot (requires Grafana Image Renderer)
+		if a.ImageURL != "" {
+			req.ImageURL = a.ImageURL
+		}
+
+		// Metadata: curated alert context (server enforces max 20 keys, 512-char values).
+		meta := make(map[string]string, 20)
+		addMeta := func(k, v string) {
+			if len(meta) >= 20 || v == "" {
+				return
+			}
+			meta[k] = text.TruncateHard(v, 512)
+		}
+		// High-value labels first.
+		for _, key := range []string{"alertname", "severity", "instance", "job", "namespace", "cluster", "pod", "container", "service"} {
+			addMeta(key, a.Labels[key])
+		}
+		// All annotations (prefixed to avoid collision with labels).
+		for k, v := range a.Annotations {
+			addMeta("annotation_"+k, v)
+		}
+		// Alert metadata.
+		addMeta("starts_at", a.StartsAt)
+		addMeta("silence_url", a.SilenceURL)
+		addMeta("generator_url", a.GeneratorURL)
+		addMeta("values", a.ValueString)
+		if len(meta) > 0 {
+			req.Metadata = meta
 		}
 
 		if err := cl.SendNotification(ctx, req); err != nil {

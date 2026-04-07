@@ -103,16 +103,19 @@ type UpdateRequest struct {
 
 // SendNotificationRequest is the body for POST /notifications.
 type SendNotificationRequest struct {
-	Title             string `json:"title"`
-	Subtitle          string `json:"subtitle,omitempty"`
-	Body              string `json:"body"`
-	ThreadID          string `json:"thread_id,omitempty"`
-	CollapseID        string `json:"collapse_id,omitempty"`
-	Level             string `json:"level,omitempty"`
-	Category          string `json:"category,omitempty"`
-	Source            string `json:"source,omitempty"`
-	SourceDisplayName string `json:"source_display_name,omitempty"`
-	Push              bool   `json:"push"`
+	Title             string            `json:"title"`
+	Subtitle          string            `json:"subtitle,omitempty"`
+	Body              string            `json:"body"`
+	ThreadID          string            `json:"thread_id,omitempty"`
+	CollapseID        string            `json:"collapse_id,omitempty"`
+	Level             string            `json:"level,omitempty"`
+	Category          string            `json:"category,omitempty"`
+	Source            string            `json:"source,omitempty"`
+	SourceDisplayName string            `json:"source_display_name,omitempty"`
+	URL               string            `json:"url,omitempty"`
+	ImageURL          string            `json:"image_url,omitempty"`
+	Metadata          map[string]string `json:"metadata,omitempty"`
+	Push              bool              `json:"push"`
 }
 
 // sourceDisplayNames maps source identifiers to their human-readable display names.
