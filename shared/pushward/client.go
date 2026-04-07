@@ -230,6 +230,7 @@ func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequ
 
 // SendNotification creates a notification record and optionally pushes an APNs alert.
 func (c *Client) SendNotification(ctx context.Context, req SendNotificationRequest) error {
+	req.FillSourceDisplayName()
 	return c.doWithRetry(ctx, "notify", http.MethodPost,
 		fmt.Sprintf("%s/notifications", c.baseURL), req, nil)
 }

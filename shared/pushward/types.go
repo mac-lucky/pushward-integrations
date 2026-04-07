@@ -103,13 +103,53 @@ type UpdateRequest struct {
 
 // SendNotificationRequest is the body for POST /notifications.
 type SendNotificationRequest struct {
-	Title      string `json:"title"`
-	Subtitle   string `json:"subtitle,omitempty"`
-	Body       string `json:"body"`
-	ThreadID   string `json:"thread_id,omitempty"`
-	CollapseID string `json:"collapse_id,omitempty"`
-	Level      string `json:"level,omitempty"`
-	Category   string `json:"category,omitempty"`
-	Source     string `json:"source,omitempty"`
-	Push       bool   `json:"push"`
+	Title             string `json:"title"`
+	Subtitle          string `json:"subtitle,omitempty"`
+	Body              string `json:"body"`
+	ThreadID          string `json:"thread_id,omitempty"`
+	CollapseID        string `json:"collapse_id,omitempty"`
+	Level             string `json:"level,omitempty"`
+	Category          string `json:"category,omitempty"`
+	Source            string `json:"source,omitempty"`
+	SourceDisplayName string `json:"source_display_name,omitempty"`
+	Push              bool   `json:"push"`
+}
+
+// sourceDisplayNames maps source identifiers to their human-readable display names.
+var sourceDisplayNames = map[string]string{
+	"grafana":         "Grafana",
+	"argocd":          "ArgoCD",
+	"radarr":          "Radarr",
+	"sonarr":          "Sonarr",
+	"prowlarr":        "Prowlarr",
+	"jellyfin":        "Jellyfin",
+	"paperless":       "Paperless-ngx",
+	"changedetection": "Changedetection.io",
+	"unmanic":         "Unmanic",
+	"proxmox":         "Proxmox",
+	"overseerr":       "Overseerr",
+	"uptimekuma":      "Uptime Kuma",
+	"gatus":           "Gatus",
+	"backrest":        "Backrest",
+	"sabnzbd":         "SABnzbd",
+	"github":          "GitHub",
+	"bambulab":        "BambuLab",
+	"octoprint":       "OctoPrint",
+	"unraid":          "Unraid",
+	"mqtt":            "MQTT",
+}
+
+// DisplayNameFor returns the display name for a source, falling back to the identifier itself.
+func DisplayNameFor(source string) string {
+	if name, ok := sourceDisplayNames[source]; ok {
+		return name
+	}
+	return source
+}
+
+// FillSourceDisplayName sets SourceDisplayName from Source when not already set.
+func (r *SendNotificationRequest) FillSourceDisplayName() {
+	if r.SourceDisplayName == "" && r.Source != "" {
+		r.SourceDisplayName = DisplayNameFor(r.Source)
+	}
 }
