@@ -18,7 +18,8 @@ import (
 )
 
 const slug = "sabnzbd"
-const seriesKey = "Download" // timeline values/units/history map key
+const seriesKey    = "Speed" // timeline values/units/history map key
+const avgSeriesKey = "Avg"   // timeline key used in completion summary
 
 var ppStatuses = map[string]bool{
 	"Queued":     true,
@@ -159,19 +160,13 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 		State:       state,
 		AccentColor: accentColor,
 	}
-	if template == "timeline" {
-		v := float64(0)
-		if value != nil {
-			v = *value
-		}
-		content.Value = map[string]float64{seriesKey: v}
+	if template == "timeline" && value != nil {
+		content.Value = map[string]float64{seriesKey: *value}
 		content.Units = map[string]string{seriesKey: "MB/s"}
-		content.Smoothing = t.cfg.SABnzbd.Timeline.Smoothing
-		content.Scale = t.cfg.SABnzbd.Timeline.Scale
-		content.Decimals = t.cfg.SABnzbd.Timeline.Decimals
+		t.cfg.SABnzbd.Timeline.Apply(&content)
 
 		// Seed sparkline history on first download update
-		if !t.historySent && value != nil && *value > 0 {
+		if !t.historySent && *value > 0 {
 			now := time.Now().Unix()
 			content.History = map[string][]pushward.HistoryPoint{
 				seriesKey: {
@@ -250,8 +245,8 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		avgSpeed = totalMB / float64(totalDownloadTime)
 	}
 
-	// Build state line: "Complete · 1.2 GB · 45 MB/s avg · unpack 1m 30s"
-	stateStr := "Done"
+	// Build state line: "1.2 GB · 45 MB/s avg · unpack 1m 30s"
+	// (icon already conveys "done", no need for a "Done" prefix)
 	var stateParts []string
 	if totalMB > 0 {
 		stateParts = append(stateParts, formatSize(totalMB))
@@ -262,17 +257,33 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	if ppSecs > 0 {
 		stateParts = append(stateParts, fmt.Sprintf("unpack %s", formatDuration(ppSecs)))
 	}
-	if len(stateParts) > 0 {
-		stateStr += " · " + strings.Join(stateParts, " · ")
-	}
+	stateStr := strings.Join(stateParts, " · ")
 
 	subtitle := text.Truncate(t.getCompletedName(ctx), 30)
 
 	slog.Info("complete", "total_mb", totalMB, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed, "state", stateStr, "subtitle", subtitle)
 
+	// Build final content with "Avg" series key showing average speed.
+	finalContent := pushward.Content{
+		Template:    t.cfg.SABnzbd.Template,
+		Progress:    1.0,
+		State:       stateStr,
+		Icon:        "checkmark.circle.fill",
+		AccentColor: "green",
+		Subtitle:    subtitle,
+	}
+	if t.cfg.SABnzbd.Template == "timeline" && avgSpeed > 0 {
+		finalContent.Value = map[string]float64{avgSeriesKey: avgSpeed}
+		finalContent.Units = map[string]string{avgSeriesKey: "MB/s"}
+		t.cfg.SABnzbd.Timeline.Apply(&finalContent)
+	}
+
 	// Two-phase end: ONGOING with final content → short display → ENDED
 	if resumed {
-		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, pushward.StateEnded, nil)
+		req := pushward.UpdateRequest{State: pushward.StateEnded, Content: finalContent}
+		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
+			slog.Error("failed to send final update", "error", err)
+		}
 		slog.Info("tracking complete (resumed, skipping two-phase end)")
 	} else {
 		endDelay := t.cfg.PushWard.EndDelay
@@ -284,7 +295,10 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 			return
 		case <-time.After(endDelay):
 		}
-		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, pushward.StateOngoing, nil)
+		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: finalContent}
+		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
+			slog.Error("failed to send final update", "error", err)
+		}
 		slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
 
 		// Phase 2: ENDED (dismisses Live Activity)
@@ -293,7 +307,10 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 			return
 		case <-time.After(displayTime):
 		}
-		t.send(ctx, 1.0, stateStr, "checkmark.circle.fill", "green", nil, subtitle, pushward.StateEnded, nil)
+		req = pushward.UpdateRequest{State: pushward.StateEnded, Content: finalContent}
+		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
+			slog.Error("failed to send final update", "error", err)
+		}
 		slog.Info("tracking complete")
 	}
 }

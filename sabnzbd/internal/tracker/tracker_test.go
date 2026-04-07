@@ -803,7 +803,7 @@ func TestSendDownloadProgress_Generic_NoValueOrUnit(t *testing.T) {
 	}
 }
 
-func TestTimeline_NonDownloadPhase_SendsZeroValue(t *testing.T) {
+func TestTimeline_NonDownloadPhase_SkipsValue(t *testing.T) {
 	pwSrv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SABnzbd.Template = "timeline"
@@ -811,7 +811,7 @@ func TestTimeline_NonDownloadPhase_SendsZeroValue(t *testing.T) {
 	ctx := context.Background()
 	tr := New(ctx, cfg, nil, pw)
 
-	// Non-download sends (e.g. "Starting...", PP) pass nil for value → defaults to 0
+	// Non-download sends (e.g. "Starting...", PP) pass nil for value → timeline fields skipped
 	tr.send(ctx, 0.0, "Starting...", "arrow.down.circle", "blue", nil, "", pushward.StateOngoing, nil)
 
 	got := testutil.GetCalls(calls, mu)
@@ -824,17 +824,11 @@ func TestTimeline_NonDownloadPhase_SendsZeroValue(t *testing.T) {
 	if req.Content.Template != "timeline" {
 		t.Errorf("expected timeline template, got %s", req.Content.Template)
 	}
-	if values := testutil.RequireValueMap(t,req.Content.Value); values == nil {
-		// already failed
-	} else if v, ok := values[seriesKey]; !ok {
-		t.Fatal("expected value map with 'Download' key for non-download phase")
-	} else if v != 0 {
-		t.Errorf("expected Download value 0 for non-download phase, got %f", v)
+	if req.Content.Value != nil {
+		t.Errorf("expected nil value for non-download phase, got %v", req.Content.Value)
 	}
-	if u, ok := req.Content.Units[seriesKey]; !ok {
-		t.Fatal("expected units map with 'Download' key for non-download phase")
-	} else if u != "MB/s" {
-		t.Errorf("expected Download unit MB/s, got %s", u)
+	if req.Content.Units != nil {
+		t.Errorf("expected nil units for non-download phase, got %v", req.Content.Units)
 	}
 }
 
@@ -873,14 +867,14 @@ func TestSendDownloadProgress_Timeline_Paused_SendsZeroValue(t *testing.T) {
 	if values := testutil.RequireValueMap(t,req.Content.Value); values == nil {
 		// already failed
 	} else if v, ok := values[seriesKey]; !ok {
-		t.Fatal("expected value map with 'Download' key for paused")
+		t.Fatal("expected value map with 'Speed' key for paused")
 	} else if v != 0 {
-		t.Errorf("expected Download value 0 for paused, got %f", v)
+		t.Errorf("expected Speed value 0 for paused, got %f", v)
 	}
 	if u, ok := req.Content.Units[seriesKey]; !ok {
-		t.Fatal("expected units map with 'Download' key for paused")
+		t.Fatal("expected units map with 'Speed' key for paused")
 	} else if u != "MB/s" {
-		t.Errorf("expected Download unit MB/s, got %s", u)
+		t.Errorf("expected Speed unit MB/s, got %s", u)
 	}
 	if req.Content.State != "Paused" {
 		t.Errorf("expected state Paused for timeline paused, got %s", req.Content.State)
@@ -928,7 +922,7 @@ func TestTimeline_FullLifecycle(t *testing.T) {
 
 	got := testutil.GetCalls(calls, mu)
 
-	// All timeline phases must have values[seriesKey] set and units[seriesKey]="MB/s"
+	// Download-phase updates must have values[seriesKey] with units
 	var hasPositiveValue bool
 	for _, c := range got {
 		if c.Method == "PATCH" {
@@ -937,28 +931,24 @@ func TestTimeline_FullLifecycle(t *testing.T) {
 			if r.Content.Template != "timeline" {
 				t.Errorf("expected timeline template, got %s", r.Content.Template)
 			}
-			values := testutil.RequireValueMap(t,r.Content.Value)
+			if r.Content.Value == nil {
+				continue // PP and non-download phases skip value
+			}
+			values := testutil.RequireValueMap(t, r.Content.Value)
 			if values == nil {
 				continue
 			}
-			v, ok := values[seriesKey]
-			if !ok {
-				t.Errorf("timeline update must have value[\"Download\"], got %v for state=%s", values, r.Content.State)
-			}
-			if u := r.Content.Units[seriesKey]; u != "MB/s" {
-				t.Errorf("timeline update should have units[\"Download\"]=MB/s, got %s", u)
-			}
-			if ok && v > 0 {
+			// Download phases use "Speed", completion uses "Avg"
+			if v, ok := values[seriesKey]; ok && v > 0 {
 				hasPositiveValue = true
 			}
 		}
 	}
 	if !hasPositiveValue {
-		t.Error("expected at least one timeline update with positive Download value (download phase)")
+		t.Error("expected at least one timeline update with positive Speed value (download phase)")
 	}
 
-	// Last ENDED update: state should match generic format (no filename prefix),
-	// subtitle should contain filename
+	// Last ENDED update: subtitle should contain filename, state should have stats
 	last := got[len(got)-1]
 	var lastReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, last.Body, &lastReq)
@@ -968,11 +958,19 @@ func TestTimeline_FullLifecycle(t *testing.T) {
 	if lastReq.Content.Template != "timeline" {
 		t.Errorf("summary ENDED should use timeline, got %s", lastReq.Content.Template)
 	}
-	if !strings.Contains(lastReq.Content.State, "Done") {
-		t.Errorf("completion state should contain 'Done', got %s", lastReq.Content.State)
+	if !strings.Contains(lastReq.Content.State, "MB/s avg") {
+		t.Errorf("completion state should contain 'MB/s avg', got %s", lastReq.Content.State)
 	}
 	if lastReq.Content.Subtitle != "test-file" {
 		t.Errorf("completion subtitle should be filename, got %s", lastReq.Content.Subtitle)
+	}
+	// Completion should use "Avg" series key with average speed
+	if lastReq.Content.Value != nil {
+		if values := testutil.RequireValueMap(t, lastReq.Content.Value); values != nil {
+			if _, ok := values["Avg"]; !ok {
+				t.Errorf("completion value should use 'Avg' key, got %v", values)
+			}
+		}
 	}
 }
 
