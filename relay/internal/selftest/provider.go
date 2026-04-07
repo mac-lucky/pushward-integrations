@@ -99,6 +99,17 @@ var providers = map[string]providerTest{
 			AccentColor: pushward.ColorBlue,
 		},
 	},
+	"bazarr": {
+		name: "Bazarr Test",
+		content: pushward.Content{
+			Template:    "generic",
+			Progress:    1.0,
+			State:       "Downloaded",
+			Icon:        "mdi:download",
+			Subtitle:    "Bazarr \u00b7 English \u00b7 96% from opensubtitles",
+			AccentColor: pushward.ColorGreen,
+		},
+	},
 	"proxmox": {
 		name: "Proxmox Test",
 		content: pushward.Content{

@@ -1,4 +1,4 @@
-package unmanic
+package bazarr
 
 import (
 	"encoding/json"
@@ -10,9 +10,9 @@ import (
 )
 
 func TestFixturesUnmarshal(t *testing.T) {
-	files, err := os.ReadDir("../../testdata/unmanic")
+	files, err := os.ReadDir("../../testdata/bazarr")
 	if err != nil {
-		t.Fatalf("reading testdata/unmanic: %v", err)
+		t.Fatalf("reading testdata/bazarr: %v", err)
 	}
 
 	for _, f := range files {
@@ -20,7 +20,7 @@ func TestFixturesUnmarshal(t *testing.T) {
 			continue
 		}
 		t.Run(f.Name(), func(t *testing.T) {
-			data, err := os.ReadFile(filepath.Join("../../testdata/unmanic", f.Name()))
+			data, err := os.ReadFile(filepath.Join("../../testdata/bazarr", f.Name()))
 			if err != nil {
 				t.Fatalf("reading file: %v", err)
 			}
@@ -29,8 +29,8 @@ func TestFixturesUnmarshal(t *testing.T) {
 			if err := json.Unmarshal(data, &p); err != nil {
 				t.Errorf("unmarshal apprisePayload: %v", err)
 			}
-			if p.Type == "" {
-				t.Error("expected non-empty type")
+			if p.Message == "" {
+				t.Error("expected non-empty message")
 			}
 		})
 	}

@@ -15,6 +15,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/argocd"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/backrest"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/bazarr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/changedetection"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
@@ -192,6 +193,13 @@ func main() {
 		mux.Handle("POST /unmanic", wrapHandler(uh))
 		collectEnder(uh)
 		slog.Info("enabled provider", "provider", "unmanic")
+	}
+
+	if cfg.Providers.Bazarr.Enabled {
+		bzh := bazarr.NewHandler(clients, &cfg.Providers.Bazarr)
+		mux.Handle("POST /bazarr", wrapHandler(bzh))
+		collectEnder(bzh)
+		slog.Info("enabled provider", "provider", "bazarr")
 	}
 
 	if cfg.Providers.Proxmox.Enabled {

@@ -126,6 +126,7 @@ var sourceDisplayNames = map[string]string{
 	"paperless":       "Paperless-ngx",
 	"changedetection": "Changedetection.io",
 	"unmanic":         "Unmanic",
+	"bazarr":          "Bazarr",
 	"proxmox":         "Proxmox",
 	"overseerr":       "Overseerr",
 	"uptimekuma":      "Uptime Kuma",

@@ -49,6 +49,7 @@ type ProvidersConfig struct {
 	Paperless       PaperlessConfig       `yaml:"paperless"`
 	Changedetection ChangedetectionConfig `yaml:"changedetection"`
 	Unmanic         UnmanicConfig         `yaml:"unmanic"`
+	Bazarr          BazarrConfig          `yaml:"bazarr"`
 	Proxmox         ProxmoxConfig         `yaml:"proxmox"`
 	Overseerr       OverseerrConfig       `yaml:"overseerr"`
 	UptimeKuma      UptimeKumaConfig      `yaml:"uptimekuma"`
@@ -122,6 +123,11 @@ type ChangedetectionConfig struct {
 
 // UnmanicConfig holds Unmanic-specific settings.
 type UnmanicConfig struct {
+	BaseProviderConfig `yaml:",inline"`
+}
+
+// BazarrConfig holds Bazarr-specific settings.
+type BazarrConfig struct {
 	BaseProviderConfig `yaml:",inline"`
 }
 
@@ -224,6 +230,16 @@ func Load(path string) (*Config, error) {
 				},
 			},
 			Unmanic: UnmanicConfig{
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       1,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   30 * time.Minute,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
+			},
+			Bazarr: BazarrConfig{
 				BaseProviderConfig: BaseProviderConfig{
 					Enabled:        true,
 					Priority:       1,
@@ -421,6 +437,7 @@ func (cfg *Config) validatePriorities() error {
 		{"paperless", cfg.Providers.Paperless.Priority},
 		{"changedetection", cfg.Providers.Changedetection.Priority},
 		{"unmanic", cfg.Providers.Unmanic.Priority},
+		{"bazarr", cfg.Providers.Bazarr.Priority},
 		{"proxmox", cfg.Providers.Proxmox.Priority},
 		{"overseerr", cfg.Providers.Overseerr.Priority},
 		{"uptimekuma", cfg.Providers.UptimeKuma.Priority},

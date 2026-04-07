@@ -8,6 +8,7 @@ import (
 	"path"
 	"regexp"
 
+	"github.com/mac-lucky/pushward-integrations/relay/internal/apprise"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
@@ -49,7 +50,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
 
-	var p apprisePayload
+	var p apprise.Payload
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		slog.Error("failed to decode unmanic payload", "error", err)
 		http.Error(w, "invalid payload", http.StatusBadRequest)
@@ -91,7 +92,7 @@ func slugForFile(filename string) string {
 	return text.SlugHash("unmanic", filename, 4)
 }
 
-func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Logger, p apprisePayload, success bool) error {
+func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Logger, p apprise.Payload, success bool) error {
 	filename := parseFilename(p.Message)
 	slug := slugForFile(filename)
 

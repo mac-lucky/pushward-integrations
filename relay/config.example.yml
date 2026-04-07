@@ -96,6 +96,17 @@ providers:
     # Add notification URL: jsons://relay.example.com/unmanic
     # Unmanic sends Apprise json:// payloads on task completion/failure
 
+  bazarr:
+    enabled: true
+    priority: 1
+    cleanup_delay: 15m
+    stale_timeout: 30m
+    end_delay: 5s
+    end_display_time: 4s
+    # Configure in Bazarr: Settings > Notifications
+    # Add notification URL: jsons://relay.example.com/bazarr?+Authorization=Bearer+hlk_YOUR_KEY
+    # Bazarr sends Apprise json:// payloads when subtitles are downloaded or upgraded
+
   proxmox:
     enabled: true
     priority: 4
