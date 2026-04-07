@@ -15,18 +15,6 @@ type providerTest struct {
 }
 
 var providers = map[string]providerTest{
-	"grafana": {
-		name: "Grafana Test",
-		content: pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       "CPU usage above 90%",
-			Icon:        "exclamationmark.triangle.fill",
-			Subtitle:    "Grafana",
-			AccentColor: pushward.ColorOrange,
-			Severity:    "warning",
-		},
-	},
 	"argocd": {
 		name: "ArgoCD Test",
 		content: pushward.Content{

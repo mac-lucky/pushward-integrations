@@ -3,7 +3,6 @@ package starr
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 
@@ -62,7 +61,7 @@ func (h *Handler) handleProwlarrWebhook(w http.ResponseWriter, r *http.Request) 
 		if !ok {
 			return
 		}
-		apiErr = h.handleProwlarrApplicationUpdate(ctx, userKey, log, p)
+		apiErr = h.handleApplicationUpdate(ctx, userKey, log, "prowlarr", p)
 	default:
 		slog.Debug("ignored event", "event_type", envelope.EventType)
 	}
@@ -76,60 +75,20 @@ func (h *Handler) handleProwlarrWebhook(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) handleProwlarrGrab(ctx context.Context, userKey string, log *slog.Logger, p *ProwlarrGrabPayload) error {
-	title := text.Truncate(p.Release.ReleaseTitle, 80)
-	slug := text.SlugHash("prowlarr-grab", p.Release.ReleaseTitle, 6)
-
-	cl := h.clients.Get(userKey)
-	endedTTL := int(h.config.CleanupDelay.Seconds())
-	staleTTL := int(h.config.StaleTimeout.Seconds())
-
-	if err := cl.CreateActivity(ctx, slug, title, h.config.Priority, endedTTL, staleTTL); err != nil {
-		log.Error("failed to create activity", "slug", slug, "error", err)
-		return err
-	}
-
-	subtitle := "Prowlarr · " + p.Release.Indexer
+	body := "Grabbed · " + p.Release.Indexer
 	if p.Source != "" {
-		subtitle += " → " + p.Source
+		body += " → " + p.Source
 	}
 
-	content := pushward.Content{
-		Template:    "generic",
-		Progress:    1.0,
-		State:       "Grabbed",
-		Icon:        "magnifyingglass",
-		Subtitle:    subtitle,
-		AccentColor: pushward.ColorBlue,
-	}
-
-	h.ender.ScheduleEnd(userKey, "prowlarr:grab:"+slug, slug, content)
-	log.Info("grab received", "slug", slug, "indexer", p.Release.Indexer, "trigger", p.Trigger)
-	return nil
-}
-
-func (h *Handler) handleProwlarrApplicationUpdate(ctx context.Context, userKey string, log *slog.Logger, p *ApplicationUpdatePayload) error {
-	slug := text.SlugHash("prowlarr-update", p.NewVersion, 4)
-
-	cl := h.clients.Get(userKey)
-	endedTTL := int(h.config.CleanupDelay.Seconds())
-	staleTTL := int(h.config.StaleTimeout.Seconds())
-
-	name := fmt.Sprintf("Prowlarr %s → %s", p.PreviousVersion, p.NewVersion)
-	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		log.Error("failed to create activity", "slug", slug, "error", err)
-		return err
-	}
-
-	content := pushward.Content{
-		Template:    "generic",
-		Progress:    1.0,
-		State:       "Updated",
-		Icon:        "arrow.triangle.2.circlepath",
-		Subtitle:    "Prowlarr · " + p.NewVersion,
-		AccentColor: pushward.ColorGreen,
-	}
-
-	h.ender.ScheduleEnd(userKey, "prowlarr:update:"+slug, slug, content)
-	log.Info("application update", "slug", slug, "from", p.PreviousVersion, "to", p.NewVersion)
-	return nil
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title:      "Prowlarr",
+		Subtitle:   text.Truncate(p.Release.ReleaseTitle, 80),
+		Body:       body,
+		ThreadID:   "prowlarr",
+		CollapseID: text.SlugHash("prowlarr-grab", p.Release.ReleaseTitle, 6),
+		Level:      pushward.LevelActive,
+		Category:   "grab",
+		Source:     "prowlarr",
+		Push:       true,
+	})
 }

@@ -138,133 +138,59 @@ func titleCase(s string) string {
 	return strings.ToUpper(string(r)) + s[size:]
 }
 
-// healthSlug derives a stable slug from the provider and health check type.
-func healthSlug(provider, checkType string) string {
-	return text.SlugHash(provider+"-health", checkType, 4)
-}
-
-// handleHealth creates an alert-style activity for a health issue.
+// handleHealth sends a push notification for a health issue.
 func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Logger, provider string, p *HealthPayload) error {
-	slug := healthSlug(provider, p.Type)
-	mapKey := provider + ":health:" + p.Type
-
-	// Cancel any pending HealthRestored end timer for this check type
-	h.ender.StopTimer(userKey, mapKey)
-
-	cl := h.clients.Get(userKey)
-	endedTTL := int(h.config.CleanupDelay.Seconds())
-	staleTTL := int(h.config.StaleTimeout.Seconds())
-
-	name := titleCase(provider) + " Health"
-	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		log.Error("failed to create health activity", "slug", slug, "error", err)
-		return err
-	}
-
-	icon := "exclamationmark.triangle.fill"
-	accent := pushward.ColorOrange
-	severity := "warning"
+	body := "Warning"
 	if p.Level == "error" {
-		icon = "exclamationmark.octagon.fill"
-		accent = pushward.ColorRed
-		severity = "critical"
+		body = "Critical"
 	}
 
-	req := pushward.UpdateRequest{
-		State: pushward.StateOngoing,
-		Content: pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       text.Truncate(p.Message, 60),
-			Icon:        icon,
-			Subtitle:    titleCase(provider),
-			AccentColor: accent,
-			Severity:    severity,
-			URL:         p.WikiURL,
-		},
-	}
-
-	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		log.Error("failed to update health activity", "slug", slug, "error", err)
-		return err
-	}
-
-	// Track in state store for HealthRestored to find
-	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
-		log.Error("failed to track health issue", "slug", slug, "error", err)
-	}
-
-	log.Info("health issue", "slug", slug, "provider", provider, "type", p.Type, "level", p.Level)
-	return nil
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title:      titleCase(provider) + " Health",
+		Subtitle:   text.Truncate(p.Message, 80),
+		Body:       body,
+		ThreadID:   provider + "-health",
+		CollapseID: provider + "-health",
+		Level:      pushward.LevelActive,
+		Category:   "health",
+		Source:     provider,
+		Push:       true,
+	})
 }
 
-// handleHealthRestored ends the health activity with a resolved state.
+// handleHealthRestored sends a push notification when a health issue resolves.
 func (h *Handler) handleHealthRestored(ctx context.Context, userKey string, log *slog.Logger, provider string, p *HealthRestoredPayload) error {
-	mapKey := provider + ":health:" + p.Type
-	slug, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
-	if !tracked {
-		slug = healthSlug(provider, p.Type)
-	}
-
-	content := pushward.Content{
-		Template:    "alert",
-		Progress:    1.0,
-		State:       text.Truncate(p.Message, 60),
-		Icon:        "checkmark.circle.fill",
-		Subtitle:    titleCase(provider),
-		AccentColor: pushward.ColorGreen,
-		Severity:    "info",
-	}
-
-	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-	log.Info("health restored", "slug", slug, "provider", provider, "type", p.Type)
-	return nil
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title:      titleCase(provider) + " Health",
+		Subtitle:   text.Truncate(p.Message, 80),
+		Body:       "Resolved",
+		ThreadID:   provider + "-health",
+		CollapseID: provider + "-health-restored",
+		Level:      pushward.LevelPassive,
+		Category:   "health-restored",
+		Source:     provider,
+		Push:       true,
+	})
 }
 
-// handleManualInteraction sends an ONGOING warning update on an existing tracked download.
+// handleManualInteraction sends a push notification when a download needs manual import.
 func (h *Handler) handleManualInteraction(ctx context.Context, userKey string, log *slog.Logger, provider string, p *ManualInteractionPayload) error {
-	if p.DownloadID == "" {
-		log.Warn("manual interaction missing downloadId", "provider", provider)
-		return nil
-	}
-
-	mapKey := provider + ":" + p.DownloadID
-	slug, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
-	if !tracked {
-		slog.Debug("manual interaction for untracked download", "provider", provider, "downloadId", p.DownloadID)
-		return nil
-	}
-
 	reason := "Import requires manual interaction"
 	if len(p.DownloadInfo.StatusMessages) > 0 && len(p.DownloadInfo.StatusMessages[0].Messages) > 0 {
 		reason = p.DownloadInfo.StatusMessages[0].Messages[0]
 	}
 
-	subtitle := titleCase(provider) + " \u00b7 " + text.Truncate(reason, 50)
-
-	step := 1
-	total := 2
-	cl := h.clients.Get(userKey)
-	req := pushward.UpdateRequest{
-		State: pushward.StateOngoing,
-		Content: pushward.Content{
-			Template:    "steps",
-			Progress:    float64(step) / float64(total),
-			State:       "Import Failed",
-			Icon:        "exclamationmark.triangle.fill",
-			Subtitle:    subtitle,
-			AccentColor: pushward.ColorOrange,
-			CurrentStep: &step,
-			TotalSteps:  &total,
-		},
-	}
-
-	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		log.Error("failed to update activity for manual interaction", "slug", slug, "error", err)
-		return err
-	}
-	log.Info("manual interaction required", "slug", slug, "provider", provider, "downloadId", p.DownloadID)
-	return nil
+	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title:      titleCase(provider),
+		Subtitle:   text.Truncate(p.DownloadInfo.Title, 80),
+		Body:       reason,
+		ThreadID:   provider,
+		CollapseID: provider + "-manual-interaction",
+		Level:      pushward.LevelActive,
+		Category:   "manual-interaction",
+		Source:     provider,
+		Push:       true,
+	})
 }
 
 func (h *Handler) sendNotification(ctx context.Context, userKey string, log *slog.Logger, req pushward.SendNotificationRequest) error {

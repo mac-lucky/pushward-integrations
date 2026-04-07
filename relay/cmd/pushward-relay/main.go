@@ -144,7 +144,7 @@ func main() {
 	}
 
 	if cfg.Providers.Grafana.Enabled {
-		gh := grafana.NewHandler(store, clients, &cfg.Providers.Grafana)
+		gh := grafana.NewHandler(clients, &cfg.Providers.Grafana)
 		mux.Handle("POST /grafana", wrapHandler(gh))
 		slog.Info("enabled provider", "provider", "grafana")
 	}

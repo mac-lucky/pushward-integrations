@@ -13,7 +13,7 @@ func TestSendTest(t *testing.T) {
 		srv, calls, mu := testutil.MockPushWardServer(t)
 		cl := pushward.NewClient(srv.URL, "hlk_test")
 
-		err := SendTest(t.Context(), cl, "grafana")
+		err := SendTest(t.Context(), cl, "radarr")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -25,8 +25,8 @@ func TestSendTest(t *testing.T) {
 
 		var create pushward.CreateActivityRequest
 		testutil.UnmarshalBody(t, recorded[0].Body, &create)
-		if create.Slug != "relay-test-grafana" {
-			t.Errorf("expected slug relay-test-grafana, got %s", create.Slug)
+		if create.Slug != "relay-test-radarr" {
+			t.Errorf("expected slug relay-test-radarr, got %s", create.Slug)
 		}
 		if create.Priority != 1 {
 			t.Errorf("expected priority 1, got %d", create.Priority)
@@ -40,11 +40,8 @@ func TestSendTest(t *testing.T) {
 
 		var update pushward.UpdateRequest
 		testutil.UnmarshalBody(t, recorded[1].Body, &update)
-		if update.Content.Template != "alert" {
-			t.Errorf("expected template alert, got %s", update.Content.Template)
-		}
-		if update.Content.FiredAt == nil {
-			t.Error("expected FiredAt to be set for alert template")
+		if update.Content.Template != "steps" {
+			t.Errorf("expected template steps, got %s", update.Content.Template)
 		}
 	})
 

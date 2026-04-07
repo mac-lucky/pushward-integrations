@@ -723,37 +723,27 @@ func TestRadarrHealth(t *testing.T) {
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls (create + update), got %d", len(recorded))
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call (notification), got %d", len(recorded))
 	}
 
-	// Create
-	var createReq pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
-	if createReq.Name != "Radarr Health" {
-		t.Errorf("expected name 'Radarr Health', got %s", createReq.Name)
+	if recorded[0].Method != "POST" || recorded[0].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s %s", recorded[0].Method, recorded[0].Path)
 	}
 
-	// ONGOING update
-	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.State != pushward.StateOngoing {
-		t.Errorf("expected ONGOING, got %s", update.State)
+	var req pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req)
+	if req.Title != "Radarr Health" {
+		t.Errorf("expected title 'Radarr Health', got %s", req.Title)
 	}
-	if update.Content.Template != "alert" {
-		t.Errorf("expected template alert, got %s", update.Content.Template)
+	if req.Body != "Warning" {
+		t.Errorf("expected body 'Warning', got %s", req.Body)
 	}
-	if update.Content.Severity != "warning" {
-		t.Errorf("expected severity warning, got %s", update.Content.Severity)
+	if req.Category != "health" {
+		t.Errorf("expected category 'health', got %s", req.Category)
 	}
-	if update.Content.Icon != "exclamationmark.triangle.fill" {
-		t.Errorf("expected warning icon, got %s", update.Content.Icon)
-	}
-	if update.Content.AccentColor != pushward.ColorOrange {
-		t.Errorf("expected orange color, got %s", update.Content.AccentColor)
-	}
-	if update.Content.URL != "https://wiki.servarr.com/radarr/system#indexers" {
-		t.Errorf("expected wiki URL, got %s", update.Content.URL)
+	if !req.Push {
+		t.Error("expected push=true")
 	}
 }
 
@@ -772,20 +762,17 @@ func TestRadarrHealthError(t *testing.T) {
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call (notification), got %d", len(recorded))
 	}
 
-	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.Content.Severity != "critical" {
-		t.Errorf("expected severity critical, got %s", update.Content.Severity)
+	var req pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req)
+	if req.Body != "Critical" {
+		t.Errorf("expected body 'Critical', got %s", req.Body)
 	}
-	if update.Content.Icon != "exclamationmark.octagon.fill" {
-		t.Errorf("expected error icon, got %s", update.Content.Icon)
-	}
-	if update.Content.AccentColor != pushward.ColorRed {
-		t.Errorf("expected red color, got %s", update.Content.AccentColor)
+	if req.Source != "radarr" {
+		t.Errorf("expected source 'radarr', got %s", req.Source)
 	}
 }
 
@@ -810,32 +797,27 @@ func TestRadarrHealthAndRestored(t *testing.T) {
 		"previousLevel": "warning"
 	}`)
 
-	time.Sleep(100 * time.Millisecond)
-
 	recorded := testutil.GetCalls(calls, mu)
-	// create + health_update + phase1(ONGOING) + phase2(ENDED) = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	// health_notification + restored_notification = 2
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls (health + restored notifications), got %d", len(recorded))
 	}
 
-	// Phase 1: ONGOING with restored content
-	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
-	if phase1.State != pushward.StateOngoing {
-		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
-	}
-	if phase1.Content.Icon != "checkmark.circle.fill" {
-		t.Errorf("expected checkmark icon, got %s", phase1.Content.Icon)
-	}
-	if phase1.Content.AccentColor != pushward.ColorGreen {
-		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
+	// Health notification
+	var healthReq pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &healthReq)
+	if healthReq.Body != "Warning" {
+		t.Errorf("expected body 'Warning', got %s", healthReq.Body)
 	}
 
-	// Phase 2: ENDED
-	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
-	if phase2.State != pushward.StateEnded {
-		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
+	// Restored notification
+	var restoredReq pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &restoredReq)
+	if restoredReq.Body != "Resolved" {
+		t.Errorf("expected body 'Resolved', got %s", restoredReq.Body)
+	}
+	if restoredReq.Category != "health-restored" {
+		t.Errorf("expected category 'health-restored', got %s", restoredReq.Category)
 	}
 }
 
@@ -854,14 +836,17 @@ func TestSonarrHealth(t *testing.T) {
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call (notification), got %d", len(recorded))
 	}
 
-	var createReq pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
-	if createReq.Name != "Sonarr Health" {
-		t.Errorf("expected name 'Sonarr Health', got %s", createReq.Name)
+	var req pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req)
+	if req.Title != "Sonarr Health" {
+		t.Errorf("expected title 'Sonarr Health', got %s", req.Title)
+	}
+	if req.Body != "Critical" {
+		t.Errorf("expected body 'Critical', got %s", req.Body)
 	}
 }
 
@@ -897,32 +882,32 @@ func TestRadarrManualInteraction(t *testing.T) {
 	}`)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// grab_notify + create + grab_update + manual_update = 4
+	// grab_notify + create + grab_update + manual_notification = 4
 	if len(recorded) != 4 {
 		t.Fatalf("expected 4 calls, got %d", len(recorded))
 	}
 
-	// Verify manual interaction update
-	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &update)
-	if update.State != pushward.StateOngoing {
-		t.Errorf("expected ONGOING, got %s", update.State)
+	// Verify manual interaction notification
+	if recorded[3].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s %s", recorded[3].Method, recorded[3].Path)
 	}
-	if update.Content.State != "Import Failed" {
-		t.Errorf("expected state 'Import Failed', got %s", update.Content.State)
+	var req pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[3].Body, &req)
+	if req.Body != "No files found eligible for import" {
+		t.Errorf("expected body with status message, got %s", req.Body)
 	}
-	if update.Content.Icon != "exclamationmark.triangle.fill" {
-		t.Errorf("expected warning icon, got %s", update.Content.Icon)
+	if req.Category != "manual-interaction" {
+		t.Errorf("expected category 'manual-interaction', got %s", req.Category)
 	}
-	if update.Content.AccentColor != pushward.ColorOrange {
-		t.Errorf("expected orange color, got %s", update.Content.AccentColor)
+	if req.Subtitle != "Inception.2010.1080p.BluRay.x264-SPARKS" {
+		t.Errorf("expected subtitle with download title, got %s", req.Subtitle)
 	}
 }
 
 func TestRadarrManualInteractionUntracked(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 
-	// ManualInteractionRequired without a prior Grab — should be silently ignored
+	// ManualInteractionRequired without a prior Grab — still sends notification
 	w := sendRadarr(t, h, `{
 		"eventType": "ManualInteractionRequired",
 		"downloadId": "SABnzbd_nzo_untracked",
@@ -938,8 +923,14 @@ func TestRadarrManualInteractionUntracked(t *testing.T) {
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 0 {
-		t.Fatalf("expected 0 calls for untracked manual interaction, got %d", len(recorded))
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call (notification), got %d", len(recorded))
+	}
+
+	var req pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req)
+	if req.Body != "Import requires manual interaction" {
+		t.Errorf("expected default reason, got %s", req.Body)
 	}
 }
 
@@ -980,9 +971,14 @@ func TestRadarrGrabManualInteractionDownload(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// grab_notify + create + grab_update + manual_update + download_notify + phase1(ONGOING) + phase2(ENDED) = 7
+	// grab_notify + create + grab_update + manual_notification + download_notify + phase1(ONGOING) + phase2(ENDED) = 7
 	if len(recorded) != 7 {
 		t.Fatalf("expected 7 calls, got %d", len(recorded))
+	}
+
+	// Manual interaction should be a notification
+	if recorded[3].Path != "/notifications" {
+		t.Errorf("expected manual interaction as notification, got %s %s", recorded[3].Method, recorded[3].Path)
 	}
 
 	// Phase 2 should be ENDED with "Imported"
@@ -1191,7 +1187,7 @@ func TestSonarrGrab_SmartMode_SendsNotification(t *testing.T) {
 	}
 }
 
-func TestHealth_SmartMode_CreatesActivity(t *testing.T) {
+func TestHealth_SmartMode_SendsNotification(t *testing.T) {
 	h, calls, mu := newHandler(t, smartConfig())
 
 	w := sendRadarr(t, h, `{
@@ -1206,12 +1202,11 @@ func TestHealth_SmartMode_CreatesActivity(t *testing.T) {
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
-	// Health in smart mode should still create activity (NOT notification-only)
-	if len(recorded) < 2 {
-		t.Fatalf("expected at least 2 calls (create + update), got %d: %+v", len(recorded), pathsOf(recorded))
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call (notification), got %d: %+v", len(recorded), pathsOf(recorded))
 	}
-	if recorded[0].Path != "/activities" {
-		t.Errorf("first call should be create activity, got %s %s", recorded[0].Method, recorded[0].Path)
+	if recorded[0].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s %s", recorded[0].Method, recorded[0].Path)
 	}
 }
 
