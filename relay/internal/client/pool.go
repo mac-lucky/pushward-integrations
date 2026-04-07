@@ -1,6 +1,8 @@
 package client
 
 import (
+	"context"
+	"log/slog"
 	"net/http"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lrumap"
@@ -27,6 +29,17 @@ func NewPool(baseURL string, httpClient *http.Client, opts ...pushward.ClientOpt
 		opts:       opts,
 		clients:    lrumap.New[*pushward.Client](maxClients),
 	}
+}
+
+// SendNotification resolves the client for userKey and sends a notification.
+func (p *Pool) SendNotification(ctx context.Context, userKey string, log *slog.Logger, req pushward.SendNotificationRequest) error {
+	cl := p.Get(userKey)
+	if err := cl.SendNotification(ctx, req); err != nil {
+		log.Error("failed to send notification", "category", req.Category, "error", err)
+		return err
+	}
+	log.Info("notification sent", "category", req.Category)
+	return nil
 }
 
 // Get returns a pushward.Client for the given hlk_ key, creating one if needed.

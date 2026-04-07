@@ -201,13 +201,7 @@ func (h *Handler) handleManualInteraction(ctx context.Context, userKey string, l
 }
 
 func (h *Handler) sendNotification(ctx context.Context, userKey string, log *slog.Logger, req pushward.SendNotificationRequest) error {
-	cl := h.clients.Get(userKey)
-	if err := cl.SendNotification(ctx, req); err != nil {
-		log.Error("failed to send notification", "category", req.Category, "error", err)
-		return err
-	}
-	log.Info("notification sent", "category", req.Category, "subtitle", req.Subtitle)
-	return nil
+	return h.clients.SendNotification(ctx, userKey, log, req)
 }
 
 func (h *Handler) handleApplicationUpdate(ctx context.Context, userKey string, log *slog.Logger, provider string, p *ApplicationUpdatePayload) error {

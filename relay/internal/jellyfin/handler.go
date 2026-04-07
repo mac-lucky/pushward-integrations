@@ -86,18 +86,6 @@ func playbackSlug(itemID, userName string) string {
 	return text.SlugHash("jellyfin", itemID+userName, 5)
 }
 
-func itemSlug(itemID string) string {
-	return text.SlugHash("jellyfin-item", itemID, 4)
-}
-
-func taskSlug(taskName string) string {
-	return text.SlugHash("jellyfin-task", taskName, 4)
-}
-
-func authSlug(userName, remoteEndPoint string) string {
-	return text.SlugHash("jellyfin-auth", userName+remoteEndPoint, 4)
-}
-
 func mediaName(p *webhookPayload) string {
 	if p.SeriesName != "" {
 		return p.SeriesName
@@ -157,7 +145,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case "ScheduledTaskStarted":
 		apiErr = h.handleTaskStarted(ctx, userKey, log, &payload)
 	case "ScheduledTaskCompleted":
-		h.handleTaskCompleted(ctx, userKey, log, &payload)
+		apiErr = h.handleTaskCompleted(ctx, userKey, log, &payload)
 	case "AuthenticationFailure":
 		apiErr = h.handleAuthFailure(ctx, userKey, log, &payload)
 	case "GenericUpdateNotification":
@@ -402,163 +390,72 @@ func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *s
 }
 
 func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
-	slug := itemSlug(p.ItemID)
-	mapKey := "item:" + p.ItemID
-
-	cl := h.clients.Get(userKey)
-	endedTTL := int(h.config.CleanupDelay.Seconds())
-	staleTTL := int(h.config.StaleTimeout.Seconds())
-
-	name := mediaName(p)
-	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
-		log.Error("failed to create activity", "slug", slug, "error", err)
-		return err
-	}
-	log.Info("created activity", "slug", slug, "name", name)
-
 	subtitle := "Jellyfin"
 	if p.ProductionYear > 0 {
 		subtitle = fmt.Sprintf("Jellyfin \u00b7 %d", p.ProductionYear)
 	}
 
-	step := 1
-	total := 1
-	content := pushward.Content{
-		Template:    "steps",
-		Progress:    1.0,
-		State:       "Added to library",
-		Icon:        "plus.circle.fill",
-		Subtitle:    subtitle,
-		AccentColor: pushward.ColorGreen,
-		CurrentStep: &step,
-		TotalSteps:  &total,
-		StepLabels:  []string{"Added"},
-	}
-
-	// Send ONGOING update first
-	req := pushward.UpdateRequest{
-		State:   pushward.StateOngoing,
-		Content: content,
-	}
-	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		log.Error("failed to update activity", "slug", slug, "error", err)
-		return err
-	}
-
-	// Immediate two-phase end
-	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-	log.Info("scheduled end", "slug", slug, "state", "Added to library")
-	return nil
+	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title:      mediaName(p),
+		Subtitle:   subtitle,
+		Body:       "Added to library",
+		ThreadID:   "jellyfin",
+		CollapseID: "jellyfin-item-" + p.ItemID,
+		Level:      pushward.LevelPassive,
+		Category:   "item-added",
+		Source:     "jellyfin",
+		Push:       true,
+	})
 }
 
 func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
-	slug := taskSlug(p.TaskName)
-	mapKey := "task:" + p.TaskName
-
-	cl := h.clients.Get(userKey)
-	endedTTL := int(h.config.CleanupDelay.Seconds())
-	staleTTL := int(h.config.StaleTimeout.Seconds())
-
-	if err := cl.CreateActivity(ctx, slug, p.TaskName, h.config.Priority, endedTTL, staleTTL); err != nil {
-		log.Error("failed to create activity", "slug", slug, "error", err)
-		return err
-	}
-	log.Info("created activity", "slug", slug, "name", p.TaskName)
-
-	// Store in state store
-	data, _ := json.Marshal(map[string]string{"slug": slug})
-	if err := h.store.Set(ctx, "jellyfin", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		log.Warn("state store write failed", "error", err, "provider", "jellyfin", "slug", slug)
-	}
-
-	step := 1
-	total := 2
-	req := pushward.UpdateRequest{
-		State: pushward.StateOngoing,
-		Content: pushward.Content{
-			Template:    "steps",
-			Progress:    0,
-			State:       "Running...",
-			Icon:        "arrow.triangle.2.circlepath",
-			Subtitle:    "Jellyfin \u00b7 " + p.TaskName,
-			AccentColor: pushward.ColorBlue,
-			CurrentStep: &step,
-			TotalSteps:  &total,
-			StepLabels:  []string{"Running", "Done"},
-		},
-	}
-
-	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		log.Error("failed to update activity", "slug", slug, "error", err)
-		return err
-	}
-	log.Info("updated activity", "slug", slug, "step", "1/2", "state", "Running...")
-	return nil
+	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title:      p.TaskName,
+		Subtitle:   "Jellyfin",
+		Body:       "Started",
+		ThreadID:   "jellyfin-tasks",
+		CollapseID: "jellyfin-task-" + p.TaskName,
+		Level:      pushward.LevelPassive,
+		Category:   "task-started",
+		Source:     "jellyfin",
+		Push:       true,
+	})
 }
 
-func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
-	slug := taskSlug(p.TaskName)
-	mapKey := "task:" + p.TaskName
-
-	stateText := "Complete"
-	icon := "checkmark.circle.fill"
-	accent := pushward.ColorGreen
+func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+	body := "Complete"
+	level := pushward.LevelPassive
 	if p.TaskResult != "Completed" {
-		stateText = "Failed"
-		icon = "xmark.circle.fill"
-		accent = pushward.ColorRed
+		body = "Failed"
+		level = pushward.LevelActive
 	}
 
-	step := 2
-	total := 2
-	content := pushward.Content{
-		Template:    "steps",
-		Progress:    1.0,
-		State:       stateText,
-		Icon:        icon,
-		Subtitle:    "Jellyfin \u00b7 " + p.TaskName,
-		AccentColor: accent,
-		CurrentStep: &step,
-		TotalSteps:  &total,
-		StepLabels:  []string{"Running", "Done"},
-	}
-
-	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-	log.Info("scheduled end", "slug", slug, "step", "2/2", "state", stateText)
+	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title:      p.TaskName,
+		Subtitle:   "Jellyfin",
+		Body:       body,
+		ThreadID:   "jellyfin-tasks",
+		CollapseID: "jellyfin-task-" + p.TaskName,
+		Level:      level,
+		Category:   "task-completed",
+		Source:     "jellyfin",
+		Push:       true,
+	})
 }
 
 func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
-	slug := authSlug(p.UserName, p.RemoteEndPoint)
-
-	cl := h.clients.Get(userKey)
-	endedTTL := int(h.config.CleanupDelay.Seconds())
-	staleTTL := int(h.config.StaleTimeout.Seconds())
-
-	if err := cl.CreateActivity(ctx, slug, "Auth Failure", h.config.Priority, endedTTL, staleTTL); err != nil {
-		log.Error("failed to create activity", "slug", slug, "error", err)
-		return err
-	}
-	log.Info("created activity", "slug", slug)
-
-	req := pushward.UpdateRequest{
-		State: pushward.StateOngoing,
-		Content: pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       "Failed login: " + text.TruncateHard(p.UserName, 40) + " from " + text.TruncateHard(p.RemoteEndPoint, 40),
-			Icon:        "lock.shield.fill",
-			Subtitle:    "Jellyfin",
-			AccentColor: pushward.ColorRed,
-			Severity:    "warning",
-		},
-	}
-
-	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
-		log.Error("failed to update activity", "slug", slug, "error", err)
-		return err
-	}
-	log.Info("auth failure", "slug", slug, "user", p.UserName, "remote", p.RemoteEndPoint)
-	return nil
+	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+		Title:      "Auth Failure",
+		Subtitle:   "Jellyfin",
+		Body:       "Failed login: " + text.TruncateHard(p.UserName, 40) + " from " + text.TruncateHard(p.RemoteEndPoint, 40),
+		ThreadID:   "jellyfin-security",
+		CollapseID: "jellyfin-auth",
+		Level:      pushward.LevelActive,
+		Category:   "auth-failure",
+		Source:     "jellyfin",
+		Push:       true,
+		Metadata:   map[string]string{"user": p.UserName, "remote": p.RemoteEndPoint},
+	})
 }
 
 // scheduleEnd schedules a two-phase end for an activity via lifecycle.Ender,

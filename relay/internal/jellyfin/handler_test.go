@@ -549,40 +549,31 @@ func TestItemAdded(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
 	recorded := testutil.GetCalls(calls, mu)
-	// create + ONGOING("Added to library") + phase1(ONGOING) + phase2(ENDED) = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call (notification), got %d", len(recorded))
 	}
 
-	// Verify create
-	var createReq pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
-	if createReq.Name != "Dune: Part Two" {
-		t.Errorf("expected name 'Dune: Part Two', got %s", createReq.Name)
+	if recorded[0].Method != "POST" || recorded[0].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s %s", recorded[0].Method, recorded[0].Path)
 	}
 
-	// Verify initial ONGOING
-	var ongoing pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &ongoing)
-	if ongoing.State != pushward.StateOngoing {
-		t.Errorf("expected ONGOING, got %s", ongoing.State)
+	var req pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req)
+	if req.Title != "Dune: Part Two" {
+		t.Errorf("expected title 'Dune: Part Two', got %s", req.Title)
 	}
-	if ongoing.Content.State != "Added to library" {
-		t.Errorf("expected state 'Added to library', got %s", ongoing.Content.State)
+	if req.Body != "Added to library" {
+		t.Errorf("expected body 'Added to library', got %s", req.Body)
 	}
-	if ongoing.Content.Icon != "plus.circle.fill" {
-		t.Errorf("expected icon plus.circle.fill, got %s", ongoing.Content.Icon)
+	if req.Subtitle != "Jellyfin \u00b7 2024" {
+		t.Errorf("expected subtitle 'Jellyfin · 2024', got %s", req.Subtitle)
 	}
-
-	// Verify ENDED
-	var ended pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &ended)
-	if ended.State != pushward.StateEnded {
-		t.Errorf("expected ENDED, got %s", ended.State)
+	if req.Source != "jellyfin" {
+		t.Errorf("expected source 'jellyfin', got %s", req.Source)
+	}
+	if !req.Push {
+		t.Error("expected push=true")
 	}
 }
 
@@ -788,6 +779,23 @@ func TestTaskStartedAndCompleted(t *testing.T) {
 		"TaskId": "abc123"
 	}`)
 
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call (started notification), got %d", len(recorded))
+	}
+	if recorded[0].Method != "POST" || recorded[0].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s %s", recorded[0].Method, recorded[0].Path)
+	}
+
+	var started pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &started)
+	if started.Title != "Scan All Libraries" {
+		t.Errorf("expected title 'Scan All Libraries', got %s", started.Title)
+	}
+	if started.Body != "Started" {
+		t.Errorf("expected body 'Started', got %s", started.Body)
+	}
+
 	// Task completed
 	send(t, h, `{
 		"NotificationType": "ScheduledTaskCompleted",
@@ -796,52 +804,45 @@ func TestTaskStartedAndCompleted(t *testing.T) {
 		"TaskResult": "Completed"
 	}`)
 
-	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
+	recorded = testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls (started + completed), got %d", len(recorded))
+	}
+
+	var completed pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &completed)
+	if completed.Title != "Scan All Libraries" {
+		t.Errorf("expected title 'Scan All Libraries', got %s", completed.Title)
+	}
+	if completed.Body != "Complete" {
+		t.Errorf("expected body 'Complete', got %s", completed.Body)
+	}
+	if completed.CollapseID != "jellyfin-task-Scan All Libraries" {
+		t.Errorf("expected collapse_id to match started, got %s", completed.CollapseID)
+	}
+}
+
+func TestTaskFailed(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	send(t, h, `{
+		"NotificationType": "ScheduledTaskCompleted",
+		"TaskName": "Scan All Libraries",
+		"TaskId": "abc123",
+		"TaskResult": "Failed"
+	}`)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + ONGOING("Running...") + phase1(ONGOING "Complete") + phase2(ENDED) = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(recorded))
 	}
 
-	// Verify create
-	var createReq pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
-	if createReq.Name != "Scan All Libraries" {
-		t.Errorf("expected name 'Scan All Libraries', got %s", createReq.Name)
+	var req pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req)
+	if req.Body != "Failed" {
+		t.Errorf("expected body 'Failed', got %s", req.Body)
 	}
-
-	// Verify Running update
-	var running pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &running)
-	if running.Content.State != "Running..." {
-		t.Errorf("expected state 'Running...', got %s", running.Content.State)
-	}
-	if running.Content.Icon != "arrow.triangle.2.circlepath" {
-		t.Errorf("expected icon arrow.triangle.2.circlepath, got %s", running.Content.Icon)
-	}
-
-	// Verify Phase 1 (ONGOING with "Complete")
-	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
-	if phase1.State != pushward.StateOngoing {
-		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
-	}
-	if phase1.Content.State != "Complete" {
-		t.Errorf("expected state 'Complete', got %s", phase1.Content.State)
-	}
-	if phase1.Content.Icon != "checkmark.circle.fill" {
-		t.Errorf("expected checkmark icon, got %s", phase1.Content.Icon)
-	}
-	if phase1.Content.AccentColor != pushward.ColorGreen {
-		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
-	}
-
-	// Verify Phase 2 (ENDED)
-	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
-	if phase2.State != pushward.StateEnded {
-		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
+	if req.Level != pushward.LevelActive {
+		t.Errorf("expected level 'active' for failure, got %s", req.Level)
 	}
 }
