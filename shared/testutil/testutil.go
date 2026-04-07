@@ -174,7 +174,7 @@ func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex
 		}
 
 		w.WriteHeader(http.StatusCreated)
-		json.NewEncoder(w).Encode(map[string]any{"id": 1, "pushed": req.Push})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "pushed": req.Push})
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

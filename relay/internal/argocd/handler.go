@@ -79,7 +79,7 @@ func (h *Handler) Ender() *lifecycle.Ender {
 // StartCleanup starts a background goroutine that periodically removes stale
 // entries from graceTimers. Since timers self-clean when they fire, this is a
 // safety net for timers whose associated app state is no longer pending.
-func (h *Handler) StartCleanup(ctx context.Context) {
+func (h *Handler) StartCleanup(ctx context.Context) { // #nosec G118 -- intentionally uses ctx (not request-scoped) for long-lived background goroutine
 	go func() {
 		ticker := time.NewTicker(h.config.StaleTimeout)
 		defer ticker.Stop()
@@ -225,7 +225,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
+	_, _ = w.Write([]byte("ok"))
 }
 
 func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {

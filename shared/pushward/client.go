@@ -113,7 +113,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url string,
 			if backoff == 0 {
 				// Integer-based exponential backoff capped at 30s with equal jitter.
 				base := min(time.Second<<(attempt-1), 30*time.Second)
-				backoff = base/2 + rand.N(base/2)
+				backoff = base/2 + rand.N(base/2) // #nosec G404 -- jitter for retry backoff, not security-sensitive
 			}
 			retryAfterOverride = 0
 			slog.Warn("retrying PushWard request", "method", method, "url", url, "attempt", attempt+1, "backoff", backoff)
@@ -148,7 +148,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url string,
 
 		if resp.StatusCode == http.StatusConflict && handleConflict != nil {
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if done, cerr := handleConflict(respBody); done {
 				c.recordResult(ctx, operation, attempts, start, cerr, false)
 				return cerr
@@ -157,8 +157,8 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url string,
 			lastErr = fmt.Errorf("conflict (409)")
 			continue
 		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			c.recordResult(ctx, operation, attempts, start, nil, false)

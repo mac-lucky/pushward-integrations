@@ -37,7 +37,7 @@ func Middleware(next http.Handler) http.Handler {
 		if key == "" {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusUnauthorized)
-			w.Write([]byte(`{"error":"missing or invalid integration key"}`))
+			_, _ = w.Write([]byte(`{"error":"missing or invalid integration key"}`))
 			return
 		}
 

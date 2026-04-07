@@ -42,7 +42,7 @@ func (p *Poller) Start(slug, expr string) {
 		return
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) // #nosec G118 -- cancel is stored in p.active and called in Stop/StopAll
 	p.active[slug] = cancel
 	p.wg.Add(1)
 	go p.run(ctx, slug, expr)

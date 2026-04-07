@@ -26,7 +26,7 @@ type ServerConfig struct {
 
 // LoadYAML reads a YAML config file into target. Missing files are tolerated (ENOENT).
 func LoadYAML(path string, target any) error {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path comes from CLI flags, not user input
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("reading config: %w", err)
 	}

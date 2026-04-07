@@ -112,7 +112,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
+	_, _ = w.Write([]byte("ok"))
 }
 
 func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slog.Logger, p *SonarrGrabPayload) error {

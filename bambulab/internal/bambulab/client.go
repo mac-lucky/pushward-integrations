@@ -48,7 +48,7 @@ func (c *Client) Connect() error {
 		SetKeepAlive(60 * time.Second).
 		SetAutoReconnect(true).
 		SetMaxReconnectInterval(30 * time.Second).
-		SetTLSConfig(&tls.Config{InsecureSkipVerify: c.insecureSkipVerify}).
+		SetTLSConfig(&tls.Config{InsecureSkipVerify: c.insecureSkipVerify}). // #nosec G402 -- Bambu Lab printers use self-signed certs
 		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 			slog.Warn("MQTT connection lost", "error", err)
 		}).

@@ -43,7 +43,7 @@ func (c *Client) GetQueue(ctx context.Context) (*Queue, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
@@ -74,7 +74,7 @@ func (c *Client) GetHistory(ctx context.Context, limit int) (*History, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, resp.Body)
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 

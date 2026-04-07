@@ -101,7 +101,7 @@ func connectWithRetry(ctx context.Context, poolCfg *pgxpool.Config) (*pgxpool.Po
 }
 
 func readPasswordFile(path string) (string, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path comes from config file, not user input
 	if err != nil {
 		return "", err
 	}

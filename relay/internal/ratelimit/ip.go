@@ -80,11 +80,11 @@ func IPMiddleware(next http.Handler) http.Handler {
 		ip := clientIP(r)
 
 		if !ipLimiters.get(ip).Allow() {
-			slog.Warn("ip rate limit exceeded", "ip", ip)
+			slog.Warn("ip rate limit exceeded", "ip", ip) // #nosec G706 -- ip is validated via net.ParseIP in clientIP()
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error":"rate limit exceeded"}`))
+			_, _ = w.Write([]byte(`{"error":"rate limit exceeded"}`))
 			return
 		}
 
