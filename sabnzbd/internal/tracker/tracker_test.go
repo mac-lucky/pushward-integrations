@@ -18,7 +18,6 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
 
-
 func testConfig() *config.Config {
 	return &config.Config{
 		SABnzbd: config.SABnzbdConfig{
@@ -747,8 +746,10 @@ func TestSendDownloadProgress_Timeline_SendsValueAndUnit(t *testing.T) {
 	if req.Content.Template != "timeline" {
 		t.Errorf("expected template timeline, got %s", req.Content.Template)
 	}
-	if v, ok := req.Content.Values[seriesKey]; !ok {
-		t.Fatal("expected values map with 'Download' key")
+	if values := testutil.RequireValueMap(t,req.Content.Value); values == nil {
+		// already failed
+	} else if v, ok := values[seriesKey]; !ok {
+		t.Fatal("expected value map with 'Download' key")
 	} else if v != 50.0 {
 		t.Errorf("expected Download value 50.0, got %.1f", v)
 	}
@@ -792,7 +793,7 @@ func TestSendDownloadProgress_Generic_NoValueOrUnit(t *testing.T) {
 		t.Errorf("expected template generic, got %s", req.Content.Template)
 	}
 	if req.Content.Value != nil {
-		t.Errorf("expected no value for generic template, got %v", *req.Content.Value)
+		t.Errorf("expected no value for generic template, got %v", req.Content.Value)
 	}
 	if req.Content.Unit != "" {
 		t.Errorf("expected no unit for generic template, got %s", req.Content.Unit)
@@ -823,8 +824,10 @@ func TestTimeline_NonDownloadPhase_SendsZeroValue(t *testing.T) {
 	if req.Content.Template != "timeline" {
 		t.Errorf("expected timeline template, got %s", req.Content.Template)
 	}
-	if v, ok := req.Content.Values[seriesKey]; !ok {
-		t.Fatal("expected values map with 'Download' key for non-download phase")
+	if values := testutil.RequireValueMap(t,req.Content.Value); values == nil {
+		// already failed
+	} else if v, ok := values[seriesKey]; !ok {
+		t.Fatal("expected value map with 'Download' key for non-download phase")
 	} else if v != 0 {
 		t.Errorf("expected Download value 0 for non-download phase, got %f", v)
 	}
@@ -867,8 +870,10 @@ func TestSendDownloadProgress_Timeline_Paused_SendsZeroValue(t *testing.T) {
 	if req.Content.Template != "timeline" {
 		t.Errorf("expected timeline template for paused download, got %s", req.Content.Template)
 	}
-	if v, ok := req.Content.Values[seriesKey]; !ok {
-		t.Fatal("expected values map with 'Download' key for paused")
+	if values := testutil.RequireValueMap(t,req.Content.Value); values == nil {
+		// already failed
+	} else if v, ok := values[seriesKey]; !ok {
+		t.Fatal("expected value map with 'Download' key for paused")
 	} else if v != 0 {
 		t.Errorf("expected Download value 0 for paused, got %f", v)
 	}
@@ -932,9 +937,13 @@ func TestTimeline_FullLifecycle(t *testing.T) {
 			if r.Content.Template != "timeline" {
 				t.Errorf("expected timeline template, got %s", r.Content.Template)
 			}
-			v, ok := r.Content.Values[seriesKey]
+			values := testutil.RequireValueMap(t,r.Content.Value)
+			if values == nil {
+				continue
+			}
+			v, ok := values[seriesKey]
 			if !ok {
-				t.Errorf("timeline update must have values[\"Download\"], got %v for state=%s", r.Content.Values, r.Content.State)
+				t.Errorf("timeline update must have value[\"Download\"], got %v for state=%s", values, r.Content.State)
 			}
 			if u := r.Content.Units[seriesKey]; u != "MB/s" {
 				t.Errorf("timeline update should have units[\"Download\"]=MB/s, got %s", u)

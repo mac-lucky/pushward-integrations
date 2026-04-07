@@ -407,8 +407,8 @@ func TestIntegration_FiringWithAnnotation(t *testing.T) {
 	if up == nil {
 		t.Fatal("no ONGOING UpdateActivity call found")
 	}
-	if up.Content.Template != "timeline" {
-		t.Errorf("template = %q, want timeline", up.Content.Template)
+	if up.Content.Template != pushward.TemplateTimeline {
+		t.Errorf("template = %q, want %q", up.Content.Template, pushward.TemplateTimeline)
 	}
 	if up.Content.Unit != "%" {
 		t.Errorf("unit = %q, want %%", up.Content.Unit)

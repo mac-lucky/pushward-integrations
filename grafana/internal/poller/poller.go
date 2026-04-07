@@ -119,8 +119,8 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr strin
 	err = p.pwClient.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
-			Template: "timeline",
-			Value:    pushward.Float64Ptr(point.V),
+			Template: pushward.TemplateTimeline,
+			Value:    map[string]float64{"Value": point.V},
 		},
 	})
 	if err != nil {

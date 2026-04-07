@@ -6,6 +6,9 @@ const (
 	StateEnded   = "ENDED"
 )
 
+// Template name constants.
+const TemplateTimeline = "timeline"
+
 // Notification interruption level constants.
 const (
 	LevelActive  = "active"
@@ -70,18 +73,18 @@ type Content struct {
 	WarningThreshold  *int    `json:"warning_threshold,omitempty"`
 	CompletionMessage string  `json:"completion_message,omitempty"`
 
-	// Gauge template
-	Value    *float64 `json:"value,omitempty"`
-	MinValue *float64 `json:"min_value,omitempty"`
-	MaxValue *float64 `json:"max_value,omitempty"`
-	Unit     string   `json:"unit,omitempty"`
+	// Gauge template: Value is float64
+	// Timeline template: Value is map[string]float64
+	Value    any         `json:"value,omitempty"`
+	MinValue *float64    `json:"min_value,omitempty"`
+	MaxValue *float64    `json:"max_value,omitempty"`
+	Unit     string      `json:"unit,omitempty"`
 
 	// Timeline template
 	Scale      string                       `json:"scale,omitempty"`
 	Decimals   *int                         `json:"decimals,omitempty"`
 	Smoothing  *bool                        `json:"smoothing,omitempty"`
 	Thresholds []Threshold                  `json:"thresholds,omitempty"`
-	Values     map[string]float64           `json:"values,omitempty"`
 	Units      map[string]string            `json:"units,omitempty"`
 	History    map[string][]HistoryPoint    `json:"history,omitempty"`
 }

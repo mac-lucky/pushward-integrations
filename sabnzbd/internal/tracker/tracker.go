@@ -164,7 +164,7 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 		if value != nil {
 			v = *value
 		}
-		content.Values = map[string]float64{seriesKey: v}
+		content.Value = map[string]float64{seriesKey: v}
 		content.Units = map[string]string{seriesKey: "MB/s"}
 		content.Smoothing = t.cfg.SABnzbd.Timeline.Smoothing
 		content.Scale = t.cfg.SABnzbd.Timeline.Scale

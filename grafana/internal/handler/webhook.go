@@ -21,7 +21,7 @@ const (
 	alertStatusFiring   = "firing"
 	alertStatusResolved = "resolved"
 
-	templateTimeline    = "timeline"
+	templateTimeline    = pushward.TemplateTimeline
 	defaultWarningIcon  = "exclamationmark.triangle.fill"
 	resolvedIcon        = "checkmark.circle.fill"
 )
@@ -289,10 +289,21 @@ func (h *Handler) resolveValue(a alert, preferredRefID string) *float64 {
 	return nil
 }
 
+func timelineValue(v *float64, label string) any {
+	if v == nil {
+		return nil
+	}
+	if label == "" {
+		label = "Value"
+	}
+	return map[string]float64{label: *v}
+}
+
 func (h *Handler) buildContent(a alert, severity string, value *float64) pushward.Content {
+	label := a.Labels["alertname"]
 	content := pushward.Content{
 		Template:    templateTimeline,
-		Value:       value,
+		Value:       timelineValue(value, label),
 		Subtitle:    "Grafana",
 		AccentColor: pushward.SeverityColor(severity),
 		Icon:        pushward.SeverityIcon(severity, defaultWarningIcon),

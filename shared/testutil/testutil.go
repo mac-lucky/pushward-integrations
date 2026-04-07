@@ -69,7 +69,7 @@ type apiContent struct {
 	EndDate           *int64   `json:"end_date,omitempty"`
 	StartDate         *int64   `json:"start_date,omitempty"`
 	WarningThreshold  *int     `json:"warning_threshold,omitempty"`
-	Value             *float64           `json:"value,omitempty"`
+	Value             any                `json:"value,omitempty"`
 	MinValue          *float64           `json:"min_value,omitempty"`
 	MaxValue          *float64           `json:"max_value,omitempty"`
 	Unit              string             `json:"unit,omitempty"`
@@ -77,7 +77,6 @@ type apiContent struct {
 	Decimals          *int               `json:"decimals,omitempty"`
 	Smoothing         *bool              `json:"smoothing,omitempty"`
 	Thresholds        []testThreshold    `json:"thresholds,omitempty"`
-	Values            map[string]float64 `json:"values,omitempty"`
 	Duration          *string            `json:"duration,omitempty"`
 }
 
@@ -402,6 +401,10 @@ func validateGauge(c *apiContent) error {
 	if c.Value == nil {
 		return fmt.Errorf("value is required for gauge template")
 	}
+	v, ok := toFloat64(c.Value)
+	if !ok {
+		return fmt.Errorf("gauge value must be a number")
+	}
 	if c.MinValue == nil {
 		return fmt.Errorf("min_value is required for gauge template")
 	}
@@ -411,7 +414,7 @@ func validateGauge(c *apiContent) error {
 	if *c.MinValue >= *c.MaxValue {
 		return fmt.Errorf("min_value must be < max_value")
 	}
-	if *c.Value < *c.MinValue || *c.Value > *c.MaxValue {
+	if v < *c.MinValue || v > *c.MaxValue {
 		return fmt.Errorf("value must be >= min_value and <= max_value")
 	}
 	if utf8.RuneCountInString(c.Unit) > 32 {
@@ -421,8 +424,12 @@ func validateGauge(c *apiContent) error {
 }
 
 func validateTimeline(c *apiContent) error {
-	if c.Value == nil && len(c.Values) == 0 {
-		return fmt.Errorf("value or values is required for timeline template")
+	if c.Value == nil {
+		return fmt.Errorf("value is required for timeline template")
+	}
+	values := toStringFloat64Map(c.Value)
+	if values == nil {
+		return fmt.Errorf("timeline value must be a labeled map (e.g. {\"CPU\": 72.5})")
 	}
 	if c.Scale != "" {
 		switch c.Scale {
@@ -448,12 +455,12 @@ func validateTimeline(c *apiContent) error {
 			return fmt.Errorf("thresholds[%d].label must be at most 12 runes", i)
 		}
 	}
-	if len(c.Values) > 4 {
-		return fmt.Errorf("values must have at most 4 series, got %d", len(c.Values))
+	if len(values) > 4 {
+		return fmt.Errorf("value must have at most 4 series, got %d", len(values))
 	}
-	for k := range c.Values {
+	for k := range values {
 		if utf8.RuneCountInString(k) > 32 {
-			return fmt.Errorf("values key %q must be at most 32 characters", k)
+			return fmt.Errorf("value key %q must be at most 32 characters", k)
 		}
 	}
 	return nil
@@ -483,4 +490,46 @@ func validateColor(c, field string) error {
 		return nil
 	}
 	return fmt.Errorf("%s must be a named color or hex (#RRGGBB or #RRGGBBAA)", field)
+}
+
+func toFloat64(v any) (float64, bool) {
+	switch n := v.(type) {
+	case float64:
+		return n, true
+	case json.Number:
+		f, err := n.Float64()
+		return f, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func toStringFloat64Map(v any) map[string]float64 {
+	switch m := v.(type) {
+	case map[string]float64:
+		return m
+	case map[string]any:
+		result := make(map[string]float64, len(m))
+		for k, val := range m {
+			f, ok := toFloat64(val)
+			if !ok {
+				return nil
+			}
+			result[k] = f
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
+// RequireValueMap extracts a map[string]float64 from a polymorphic value field,
+// failing the test if the value is nil or not a map.
+func RequireValueMap(t testing.TB, v any) map[string]float64 {
+	t.Helper()
+	m := toStringFloat64Map(v)
+	if m == nil {
+		t.Fatalf("expected map[string]float64, got %T", v)
+	}
+	return m
 }
