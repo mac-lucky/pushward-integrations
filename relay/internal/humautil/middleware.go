@@ -17,7 +17,7 @@ func AuthMiddleware(api huma.API) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		key := auth.ExtractKey(ctx.Header("Authorization"))
 		if key == "" {
-			huma.WriteErr(api, ctx, http.StatusUnauthorized, "missing or invalid integration key")
+			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "missing or invalid integration key")
 			return
 		}
 		ctx = huma.WithValue(ctx, auth.ContextKey(), key)
@@ -33,7 +33,7 @@ func IPRateLimitMiddleware(api huma.API) func(huma.Context, func(huma.Context)) 
 		if !ratelimit.AllowIP(ip) {
 			slog.Warn("ip rate limit exceeded", "ip", ip)
 			ctx.SetHeader("Retry-After", "1")
-			huma.WriteErr(api, ctx, http.StatusTooManyRequests, "rate limit exceeded")
+			_ = huma.WriteErr(api, ctx, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}
 		next(ctx)
@@ -51,7 +51,7 @@ func KeyRateLimitMiddleware(api huma.API) func(huma.Context, func(huma.Context))
 		}
 		if !ratelimit.AllowKey(ctx.Method()+" "+ctx.Operation().Path, key) {
 			ctx.SetHeader("Retry-After", "1")
-			huma.WriteErr(api, ctx, http.StatusTooManyRequests, "rate limit exceeded")
+			_ = huma.WriteErr(api, ctx, http.StatusTooManyRequests, "rate limit exceeded")
 			return
 		}
 		next(ctx)
