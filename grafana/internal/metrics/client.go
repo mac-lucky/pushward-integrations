@@ -7,12 +7,59 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
+
+// LabeledSeries is a single time-series result with its metric labels.
+type LabeledSeries struct {
+	Labels map[string]string
+	Points []pushward.HistoryPoint
+}
+
+// LabeledPoint is a single instant-query result with its metric labels.
+type LabeledPoint struct {
+	Labels map[string]string
+	Point  pushward.HistoryPoint
+}
+
+// SeriesKey builds a display name from metric labels.
+// If preferLabel is set and present, use its value.
+// If only one label exists, use its value.
+// Otherwise join all as "k=v, k=v" sorted by key.
+func SeriesKey(labels map[string]string, preferLabel string) string {
+	if len(labels) == 0 {
+		return "value"
+	}
+
+	if preferLabel != "" {
+		if v, ok := labels[preferLabel]; ok {
+			return v
+		}
+	}
+
+	if len(labels) == 1 {
+		for _, v := range labels {
+			return v
+		}
+	}
+
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+labels[k])
+	}
+	return strings.Join(parts, ", ")
+}
 
 // Client queries Prometheus or VictoriaMetrics for time-series data.
 type Client struct {
@@ -51,8 +98,26 @@ func WithBearerToken(token string) Option {
 	return func(c *Client) { c.bearer = token }
 }
 
-// QueryRange fetches time-series data for the given PromQL expression.
+// QueryRange fetches time-series data for the first result series only.
 func (c *Client) QueryRange(ctx context.Context, expr string, from, to time.Time, step time.Duration) ([]pushward.HistoryPoint, error) {
+	series, err := c.QueryRangeAll(ctx, expr, from, to, step)
+	if err != nil || len(series) == 0 {
+		return nil, err
+	}
+	return series[0].Points, nil
+}
+
+// QueryInstant fetches a single data point for the first result series only.
+func (c *Client) QueryInstant(ctx context.Context, expr string, ts time.Time) (*pushward.HistoryPoint, error) {
+	points, err := c.QueryInstantAll(ctx, expr, ts)
+	if err != nil || len(points) == 0 {
+		return nil, err
+	}
+	return &points[0].Point, nil
+}
+
+// QueryRangeAll fetches time-series data for all result series.
+func (c *Client) QueryRangeAll(ctx context.Context, expr string, from, to time.Time, step time.Duration) ([]LabeledSeries, error) {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parsing base URL: %w", err)
@@ -94,11 +159,22 @@ func (c *Client) QueryRange(ctx context.Context, expr string, from, to time.Time
 		return nil, nil
 	}
 
-	return parseValues(result.Data.Result[0].Values), nil
+	series := make([]LabeledSeries, 0, len(result.Data.Result))
+	for _, r := range result.Data.Result {
+		points := parseValues(r.Values)
+		if len(points) == 0 {
+			continue
+		}
+		series = append(series, LabeledSeries{
+			Labels: filterMetricLabels(r.Metric),
+			Points: points,
+		})
+	}
+	return series, nil
 }
 
-// QueryInstant fetches a single data point for the given PromQL expression at the given time.
-func (c *Client) QueryInstant(ctx context.Context, expr string, ts time.Time) (*pushward.HistoryPoint, error) {
+// QueryInstantAll fetches a single data point for all result series.
+func (c *Client) QueryInstantAll(ctx context.Context, expr string, ts time.Time) ([]LabeledPoint, error) {
 	u, err := url.Parse(c.baseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parsing base URL: %w", err)
@@ -138,7 +214,30 @@ func (c *Client) QueryInstant(ctx context.Context, expr string, ts time.Time) (*
 		return nil, nil
 	}
 
-	return parseInstantValue(result.Data.Result[0].Value)
+	points := make([]LabeledPoint, 0, len(result.Data.Result))
+	for _, r := range result.Data.Result {
+		pt, err := parseInstantValue(r.Value)
+		if err != nil || pt == nil {
+			continue
+		}
+		points = append(points, LabeledPoint{
+			Labels: filterMetricLabels(r.Metric),
+			Point:  *pt,
+		})
+	}
+	return points, nil
+}
+
+// filterMetricLabels returns labels without the __name__ meta-label.
+func filterMetricLabels(m map[string]string) map[string]string {
+	out := make(map[string]string, len(m))
+	for k, v := range m {
+		if k == "__name__" {
+			continue
+		}
+		out[k] = v
+	}
+	return out
 }
 
 // instantQueryResponse is the Prometheus/VictoriaMetrics /api/v1/query response.

@@ -207,3 +207,152 @@ func TestQueryInstant_NaN(t *testing.T) {
 		t.Errorf("expected nil for NaN, got %+v", point)
 	}
 }
+
+func TestQueryRangeAll_MultiSeries(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"status": "success",
+			"data": {
+				"resultType": "matrix",
+				"result": [
+					{"metric": {"instance": "10.0.0.1:9100"}, "values": [[1700000000,"1"],[1700000015,"2"]]},
+					{"metric": {"instance": "10.0.0.2:9100"}, "values": [[1700000000,"3"],[1700000015,"4"]]}
+				]
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	series, err := c.QueryRangeAll(context.Background(), "up", time.Unix(1700000000, 0), time.Unix(1700000015, 0), 15*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(series) != 2 {
+		t.Fatalf("got %d series, want 2", len(series))
+	}
+	if series[0].Labels["instance"] != "10.0.0.1:9100" {
+		t.Errorf("series[0] labels = %v, want instance=10.0.0.1:9100", series[0].Labels)
+	}
+	if len(series[0].Points) != 2 {
+		t.Errorf("series[0] has %d points, want 2", len(series[0].Points))
+	}
+	if series[1].Points[0].V != 3 {
+		t.Errorf("series[1].Points[0].V = %v, want 3", series[1].Points[0].V)
+	}
+}
+
+func TestQueryRangeAll_FiltersNameLabel(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"status": "success",
+			"data": {
+				"resultType": "matrix",
+				"result": [{"metric": {"__name__": "up", "job": "node"}, "values": [[1700000000,"1"]]}]
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	series, err := c.QueryRangeAll(context.Background(), "up", time.Unix(1700000000, 0), time.Unix(1700000000, 0), 15*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(series) != 1 {
+		t.Fatalf("got %d series, want 1", len(series))
+	}
+	if _, ok := series[0].Labels["__name__"]; ok {
+		t.Error("__name__ label should be filtered out")
+	}
+	if series[0].Labels["job"] != "node" {
+		t.Errorf("expected job=node, got %v", series[0].Labels)
+	}
+}
+
+func TestQueryInstantAll_MultiSeries(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"status": "success",
+			"data": {
+				"resultType": "vector",
+				"result": [
+					{"metric": {"instance": "10.0.0.1:9100"}, "value": [1700000000, "0.5"]},
+					{"metric": {"instance": "10.0.0.2:9100"}, "value": [1700000000, "0.8"]}
+				]
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	points, err := c.QueryInstantAll(context.Background(), "up", time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(points) != 2 {
+		t.Fatalf("got %d points, want 2", len(points))
+	}
+	if points[0].Labels["instance"] != "10.0.0.1:9100" {
+		t.Errorf("points[0] labels = %v", points[0].Labels)
+	}
+	if points[0].Point.V != 0.5 {
+		t.Errorf("points[0].Point.V = %v, want 0.5", points[0].Point.V)
+	}
+	if points[1].Point.V != 0.8 {
+		t.Errorf("points[1].Point.V = %v, want 0.8", points[1].Point.V)
+	}
+}
+
+func TestQueryInstantAll_SkipsNaN(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"status": "success",
+			"data": {
+				"resultType": "vector",
+				"result": [
+					{"metric": {"instance": "a"}, "value": [1700000000, "1"]},
+					{"metric": {"instance": "b"}, "value": [1700000000, "NaN"]},
+					{"metric": {"instance": "c"}, "value": [1700000000, "2"]}
+				]
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	points, err := c.QueryInstantAll(context.Background(), "up", time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(points) != 2 {
+		t.Fatalf("got %d points, want 2 (NaN skipped)", len(points))
+	}
+}
+
+func TestSeriesKey(t *testing.T) {
+	tests := []struct {
+		name        string
+		labels      map[string]string
+		preferLabel string
+		want        string
+	}{
+		{"empty labels", map[string]string{}, "", "value"},
+		{"single label", map[string]string{"instance": "10.0.0.1:9100"}, "", "10.0.0.1:9100"},
+		{"prefer label hit", map[string]string{"instance": "10.0.0.1:9100", "job": "node"}, "instance", "10.0.0.1:9100"},
+		{"prefer label miss", map[string]string{"job": "node"}, "instance", "node"},
+		{"multiple labels no prefer", map[string]string{"instance": "X", "job": "Y"}, "", "instance=X, job=Y"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := SeriesKey(tt.labels, tt.preferLabel)
+			if got != tt.want {
+				t.Errorf("SeriesKey(%v, %q) = %q, want %q", tt.labels, tt.preferLabel, got, tt.want)
+			}
+		})
+	}
+}

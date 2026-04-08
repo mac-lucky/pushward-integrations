@@ -33,9 +33,9 @@ func New(metricsClient *metrics.Client, pwClient *pushward.Client, interval time
 }
 
 // Start begins polling for the given slug and PromQL expression.
-// label is used as the value map key in timeline updates (must match the key used in History).
+// seriesLabel is the preferred metric label to use as series key (can be empty for auto-detect).
 // No-op if already polling for this slug.
-func (p *Poller) Start(slug, expr, label string) {
+func (p *Poller) Start(slug, expr, seriesLabel string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -46,7 +46,7 @@ func (p *Poller) Start(slug, expr, label string) {
 	ctx, cancel := context.WithCancel(context.Background()) // #nosec G118 -- cancel is stored in p.active and called in Stop/StopAll
 	p.active[slug] = cancel
 	p.wg.Add(1)
-	go p.run(ctx, slug, expr, label)
+	go p.run(ctx, slug, expr, seriesLabel)
 }
 
 // Stop cancels the polling goroutine for the given slug.
@@ -85,7 +85,7 @@ func (p *Poller) ActiveCount() int {
 	return len(p.active)
 }
 
-func (p *Poller) run(ctx context.Context, slug, expr, label string) {
+func (p *Poller) run(ctx context.Context, slug, expr, seriesLabel string) {
 	defer p.wg.Done()
 
 	logger := slog.With("slug", slug)
@@ -98,13 +98,13 @@ func (p *Poller) run(ctx context.Context, slug, expr, label string) {
 			logger.Info("poller stopped")
 			return
 		case <-ticker.C:
-			p.poll(ctx, logger, slug, expr, label)
+			p.poll(ctx, logger, slug, expr, seriesLabel)
 		}
 	}
 }
 
-func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, label string) {
-	point, err := p.metricsClient.QueryInstant(ctx, expr, time.Now())
+func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seriesLabel string) {
+	points, err := p.metricsClient.QueryInstantAll(ctx, expr, time.Now())
 	if err != nil {
 		if ctx.Err() != nil {
 			return
@@ -113,15 +113,21 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, labe
 		return
 	}
 
-	if point == nil {
+	if len(points) == 0 {
 		return
+	}
+
+	values := make(map[string]float64, len(points))
+	for _, lp := range points {
+		key := metrics.SeriesKey(lp.Labels, seriesLabel)
+		values[key] = lp.Point.V
 	}
 
 	err = p.pwClient.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template: pushward.TemplateTimeline,
-			Value:    map[string]float64{label: point.V},
+			Value:    values,
 		},
 	})
 	if err != nil {

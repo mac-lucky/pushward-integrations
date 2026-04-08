@@ -54,10 +54,11 @@ type Handler struct {
 }
 
 type alertState struct {
-	slug     string
-	expr     string
-	refID    string
-	lastSeen time.Time
+	slug        string
+	expr        string
+	refID       string
+	seriesLabel string
+	lastSeen    time.Time
 }
 
 func NewHandler(
@@ -137,13 +138,15 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	slug := makeSlug(alertname)
 	logger := slog.With("alertname", alertname, "slug", slug, "fingerprint", a.Fingerprint)
 
+	seriesLabel := a.Annotations["pushward_series_label"]
+
 	// Check-and-mark: reserve the slot before releasing the lock to prevent
 	// duplicate creates from concurrent webhooks.
 	h.mu.Lock()
 	existing := h.active[alertname]
 	isNew := existing == nil
 	if isNew {
-		h.active[alertname] = &alertState{slug: slug, lastSeen: time.Now()}
+		h.active[alertname] = &alertState{slug: slug, seriesLabel: seriesLabel, lastSeen: time.Now()}
 	} else {
 		existing.lastSeen = time.Now()
 	}
@@ -170,13 +173,12 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	}
 
 	severity := h.resolveSeverity(a)
-	value := h.resolveValue(a, refID)
-	content := h.buildContent(a, severity, value)
+	content := h.buildContent(a, severity, h.resolveValues(a, refID, seriesLabel))
 
 	if isNew && expr != "" {
-		history := h.fetchHistory(ctx, logger, expr)
+		history := h.fetchHistoryAll(ctx, logger, expr, seriesLabel)
 		if len(history) > 0 {
-			content.History = map[string][]pushward.HistoryPoint{alertname: history}
+			content.History = history
 		}
 	}
 
@@ -190,7 +192,7 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	}
 
 	if isNew && expr != "" {
-		h.poller.Start(slug, expr, alertname)
+		h.poller.Start(slug, expr, seriesLabel)
 		logger.Info("poller started")
 	}
 }
@@ -203,12 +205,13 @@ func (h *Handler) handleResolved(ctx context.Context, a alert) {
 	slug := makeSlug(alertname)
 	logger := slog.With("alertname", alertname, "slug", slug)
 
-	// Capture refID before deleting state so resolveValue uses the correct key.
+	// Capture state before deleting so resolveValues uses the correct keys.
 	h.mu.Lock()
 	state, exists := h.active[alertname]
-	var refID string
+	var refID, seriesLabel string
 	if exists {
 		refID = state.refID
+		seriesLabel = state.seriesLabel
 	}
 	delete(h.active, alertname)
 	h.mu.Unlock()
@@ -220,8 +223,7 @@ func (h *Handler) handleResolved(ctx context.Context, a alert) {
 	h.poller.Stop(slug)
 
 	severity := h.resolveSeverity(a)
-	value := h.resolveValue(a, refID)
-	content := h.buildContent(a, severity, value)
+	content := h.buildContent(a, severity, h.resolveValues(a, refID, seriesLabel))
 	content.Icon = resolvedIcon
 	content.AccentColor = pushward.ColorGreen
 
@@ -268,7 +270,9 @@ func (h *Handler) resolveSeverity(a alert) string {
 	return h.cfg.DefaultSeverity
 }
 
-func (h *Handler) resolveValue(a alert, preferredRefID string) *float64 {
+// resolveValues builds a multi-key value map from the webhook payload.
+// For single-series alerts it returns a single-key map; for multi-series it returns N keys.
+func (h *Handler) resolveValues(a alert, preferredRefID, seriesLabel string) map[string]float64 {
 	if len(a.Values) == 0 {
 		return nil
 	}
@@ -277,33 +281,44 @@ func (h *Handler) resolveValue(a alert, preferredRefID string) *float64 {
 		preferredRefID = rid
 	}
 
-	if preferredRefID != "" {
-		if v, ok := a.Values[preferredRefID]; ok {
-			return &v
-		}
-	}
-
-	for _, v := range a.Values {
-		return &v
-	}
-	return nil
-}
-
-func timelineValue(v *float64, label string) any {
-	if v == nil {
-		return nil
-	}
+	label := a.Labels["alertname"]
 	if label == "" {
 		label = "Value"
 	}
-	return map[string]float64{label: *v}
+
+	// Single ref ID match — use alertname as key for backward compatibility.
+	if preferredRefID != "" {
+		if v, ok := a.Values[preferredRefID]; ok {
+			return map[string]float64{label: v}
+		}
+	}
+
+	// Single value — use alertname as key.
+	if len(a.Values) == 1 {
+		for _, v := range a.Values {
+			return map[string]float64{label: v}
+		}
+	}
+
+	// Multi-value: use the webhook's ref ID keys directly.
+	// These are Grafana expression ref IDs (A, B, C...), not ideal series labels,
+	// but the poller will replace them with proper metric-derived keys on next tick.
+	result := make(map[string]float64, len(a.Values))
+	for k, v := range a.Values {
+		result[k] = v
+	}
+	return result
 }
 
-func (h *Handler) buildContent(a alert, severity string, value *float64) pushward.Content {
-	label := a.Labels["alertname"]
+func (h *Handler) buildContent(a alert, severity string, values map[string]float64) pushward.Content {
+	var value any
+	if len(values) > 0 {
+		value = values
+	}
+
 	content := pushward.Content{
 		Template:    templateTimeline,
-		Value:       timelineValue(value, label),
+		Value:       value,
 		Subtitle:    "Grafana",
 		AccentColor: pushward.SeverityColor(severity),
 		Icon:        pushward.SeverityIcon(severity, defaultWarningIcon),
@@ -334,19 +349,29 @@ func (h *Handler) buildContent(a alert, severity string, value *float64) pushwar
 	return content
 }
 
-func (h *Handler) fetchHistory(ctx context.Context, logger *slog.Logger, expr string) []pushward.HistoryPoint {
+func (h *Handler) fetchHistoryAll(ctx context.Context, logger *slog.Logger, expr, seriesLabel string) map[string][]pushward.HistoryPoint {
 	now := time.Now()
 	step := h.cfg.HistoryWindow / 120
 	if step < 15*time.Second {
 		step = 15 * time.Second
 	}
 
-	points, err := h.metricsClient.QueryRange(ctx, expr, now.Add(-h.cfg.HistoryWindow), now, step)
+	allSeries, err := h.metricsClient.QueryRangeAll(ctx, expr, now.Add(-h.cfg.HistoryWindow), now, step)
 	if err != nil {
 		logger.Warn("failed to fetch history", "error", err)
 		return nil
 	}
-	return points
+
+	if len(allSeries) == 0 {
+		return nil
+	}
+
+	history := make(map[string][]pushward.HistoryPoint, len(allSeries))
+	for _, s := range allSeries {
+		key := metrics.SeriesKey(s.Labels, seriesLabel)
+		history[key] = s.Points
+	}
+	return history
 }
 
 func makeSlug(alertname string) string {

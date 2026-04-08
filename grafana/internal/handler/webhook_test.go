@@ -78,7 +78,7 @@ func TestWebhook_FiringWithAnnotation(t *testing.T) {
 
 	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1700000000,"10"],[1700000015,"20"]]}]}}`))
+		w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"10.0.0.1:9100"},"values":[[1700000000,"10"],[1700000015,"20"]]}]}}`))
 	}))
 	defer promSrv.Close()
 
@@ -98,7 +98,8 @@ func TestWebhook_FiringWithAnnotation(t *testing.T) {
 				"summary": "CPU over 80%",
 				"pushward_query": "rate(cpu[5m])",
 				"pushward_unit": "%",
-				"pushward_threshold": "80"
+				"pushward_threshold": "80",
+				"pushward_series_label": "instance"
 			},
 			"values": {"B": 87.3},
 			"startsAt": "2026-04-05T10:00:00Z",
@@ -136,8 +137,8 @@ func TestWebhook_FiringWithAnnotation(t *testing.T) {
 	if len(up.Content.Thresholds) != 1 || up.Content.Thresholds[0].Value != 80 {
 		t.Errorf("thresholds = %+v, want [{Value:80}]", up.Content.Thresholds)
 	}
-	if up.Content.History == nil || len(up.Content.History["HighCPU"]) != 2 {
-		t.Errorf("expected 2 history points keyed by alertname, got %v", up.Content.History)
+	if up.Content.History == nil || len(up.Content.History["10.0.0.1:9100"]) != 2 {
+		t.Errorf("expected 2 history points keyed by instance label, got %v", up.Content.History)
 	}
 	if up.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("accent_color = %q, want critical red", up.Content.AccentColor)
@@ -243,6 +244,71 @@ func TestWebhook_MethodNotAllowed(t *testing.T) {
 
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want 405", rec.Code)
+	}
+}
+
+func TestWebhook_MultiSeriesHistory(t *testing.T) {
+	pw := newMockPWServer()
+	defer pw.close()
+
+	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"status": "success",
+			"data": {
+				"resultType": "matrix",
+				"result": [
+					{"metric": {"instance": "10.0.0.1:9100"}, "values": [[1700000000,"10"],[1700000015,"20"]]},
+					{"metric": {"instance": "10.0.0.2:9100"}, "values": [[1700000000,"30"],[1700000015,"40"]]}
+				]
+			}
+		}`))
+	}))
+	defer promSrv.Close()
+
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	mc := metrics.NewClient(promSrv.URL)
+	p := poller.New(mc, pwClient, 1*time.Hour)
+	defer p.StopAll()
+
+	h := NewHandler(pwClient, mc, nil, p, Config{Priority: 5})
+
+	body := `{
+		"status": "firing",
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "MultiCPU", "severity": "warning"},
+			"annotations": {
+				"pushward_query": "rate(cpu[5m])",
+				"pushward_series_label": "instance"
+			},
+			"values": {"B": 10},
+			"startsAt": "2026-04-05T10:00:00Z",
+			"generatorURL": "",
+			"fingerprint": "multi1"
+		}]
+	}`
+
+	rec := fireWebhook(t, h, body)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	updates := pw.getUpdates()
+	if len(updates) != 1 {
+		t.Fatalf("updates = %d, want 1", len(updates))
+	}
+
+	hist := updates[0].Content.History
+	if hist == nil {
+		t.Fatal("expected non-nil history")
+	}
+	if len(hist["10.0.0.1:9100"]) != 2 {
+		t.Errorf("expected 2 points for 10.0.0.1:9100, got %d", len(hist["10.0.0.1:9100"]))
+	}
+	if len(hist["10.0.0.2:9100"]) != 2 {
+		t.Errorf("expected 2 points for 10.0.0.2:9100, got %d", len(hist["10.0.0.2:9100"]))
 	}
 }
 
