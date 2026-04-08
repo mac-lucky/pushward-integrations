@@ -13,8 +13,6 @@ Each runs as its own container with a dedicated PushWard API key.
 | [pushward-github](./github/) | GitHub Actions CI/CD workflow progress | - | `ghcr.io/mac-lucky/pushward-github` |
 | [pushward-sabnzbd](./sabnzbd/) | SABnzbd download and post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
 | [pushward-bambulab](./bambulab/) | BambuLab 3D printer progress via MQTT | - | `ghcr.io/mac-lucky/pushward-bambulab` |
-| [pushward-mqtt](./mqtt/) | Generic MQTT-to-Live-Activity bridge | - | `ghcr.io/mac-lucky/pushward-mqtt` |
-| [pushward-octoprint](./octoprint/) | OctoPrint 3D printer progress via webhooks + API polling | 8090 | `ghcr.io/mac-lucky/pushward-octoprint` |
 | [pushward-unraid](./unraid/) | Unraid parity checks, array state, disk alerts, and UPS events via GraphQL WebSocket | - | `ghcr.io/mac-lucky/pushward-unraid` |
 
 ### Relay (Multi-Tenant Gateway)
@@ -54,7 +52,7 @@ See each integration's README or `config.example.yml` for the full list of confi
 
 ## Project Structure
 
-This is a Go workspace (`go.work`) with a shared module and seven integration modules:
+This is a Go workspace (`go.work`) with a shared module and five integration modules:
 
 ```
 pushward-integrations/
@@ -63,8 +61,6 @@ pushward-integrations/
   github/                    # GitHub Actions poller
   sabnzbd/                   # SABnzbd webhook + download tracker
   bambulab/                  # BambuLab MQTT client
-  mqtt/                      # Generic MQTT bridge
-  octoprint/                 # OctoPrint webhook + REST API poller
   unraid/                    # Unraid GraphQL WebSocket client
   relay/                     # Multi-tenant webhook gateway (PostgreSQL)
     cmd/pushward-relay/      # Entry point
@@ -103,8 +99,6 @@ Build any integration from the repo root:
 go build ./github/cmd/pushward-github
 go build ./sabnzbd/cmd/pushward-sabnzbd
 go build ./bambulab/cmd/pushward-bambulab
-go build ./mqtt/cmd/pushward-mqtt
-go build ./octoprint/cmd/pushward-octoprint
 go build ./unraid/cmd/pushward-unraid
 go build ./relay/cmd/pushward-relay
 ```
@@ -115,8 +109,6 @@ Run locally with a config file:
 ./pushward-github -config github/config.example.yml
 ./pushward-sabnzbd -config sabnzbd/config.example.yml
 ./pushward-bambulab -config bambulab/config.example.yml
-./pushward-mqtt -config mqtt/config.example.yml
-./pushward-octoprint -config octoprint/config.example.yml
 ./pushward-unraid -config unraid/config.example.yml
 ./pushward-relay -config relay/config.example.yml
 ```
@@ -125,7 +117,7 @@ Run tests:
 
 ```bash
 # All tests
-go test ./shared/... ./github/... ./sabnzbd/... ./bambulab/... ./mqtt/... ./octoprint/... ./unraid/... ./relay/... -v -count=1
+go test ./shared/... ./github/... ./sabnzbd/... ./bambulab/... ./unraid/... ./relay/... -v -count=1
 
 # Relay only (with race detector)
 go test ./relay/... -race -count=1 -v
@@ -137,8 +129,6 @@ Build Docker images:
 docker build -f github/Dockerfile -t pushward-github .
 docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd .
 docker build -f bambulab/Dockerfile -t pushward-bambulab .
-docker build -f mqtt/Dockerfile -t pushward-mqtt .
-docker build -f octoprint/Dockerfile -t pushward-octoprint .
 docker build -f unraid/Dockerfile -t pushward-unraid .
 docker build -f relay/Dockerfile -t pushward-relay .
 ```
@@ -150,8 +140,6 @@ Each integration has its own GitHub Actions workflow with path filters so only t
 - `.github/workflows/github-ci-cd.yml` — triggers on `github/**` and `shared/**` changes
 - `.github/workflows/sabnzbd-ci-cd.yml` — triggers on `sabnzbd/**` and `shared/**` changes
 - `.github/workflows/bambulab-ci-cd.yml` — triggers on `bambulab/**` and `shared/**` changes
-- `.github/workflows/mqtt-ci-cd.yml` — triggers on `mqtt/**` and `shared/**` changes
-- `.github/workflows/octoprint-ci-cd.yml` — triggers on `octoprint/**` and `shared/**` changes
 - `.github/workflows/unraid-ci-cd.yml` — triggers on `unraid/**` and `shared/**` changes
 - `.github/workflows/relay-ci-cd.yml` — triggers on `relay/**` and `shared/**` changes
 
