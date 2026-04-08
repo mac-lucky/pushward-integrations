@@ -5,13 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
@@ -29,8 +31,9 @@ type Handler struct {
 	ender   *lifecycle.Ender
 }
 
-func NewHandler(store state.Store, clients *client.Pool, cfg *config.ProxmoxConfig) *Handler {
-	return &Handler{
+// RegisterRoutes registers the Proxmox webhook endpoint and returns the Handler.
+func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.ProxmoxConfig) *Handler {
+	h := &Handler{
 		store:   store,
 		clients: clients,
 		config:  cfg,
@@ -39,37 +42,35 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.ProxmoxConf
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
 	}
+	humautil.RegisterWebhook(api, "/proxmox", "post-proxmox-webhook",
+		"Receive Proxmox notification webhook",
+		"Processes Proxmox infrastructure events (vzdump, replication, fencing, package-updates).",
+		[]string{"Proxmox"}, h.handleWebhook)
+	return h
 }
 
 func (h *Handler) Ender() *lifecycle.Ender {
 	return h.ender
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	var payload webhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		slog.Error("failed to decode proxmox webhook payload", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	userKey := auth.KeyFromContext(r.Context())
+func (h *Handler) handleWebhook(ctx context.Context, input *struct {
+	Body webhookPayload
+}) (*humautil.WebhookResponse, error) {
+	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
-	ctx := r.Context()
 	ctx = metrics.WithProvider(ctx, "proxmox")
+	payload := &input.Body
 
 	var apiErr error
 	switch payload.Type {
 	case "vzdump":
-		apiErr = h.handleVzdump(ctx, userKey, log, &payload)
+		apiErr = h.handleVzdump(ctx, userKey, log, payload)
 	case "replication":
-		apiErr = h.handleReplication(ctx, userKey, log, &payload)
+		apiErr = h.handleReplication(ctx, userKey, log, payload)
 	case "fencing":
-		apiErr = h.handleFencing(ctx, userKey, log, &payload)
+		apiErr = h.handleFencing(ctx, userKey, log, payload)
 	case "package-updates":
-		apiErr = h.handleUpdates(ctx, userKey, log, &payload)
+		apiErr = h.handleUpdates(ctx, userKey, log, payload)
 	case "system":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "proxmox"); err != nil {
@@ -80,11 +81,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if apiErr != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		return
+		return nil, huma.Error502BadGateway("upstream API error")
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return humautil.NewOK(), nil
 }
 
 func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {

@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strconv"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
@@ -26,8 +28,9 @@ type Handler struct {
 	ender   *lifecycle.Ender
 }
 
-func NewHandler(store state.Store, clients *client.Pool, cfg *config.OverseerrConfig) *Handler {
-	return &Handler{
+// RegisterRoutes registers the Overseerr webhook endpoint and returns the Handler.
+func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.OverseerrConfig) *Handler {
+	h := &Handler{
 		store:   store,
 		clients: clients,
 		config:  cfg,
@@ -36,39 +39,37 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.OverseerrCo
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
 	}
+	humautil.RegisterWebhook(api, "/overseerr", "post-overseerr-webhook",
+		"Receive Overseerr media request webhook",
+		"Processes Overseerr media request lifecycle events.",
+		[]string{"Overseerr"}, h.handleWebhook)
+	return h
 }
 
 func (h *Handler) Ender() *lifecycle.Ender {
 	return h.ender
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	var payload webhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		slog.Error("failed to decode webhook payload", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	userKey := auth.KeyFromContext(r.Context())
+func (h *Handler) handleWebhook(ctx context.Context, input *struct {
+	Body webhookPayload
+}) (*humautil.WebhookResponse, error) {
+	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
-	ctx := r.Context()
 	ctx = metrics.WithProvider(ctx, "overseerr")
+	payload := &input.Body
 
 	var apiErr error
 	switch payload.NotificationType {
 	case "MEDIA_PENDING":
-		apiErr = h.handleEvent(ctx, userKey, log, &payload, 1, "Requested", "hourglass", pushward.ColorOrange, false)
+		apiErr = h.handleEvent(ctx, userKey, log, payload, 1, "Requested", "hourglass", pushward.ColorOrange, false)
 	case "MEDIA_APPROVED", "MEDIA_AUTO_APPROVED":
-		apiErr = h.handleEvent(ctx, userKey, log, &payload, 2, "Approved", "checkmark.circle", pushward.ColorBlue, false)
+		apiErr = h.handleEvent(ctx, userKey, log, payload, 2, "Approved", "checkmark.circle", pushward.ColorBlue, false)
 	case "MEDIA_AVAILABLE":
-		apiErr = h.handleEvent(ctx, userKey, log, &payload, 4, "Available", "checkmark.circle.fill", pushward.ColorGreen, true)
+		apiErr = h.handleEvent(ctx, userKey, log, payload, 4, "Available", "checkmark.circle.fill", pushward.ColorGreen, true)
 	case "MEDIA_DECLINED":
-		apiErr = h.handleEvent(ctx, userKey, log, &payload, 0, "Declined", "xmark.circle.fill", pushward.ColorRed, true)
+		apiErr = h.handleEvent(ctx, userKey, log, payload, 0, "Declined", "xmark.circle.fill", pushward.ColorRed, true)
 	case "MEDIA_FAILED":
-		apiErr = h.handleEvent(ctx, userKey, log, &payload, 0, "Failed", "xmark.circle.fill", pushward.ColorRed, true)
+		apiErr = h.handleEvent(ctx, userKey, log, payload, 0, "Failed", "xmark.circle.fill", pushward.ColorRed, true)
 	case "TEST_NOTIFICATION":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "overseerr"); err != nil {
@@ -79,11 +80,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if apiErr != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		return
+		return nil, huma.Error502BadGateway("upstream API error")
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return humautil.NewOK(), nil
 }
 
 func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, step int, stateText, icon, accentColor string, terminal bool) error {

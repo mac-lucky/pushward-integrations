@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
@@ -31,26 +31,30 @@ func testConfig() *config.GrafanaConfig {
 	}
 }
 
-func setup(t *testing.T) (http.Handler, *[]testutil.APICall, *sync.Mutex) {
+func newTestAPI(t *testing.T, cfg *config.GrafanaConfig) (http.Handler, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
 	srv, calls, mu := testutil.MockPushWardServer(t)
-	cfg := testConfig()
 	pool := client.NewPool(srv.URL, nil)
-	h := NewHandler(pool, cfg)
-	return auth.Middleware(h), calls, mu
+
+	mux, api := humautil.NewTestAPI()
+	RegisterRoutes(api, pool, cfg)
+
+	return mux, calls, mu
+}
+
+func setup(t *testing.T) (http.Handler, *[]testutil.APICall, *sync.Mutex) {
+	t.Helper()
+	return newTestAPI(t, testConfig())
 }
 
 func setupWithConfig(t *testing.T, cfg *config.GrafanaConfig) (http.Handler, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
-	srv, calls, mu := testutil.MockPushWardServer(t)
-	pool := client.NewPool(srv.URL, nil)
-	h := NewHandler(pool, cfg)
-	return auth.Middleware(h), calls, mu
+	return newTestAPI(t, cfg)
 }
 
 func sendWebhook(t *testing.T, handler http.Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/grafana", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+testKey)
 	w := httptest.NewRecorder()
@@ -473,7 +477,7 @@ func TestUnknownAlertStatus_Ignored(t *testing.T) {
 
 func TestMissingAuthKey_Unauthorized(t *testing.T) {
 	handler, _, _ := setup(t)
-	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(`{"alerts":[]}`))
+	req := httptest.NewRequest(http.MethodPost, "/grafana", strings.NewReader(`{"alerts":[]}`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -546,7 +550,8 @@ func TestMaxBytesReader_OversizedBody(t *testing.T) {
 	handler, _, _ := setup(t)
 	bigPayload := strings.Repeat("x", 2<<20)
 	w := sendWebhook(t, handler, bigPayload)
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for oversized body, got %d", w.Code)
+	// Huma returns 413 Request Entity Too Large for oversized bodies.
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected 413 for oversized body, got %d", w.Code)
 	}
 }

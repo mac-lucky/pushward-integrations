@@ -1,28 +1,33 @@
 package grafana
 
 import (
-	"encoding/json"
+	"context"
 	"log/slog"
-	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
+// Handler processes Grafana alerting webhooks.
 type Handler struct {
 	clients *client.Pool
 	config  *config.GrafanaConfig
 }
 
-func NewHandler(clients *client.Pool, cfg *config.GrafanaConfig) *Handler {
-	return &Handler{
-		clients: clients,
-		config:  cfg,
-	}
+// RegisterRoutes registers the Grafana webhook endpoint with the Huma API.
+func RegisterRoutes(api huma.API, clients *client.Pool, cfg *config.GrafanaConfig) {
+	h := &Handler{clients: clients, config: cfg}
+	humautil.RegisterWebhook(api, "/grafana", "post-grafana-webhook",
+		"Receive Grafana alert webhook",
+		"Processes Grafana alerting webhook payloads and sends push notifications for each alert.",
+		[]string{"Grafana"}, h.handleWebhook)
 }
 
 type webhookPayload struct {
@@ -48,24 +53,16 @@ func isKnownSeverity(s string) bool {
 	return s == pushward.SeverityCritical || s == pushward.SeverityWarning || s == pushward.SeverityInfo
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	var payload webhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		slog.Error("failed to decode webhook payload", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
+func (h *Handler) handleWebhook(ctx context.Context, input *struct {
+	Body webhookPayload
+}) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "grafana")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	cl := h.clients.Get(userKey)
 
 	var apiErr error
-	for _, a := range payload.Alerts {
+	for _, a := range input.Body.Alerts {
 		severity := a.Labels[h.config.SeverityLabel]
 		if !isKnownSeverity(severity) {
 			severity = h.config.DefaultSeverity
@@ -158,9 +155,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if apiErr != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		return
+		return nil, huma.Error502BadGateway("upstream API error")
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return humautil.NewOK(), nil
 }

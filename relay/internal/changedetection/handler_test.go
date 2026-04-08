@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
@@ -30,8 +30,11 @@ func newHandler(t *testing.T, cfg *config.ChangedetectionConfig) (http.Handler, 
 	t.Helper()
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	pool := client.NewPool(srv.URL, nil)
-	h := NewHandler(pool, cfg)
-	return auth.Middleware(h), calls, mu
+
+	mux, api := humautil.NewTestAPI()
+	RegisterRoutes(api, pool, cfg)
+
+	return mux, calls, mu
 }
 
 func send(t *testing.T, h http.Handler, payload string) *httptest.ResponseRecorder {

@@ -38,6 +38,12 @@ func init() {
 	})
 }
 
+// AllowKey checks whether a request with the given route pattern and auth key
+// is allowed under per-key rate limiting. Returns true if allowed.
+func AllowKey(pattern, key string) bool {
+	return keyLimiters.get(pattern + lrumap.KeyHash(key)).Allow()
+}
+
 // Middleware applies per-key rate limiting. Must run after auth.Middleware
 // so that auth.KeyFromContext returns the hlk_ key.
 func Middleware(next http.Handler) http.Handler {
@@ -49,8 +55,7 @@ func Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		limiter := keyLimiters.get(r.Pattern + lrumap.KeyHash(key))
-		if !limiter.Allow() {
+		if !AllowKey(r.Pattern, key) {
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)

@@ -24,7 +24,7 @@ func TestClientIP_CFConnectingIP(t *testing.T) {
 	r.Header.Set("X-Real-IP", "5.6.7.8")
 	r.Header.Set("X-Forwarded-For", "9.10.11.12, 13.14.15.16")
 
-	if got := clientIP(r); got != "1.2.3.4" {
+	if got := ClientIP(r.RemoteAddr, r.Header.Get); got != "1.2.3.4" {
 		t.Errorf("expected CF-Connecting-IP 1.2.3.4, got %s", got)
 	}
 }
@@ -36,7 +36,7 @@ func TestClientIP_XRealIP(t *testing.T) {
 	r.Header.Set("X-Real-IP", "5.6.7.8")
 	r.Header.Set("X-Forwarded-For", "9.10.11.12")
 
-	if got := clientIP(r); got != "5.6.7.8" {
+	if got := ClientIP(r.RemoteAddr, r.Header.Get); got != "5.6.7.8" {
 		t.Errorf("expected X-Real-IP 5.6.7.8, got %s", got)
 	}
 }
@@ -47,7 +47,7 @@ func TestClientIP_XForwardedFor_FirstEntry(t *testing.T) {
 	r := httptest.NewRequest("POST", "/", nil)
 	r.Header.Set("X-Forwarded-For", "9.10.11.12, 13.14.15.16")
 
-	if got := clientIP(r); got != "9.10.11.12" {
+	if got := ClientIP(r.RemoteAddr, r.Header.Get); got != "9.10.11.12" {
 		t.Errorf("expected first XFF entry 9.10.11.12, got %s", got)
 	}
 }
@@ -58,7 +58,7 @@ func TestClientIP_XForwardedFor_SingleEntry(t *testing.T) {
 	r := httptest.NewRequest("POST", "/", nil)
 	r.Header.Set("X-Forwarded-For", "9.10.11.12")
 
-	if got := clientIP(r); got != "9.10.11.12" {
+	if got := ClientIP(r.RemoteAddr, r.Header.Get); got != "9.10.11.12" {
 		t.Errorf("expected XFF 9.10.11.12, got %s", got)
 	}
 }
@@ -67,7 +67,7 @@ func TestClientIP_RemoteAddr_IPv4(t *testing.T) {
 	r := httptest.NewRequest("POST", "/", nil)
 	r.RemoteAddr = "192.168.1.1:12345"
 
-	if got := clientIP(r); got != "192.168.1.1" {
+	if got := ClientIP(r.RemoteAddr, r.Header.Get); got != "192.168.1.1" {
 		t.Errorf("expected 192.168.1.1, got %s", got)
 	}
 }
@@ -76,7 +76,7 @@ func TestClientIP_RemoteAddr_IPv6(t *testing.T) {
 	r := httptest.NewRequest("POST", "/", nil)
 	r.RemoteAddr = "[::1]:12345"
 
-	if got := clientIP(r); got != "::1" {
+	if got := ClientIP(r.RemoteAddr, r.Header.Get); got != "::1" {
 		t.Errorf("expected ::1, got %s", got)
 	}
 }
@@ -85,7 +85,7 @@ func TestClientIP_RemoteAddr_NoPort(t *testing.T) {
 	r := httptest.NewRequest("POST", "/", nil)
 	r.RemoteAddr = "192.168.1.1"
 
-	if got := clientIP(r); got != "192.168.1.1" {
+	if got := ClientIP(r.RemoteAddr, r.Header.Get); got != "192.168.1.1" {
 		t.Errorf("expected 192.168.1.1, got %s", got)
 	}
 }
@@ -102,7 +102,7 @@ func TestClientIP_UntrustedProxy_IgnoresHeaders(t *testing.T) {
 	r.Header.Set("X-Real-IP", "5.6.7.8")
 	r.Header.Set("X-Forwarded-For", "9.10.11.12")
 
-	if got := clientIP(r); got != "203.0.113.1" {
+	if got := ClientIP(r.RemoteAddr, r.Header.Get); got != "203.0.113.1" {
 		t.Errorf("expected RemoteAddr 203.0.113.1 (untrusted proxy), got %s", got)
 	}
 }

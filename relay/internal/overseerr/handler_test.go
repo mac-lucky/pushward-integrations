@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -30,23 +30,26 @@ func testConfig() *config.OverseerrConfig {
 	}
 }
 
-func newHandler(t *testing.T, cfg *config.OverseerrConfig) (*Handler, *[]testutil.APICall, *sync.Mutex) {
+func newHandler(t *testing.T, cfg *config.OverseerrConfig) (http.Handler, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
 	lifecycle.SetRetryDelay(10 * time.Millisecond)
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	store := state.NewMemoryStore()
 	pool := client.NewPool(srv.URL, nil)
-	h := NewHandler(store, pool, cfg)
-	return h, calls, mu
+
+	mux, api := humautil.NewTestAPI()
+	RegisterRoutes(api, store, pool, cfg)
+
+	return mux, calls, mu
 }
 
-func send(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
+func send(t *testing.T, h http.Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/overseerr", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer hlk_test")
 	w := httptest.NewRecorder()
-	auth.Middleware(h).ServeHTTP(w, req)
+	h.ServeHTTP(w, req)
 	return w
 }
 

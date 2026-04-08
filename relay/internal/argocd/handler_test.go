@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -35,23 +35,25 @@ func testConfig() *config.ArgoCDConfig {
 	}
 }
 
-func setupHandler(t *testing.T, cfg *config.ArgoCDConfig, srvURL string) (*Handler, state.Store) {
+func setupHandler(t *testing.T, cfg *config.ArgoCDConfig, srvURL string) (http.Handler, *Handler) {
 	t.Helper()
 	lifecycle.SetRetryDelay(10 * time.Millisecond)
 	store := state.NewMemoryStore()
 	pool := client.NewPool(srvURL, nil)
-	h := NewHandler(store, pool, cfg)
-	return h, store
+
+	mux, api := humautil.NewTestAPI()
+	h := RegisterRoutes(api, store, pool, cfg)
+
+	return mux, h
 }
 
-func sendWebhook(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
+func sendWebhook(t *testing.T, handler http.Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/argocd", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+testKey)
 	w := httptest.NewRecorder()
-	wrapped := auth.Middleware(h)
-	wrapped.ServeHTTP(w, req)
+	handler.ServeHTTP(w, req)
 	return w
 }
 
@@ -66,10 +68,10 @@ func appExists(t *testing.T, h *Handler, appName string) bool {
 func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
 	// Step 1: sync-running
-	w := sendWebhook(t, h, `{
+	w := sendWebhook(t, mux, `{
 		"app": "pushward-server",
 		"project": "default",
 		"event": "sync-running",
@@ -138,7 +140,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	}
 
 	// Step 2: sync-succeeded
-	w = sendWebhook(t, h, `{
+	w = sendWebhook(t, mux, `{
 		"app": "pushward-server",
 		"project": "default",
 		"event": "sync-succeeded",
@@ -173,7 +175,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	}
 
 	// Step 3: deployed (schedules async two-phase end)
-	w = sendWebhook(t, h, `{
+	w = sendWebhook(t, mux, `{
 		"app": "pushward-server",
 		"project": "default",
 		"event": "deployed",
@@ -233,13 +235,13 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 func TestSyncRunning_ThenSyncFailed(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
 	// Start sync
-	sendWebhook(t, h, `{"app":"my-app","event":"sync-running","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"my-app","event":"sync-running","revision":"rev1"}`)
 
 	// Fail
-	w := sendWebhook(t, h, `{"app":"my-app","event":"sync-failed","revision":"rev1","message":"sync error"}`)
+	w := sendWebhook(t, mux, `{"app":"my-app","event":"sync-failed","revision":"rev1","message":"sync error"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
@@ -278,12 +280,12 @@ func TestSyncRunning_ThenSyncFailed(t *testing.T) {
 func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
-	sendWebhook(t, h, `{"app":"web-app","event":"sync-running","revision":"rev1"}`)
-	sendWebhook(t, h, `{"app":"web-app","event":"sync-succeeded","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"web-app","event":"sync-running","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"web-app","event":"sync-succeeded","revision":"rev1"}`)
 
-	w := sendWebhook(t, h, `{"app":"web-app","event":"health-degraded","revision":"rev1","health_status":"Degraded"}`)
+	w := sendWebhook(t, mux, `{"app":"web-app","event":"health-degraded","revision":"rev1","health_status":"Degraded"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
@@ -319,7 +321,7 @@ func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 	}
 
 	// deployed arrives — should recover to 100% Deployed
-	w = sendWebhook(t, h, `{"app":"web-app","event":"deployed","revision":"rev1"}`)
+	w = sendWebhook(t, mux, `{"app":"web-app","event":"deployed","revision":"rev1"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("deployed: expected 200, got %d", w.Code)
 	}
@@ -354,10 +356,10 @@ func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 func TestUntracked_SyncSucceeded(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
 	// No prior sync-running — bridge restarted
-	w := sendWebhook(t, h, `{"app":"my-app","event":"sync-succeeded","revision":"rev1"}`)
+	w := sendWebhook(t, mux, `{"app":"my-app","event":"sync-succeeded","revision":"rev1"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
@@ -384,9 +386,9 @@ func TestUntracked_SyncSucceeded(t *testing.T) {
 func TestUntracked_Deployed(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	w := sendWebhook(t, h, `{"app":"my-app","event":"deployed","revision":"rev1"}`)
+	w := sendWebhook(t, mux, `{"app":"my-app","event":"deployed","revision":"rev1"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
@@ -416,9 +418,9 @@ func TestUntracked_Deployed(t *testing.T) {
 func TestUntracked_SyncFailed(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	w := sendWebhook(t, h, `{"app":"my-app","event":"sync-failed","revision":"rev1"}`)
+	w := sendWebhook(t, mux, `{"app":"my-app","event":"sync-failed","revision":"rev1"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
@@ -448,9 +450,9 @@ func TestUntracked_SyncFailed(t *testing.T) {
 func TestUntracked_HealthDegraded(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	w := sendWebhook(t, h, `{"app":"my-app","event":"health-degraded","revision":"rev1"}`)
+	w := sendWebhook(t, mux, `{"app":"my-app","event":"health-degraded","revision":"rev1"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
@@ -479,13 +481,13 @@ func TestUntracked_HealthDegraded(t *testing.T) {
 func TestResyncSameRevision_SkipsCreate(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
 	// First sync-running
-	sendWebhook(t, h, `{"app":"my-app","event":"sync-running","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"my-app","event":"sync-running","revision":"rev1"}`)
 
 	// Re-fire sync-running with same revision
-	sendWebhook(t, h, `{"app":"my-app","event":"sync-running","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"my-app","event":"sync-running","revision":"rev1"}`)
 
 	recorded := testutil.GetCalls(calls, mu)
 	// First: create + update. Second: update only (no create) = 3
@@ -508,13 +510,13 @@ func TestResyncSameRevision_SkipsCreate(t *testing.T) {
 func TestNewRevision_ResetsTracking(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
 	// Start sync with rev1
-	sendWebhook(t, h, `{"app":"my-app","event":"sync-running","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"my-app","event":"sync-running","revision":"rev1"}`)
 
 	// New sync with rev2
-	sendWebhook(t, h, `{"app":"my-app","event":"sync-running","revision":"rev2"}`)
+	sendWebhook(t, mux, `{"app":"my-app","event":"sync-running","revision":"rev2"}`)
 
 	recorded := testutil.GetCalls(calls, mu)
 	// First: create + update. Second: create + update = 4
@@ -534,12 +536,13 @@ func TestNewRevision_ResetsTracking(t *testing.T) {
 
 func TestInvalidJSON(t *testing.T) {
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, "http://unused")
+	mux, _ := setupHandler(t, cfg, "http://unused")
 
-	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader("not json"))
+	req := httptest.NewRequest(http.MethodPost, "/argocd", strings.NewReader("not json"))
+	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+testKey)
 	w := httptest.NewRecorder()
-	auth.Middleware(h).ServeHTTP(w, req)
+	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
 	}
@@ -549,9 +552,9 @@ func TestInvalidJSON(t *testing.T) {
 
 func TestMissingApp(t *testing.T) {
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, "http://unused")
+	mux, _ := setupHandler(t, cfg, "http://unused")
 
-	w := sendWebhook(t, h, `{"event":"sync-running","revision":"r1"}`)
+	w := sendWebhook(t, mux, `{"event":"sync-running","revision":"r1"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
 	}
@@ -559,9 +562,9 @@ func TestMissingApp(t *testing.T) {
 
 func TestMissingEvent(t *testing.T) {
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, "http://unused")
+	mux, _ := setupHandler(t, cfg, "http://unused")
 
-	w := sendWebhook(t, h, `{"app":"my-app","revision":"r1"}`)
+	w := sendWebhook(t, mux, `{"app":"my-app","revision":"r1"}`)
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
 	}
@@ -572,9 +575,9 @@ func TestMissingEvent(t *testing.T) {
 func TestCreateActivity_IncludesTTLValues(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	sendWebhook(t, h, `{"app":"ttl-app","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"ttl-app","event":"sync-running","revision":"r1"}`)
 
 	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) < 1 {
@@ -600,10 +603,10 @@ func TestCreateActivity_IncludesTTLValues(t *testing.T) {
 func TestCleanupAfterEnd_RemovesFromStore(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
-	sendWebhook(t, h, `{"app":"cleanup-app","event":"sync-running","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"cleanup-app","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"cleanup-app","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"cleanup-app","event":"deployed","revision":"r1"}`)
 
 	// Wait for two-phase end (EndDelay + EndDisplayTime)
 	time.Sleep(100 * time.Millisecond)
@@ -630,14 +633,14 @@ func TestNewSync_CancelsPendingEnd(t *testing.T) {
 	cfg := testConfig()
 	cfg.EndDelay = 100 * time.Millisecond
 	cfg.EndDisplayTime = 100 * time.Millisecond
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
 	// Sync and deploy (starts endTimer)
-	sendWebhook(t, h, `{"app":"flap-app","event":"sync-running","revision":"rev1"}`)
-	sendWebhook(t, h, `{"app":"flap-app","event":"deployed","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"flap-app","event":"sync-running","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"flap-app","event":"deployed","revision":"rev1"}`)
 
 	// Immediately start new sync (should cancel endTimer via new revision reset)
-	sendWebhook(t, h, `{"app":"flap-app","event":"sync-running","revision":"rev2"}`)
+	sendWebhook(t, mux, `{"app":"flap-app","event":"sync-running","revision":"rev2"}`)
 
 	// Wait longer than end delay + display time
 	time.Sleep(300 * time.Millisecond)
@@ -653,16 +656,16 @@ func TestNewSync_CancelsPendingEnd(t *testing.T) {
 func TestMultipleApps_Independent(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
 	// App 1: sync-running
-	sendWebhook(t, h, `{"app":"app-one","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"app-one","event":"sync-running","revision":"r1"}`)
 
 	// App 2: sync-running
-	sendWebhook(t, h, `{"app":"app-two","event":"sync-running","revision":"r2"}`)
+	sendWebhook(t, mux, `{"app":"app-two","event":"sync-running","revision":"r2"}`)
 
 	// App 1: deployed (schedules async two-phase end)
-	sendWebhook(t, h, `{"app":"app-one","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"app-one","event":"deployed","revision":"r1"}`)
 
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
@@ -717,9 +720,9 @@ func TestSlugSanitization(t *testing.T) {
 func TestUnknownEvent_Ignored(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	w := sendWebhook(t, h, `{"app":"my-app","event":"some-unknown-event","revision":"r1"}`)
+	w := sendWebhook(t, mux, `{"app":"my-app","event":"some-unknown-event","revision":"r1"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
@@ -735,13 +738,13 @@ func TestUnknownEvent_Ignored(t *testing.T) {
 func TestSyncFailed_AtStep2_PreservesStep(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	sendWebhook(t, h, `{"app":"my-app","event":"sync-running","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"my-app","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"my-app","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"my-app","event":"sync-succeeded","revision":"r1"}`)
 
 	// Fail after sync-succeeded (step 2)
-	sendWebhook(t, h, `{"app":"my-app","event":"sync-failed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"my-app","event":"sync-failed","revision":"r1"}`)
 
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
@@ -762,12 +765,12 @@ func TestGracePeriod_FastSync_Skipped(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 100 * time.Millisecond
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
 	// Full sync cycle within grace period — should be skipped as no-op
-	sendWebhook(t, h, `{"app":"fast-app","event":"sync-running","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"fast-app","event":"sync-succeeded","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"fast-app","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"fast-app","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"fast-app","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"fast-app","event":"deployed","revision":"r1"}`)
 
 	// Wait for grace timer to fire (it shouldn't since it was cancelled)
 	time.Sleep(200 * time.Millisecond)
@@ -786,9 +789,9 @@ func TestGracePeriod_SlowSync_Created(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 50 * time.Millisecond
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	sendWebhook(t, h, `{"app":"slow-app","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"slow-app","event":"sync-running","revision":"r1"}`)
 
 	// No API calls yet (in grace period)
 	recorded := testutil.GetCalls(calls, mu)
@@ -815,8 +818,8 @@ func TestGracePeriod_SlowSync_Created(t *testing.T) {
 	}
 
 	// Complete the sync normally
-	sendWebhook(t, h, `{"app":"slow-app","event":"sync-succeeded","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"slow-app","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"slow-app","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"slow-app","event":"deployed","revision":"r1"}`)
 
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
@@ -832,10 +835,10 @@ func TestGracePeriod_SyncSucceededDuringGrace_ExpiresAtStep2(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 100 * time.Millisecond
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	sendWebhook(t, h, `{"app":"step2-app","event":"sync-running","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"step2-app","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"step2-app","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"step2-app","event":"sync-succeeded","revision":"r1"}`)
 
 	// Grace expires with step at 2
 	time.Sleep(200 * time.Millisecond)
@@ -859,9 +862,9 @@ func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 5 * time.Second // long grace to prove bypass
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	sendWebhook(t, h, `{"app":"fail-app","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"fail-app","event":"sync-running","revision":"r1"}`)
 
 	// No API calls yet (in grace period)
 	recorded := testutil.GetCalls(calls, mu)
@@ -870,7 +873,7 @@ func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
 	}
 
 	// Sync fails — should bypass grace and create immediately
-	sendWebhook(t, h, `{"app":"fail-app","event":"sync-failed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"fail-app","event":"sync-failed","revision":"r1"}`)
 
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
@@ -895,10 +898,10 @@ func TestGracePeriod_HealthDegraded_BypassesGrace(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 5 * time.Second
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	sendWebhook(t, h, `{"app":"deg-app","event":"sync-running","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"deg-app","event":"health-degraded","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"deg-app","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"deg-app","event":"health-degraded","revision":"r1"}`)
 
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
@@ -923,10 +926,10 @@ func TestGracePeriod_UntrackedDeployed_Recorded(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 100 * time.Millisecond
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
 	// Untracked deployed with grace period — recorded but no API calls
-	sendWebhook(t, h, `{"app":"already-done","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"already-done","event":"deployed","revision":"r1"}`)
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -940,11 +943,11 @@ func TestGracePeriod_DeployedBeforeSyncSucceeded_Skipped(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 100 * time.Millisecond
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
 	// deployed arrives before sync-succeeded (out-of-order from ArgoCD notifications)
-	sendWebhook(t, h, `{"app":"ooo-app","event":"deployed","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"ooo-app","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"ooo-app","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"ooo-app","event":"sync-succeeded","revision":"r1"}`)
 
 	// Wait for grace timer (should NOT fire — the sync was detected as no-op)
 	time.Sleep(200 * time.Millisecond)
@@ -964,11 +967,11 @@ func TestGracePeriod_UntrackedSyncSucceeded_ThenDeployed_Skipped(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 100 * time.Millisecond
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
 	// Untracked sync-succeeded starts grace, then deployed during grace — skip
-	sendWebhook(t, h, `{"app":"untracked-app","event":"sync-succeeded","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"untracked-app","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"untracked-app","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"untracked-app","event":"deployed","revision":"r1"}`)
 
 	time.Sleep(200 * time.Millisecond)
 
@@ -982,10 +985,10 @@ func TestGracePeriod_UntrackedSyncSucceeded_GraceExpires(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 50 * time.Millisecond
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
 	// Untracked sync-succeeded with grace — if no deployed arrives, create at step 2
-	sendWebhook(t, h, `{"app":"untracked-rolling","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"untracked-rolling","event":"sync-succeeded","revision":"r1"}`)
 
 	time.Sleep(150 * time.Millisecond)
 
@@ -1008,11 +1011,11 @@ func TestGracePeriod_UntrackedSyncSucceeded_GraceExpires(t *testing.T) {
 func TestHealthDegraded_AtStep1_StillEnds(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
 	// sync-running (step 1) → health-degraded: should end immediately (not transient)
-	sendWebhook(t, h, `{"app":"step1-app","event":"sync-running","revision":"rev1"}`)
-	sendWebhook(t, h, `{"app":"step1-app","event":"health-degraded","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"step1-app","event":"sync-running","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"step1-app","event":"health-degraded","revision":"rev1"}`)
 
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
@@ -1044,14 +1047,14 @@ func TestHealthDegraded_AtStep1_StillEnds(t *testing.T) {
 func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
-	sendWebhook(t, h, `{"app":"multi-deg","event":"sync-running","revision":"rev1"}`)
-	sendWebhook(t, h, `{"app":"multi-deg","event":"sync-succeeded","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"multi-deg","event":"sync-running","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"multi-deg","event":"sync-succeeded","revision":"rev1"}`)
 
 	// Two degraded events at step 2 — both should be transient ONGOING warnings
-	sendWebhook(t, h, `{"app":"multi-deg","event":"health-degraded","revision":"rev1"}`)
-	sendWebhook(t, h, `{"app":"multi-deg","event":"health-degraded","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"multi-deg","event":"health-degraded","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"multi-deg","event":"health-degraded","revision":"rev1"}`)
 
 	recorded := testutil.GetCalls(calls, mu)
 	// create + step1 + step2 + degraded1(ONGOING) + degraded2(ONGOING) = 5
@@ -1077,7 +1080,7 @@ func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
 	}
 
 	// deployed recovers to 100%
-	sendWebhook(t, h, `{"app":"multi-deg","event":"deployed","revision":"rev1"}`)
+	sendWebhook(t, mux, `{"app":"multi-deg","event":"deployed","revision":"rev1"}`)
 	time.Sleep(100 * time.Millisecond)
 
 	recorded = testutil.GetCalls(calls, mu)
@@ -1103,12 +1106,12 @@ func TestGracePeriod_SyncRunning_DeployedBeforeSyncSucceeded_Skipped(t *testing.
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 100 * time.Millisecond
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
 	// sync-running starts grace period, deployed arrives before sync-succeeded
-	sendWebhook(t, h, `{"app":"pending-ooo","event":"sync-running","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"pending-ooo","event":"deployed","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"pending-ooo","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"pending-ooo","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"pending-ooo","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"pending-ooo","event":"sync-succeeded","revision":"r1"}`)
 
 	// Wait for any grace timer to fire (should NOT — entire sync was no-op)
 	time.Sleep(300 * time.Millisecond)
@@ -1128,12 +1131,12 @@ func TestGracePeriod_DeployedThenSyncSucceededThenSyncRunning_Skipped(t *testing
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 100 * time.Millisecond
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
 	// Out-of-order: deployed first, then sync-succeeded, then sync-running arrives late
-	sendWebhook(t, h, `{"app":"late-app","event":"deployed","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"late-app","event":"sync-succeeded","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"late-app","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"late-app","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"late-app","event":"sync-succeeded","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"late-app","event":"sync-running","revision":"r1"}`)
 
 	// Wait for any grace timer to fire
 	time.Sleep(300 * time.Millisecond)
@@ -1175,9 +1178,9 @@ func TestContentURLs_WithArgoCDURLAndRepoURL(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.URL = "https://argocd.example.com"
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	w := sendWebhook(t, h, `{
+	w := sendWebhook(t, mux, `{
 		"app": "url-test-app",
 		"event": "sync-running",
 		"revision": "abc123",
@@ -1210,17 +1213,17 @@ func TestContentURLs_WithArgoCDURLAndRepoURL(t *testing.T) {
 
 func TestOversizedBody_ReturnsBadRequest(t *testing.T) {
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, "http://unused")
+	mux, _ := setupHandler(t, cfg, "http://unused")
 
 	oversized := strings.Repeat("a", (1<<20)+1)
-	req := httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(oversized))
+	req := httptest.NewRequest(http.MethodPost, "/argocd", strings.NewReader(oversized))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+testKey)
 	w := httptest.NewRecorder()
-	auth.Middleware(h).ServeHTTP(w, req)
+	mux.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected 400 for oversized body, got %d", w.Code)
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("expected 413 for oversized body, got %d", w.Code)
 	}
 }
 
@@ -1229,9 +1232,9 @@ func TestOversizedBody_ReturnsBadRequest(t *testing.T) {
 func TestCreateActivityFails_SyncRunning(t *testing.T) {
 	srv, _, _ := customMockServer(t, http.MethodPost)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
-	w := sendWebhook(t, h, `{"app":"fail-create","event":"sync-running","revision":"r1"}`)
+	w := sendWebhook(t, mux, `{"app":"fail-create","event":"sync-running","revision":"r1"}`)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", w.Code)
 	}
@@ -1244,9 +1247,9 @@ func TestCreateActivityFails_SyncRunning(t *testing.T) {
 func TestCreateActivityFails_UntrackedSyncSucceeded(t *testing.T) {
 	srv, _, _ := customMockServer(t, http.MethodPost)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
-	w := sendWebhook(t, h, `{"app":"fail-create","event":"sync-succeeded","revision":"r1"}`)
+	w := sendWebhook(t, mux, `{"app":"fail-create","event":"sync-succeeded","revision":"r1"}`)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", w.Code)
 	}
@@ -1259,9 +1262,9 @@ func TestCreateActivityFails_UntrackedSyncSucceeded(t *testing.T) {
 func TestCreateActivityFails_UntrackedDeployed(t *testing.T) {
 	srv, _, _ := customMockServer(t, http.MethodPost)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
-	w := sendWebhook(t, h, `{"app":"fail-create","event":"deployed","revision":"r1"}`)
+	w := sendWebhook(t, mux, `{"app":"fail-create","event":"deployed","revision":"r1"}`)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", w.Code)
 	}
@@ -1274,9 +1277,9 @@ func TestCreateActivityFails_UntrackedDeployed(t *testing.T) {
 func TestCreateActivityFails_SyncFailed(t *testing.T) {
 	srv, _, _ := customMockServer(t, http.MethodPost)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
-	w := sendWebhook(t, h, `{"app":"fail-create","event":"sync-failed","revision":"r1"}`)
+	w := sendWebhook(t, mux, `{"app":"fail-create","event":"sync-failed","revision":"r1"}`)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", w.Code)
 	}
@@ -1289,9 +1292,9 @@ func TestCreateActivityFails_SyncFailed(t *testing.T) {
 func TestCreateActivityFails_HealthDegraded(t *testing.T) {
 	srv, _, _ := customMockServer(t, http.MethodPost)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
-	w := sendWebhook(t, h, `{"app":"fail-create","event":"health-degraded","revision":"r1"}`)
+	w := sendWebhook(t, mux, `{"app":"fail-create","event":"health-degraded","revision":"r1"}`)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", w.Code)
 	}
@@ -1305,12 +1308,12 @@ func TestCreateActivityFails_PendingSyncFailed(t *testing.T) {
 	srv, _, _ := customMockServer(t, http.MethodPost)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 5 * time.Second
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
 	// sync-running enters grace (no API calls)
-	sendWebhook(t, h, `{"app":"pending-fail","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"pending-fail","event":"sync-running","revision":"r1"}`)
 	// sync-failed bypasses grace, tries create — fails
-	sendWebhook(t, h, `{"app":"pending-fail","event":"sync-failed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"pending-fail","event":"sync-failed","revision":"r1"}`)
 
 	if appExists(t, h, "pending-fail") {
 		t.Error("expected app to be removed from store after create failure")
@@ -1321,10 +1324,10 @@ func TestCreateActivityFails_PendingHealthDegraded(t *testing.T) {
 	srv, _, _ := customMockServer(t, http.MethodPost)
 	cfg := testConfig()
 	cfg.SyncGracePeriod = 5 * time.Second
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
-	sendWebhook(t, h, `{"app":"pending-deg","event":"sync-running","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"pending-deg","event":"health-degraded","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"pending-deg","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"pending-deg","event":"health-degraded","revision":"r1"}`)
 
 	if appExists(t, h, "pending-deg") {
 		t.Error("expected app to be removed from store after create failure")
@@ -1336,9 +1339,9 @@ func TestCreateActivityFails_PendingHealthDegraded(t *testing.T) {
 func TestUpdateActivityFails_SyncRunning(t *testing.T) {
 	srv, calls, mu := customMockServer(t, http.MethodPatch)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
-	w := sendWebhook(t, h, `{"app":"fail-update","event":"sync-running","revision":"r1"}`)
+	w := sendWebhook(t, mux, `{"app":"fail-update","event":"sync-running","revision":"r1"}`)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", w.Code)
 	}
@@ -1357,12 +1360,12 @@ func TestUpdateActivityFails_SyncRunning(t *testing.T) {
 func TestUpdateActivityFails_SyncSucceeded(t *testing.T) {
 	srv, calls, mu := customMockServer(t, http.MethodPatch)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
 	// sync-running: POST(create) ok, PATCH(update) fail
-	sendWebhook(t, h, `{"app":"fail-update","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"fail-update","event":"sync-running","revision":"r1"}`)
 	// sync-succeeded: PATCH(update) fail
-	w := sendWebhook(t, h, `{"app":"fail-update","event":"sync-succeeded","revision":"r1"}`)
+	w := sendWebhook(t, mux, `{"app":"fail-update","event":"sync-succeeded","revision":"r1"}`)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", w.Code)
 	}
@@ -1395,11 +1398,11 @@ func TestTransientHealthDegraded_UpdateFails(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	sendWebhook(t, h, `{"app":"deg-fail","event":"sync-running","revision":"r1"}`)
-	sendWebhook(t, h, `{"app":"deg-fail","event":"sync-succeeded","revision":"r1"}`)
-	w := sendWebhook(t, h, `{"app":"deg-fail","event":"health-degraded","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"deg-fail","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"deg-fail","event":"sync-succeeded","revision":"r1"}`)
+	w := sendWebhook(t, mux, `{"app":"deg-fail","event":"health-degraded","revision":"r1"}`)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", w.Code)
 	}
@@ -1418,7 +1421,7 @@ func TestTransientHealthDegraded_UpdateFails(t *testing.T) {
 func TestScheduleEnd_AppNotInStore(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	_, h := setupHandler(t, cfg, srv.URL)
 
 	// Call ender.ScheduleEnd for non-existent app — the ender fires both phases
 	// but ArgoCD's old scheduleEnd would skip. With lifecycle.Ender, it proceeds
@@ -1436,12 +1439,12 @@ func TestScheduleEnd_AppNotInStore(t *testing.T) {
 func TestScheduleEnd_UpdateFails(t *testing.T) {
 	srv, _, _ := customMockServer(t, http.MethodPatch)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, h := setupHandler(t, cfg, srv.URL)
 
 	// Create app via sync-running (POST ok, PATCH fail — but app is tracked)
-	sendWebhook(t, h, `{"app":"end-fail","event":"sync-running","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"end-fail","event":"sync-running","revision":"r1"}`)
 	// Deploy triggers scheduleEnd (PATCH phase1 fail, PATCH phase2 fail)
-	sendWebhook(t, h, `{"app":"end-fail","event":"deployed","revision":"r1"}`)
+	sendWebhook(t, mux, `{"app":"end-fail","event":"deployed","revision":"r1"}`)
 
 	// Wait for two-phase end
 	time.Sleep(100 * time.Millisecond)
@@ -1457,7 +1460,7 @@ func TestScheduleEnd_UpdateFails(t *testing.T) {
 func TestGraceExpired_AppNotInStore(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	_, h := setupHandler(t, cfg, srv.URL)
 
 	// Call graceExpired for non-existent app — should return immediately
 	h.graceExpired(testKey, "non-existent")
@@ -1471,7 +1474,7 @@ func TestGraceExpired_AppNotInStore(t *testing.T) {
 func TestGraceExpired_AppNotPending(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	_, h := setupHandler(t, cfg, srv.URL)
 
 	// Manually add a tracked app that is NOT pending
 	ctx := context.Background()
@@ -1492,7 +1495,7 @@ func TestGraceExpired_AppNotPending(t *testing.T) {
 func TestGraceExpired_DefaultStep(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	_, h := setupHandler(t, cfg, srv.URL)
 
 	// Manually inject a tracked app at step 5 (safety-net scenario)
 	ctx := context.Background()
@@ -1525,9 +1528,9 @@ func TestSyncRunning_APIFailure_Returns502(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	cfg := testConfig()
-	h, _ := setupHandler(t, cfg, srv.URL)
+	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	w := sendWebhook(t, h, `{
+	w := sendWebhook(t, mux, `{
 		"app": "test-502",
 		"event": "sync-running",
 		"revision": "abc123"

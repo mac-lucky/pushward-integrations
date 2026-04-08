@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
@@ -24,8 +26,9 @@ type Handler struct {
 	ender   *lifecycle.Ender
 }
 
-func NewHandler(store state.Store, clients *client.Pool, cfg *config.PaperlessConfig) *Handler {
-	return &Handler{
+// RegisterRoutes registers the Paperless webhook endpoint and returns the Handler.
+func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.PaperlessConfig) *Handler {
+	h := &Handler{
 		store:   store,
 		clients: clients,
 		config:  cfg,
@@ -34,45 +37,41 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.PaperlessCo
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
 	}
+	humautil.RegisterWebhook(api, "/paperless", "post-paperless-webhook",
+		"Receive Paperless-ngx webhook",
+		"Processes Paperless-ngx document events (added, updated, consumption_started).",
+		[]string{"Paperless"}, h.handleWebhook)
+	return h
 }
 
 func (h *Handler) Ender() *lifecycle.Ender {
 	return h.ender
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	var payload webhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		slog.Error("failed to decode webhook payload", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	userKey := auth.KeyFromContext(r.Context())
+func (h *Handler) handleWebhook(ctx context.Context, input *struct {
+	Body webhookPayload
+}) (*humautil.WebhookResponse, error) {
+	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
-	ctx := r.Context()
 	ctx = metrics.WithProvider(ctx, "paperless")
+	payload := &input.Body
 
 	var err error
 	switch payload.Event {
 	case "added":
-		err = h.handleDocument(ctx, userKey, log, &payload, "Processed")
+		err = h.handleDocument(ctx, userKey, log, payload, "Processed")
 	case "updated":
-		err = h.handleDocument(ctx, userKey, log, &payload, "Updated")
+		err = h.handleDocument(ctx, userKey, log, payload, "Updated")
 	case "consumption_started":
-		err = h.handleConsumptionStarted(ctx, userKey, log, &payload)
+		err = h.handleConsumptionStarted(ctx, userKey, log, payload)
 	default:
 		slog.Debug("unknown paperless event", "event", payload.Event)
 	}
 
 	if err != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		return
+		return nil, huma.Error502BadGateway("upstream API error")
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return humautil.NewOK(), nil
 }
 
 // handleDocument processes "added" and "updated" events.

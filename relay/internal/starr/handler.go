@@ -1,17 +1,22 @@
 package starr
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/danielgtaylor/huma/v2"
+
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -30,8 +35,10 @@ type Handler struct {
 	ender   *lifecycle.Ender
 }
 
-func NewHandler(store state.Store, clients *client.Pool, cfg *config.StarrConfig) *Handler {
-	return &Handler{
+// RegisterRoutes registers the Radarr, Sonarr, and Prowlarr webhook endpoints
+// and returns the Handler so the caller can collect the Ender for graceful shutdown.
+func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.StarrConfig) *Handler {
+	h := &Handler{
 		store:   store,
 		clients: clients,
 		config:  cfg,
@@ -40,25 +47,66 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.StarrConfig
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
 	}
+
+	humautil.RegisterWebhook(api, "/radarr", "post-radarr-webhook",
+		"Receive Radarr webhook",
+		"Processes Radarr movie download and library events.",
+		[]string{"Starr", "Radarr"}, h.handleRadarrHuma)
+
+	humautil.RegisterWebhook(api, "/sonarr", "post-sonarr-webhook",
+		"Receive Sonarr webhook",
+		"Processes Sonarr TV show download and library events.",
+		[]string{"Starr", "Sonarr"}, h.handleSonarrHuma)
+
+	humautil.RegisterWebhook(api, "/prowlarr", "post-prowlarr-webhook",
+		"Receive Prowlarr webhook",
+		"Processes Prowlarr indexer health and application update events.",
+		[]string{"Starr", "Prowlarr"}, h.handleProwlarrHuma)
+
+	return h
 }
 
 func (h *Handler) Ender() *lifecycle.Ender {
 	return h.ender
 }
 
-// RadarrHandler returns an http.Handler for Radarr webhooks.
-func (h *Handler) RadarrHandler() http.Handler {
-	return http.HandlerFunc(h.handleRadarrWebhook)
+// handleRadarrHuma is the Huma handler for Radarr webhooks. Uses RawBody
+// because starr does two-phase JSON parsing (envelope → type-specific struct).
+func (h *Handler) handleRadarrHuma(ctx context.Context, input *struct {
+	RawBody []byte
+}) (*humautil.WebhookResponse, error) {
+	return h.dispatchRaw(ctx, input.RawBody, h.handleRadarrWebhook)
 }
 
-// SonarrHandler returns an http.Handler for Sonarr webhooks.
-func (h *Handler) SonarrHandler() http.Handler {
-	return http.HandlerFunc(h.handleSonarrWebhook)
+func (h *Handler) handleSonarrHuma(ctx context.Context, input *struct {
+	RawBody []byte
+}) (*humautil.WebhookResponse, error) {
+	return h.dispatchRaw(ctx, input.RawBody, h.handleSonarrWebhook)
 }
 
-// ProwlarrHandler returns an http.Handler for Prowlarr webhooks.
-func (h *Handler) ProwlarrHandler() http.Handler {
-	return http.HandlerFunc(h.handleProwlarrWebhook)
+func (h *Handler) handleProwlarrHuma(ctx context.Context, input *struct {
+	RawBody []byte
+}) (*humautil.WebhookResponse, error) {
+	return h.dispatchRaw(ctx, input.RawBody, h.handleProwlarrWebhook)
+}
+
+// dispatchRaw creates an httptest request/response pair and delegates to the
+// existing http.HandlerFunc. This avoids rewriting the complex two-phase parsing
+// logic in each starr sub-handler during the initial migration.
+// TODO: refactor sub-handlers to accept (ctx, raw []byte) directly.
+func (h *Handler) dispatchRaw(ctx context.Context, raw []byte, handler func(http.ResponseWriter, *http.Request)) (*humautil.WebhookResponse, error) {
+	// Import is at file level; these are only used in this bridge.
+	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(raw))
+	r = r.WithContext(ctx)
+	w := httptest.NewRecorder()
+	handler(w, r)
+	if w.Code == http.StatusBadGateway {
+		return nil, huma.Error502BadGateway("upstream API error")
+	}
+	if w.Code == http.StatusBadRequest {
+		return nil, huma.Error400BadRequest("invalid payload")
+	}
+	return humautil.NewOK(), nil
 }
 
 // shouldNotify returns true if the given event type should send a push notification

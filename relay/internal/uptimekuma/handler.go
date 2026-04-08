@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
@@ -26,8 +28,9 @@ type Handler struct {
 	ender   *lifecycle.Ender
 }
 
-func NewHandler(store state.Store, clients *client.Pool, cfg *config.UptimeKumaConfig) *Handler {
-	return &Handler{
+// RegisterRoutes registers the Uptime Kuma webhook endpoint and returns the Handler.
+func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.UptimeKumaConfig) *Handler {
+	h := &Handler{
 		store:   store,
 		clients: clients,
 		config:  cfg,
@@ -36,36 +39,34 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.UptimeKumaC
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
 	}
+	humautil.RegisterWebhook(api, "/uptimekuma", "post-uptimekuma-webhook",
+		"Receive Uptime Kuma webhook",
+		"Processes Uptime Kuma monitor status events (DOWN/UP/PENDING/MAINTENANCE).",
+		[]string{"Uptime Kuma"}, h.handleWebhook)
+	return h
 }
 
 func (h *Handler) Ender() *lifecycle.Ender {
 	return h.ender
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	var payload webhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		slog.Error("failed to decode webhook payload", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
+func (h *Handler) handleWebhook(ctx context.Context, input *struct {
+	Body webhookPayload
+}) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "uptimekuma")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	pwClient := h.clients.Get(userKey)
+	payload := &input.Body
 
 	var err error
 	switch payload.Heartbeat.Status {
 	case 0: // DOWN
-		err = h.handleDown(ctx, userKey, log, pwClient, &payload)
+		err = h.handleDown(ctx, userKey, log, pwClient, payload)
 	case 1: // UP
-		err = h.handleUp(ctx, userKey, log, pwClient, &payload)
+		err = h.handleUp(ctx, userKey, log, pwClient, payload)
 	case 2: // PENDING
-		err = h.handlePending(ctx, userKey, log, pwClient, &payload)
+		err = h.handlePending(ctx, userKey, log, pwClient, payload)
 	case 3: // MAINTENANCE — used as test event
 		if err := selftest.SendTest(ctx, pwClient, "uptimekuma"); err != nil {
 			log.Error("test notification failed", "provider", "uptimekuma", "error", err)
@@ -75,11 +76,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		return
+		return nil, huma.Error502BadGateway("upstream API error")
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return humautil.NewOK(), nil
 }
 
 func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) error {

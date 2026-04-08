@@ -2,29 +2,33 @@ package changedetection
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
-	"net/http"
 	"time"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
+// Handler processes Changedetection.io webhooks.
 type Handler struct {
 	clients *client.Pool
 	config  *config.ChangedetectionConfig
 }
 
-func NewHandler(clients *client.Pool, cfg *config.ChangedetectionConfig) *Handler {
-	return &Handler{
-		clients: clients,
-		config:  cfg,
-	}
+// RegisterRoutes registers the Changedetection webhook endpoint with the Huma API.
+func RegisterRoutes(api huma.API, clients *client.Pool, cfg *config.ChangedetectionConfig) {
+	h := &Handler{clients: clients, config: cfg}
+	humautil.RegisterWebhook(api, "/changedetection", "post-changedetection-webhook",
+		"Receive Changedetection.io webhook",
+		"Processes page change detection events and creates push notification activities.",
+		[]string{"Changedetection"}, h.handleWebhook)
 }
 
 // slugForURL derives a stable, URL-safe activity slug from a watched URL.
@@ -32,25 +36,15 @@ func slugForURL(url string) string {
 	return text.SlugHash("cd", url, 4)
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	var payload webhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		slog.Error("failed to decode webhook payload", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
+func (h *Handler) handleWebhook(ctx context.Context, input *struct {
+	Body webhookPayload
+}) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "changedetection")
 
-	if err := h.handleChange(ctx, &payload); err != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		return
+	if err := h.handleChange(ctx, &input.Body); err != nil {
+		return nil, huma.Error502BadGateway("upstream API error")
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return humautil.NewOK(), nil
 }
 
 func (h *Handler) handleChange(ctx context.Context, payload *webhookPayload) error {

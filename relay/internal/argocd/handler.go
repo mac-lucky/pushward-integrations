@@ -5,14 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/danielgtaylor/huma/v2"
+
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
@@ -59,8 +61,9 @@ func (h *Handler) lockApp(userKey, appName string) func() {
 	return m.Unlock
 }
 
-func NewHandler(store state.Store, clients *client.Pool, cfg *config.ArgoCDConfig) *Handler {
-	return &Handler{
+// RegisterRoutes registers the ArgoCD webhook endpoint and returns the Handler.
+func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.ArgoCDConfig) *Handler {
+	h := &Handler{
 		store:   store,
 		clients: clients,
 		config:  cfg,
@@ -70,6 +73,11 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.ArgoCDConfi
 		}),
 		graceTimers: make(map[string]*time.Timer),
 	}
+	humautil.RegisterWebhook(api, "/argocd", "post-argocd-webhook",
+		"Receive ArgoCD sync webhook",
+		"Processes ArgoCD application sync lifecycle events.",
+		[]string{"ArgoCD"}, h.handleWebhook)
+	return h
 }
 
 func (h *Handler) Ender() *lifecycle.Ender {
@@ -184,48 +192,39 @@ func slugForApp(appName string) string {
 	return text.Slug("argocd-", appName)
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	var payload webhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		slog.Error("failed to decode webhook payload", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
+func (h *Handler) handleWebhook(ctx context.Context, input *struct {
+	Body webhookPayload
+}) (*humautil.WebhookResponse, error) {
+	payload := &input.Body
 
 	if payload.App == "" || payload.Event == "" {
-		http.Error(w, "missing app or event", http.StatusBadRequest)
-		return
+		return nil, huma.Error400BadRequest("missing app or event")
 	}
 
-	userKey := auth.KeyFromContext(r.Context())
+	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
-	ctx := r.Context()
 	ctx = metrics.WithProvider(ctx, "argocd")
 
 	var err error
 	switch payload.Event {
 	case "sync-running":
-		err = h.handleSyncRunning(ctx, userKey, log, &payload)
+		err = h.handleSyncRunning(ctx, userKey, log, payload)
 	case "sync-succeeded":
-		err = h.handleSyncSucceeded(ctx, userKey, log, &payload)
+		err = h.handleSyncSucceeded(ctx, userKey, log, payload)
 	case "deployed":
-		err = h.handleDeployed(ctx, userKey, log, &payload)
+		err = h.handleDeployed(ctx, userKey, log, payload)
 	case "sync-failed":
-		err = h.handleSyncFailed(ctx, userKey, log, &payload)
+		err = h.handleSyncFailed(ctx, userKey, log, payload)
 	case "health-degraded":
-		err = h.handleHealthDegraded(ctx, userKey, log, &payload)
+		err = h.handleHealthDegraded(ctx, userKey, log, payload)
 	default:
 		log.Warn("unknown event", "event", payload.Event, "app", payload.App)
 	}
 
 	if err != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		return
+		return nil, huma.Error502BadGateway("upstream API error")
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return humautil.NewOK(), nil
 }
 
 func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {

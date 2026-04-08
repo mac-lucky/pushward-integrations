@@ -44,24 +44,26 @@ func isTrustedProxy(ipStr string) bool {
 	return false
 }
 
-// clientIP extracts the client IP address from the request.
-// Forwarding headers (CF-Connecting-IP, X-Real-IP, X-Forwarded-For) are only
-// trusted when the direct RemoteAddr falls within a configured trusted proxy CIDR.
-// Falls back to RemoteAddr otherwise.
-func clientIP(r *http.Request) string {
-	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
+// ClientIP extracts the client IP address from the given remote address and
+// header getter. Forwarding headers (CF-Connecting-IP, X-Real-IP, X-Forwarded-For)
+// are only trusted when the direct remote address falls within a configured trusted
+// proxy CIDR. Falls back to remote address otherwise.
+//
+// This function is used by both the stdlib IPMiddleware and Huma middleware.
+func ClientIP(remoteAddr string, getHeader func(string) string) string {
+	remoteHost, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		remoteHost = r.RemoteAddr
+		remoteHost = remoteAddr
 	}
 
 	if isTrustedProxy(remoteHost) {
-		if ip := r.Header.Get("CF-Connecting-IP"); ip != "" && net.ParseIP(ip) != nil {
+		if ip := getHeader("CF-Connecting-IP"); ip != "" && net.ParseIP(ip) != nil {
 			return ip
 		}
-		if ip := r.Header.Get("X-Real-IP"); ip != "" && net.ParseIP(ip) != nil {
+		if ip := getHeader("X-Real-IP"); ip != "" && net.ParseIP(ip) != nil {
 			return ip
 		}
-		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		if xff := getHeader("X-Forwarded-For"); xff != "" {
 			if first, _, _ := strings.Cut(xff, ","); first != "" {
 				first = strings.TrimSpace(first)
 				if net.ParseIP(first) != nil {
@@ -74,13 +76,19 @@ func clientIP(r *http.Request) string {
 	return remoteHost
 }
 
+// AllowIP checks whether a request from the given IP is allowed under IP rate
+// limiting. Returns true if allowed.
+func AllowIP(ip string) bool {
+	return ipLimiters.get(ip).Allow()
+}
+
 // IPMiddleware applies per-IP rate limiting. Should run before auth middleware.
 func IPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
+		ip := ClientIP(r.RemoteAddr, r.Header.Get)
 
-		if !ipLimiters.get(ip).Allow() {
-			slog.Warn("ip rate limit exceeded", "ip", ip) // #nosec G706 -- ip is validated via net.ParseIP in clientIP()
+		if !AllowIP(ip) {
+			slog.Warn("ip rate limit exceeded", "ip", ip) // #nosec G706 -- ip is validated via net.ParseIP in ClientIP()
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("Retry-After", "1")
 			w.WriteHeader(http.StatusTooManyRequests)

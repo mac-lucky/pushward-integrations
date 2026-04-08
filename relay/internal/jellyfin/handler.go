@@ -5,13 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"sync"
 	"time"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
@@ -32,8 +34,9 @@ type Handler struct {
 	lastProgress map[string]float64     // "userKey:slug" → last progress value
 }
 
-func NewHandler(store state.Store, clients *client.Pool, cfg *config.JellyfinConfig) *Handler {
-	return &Handler{
+// RegisterRoutes registers the Jellyfin webhook endpoint and returns the Handler.
+func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.JellyfinConfig) *Handler {
+	h := &Handler{
 		store:   store,
 		clients: clients,
 		config:  cfg,
@@ -46,6 +49,11 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.JellyfinCon
 		lastPaused:   make(map[string]bool),
 		lastProgress: make(map[string]float64),
 	}
+	humautil.RegisterWebhook(api, "/jellyfin", "post-jellyfin-webhook",
+		"Receive Jellyfin webhook",
+		"Processes Jellyfin playback and library events.",
+		[]string{"Jellyfin"}, h.handleWebhook)
+	return h
 }
 
 func (h *Handler) Ender() *lifecycle.Ender {
@@ -117,37 +125,30 @@ func remainingSeconds(p *webhookPayload) int {
 	return max(int((p.RunTimeTicks-p.PlaybackPositionTicks)/10_000_000), 0)
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	var payload webhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		slog.Error("failed to decode webhook payload", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
+func (h *Handler) handleWebhook(ctx context.Context, input *struct {
+	Body webhookPayload
+}) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "jellyfin")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
+	payload := &input.Body
 
 	var apiErr error
 	switch payload.NotificationType {
 	case "PlaybackStart":
-		apiErr = h.handlePlaybackStart(ctx, userKey, log, &payload)
+		apiErr = h.handlePlaybackStart(ctx, userKey, log, payload)
 	case "PlaybackProgress":
-		apiErr = h.handlePlaybackProgress(ctx, userKey, log, &payload)
+		apiErr = h.handlePlaybackProgress(ctx, userKey, log, payload)
 	case "PlaybackStop":
-		h.handlePlaybackStop(ctx, userKey, log, &payload)
+		h.handlePlaybackStop(ctx, userKey, log, payload)
 	case "ItemAdded":
-		apiErr = h.handleItemAdded(ctx, userKey, log, &payload)
+		apiErr = h.handleItemAdded(ctx, userKey, log, payload)
 	case "ScheduledTaskStarted":
-		apiErr = h.handleTaskStarted(ctx, userKey, log, &payload)
+		apiErr = h.handleTaskStarted(ctx, userKey, log, payload)
 	case "ScheduledTaskCompleted":
-		apiErr = h.handleTaskCompleted(ctx, userKey, log, &payload)
+		apiErr = h.handleTaskCompleted(ctx, userKey, log, payload)
 	case "AuthenticationFailure":
-		apiErr = h.handleAuthFailure(ctx, userKey, log, &payload)
+		apiErr = h.handleAuthFailure(ctx, userKey, log, payload)
 	case "GenericUpdateNotification":
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "jellyfin"); err != nil {
@@ -158,11 +159,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if apiErr != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		return
+		return nil, huma.Error502BadGateway("upstream API error")
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return humautil.NewOK(), nil
 }
 
 func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {

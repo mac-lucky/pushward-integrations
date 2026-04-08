@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -30,59 +30,65 @@ func testConfig() *config.StarrConfig {
 	}
 }
 
-func newHandler(t *testing.T, cfg *config.StarrConfig) (*Handler, *[]testutil.APICall, *sync.Mutex) {
+func newTestAPI(t *testing.T, cfg *config.StarrConfig) (http.Handler, *Handler, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
 	lifecycle.SetRetryDelay(10 * time.Millisecond)
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	store := state.NewMemoryStore()
 	pool := client.NewPool(srv.URL, nil)
-	h := NewHandler(store, pool, cfg)
-	return h, calls, mu
+
+	mux, api := humautil.NewTestAPI()
+	h := RegisterRoutes(api, store, pool, cfg)
+
+	return mux, h, calls, mu
 }
 
-// sendRadarr sends a Radarr webhook through auth middleware with Bearer hlk_test.
-func sendRadarr(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
+func newHandler(t *testing.T, cfg *config.StarrConfig) (http.Handler, *Handler, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/starr/radarr", strings.NewReader(payload))
+	return newTestAPI(t, cfg)
+}
+
+// sendRadarr sends a Radarr webhook with Bearer hlk_test.
+func sendRadarr(t *testing.T, mux http.Handler, payload string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/radarr", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer hlk_test")
 	w := httptest.NewRecorder()
-	auth.Middleware(h.RadarrHandler()).ServeHTTP(w, req)
+	mux.ServeHTTP(w, req)
 	return w
 }
 
-// sendRadarrBasicAuth sends a Radarr webhook through auth middleware with
-// Basic Auth where password=hlk_test (integration key).
-func sendRadarrBasicAuth(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
+// sendRadarrBasicAuth sends a Radarr webhook with Basic Auth where password=hlk_test.
+func sendRadarrBasicAuth(t *testing.T, mux http.Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/starr/radarr", strings.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/radarr", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth("radarr", "hlk_test")
 	w := httptest.NewRecorder()
-	auth.Middleware(h.RadarrHandler()).ServeHTTP(w, req)
+	mux.ServeHTTP(w, req)
 	return w
 }
 
-// sendSonarr sends a Sonarr webhook through auth middleware with Bearer hlk_test.
-func sendSonarr(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
+// sendSonarr sends a Sonarr webhook with Bearer hlk_test.
+func sendSonarr(t *testing.T, mux http.Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/starr/sonarr", strings.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/sonarr", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer hlk_test")
 	w := httptest.NewRecorder()
-	auth.Middleware(h.SonarrHandler()).ServeHTTP(w, req)
+	mux.ServeHTTP(w, req)
 	return w
 }
 
-// sendSonarrBasicAuth sends a Sonarr webhook through auth middleware with
-// Basic Auth where password=hlk_test (integration key).
-func sendSonarrBasicAuth(t *testing.T, h *Handler, payload string) *httptest.ResponseRecorder {
+// sendSonarrBasicAuth sends a Sonarr webhook with Basic Auth where password=hlk_test.
+func sendSonarrBasicAuth(t *testing.T, mux http.Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/starr/sonarr", strings.NewReader(payload))
+	req := httptest.NewRequest(http.MethodPost, "/sonarr", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth("sonarr", "hlk_test")
 	w := httptest.NewRecorder()
-	auth.Middleware(h.SonarrHandler()).ServeHTTP(w, req)
+	mux.ServeHTTP(w, req)
 	return w
 }
 
@@ -91,9 +97,9 @@ func sendSonarrBasicAuth(t *testing.T, h *Handler, payload string) *httptest.Res
 // ============================================================
 
 func TestRadarrGrab(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	w := sendRadarr(t, h, `{
+	w := sendRadarr(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"release": {"quality": "Bluray-1080p", "size": 5368709120, "indexer": "NZBgeek", "releaseTitle": "Inception.2010.1080p.BluRay"},
@@ -157,10 +163,10 @@ func TestRadarrGrab(t *testing.T) {
 }
 
 func TestRadarrGrabAndDownload(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
 	// Grab
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"release": {"quality": "Bluray-1080p", "size": 5368709120},
@@ -169,7 +175,7 @@ func TestRadarrGrabAndDownload(t *testing.T) {
 	}`)
 
 	// Download
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "Download",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"movieFile": {"relativePath": "Inception (2010)/Inception.2010.1080p.BluRay.mkv", "quality": "Bluray-1080p", "size": 5368709120},
@@ -215,9 +221,9 @@ func TestRadarrGrabAndDownload(t *testing.T) {
 }
 
 func TestRadarrGrabAndDownload_IsUpgrade(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"release": {"quality": "Bluray-2160p", "size": 10737418240},
@@ -225,7 +231,7 @@ func TestRadarrGrabAndDownload_IsUpgrade(t *testing.T) {
 		"downloadId": "SABnzbd_nzo_upgrade1"
 	}`)
 
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "Download",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"movieFile": {"relativePath": "Inception.2010.2160p.mkv", "quality": "Bluray-2160p", "size": 10737418240},
@@ -249,10 +255,10 @@ func TestRadarrGrabAndDownload_IsUpgrade(t *testing.T) {
 }
 
 func TestRadarrConcurrentDownloads(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, h, calls, mu := newHandler(t, testConfig())
 
 	// Grab movie 1
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"release": {"quality": "Bluray-1080p", "size": 5368709120},
@@ -261,7 +267,7 @@ func TestRadarrConcurrentDownloads(t *testing.T) {
 	}`)
 
 	// Grab movie 2
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 2, "title": "Interstellar", "year": 2014},
 		"release": {"quality": "Bluray-2160p", "size": 10737418240},
@@ -285,7 +291,7 @@ func TestRadarrConcurrentDownloads(t *testing.T) {
 	}
 
 	// Download movie 1 only
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "Download",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"movieFile": {"relativePath": "Inception.mkv", "quality": "Bluray-1080p", "size": 5368709120},
@@ -310,9 +316,9 @@ func TestRadarrConcurrentDownloads(t *testing.T) {
 }
 
 func TestRadarrDownloadWithoutGrab(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "Download",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"movieFile": {"relativePath": "Inception.mkv", "quality": "Bluray-1080p", "size": 5368709120},
@@ -357,9 +363,9 @@ func TestRadarrDownloadWithoutGrab(t *testing.T) {
 }
 
 func TestRadarrBasicAuth_KeyInPassword(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	w := sendRadarrBasicAuth(t, h, `{
+	w := sendRadarrBasicAuth(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"release": {"quality": "Bluray-1080p", "size": 5368709120},
@@ -378,9 +384,9 @@ func TestRadarrBasicAuth_KeyInPassword(t *testing.T) {
 }
 
 func TestRadarrUnknownEventType(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	w := sendRadarr(t, h, `{"eventType": "FooBar"}`)
+	w := sendRadarr(t, mux, `{"eventType": "FooBar"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
@@ -396,9 +402,9 @@ func TestRadarrUnknownEventType(t *testing.T) {
 // ============================================================
 
 func TestSonarrGrab(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	w := sendSonarr(t, h, `{
+	w := sendSonarr(t, mux, `{
 		"eventType": "Grab",
 		"series": {"id": 1, "title": "Breaking Bad", "year": 2008},
 		"episodes": [{"episodeNumber": 5, "seasonNumber": 2, "title": "Breakage"}],
@@ -450,10 +456,10 @@ func TestSonarrGrab(t *testing.T) {
 }
 
 func TestSonarrGrabAndDownload(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
 	// Grab
-	sendSonarr(t, h, `{
+	sendSonarr(t, mux, `{
 		"eventType": "Grab",
 		"series": {"id": 1, "title": "Breaking Bad", "year": 2008},
 		"episodes": [{"episodeNumber": 5, "seasonNumber": 2, "title": "Breakage"}],
@@ -463,7 +469,7 @@ func TestSonarrGrabAndDownload(t *testing.T) {
 	}`)
 
 	// Download
-	sendSonarr(t, h, `{
+	sendSonarr(t, mux, `{
 		"eventType": "Download",
 		"series": {"id": 1, "title": "Breaking Bad", "year": 2008},
 		"episodes": [{"episodeNumber": 5, "seasonNumber": 2, "title": "Breakage"}],
@@ -507,9 +513,9 @@ func TestSonarrGrabAndDownload(t *testing.T) {
 }
 
 func TestSonarrGrabAndDownload_IsUpgrade(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	sendSonarr(t, h, `{
+	sendSonarr(t, mux, `{
 		"eventType": "Grab",
 		"series": {"id": 1, "title": "Breaking Bad", "year": 2008},
 		"episodes": [{"episodeNumber": 5, "seasonNumber": 2, "title": "Breakage"}],
@@ -518,7 +524,7 @@ func TestSonarrGrabAndDownload_IsUpgrade(t *testing.T) {
 		"downloadId": "upgrade-1"
 	}`)
 
-	sendSonarr(t, h, `{
+	sendSonarr(t, mux, `{
 		"eventType": "Download",
 		"series": {"id": 1, "title": "Breaking Bad", "year": 2008},
 		"episodes": [{"episodeNumber": 5, "seasonNumber": 2, "title": "Breakage"}],
@@ -544,10 +550,10 @@ func TestSonarrGrabAndDownload_IsUpgrade(t *testing.T) {
 }
 
 func TestSonarrConcurrentDownloads(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
 	// Two grabs
-	sendSonarr(t, h, `{
+	sendSonarr(t, mux, `{
 		"eventType": "Grab",
 		"series": {"id": 1, "title": "Breaking Bad", "year": 2008},
 		"episodes": [{"episodeNumber": 1, "seasonNumber": 1, "title": "Pilot"}],
@@ -555,7 +561,7 @@ func TestSonarrConcurrentDownloads(t *testing.T) {
 		"downloadClient": "SABnzbd",
 		"downloadId": "dl-1"
 	}`)
-	sendSonarr(t, h, `{
+	sendSonarr(t, mux, `{
 		"eventType": "Grab",
 		"series": {"id": 2, "title": "Better Call Saul", "year": 2015},
 		"episodes": [{"episodeNumber": 1, "seasonNumber": 1, "title": "Uno"}],
@@ -586,7 +592,7 @@ func TestSonarrConcurrentDownloads(t *testing.T) {
 	}
 
 	// Complete both
-	sendSonarr(t, h, `{
+	sendSonarr(t, mux, `{
 		"eventType": "Download",
 		"series": {"id": 1, "title": "Breaking Bad", "year": 2008},
 		"episodes": [{"episodeNumber": 1, "seasonNumber": 1, "title": "Pilot"}],
@@ -595,7 +601,7 @@ func TestSonarrConcurrentDownloads(t *testing.T) {
 		"downloadClient": "SABnzbd",
 		"downloadId": "dl-1"
 	}`)
-	sendSonarr(t, h, `{
+	sendSonarr(t, mux, `{
 		"eventType": "Download",
 		"series": {"id": 2, "title": "Better Call Saul", "year": 2015},
 		"episodes": [{"episodeNumber": 1, "seasonNumber": 1, "title": "Uno"}],
@@ -630,9 +636,9 @@ func TestSonarrConcurrentDownloads(t *testing.T) {
 }
 
 func TestSonarrDownloadWithoutGrab(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	w := sendSonarr(t, h, `{
+	w := sendSonarr(t, mux, `{
 		"eventType": "Download",
 		"series": {"id": 1, "title": "Breaking Bad", "year": 2008},
 		"episodes": [{"episodeNumber": 5, "seasonNumber": 2, "title": "Breakage"}],
@@ -684,9 +690,9 @@ func TestSonarrDownloadWithoutGrab(t *testing.T) {
 // ============================================================
 
 func TestRadarrTestEvent(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	w := sendRadarr(t, h, `{"eventType": "Test"}`)
+	w := sendRadarr(t, mux, `{"eventType": "Test"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
@@ -709,9 +715,9 @@ func TestRadarrTestEvent(t *testing.T) {
 // ============================================================
 
 func TestRadarrHealth(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	w := sendRadarr(t, h, `{
+	w := sendRadarr(t, mux, `{
 		"eventType": "Health",
 		"level": "warning",
 		"message": "Indexer NZBgeek is unavailable due to failures",
@@ -748,9 +754,9 @@ func TestRadarrHealth(t *testing.T) {
 }
 
 func TestRadarrHealthError(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	w := sendRadarr(t, h, `{
+	w := sendRadarr(t, mux, `{
 		"eventType": "Health",
 		"level": "error",
 		"message": "Disk space low",
@@ -777,10 +783,10 @@ func TestRadarrHealthError(t *testing.T) {
 }
 
 func TestRadarrHealthAndRestored(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
 	// Health
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "Health",
 		"level": "warning",
 		"message": "Indexer NZBgeek is unavailable",
@@ -789,7 +795,7 @@ func TestRadarrHealthAndRestored(t *testing.T) {
 	}`)
 
 	// HealthRestored
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "HealthRestored",
 		"level": "warning",
 		"message": "Indexer NZBgeek is available again",
@@ -822,9 +828,9 @@ func TestRadarrHealthAndRestored(t *testing.T) {
 }
 
 func TestSonarrHealth(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	w := sendSonarr(t, h, `{
+	w := sendSonarr(t, mux, `{
 		"eventType": "Health",
 		"level": "error",
 		"message": "No indexers available",
@@ -855,10 +861,10 @@ func TestSonarrHealth(t *testing.T) {
 // ============================================================
 
 func TestRadarrManualInteraction(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
 	// Grab first to create a tracked download
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"release": {"quality": "Bluray-1080p", "size": 5368709120},
@@ -867,7 +873,7 @@ func TestRadarrManualInteraction(t *testing.T) {
 	}`)
 
 	// ManualInteractionRequired
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "ManualInteractionRequired",
 		"downloadId": "SABnzbd_nzo_manual1",
 		"downloadInfo": {
@@ -905,10 +911,10 @@ func TestRadarrManualInteraction(t *testing.T) {
 }
 
 func TestRadarrManualInteractionUntracked(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
 	// ManualInteractionRequired without a prior Grab — still sends notification
-	w := sendRadarr(t, h, `{
+	w := sendRadarr(t, mux, `{
 		"eventType": "ManualInteractionRequired",
 		"downloadId": "SABnzbd_nzo_untracked",
 		"downloadInfo": {
@@ -935,10 +941,10 @@ func TestRadarrManualInteractionUntracked(t *testing.T) {
 }
 
 func TestRadarrGrabManualInteractionDownload(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
 	// Grab
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"release": {"quality": "Bluray-1080p", "size": 5368709120},
@@ -947,7 +953,7 @@ func TestRadarrGrabManualInteractionDownload(t *testing.T) {
 	}`)
 
 	// ManualInteractionRequired
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "ManualInteractionRequired",
 		"downloadId": "SABnzbd_nzo_full",
 		"downloadInfo": {
@@ -959,7 +965,7 @@ func TestRadarrGrabManualInteractionDownload(t *testing.T) {
 	}`)
 
 	// Download (eventually succeeds)
-	sendRadarr(t, h, `{
+	sendRadarr(t, mux, `{
 		"eventType": "Download",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"movieFile": {"relativePath": "Inception.mkv", "quality": "Bluray-1080p", "size": 5368709120},
@@ -993,9 +999,9 @@ func TestRadarrGrabManualInteractionDownload(t *testing.T) {
 }
 
 func TestSonarrTestEvent(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	w := sendSonarr(t, h, `{"eventType": "Test"}`)
+	w := sendSonarr(t, mux, `{"eventType": "Test"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
@@ -1014,9 +1020,9 @@ func TestSonarrTestEvent(t *testing.T) {
 }
 
 func TestSonarrBasicAuth_KeyInPassword(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+	mux, _, calls, mu := newHandler(t, testConfig())
 
-	w := sendSonarrBasicAuth(t, h, `{
+	w := sendSonarrBasicAuth(t, mux, `{
 		"eventType": "Grab",
 		"series": {"id": 1, "title": "Test", "year": 2024},
 		"episodes": [{"episodeNumber": 1, "seasonNumber": 1, "title": "Pilot"}],
@@ -1052,9 +1058,9 @@ func notifyConfig() *config.StarrConfig {
 }
 
 func TestRadarrGrab_SmartMode_SendsNotification(t *testing.T) {
-	h, calls, mu := newHandler(t, smartConfig())
+	mux, _, calls, mu := newHandler(t, smartConfig())
 
-	w := sendRadarr(t, h, `{
+	w := sendRadarr(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"release": {"quality": "Bluray-1080p", "size": 5368709120, "indexer": "NZBgeek", "releaseTitle": "Inception.2010.1080p.BluRay"},
@@ -1091,9 +1097,9 @@ func TestRadarrGrab_SmartMode_SendsNotification(t *testing.T) {
 }
 
 func TestRadarrGrab_ActivityMode_CreatesActivity(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig()) // default = activity mode
+	mux, _, calls, mu := newHandler(t, testConfig()) // default = activity mode
 
-	w := sendRadarr(t, h, `{
+	w := sendRadarr(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"release": {"quality": "Bluray-1080p", "size": 5368709120, "indexer": "NZBgeek", "releaseTitle": "Inception.2010.1080p.BluRay"},
@@ -1125,9 +1131,9 @@ func TestRadarrGrab_ActivityMode_CreatesActivity(t *testing.T) {
 }
 
 func TestRadarrDownload_SmartMode_SendsNotification(t *testing.T) {
-	h, calls, mu := newHandler(t, smartConfig())
+	mux, _, calls, mu := newHandler(t, smartConfig())
 
-	w := sendRadarr(t, h, `{
+	w := sendRadarr(t, mux, `{
 		"eventType": "Download",
 		"movie": {"id": 1, "title": "Inception", "year": 2010},
 		"movieFile": {"quality": "Bluray-1080p"},
@@ -1155,9 +1161,9 @@ func TestRadarrDownload_SmartMode_SendsNotification(t *testing.T) {
 }
 
 func TestSonarrGrab_SmartMode_SendsNotification(t *testing.T) {
-	h, calls, mu := newHandler(t, smartConfig())
+	mux, _, calls, mu := newHandler(t, smartConfig())
 
-	w := sendSonarr(t, h, `{
+	w := sendSonarr(t, mux, `{
 		"eventType": "Grab",
 		"series": {"id": 1, "title": "Breaking Bad", "tvdbId": 81189},
 		"episodes": [{"id": 1, "episodeNumber": 5, "seasonNumber": 2, "title": "Breakage"}],
@@ -1188,9 +1194,9 @@ func TestSonarrGrab_SmartMode_SendsNotification(t *testing.T) {
 }
 
 func TestHealth_SmartMode_SendsNotification(t *testing.T) {
-	h, calls, mu := newHandler(t, smartConfig())
+	mux, _, calls, mu := newHandler(t, smartConfig())
 
-	w := sendRadarr(t, h, `{
+	w := sendRadarr(t, mux, `{
 		"eventType": "Health",
 		"level": "warning",
 		"message": "Disk space low",
@@ -1211,9 +1217,9 @@ func TestHealth_SmartMode_SendsNotification(t *testing.T) {
 }
 
 func TestRadarrGrab_NotifyMode_SendsNotification(t *testing.T) {
-	h, calls, mu := newHandler(t, notifyConfig())
+	mux, _, calls, mu := newHandler(t, notifyConfig())
 
-	w := sendRadarr(t, h, `{
+	w := sendRadarr(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Matrix", "year": 1999},
 		"release": {"quality": "1080p"},

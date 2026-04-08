@@ -12,8 +12,10 @@ import (
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/danielgtaylor/huma/v2/adapters/humago"
+
 	"github.com/mac-lucky/pushward-integrations/relay/internal/argocd"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/backrest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/bazarr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/changedetection"
@@ -21,6 +23,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/gatus"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/grafana"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/jellyfin"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
@@ -129,10 +132,23 @@ func main() {
 	mux := server.NewMux(pool.Ping)
 	mux.Handle("GET /metrics", metrics.Handler())
 
-	// wrapHandler applies the standard middleware chain: IP rate limit → auth → key rate limit.
-	wrapHandler := func(h http.Handler) http.Handler {
-		return ratelimit.IPMiddleware(auth.Middleware(ratelimit.Middleware(h)))
+	// Huma API — auto-generates OpenAPI 3.1 spec at /openapi.json and docs at /docs.
+	humaConfig := huma.DefaultConfig("PushWard Relay", "1.0.0")
+	humaConfig.Info.Description = "Webhook relay that bridges external service webhooks to PushWard push notifications"
+	humaConfig.AllowAdditionalPropertiesByDefault = true
+	humaConfig.FieldsOptionalByDefault = true
+	humaConfig.Components.SecuritySchemes = map[string]*huma.SecurityScheme{
+		"bearerAuth": {
+			Type:   "http",
+			Scheme: "bearer",
+			Description: "PushWard integration key (hlk_...). " +
+				"Pass via Authorization: Bearer hlk_... or HTTP Basic Auth with the key as password.",
+		},
 	}
+	api := humago.New(mux, humaConfig)
+	api.UseMiddleware(humautil.IPRateLimitMiddleware(api))
+	api.UseMiddleware(humautil.AuthMiddleware(api))
+	api.UseMiddleware(humautil.KeyRateLimitMiddleware(api))
 
 	// Provider handlers
 	var enders []*lifecycle.Ender
@@ -145,94 +161,79 @@ func main() {
 	}
 
 	if cfg.Providers.Grafana.Enabled {
-		gh := grafana.NewHandler(clients, &cfg.Providers.Grafana)
-		mux.Handle("POST /grafana", wrapHandler(gh))
+		grafana.RegisterRoutes(api, clients, &cfg.Providers.Grafana)
 		slog.Info("enabled provider", "provider", "grafana")
 	}
 
 	if cfg.Providers.ArgoCD.Enabled {
-		ah := argocd.NewHandler(store, clients, &cfg.Providers.ArgoCD)
-		mux.Handle("POST /argocd", wrapHandler(ah))
+		ah := argocd.RegisterRoutes(api, store, clients, &cfg.Providers.ArgoCD)
 		collectEnder(ah)
 		ah.StartCleanup(ctx)
 		slog.Info("enabled provider", "provider", "argocd")
 	}
 
 	if cfg.Providers.Starr.Enabled {
-		sh := starr.NewHandler(store, clients, &cfg.Providers.Starr)
-		mux.Handle("POST /radarr", wrapHandler(sh.RadarrHandler()))
-		mux.Handle("POST /sonarr", wrapHandler(sh.SonarrHandler()))
-		mux.Handle("POST /prowlarr", wrapHandler(sh.ProwlarrHandler()))
+		sh := starr.RegisterRoutes(api, store, clients, &cfg.Providers.Starr)
 		collectEnder(sh)
 		slog.Info("enabled provider", "provider", "starr")
 	}
 
 	if cfg.Providers.Jellyfin.Enabled {
-		jh := jellyfin.NewHandler(store, clients, &cfg.Providers.Jellyfin)
-		mux.Handle("POST /jellyfin", wrapHandler(jh))
+		jh := jellyfin.RegisterRoutes(api, store, clients, &cfg.Providers.Jellyfin)
 		collectEnder(jh)
 		jh.StartCleanup(ctx)
 		slog.Info("enabled provider", "provider", "jellyfin")
 	}
 
 	if cfg.Providers.Paperless.Enabled {
-		ph := paperless.NewHandler(store, clients, &cfg.Providers.Paperless)
-		mux.Handle("POST /paperless", wrapHandler(ph))
+		ph := paperless.RegisterRoutes(api, store, clients, &cfg.Providers.Paperless)
 		collectEnder(ph)
 		slog.Info("enabled provider", "provider", "paperless")
 	}
 
 	if cfg.Providers.Changedetection.Enabled {
-		cdh := changedetection.NewHandler(clients, &cfg.Providers.Changedetection)
-		mux.Handle("POST /changedetection", wrapHandler(cdh))
+		changedetection.RegisterRoutes(api, clients, &cfg.Providers.Changedetection)
 		slog.Info("enabled provider", "provider", "changedetection")
 	}
 
 	if cfg.Providers.Unmanic.Enabled {
-		uh := unmanic.NewHandler(clients, &cfg.Providers.Unmanic)
-		mux.Handle("POST /unmanic", wrapHandler(uh))
+		uh := unmanic.RegisterRoutes(api, clients, &cfg.Providers.Unmanic)
 		collectEnder(uh)
 		slog.Info("enabled provider", "provider", "unmanic")
 	}
 
 	if cfg.Providers.Bazarr.Enabled {
-		bzh := bazarr.NewHandler(clients, &cfg.Providers.Bazarr)
-		mux.Handle("POST /bazarr", wrapHandler(bzh))
+		bzh := bazarr.RegisterRoutes(api, clients, &cfg.Providers.Bazarr)
 		collectEnder(bzh)
 		slog.Info("enabled provider", "provider", "bazarr")
 	}
 
 	if cfg.Providers.Proxmox.Enabled {
-		pxh := proxmox.NewHandler(store, clients, &cfg.Providers.Proxmox)
-		mux.Handle("POST /proxmox", wrapHandler(pxh))
+		pxh := proxmox.RegisterRoutes(api, store, clients, &cfg.Providers.Proxmox)
 		collectEnder(pxh)
 		slog.Info("enabled provider", "provider", "proxmox")
 	}
 
 	if cfg.Providers.Overseerr.Enabled {
-		oh := overseerr.NewHandler(store, clients, &cfg.Providers.Overseerr)
-		mux.Handle("POST /overseerr", wrapHandler(oh))
+		oh := overseerr.RegisterRoutes(api, store, clients, &cfg.Providers.Overseerr)
 		collectEnder(oh)
 		slog.Info("enabled provider", "provider", "overseerr")
 	}
 
 	if cfg.Providers.UptimeKuma.Enabled {
-		ukh := uptimekuma.NewHandler(store, clients, &cfg.Providers.UptimeKuma)
-		mux.Handle("POST /uptimekuma", wrapHandler(ukh))
+		ukh := uptimekuma.RegisterRoutes(api, store, clients, &cfg.Providers.UptimeKuma)
 		collectEnder(ukh)
 		slog.Info("enabled provider", "provider", "uptimekuma")
 	}
 
 	if cfg.Providers.Gatus.Enabled {
-		gah := gatus.NewHandler(store, clients, &cfg.Providers.Gatus)
-		mux.Handle("POST /gatus", wrapHandler(gah))
+		gah := gatus.RegisterRoutes(api, store, clients, &cfg.Providers.Gatus)
 		collectEnder(gah)
 		slog.Info("enabled provider", "provider", "gatus")
 	}
 
 	if cfg.Providers.Backrest.Enabled {
-		bh := backrest.NewHandler(store, clients, &cfg.Providers.Backrest)
-		mux.Handle("POST /backrest", wrapHandler(bh))
+		bh := backrest.RegisterRoutes(api, store, clients, &cfg.Providers.Backrest)
 		collectEnder(bh)
 		slog.Info("enabled provider", "provider", "backrest")
 	}

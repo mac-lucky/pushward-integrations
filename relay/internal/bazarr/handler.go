@@ -2,16 +2,17 @@ package bazarr
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
-	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/apprise"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
@@ -30,8 +31,9 @@ type Handler struct {
 	ender   *lifecycle.Ender
 }
 
-func NewHandler(clients *client.Pool, cfg *config.BazarrConfig) *Handler {
-	return &Handler{
+// RegisterRoutes registers the Bazarr webhook endpoint and returns the Handler.
+func RegisterRoutes(api huma.API, clients *client.Pool, cfg *config.BazarrConfig) *Handler {
+	h := &Handler{
 		clients: clients,
 		config:  cfg,
 		ender: lifecycle.NewEnder(clients, nil, "bazarr", lifecycle.EndConfig{
@@ -39,45 +41,38 @@ func NewHandler(clients *client.Pool, cfg *config.BazarrConfig) *Handler {
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
 	}
+	humautil.RegisterWebhook(api, "/bazarr", "post-bazarr-webhook",
+		"Receive Bazarr subtitle webhook",
+		"Processes Bazarr subtitle download events via Apprise notifications.",
+		[]string{"Bazarr"}, h.handleWebhook)
+	return h
 }
 
 func (h *Handler) Ender() *lifecycle.Ender {
 	return h.ender
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	ctx := r.Context()
+func (h *Handler) handleWebhook(ctx context.Context, input *struct {
+	Body apprise.Payload
+}) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "bazarr")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
 
-	var p apprise.Payload
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
-		slog.Error("failed to decode bazarr payload", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	ev := parseMessage(p.Message)
+	ev := parseMessage(input.Body.Message)
 	if ev == nil {
 		// Unrecognized message format → treat as test notification.
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "bazarr"); err != nil {
 			log.Error("test notification failed", "provider", "bazarr", "error", err)
 		}
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-		return
+		return humautil.NewOK(), nil
 	}
 
 	if err := h.handleSubtitle(ctx, userKey, log, ev); err != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		return
+		return nil, huma.Error502BadGateway("upstream API error")
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return humautil.NewOK(), nil
 }
 
 func parseMessage(msg string) *subtitleEvent {

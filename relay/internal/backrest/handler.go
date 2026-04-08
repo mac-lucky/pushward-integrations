@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
@@ -26,8 +28,10 @@ type Handler struct {
 	ender   *lifecycle.Ender
 }
 
-func NewHandler(store state.Store, clients *client.Pool, cfg *config.BackrestConfig) *Handler {
-	return &Handler{
+// RegisterRoutes registers the Backrest webhook endpoint and returns the Handler
+// so the caller can collect the Ender for graceful shutdown.
+func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.BackrestConfig) *Handler {
+	h := &Handler{
 		store:   store,
 		clients: clients,
 		config:  cfg,
@@ -36,74 +40,70 @@ func NewHandler(store state.Store, clients *client.Pool, cfg *config.BackrestCon
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
 	}
+	humautil.RegisterWebhook(api, "/backrest", "post-backrest-webhook",
+		"Receive Backrest backup webhook",
+		"Processes Backrest backup lifecycle events (snapshot, prune, check, forget).",
+		[]string{"Backrest"}, h.handleWebhook)
+	return h
 }
 
 func (h *Handler) Ender() *lifecycle.Ender {
 	return h.ender
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	var payload webhookPayload
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
-		slog.Error("failed to decode webhook payload", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	userKey := auth.KeyFromContext(r.Context())
+func (h *Handler) handleWebhook(ctx context.Context, input *struct {
+	Body webhookPayload
+}) (*humautil.WebhookResponse, error) {
+	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
-	ctx := r.Context()
 	ctx = metrics.WithProvider(ctx, "backrest")
+	payload := &input.Body
 
 	var err error
 	switch payload.Event {
 	case "CONDITION_SNAPSHOT_START":
-		err = h.handleStart(ctx, userKey, log, &payload, "Backing up...")
+		err = h.handleStart(ctx, userKey, log, payload, "Backing up...")
 	case "CONDITION_SNAPSHOT_SUCCESS":
 		stateText := "Complete · " + formatBytes(payload.DataAdded)
-		err = h.handleEnd(ctx, userKey, log, &payload, stateText, pushward.ColorGreen, "checkmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, stateText, pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_SNAPSHOT_WARNING":
-		err = h.handleEnd(ctx, userKey, log, &payload, "Complete (warnings)", pushward.ColorOrange, "exclamationmark.triangle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, "Complete (warnings)", pushward.ColorOrange, "exclamationmark.triangle.fill")
 	case "CONDITION_SNAPSHOT_ERROR":
 		stateText := "Failed"
 		if payload.Error != "" {
 			stateText = "Failed: " + text.TruncateHard(payload.Error, 50)
 		}
-		err = h.handleEnd(ctx, userKey, log, &payload, stateText, pushward.ColorRed, "xmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, stateText, pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_PRUNE_START":
-		err = h.handleStart(ctx, userKey, log, &payload, "Pruning...")
+		err = h.handleStart(ctx, userKey, log, payload, "Pruning...")
 	case "CONDITION_PRUNE_SUCCESS":
-		err = h.handleEnd(ctx, userKey, log, &payload, "Pruned", pushward.ColorGreen, "checkmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, "Pruned", pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_PRUNE_ERROR":
-		err = h.handleEnd(ctx, userKey, log, &payload, "Prune Failed", pushward.ColorRed, "xmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, "Prune Failed", pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_CHECK_START":
-		err = h.handleStart(ctx, userKey, log, &payload, "Checking...")
+		err = h.handleStart(ctx, userKey, log, payload, "Checking...")
 	case "CONDITION_CHECK_SUCCESS":
-		err = h.handleEnd(ctx, userKey, log, &payload, "Check Passed", pushward.ColorGreen, "checkmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, "Check Passed", pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_CHECK_ERROR":
-		err = h.handleEnd(ctx, userKey, log, &payload, "Check Failed", pushward.ColorRed, "xmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, "Check Failed", pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_FORGET_START":
-		err = h.handleStart(ctx, userKey, log, &payload, "Forgetting...")
+		err = h.handleStart(ctx, userKey, log, payload, "Forgetting...")
 	case "CONDITION_FORGET_SUCCESS":
-		err = h.handleEnd(ctx, userKey, log, &payload, "Forgotten", pushward.ColorGreen, "checkmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, "Forgotten", pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_FORGET_ERROR":
-		err = h.handleEnd(ctx, userKey, log, &payload, "Forget Failed", pushward.ColorRed, "xmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, "Forget Failed", pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_ANY_ERROR":
-		err = h.handleAlert(ctx, userKey, log, &payload, "Error", pushward.ColorRed, "critical")
+		err = h.handleAlert(ctx, userKey, log, payload, "Error", pushward.ColorRed, "critical")
 	case "CONDITION_SNAPSHOT_SKIPPED":
-		err = h.handleAlert(ctx, userKey, log, &payload, "Snapshot Skipped", pushward.ColorBlue, "info")
+		err = h.handleAlert(ctx, userKey, log, payload, "Snapshot Skipped", pushward.ColorBlue, "info")
 	default:
 		slog.Debug("unknown backrest event", "event", payload.Event)
 	}
 
 	if err != nil {
-		w.WriteHeader(http.StatusBadGateway)
-		return
+		return nil, huma.Error502BadGateway("upstream API error")
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return humautil.NewOK(), nil
 }
 
 func (h *Handler) slugAndKey(p *webhookPayload) (string, string) {
