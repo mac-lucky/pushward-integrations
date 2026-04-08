@@ -5,11 +5,12 @@ Multi-tenant webhook gateway that consolidates multiple providers into a single 
 ## Features
 
 - **Multi-tenant** — tenants are identified by their `hlk_` integration key, extracted from every request by a shared auth middleware
-- **13 providers** — Grafana, ArgoCD, Radarr, Sonarr, Jellyfin, Paperless-ngx, Changedetection.io, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest
+- **14 providers** — Grafana, ArgoCD, Radarr, Sonarr, Bazarr, Jellyfin, Paperless-ngx, Changedetection.io, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest
 - **PostgreSQL state** — persistent state store with automatic TTL cleanup for alert grouping, sync tracking, and download tracking
 - **Per-tenant client pool** — LRU pool of PushWard API clients keyed by integration key hash (max 1000 concurrent tenants)
 - **Rate limiting** — dual-layer: per-IP (5 req/s, burst 20) and per-key (1 req/s, burst 10)
 - **Two-phase end** — activities show final content on Dynamic Island before dismissing (ArgoCD, Starr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest)
+- **Push notifications** — fire-and-forget APNs alerts for one-shot events (Bazarr)
 - **Retry with backoff** — PushWard API calls retry up to 5 times with exponential backoff and 429 rate-limit handling
 - **Live credential rotation** — optional `password_file` support with fsnotify watching; the connection pool resets automatically when the file changes
 - **Graceful shutdown** — waits for in-flight requests on SIGINT/SIGTERM
@@ -83,6 +84,7 @@ services:
 | POST | `/argocd` | ArgoCD sync webhooks |
 | POST | `/radarr` | Radarr webhooks |
 | POST | `/sonarr` | Sonarr webhooks |
+| POST | `/bazarr` | Bazarr Apprise subtitle notifications |
 | POST | `/jellyfin` | Jellyfin webhook plugin |
 | POST | `/paperless` | Paperless-ngx workflow webhooks |
 | POST | `/changedetection` | Changedetection.io notifications |
@@ -150,6 +152,32 @@ Receives Radarr and Sonarr webhooks. Tracks download lifecycle from grab to impo
 | `Test` | (provider-specific test activity) | varies | varies |
 
 **Setup:** In Radarr/Sonarr, go to Settings > Connect > + > Webhook. Set URL to `https://relay.example.com/radarr` (or `/sonarr`). Leave Username as any value, set Password to your `hlk_` key (Basic Auth). Enable triggers: On Grab, On Import, On Health Issue, On Health Restored. Click Test, then Save.
+
+### Bazarr
+
+Receives Bazarr subtitle download notifications via Apprise. Sends a push notification (not a Live Activity) with the media title, language, provider, and match score.
+
+| Route | `POST /bazarr` |
+|---|---|
+| Type | Push notification |
+| Auth | Basic Auth with `hlk_` key as password |
+| CollapseID | `bazarr-<sha256(media)[:8]>` |
+
+**Events:**
+
+| Action | Title | Subtitle | Body |
+|---|---|---|---|
+| `downloaded` | media title | Downloaded · language | score% from provider |
+| `upgraded` | media title | Upgraded · language | score% from provider |
+| `manually downloaded` | media title | Downloaded · language | score% from provider |
+
+**Setup:** In Bazarr, go to Settings > Notifications. Add a notification provider with the URL:
+
+```
+jsons://user:hlk_YOUR_KEY@relay.example.com/bazarr
+```
+
+The `hlk_` key is passed as the Basic Auth password — the username can be anything. Enable subtitle download events, then click Test and Save.
 
 ### Jellyfin
 
@@ -506,6 +534,6 @@ Most providers authenticate with a Bearer token containing the `hlk_` integratio
 - Gatus
 - Backrest
 
-### HTTP Basic Auth (Radarr/Sonarr only)
+### HTTP Basic Auth (Radarr/Sonarr/Bazarr)
 
-Radarr and Sonarr send the `hlk_` integration key as the Basic Auth password. The username field is ignored.
+Radarr, Sonarr, and Bazarr send the `hlk_` integration key as the Basic Auth password. The username field is ignored.
