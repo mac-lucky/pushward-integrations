@@ -1,6 +1,6 @@
 module github.com/mac-lucky/pushward-integrations/grafana
 
-go 1.25.8
+go 1.26.2
 
 require (
 	github.com/mac-lucky/pushward-integrations/shared v0.0.0

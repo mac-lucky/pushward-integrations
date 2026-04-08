@@ -1,5 +1,12 @@
 # pushward-integrations
 
+[![CI/CD GitHub](https://github.com/mac-lucky/pushward-integrations/actions/workflows/github-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/github-ci-cd.yml)
+[![CI/CD SABnzbd](https://github.com/mac-lucky/pushward-integrations/actions/workflows/sabnzbd-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/sabnzbd-ci-cd.yml)
+[![CI/CD BambuLab](https://github.com/mac-lucky/pushward-integrations/actions/workflows/bambulab-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/bambulab-ci-cd.yml)
+[![CI/CD Unraid](https://github.com/mac-lucky/pushward-integrations/actions/workflows/unraid-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/unraid-ci-cd.yml)
+[![CI/CD Relay](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml)
+[![CI/CD Grafana](https://github.com/mac-lucky/pushward-integrations/actions/workflows/grafana-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/grafana-ci-cd.yml)
+
 Collection of PushWard integration bridges packaged as Docker containers. Each bridge monitors an external service and sends real-time Live Activity updates to [pushward-server](https://pushward.app) for display on iOS (Dynamic Island and Lock Screen).
 
 ## Integrations
