@@ -6,12 +6,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
@@ -19,19 +17,13 @@ import (
 func testConfig() *config.BazarrConfig {
 	return &config.BazarrConfig{
 		BaseProviderConfig: config.BaseProviderConfig{
-			Enabled:        true,
-			Priority:       1,
-			CleanupDelay:   5 * time.Minute,
-			StaleTimeout:   30 * time.Minute,
-			EndDelay:       10 * time.Millisecond,
-			EndDisplayTime: 10 * time.Millisecond,
+			Enabled: true,
 		},
 	}
 }
 
 func newHandler(t *testing.T, cfg *config.BazarrConfig) (http.Handler, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
-	lifecycle.SetRetryDelay(10 * time.Millisecond)
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	pool := client.NewPool(srv.URL, nil)
 
@@ -64,55 +56,37 @@ func TestEpisodeDownloaded(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
 	recorded := testutil.GetCalls(calls, mu)
-	// create + phase1(ONGOING) + phase2(ENDED) = 3
-	if len(recorded) != 3 {
-		t.Fatalf("expected 3 calls (create + phase1 + phase2), got %d", len(recorded))
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call (notification), got %d", len(recorded))
 	}
 
-	// Verify create
-	var createReq pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
-	if !strings.HasPrefix(createReq.Slug, "bazarr-") {
-		t.Errorf("expected slug with bazarr- prefix, got %s", createReq.Slug)
-	}
-	if createReq.Name != "Breaking Bad (2008) - S05E14 - Ozymandias" {
-		t.Errorf("expected media name, got %s", createReq.Name)
-	}
-	if createReq.Priority != 1 {
-		t.Errorf("expected priority 1, got %d", createReq.Priority)
+	if recorded[0].Method != http.MethodPost || recorded[0].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s %s", recorded[0].Method, recorded[0].Path)
 	}
 
-	// Phase 1: ONGOING with "Downloaded"
-	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &phase1)
-	if phase1.State != pushward.StateOngoing {
-		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
+	var req pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req)
+	if req.Title != "Breaking Bad (2008) - S05E14 - Ozymandias" {
+		t.Errorf("expected media name in title, got %s", req.Title)
 	}
-	if phase1.Content.State != "Downloaded" {
-		t.Errorf("expected state 'Downloaded', got %s", phase1.Content.State)
+	if !strings.Contains(req.Subtitle, "Downloaded") {
+		t.Errorf("expected subtitle to contain 'Downloaded', got %s", req.Subtitle)
 	}
-	if phase1.Content.Icon != "mdi:download" {
-		t.Errorf("expected mdi:download icon, got %s", phase1.Content.Icon)
+	if !strings.Contains(req.Subtitle, "English") {
+		t.Errorf("expected subtitle to contain language, got %s", req.Subtitle)
 	}
-	if phase1.Content.AccentColor != pushward.ColorGreen {
-		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
+	if !strings.Contains(req.Body, "96.0%") {
+		t.Errorf("expected body to contain score, got %s", req.Body)
 	}
-	if !strings.Contains(phase1.Content.Subtitle, "English") {
-		t.Errorf("expected subtitle to contain language, got %s", phase1.Content.Subtitle)
+	if !strings.Contains(req.Body, "opensubtitles") {
+		t.Errorf("expected body to contain provider, got %s", req.Body)
 	}
-	if !strings.Contains(phase1.Content.Subtitle, "96.0%") {
-		t.Errorf("expected subtitle to contain score, got %s", phase1.Content.Subtitle)
+	if req.Source != "bazarr" {
+		t.Errorf("expected source bazarr, got %s", req.Source)
 	}
-
-	// Phase 2: ENDED
-	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &phase2)
-	if phase2.State != pushward.StateEnded {
-		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
+	if !req.Push {
+		t.Error("expected push=true")
 	}
 }
 
@@ -129,26 +103,21 @@ func TestMovieUpgraded(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 3 {
-		t.Fatalf("expected 3 calls, got %d", len(recorded))
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(recorded))
 	}
 
-	var createReq pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
-	if createReq.Name != "Dune: Part Two (2024)" {
-		t.Errorf("expected movie name with colon preserved, got %s", createReq.Name)
+	var req pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req)
+	if req.Title != "Dune: Part Two (2024)" {
+		t.Errorf("expected movie name with colon preserved, got %s", req.Title)
 	}
-
-	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &phase1)
-	if phase1.Content.State != "Upgraded" {
-		t.Errorf("expected state 'Upgraded', got %s", phase1.Content.State)
+	if !strings.Contains(req.Subtitle, "Upgraded") {
+		t.Errorf("expected subtitle with 'Upgraded', got %s", req.Subtitle)
 	}
-	if !strings.Contains(phase1.Content.Subtitle, "French forced") {
-		t.Errorf("expected subtitle with forced modifier, got %s", phase1.Content.Subtitle)
+	if !strings.Contains(req.Subtitle, "French forced") {
+		t.Errorf("expected subtitle with forced modifier, got %s", req.Subtitle)
 	}
 }
 

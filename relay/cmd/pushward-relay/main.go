@@ -203,8 +203,7 @@ func main() {
 	}
 
 	if cfg.Providers.Bazarr.Enabled {
-		bzh := bazarr.RegisterRoutes(api, clients, &cfg.Providers.Bazarr)
-		collectEnder(bzh)
+		bazarr.RegisterRoutes(api, clients, &cfg.Providers.Bazarr)
 		slog.Info("enabled provider", "provider", "bazarr")
 	}
 

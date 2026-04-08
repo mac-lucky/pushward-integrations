@@ -13,7 +13,6 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -27,29 +26,18 @@ var messageRe = regexp.MustCompile(
 
 type Handler struct {
 	clients *client.Pool
-	config  *config.BazarrConfig
-	ender   *lifecycle.Ender
 }
 
 // RegisterRoutes registers the Bazarr webhook endpoint and returns the Handler.
 func RegisterRoutes(api huma.API, clients *client.Pool, cfg *config.BazarrConfig) *Handler {
 	h := &Handler{
 		clients: clients,
-		config:  cfg,
-		ender: lifecycle.NewEnder(clients, nil, "bazarr", lifecycle.EndConfig{
-			EndDelay:       cfg.EndDelay,
-			EndDisplayTime: cfg.EndDisplayTime,
-		}),
 	}
 	humautil.RegisterWebhook(api, "/bazarr", "post-bazarr-webhook",
 		"Receive Bazarr subtitle webhook",
 		"Processes Bazarr subtitle download events via Apprise notifications.",
 		[]string{"Bazarr"}, h.handleWebhook)
 	return h
-}
-
-func (h *Handler) Ender() *lifecycle.Ender {
-	return h.ender
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
@@ -90,32 +78,26 @@ func parseMessage(msg string) *subtitleEvent {
 }
 
 func (h *Handler) handleSubtitle(ctx context.Context, userKey string, log *slog.Logger, ev *subtitleEvent) error {
-	slug := text.SlugHash("bazarr", ev.media, 4)
+	action := "Downloaded"
+	if ev.action == "upgraded" {
+		action = "Upgraded"
+	}
 
-	cl := h.clients.Get(userKey)
-	endedTTL := int(h.config.CleanupDelay.Seconds())
-	staleTTL := int(h.config.StaleTimeout.Seconds())
+	req := pushward.SendNotificationRequest{
+		Title:      ev.media,
+		Subtitle:   action + " · " + ev.language,
+		Body:       ev.score + "% from " + ev.provider,
+		ThreadID:   "bazarr",
+		CollapseID: text.SlugHash("bazarr", ev.media, 4),
+		Level:      pushward.LevelActive,
+		Category:   "subtitle-" + strings.ReplaceAll(ev.action, " ", "-"),
+		Source:     "bazarr",
+		Push:       true,
+	}
 
-	if err := cl.CreateActivity(ctx, slug, ev.media, h.config.Priority, endedTTL, staleTTL); err != nil {
-		log.Error("failed to create bazarr activity", "slug", slug, "error", err)
+	if err := h.clients.SendNotification(ctx, userKey, log, req); err != nil {
 		return err
 	}
-
-	state := "Downloaded"
-	if ev.action == "upgraded" {
-		state = "Upgraded"
-	}
-
-	content := pushward.Content{
-		Template:    "generic",
-		Progress:    1.0,
-		State:       state,
-		Icon:        "mdi:download",
-		Subtitle:    "Bazarr \u00b7 " + ev.language + " \u00b7 " + ev.score + "% from " + ev.provider,
-		AccentColor: pushward.ColorGreen,
-	}
-
-	h.ender.ScheduleEnd(userKey, slug, slug, content)
-	log.Info("bazarr activity", "slug", slug, "media", ev.media, "language", ev.language, "action", ev.action)
+	log.Info("bazarr notification", "media", ev.media, "language", ev.language, "action", ev.action)
 	return nil
 }
