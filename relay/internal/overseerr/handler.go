@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/mediathread"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
@@ -104,6 +106,28 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 	subtitle := "Overseerr · " + text.TruncateHard(p.Subject, 50)
 
 	cl := h.clients.Get(userKey)
+
+	// Send notification (always, independent of Live Activity)
+	notifReq := pushward.SendNotificationRequest{
+		Title:    "Overseerr",
+		Subtitle: text.TruncateHard(p.Subject, 100),
+		Body:     stateText,
+		ThreadID: mediathread.ThreadID(p.Media.MediaType, p.Media.TmdbID, p.Media.TvdbID),
+		Level:    pushward.LevelActive,
+		Category: "media-" + strings.ToLower(stateText),
+		Source:   "overseerr",
+		ImageURL: p.Image,
+		Push:     true,
+	}
+	meta := map[string]string{"media_type": p.Media.MediaType, "tmdb_id": p.Media.TmdbID}
+	if p.Request.RequestedBy != "" {
+		meta["requested_by"] = p.Request.RequestedBy
+	}
+	notifReq.Metadata = meta
+	if err := cl.SendNotification(ctx, notifReq); err != nil {
+		log.Error("failed to send notification", "slug", slug, "error", err)
+	}
+
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 

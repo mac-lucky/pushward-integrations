@@ -122,6 +122,9 @@ func TestFiringSingleAlert(t *testing.T) {
 	if req.Source != "grafana" {
 		t.Errorf("expected source grafana, got %s", req.Source)
 	}
+	if req.ThreadID != "grafana-highcpuusage" {
+		t.Errorf("expected thread_id grafana-highcpuusage, got %s", req.ThreadID)
+	}
 	if !req.Push {
 		t.Error("expected push=true")
 	}
@@ -543,6 +546,83 @@ func TestCollapseID_PerFingerprint(t *testing.T) {
 	testutil.UnmarshalBody(t, recorded[1].Body, &req2)
 	if req1.CollapseID == req2.CollapseID {
 		t.Errorf("expected different collapse IDs for different fingerprints, both got %s", req1.CollapseID)
+	}
+}
+
+func TestThreadID_PerAlertname(t *testing.T) {
+	handler, calls, mu := setup(t)
+
+	payload := `{
+		"alerts": [
+			{
+				"status": "firing",
+				"labels": {"alertname": "HighCPU", "severity": "critical"},
+				"annotations": {"summary": "CPU high"},
+				"fingerprint": "fp1"
+			},
+			{
+				"status": "firing",
+				"labels": {"alertname": "DiskFull", "severity": "warning"},
+				"annotations": {"summary": "Disk full"},
+				"fingerprint": "fp2"
+			}
+		]
+	}`
+
+	sendWebhook(t, handler, payload)
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	}
+
+	var req1, req2 pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req1)
+	testutil.UnmarshalBody(t, recorded[1].Body, &req2)
+	if req1.ThreadID == req2.ThreadID {
+		t.Errorf("expected different thread IDs for different alertnames, both got %s", req1.ThreadID)
+	}
+	if req1.ThreadID != "grafana-highcpu" {
+		t.Errorf("expected thread_id grafana-highcpu, got %s", req1.ThreadID)
+	}
+	if req2.ThreadID != "grafana-diskfull" {
+		t.Errorf("expected thread_id grafana-diskfull, got %s", req2.ThreadID)
+	}
+}
+
+func TestThreadID_SameAlertnameDifferentFingerprints(t *testing.T) {
+	handler, calls, mu := setup(t)
+
+	payload := `{
+		"alerts": [
+			{
+				"status": "firing",
+				"labels": {"alertname": "HighCPU", "severity": "critical", "instance": "node1"},
+				"annotations": {"summary": "CPU high on node1"},
+				"fingerprint": "fp-node1"
+			},
+			{
+				"status": "firing",
+				"labels": {"alertname": "HighCPU", "severity": "critical", "instance": "node2"},
+				"annotations": {"summary": "CPU high on node2"},
+				"fingerprint": "fp-node2"
+			}
+		]
+	}`
+
+	sendWebhook(t, handler, payload)
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	}
+
+	var req1, req2 pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &req1)
+	testutil.UnmarshalBody(t, recorded[1].Body, &req2)
+	if req1.ThreadID != req2.ThreadID {
+		t.Errorf("expected same thread ID for same alertname, got %s and %s", req1.ThreadID, req2.ThreadID)
+	}
+	if req1.ThreadID != "grafana-highcpu" {
+		t.Errorf("expected thread_id grafana-highcpu, got %s", req1.ThreadID)
 	}
 }
 

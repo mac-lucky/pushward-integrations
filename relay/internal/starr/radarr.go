@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/mediathread"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -166,7 +167,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 		Title:      "Radarr",
 		Subtitle:   title,
 		Body:       "Grabbed · " + p.Release.Quality,
-		ThreadID:   "radarr",
+		ThreadID:   radarrMediaThreadID(p.Movie),
 		CollapseID: "radarr-grab",
 		Level:      pushward.LevelActive,
 		Category:   "grab",
@@ -264,7 +265,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 		Title:      "Radarr",
 		Subtitle:   title,
 		Body:       state,
-		ThreadID:   "radarr",
+		ThreadID:   radarrMediaThreadID(p.Movie),
 		CollapseID: "radarr-download",
 		Level:      pushward.LevelActive,
 		Category:   "download",
@@ -333,7 +334,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 func (h *Handler) handleRadarrRename(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieEventPayload) error {
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: "Files renamed",
-		ThreadID: "radarr", CollapseID: "radarr-rename",
+		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-rename",
 		Level: pushward.LevelPassive, Category: "rename", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
 		Metadata: radarrMovieMeta(p.Movie),
@@ -343,7 +344,7 @@ func (h *Handler) handleRadarrRename(ctx context.Context, userKey string, log *s
 func (h *Handler) handleRadarrMovieAdded(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieEventPayload) error {
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: "Added to library",
-		ThreadID: "radarr", CollapseID: "radarr-movie-added",
+		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-movie-added",
 		Level: pushward.LevelActive, Category: "movie-added", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
 		Metadata: radarrMovieMeta(p.Movie),
@@ -357,7 +358,7 @@ func (h *Handler) handleRadarrMovieDelete(ctx context.Context, userKey string, l
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: body,
-		ThreadID: "radarr", CollapseID: "radarr-movie-delete",
+		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-movie-delete",
 		Level: pushward.LevelActive, Category: "movie-delete", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
 		Metadata: radarrMovieMeta(p.Movie),
@@ -371,7 +372,7 @@ func (h *Handler) handleRadarrMovieFileDelete(ctx context.Context, userKey strin
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: body,
-		ThreadID: "radarr", CollapseID: "radarr-file-delete",
+		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-file-delete",
 		Level: pushward.LevelPassive, Category: "file-delete", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
 		Metadata: radarrMovieMeta(p.Movie),
@@ -384,4 +385,12 @@ func radarrMovieMeta(m RadarrMovie) map[string]string {
 		return map[string]string{"tmdb_id": strconv.Itoa(m.TmdbID)}
 	}
 	return nil
+}
+
+// radarrMediaThreadID returns a cross-provider thread ID for a movie, falling back to "radarr".
+func radarrMediaThreadID(m RadarrMovie) string {
+	if m.TmdbID > 0 {
+		return mediathread.ThreadID("movie", strconv.Itoa(m.TmdbID), "")
+	}
+	return "radarr"
 }

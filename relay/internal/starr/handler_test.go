@@ -1188,8 +1188,8 @@ func TestSonarrGrab_SmartMode_SendsNotification(t *testing.T) {
 	if req.Title != "Sonarr" {
 		t.Errorf("expected title Sonarr, got %s", req.Title)
 	}
-	if req.ThreadID != "sonarr" {
-		t.Errorf("expected thread_id sonarr, got %s", req.ThreadID)
+	if req.ThreadID != "media-tv-81189" {
+		t.Errorf("expected thread_id media-tv-81189, got %s", req.ThreadID)
 	}
 }
 

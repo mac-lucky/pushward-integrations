@@ -15,6 +15,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/mediathread"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
@@ -409,7 +410,7 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog
 		Title:      mediaName(p),
 		Subtitle:   subtitle,
 		Body:       "Added to library",
-		ThreadID:   "jellyfin",
+		ThreadID:   jellyfinMediaThreadID(p),
 		CollapseID: "jellyfin-item-" + p.ItemID,
 		Level:      pushward.LevelPassive,
 		Category:   "item-added",
@@ -417,6 +418,24 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog
 		Push:       true,
 		Metadata:   meta,
 	})
+}
+
+// jellyfinMediaThreadID returns a cross-provider thread ID for a Jellyfin item,
+// falling back to "jellyfin" when provider IDs are unavailable.
+func jellyfinMediaThreadID(p *jellyfinPayload) string {
+	var mediaType string
+	switch p.ItemType {
+	case "Movie":
+		mediaType = "movie"
+	case "Series", "Season", "Episode":
+		mediaType = "tv"
+	}
+	if mediaType != "" {
+		if tid := mediathread.ThreadID(mediaType, p.ProviderTmdb, p.ProviderTvdb); tid != "" {
+			return tid
+		}
+	}
+	return "jellyfin"
 }
 
 func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {

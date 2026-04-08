@@ -83,7 +83,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		req := pushward.SendNotificationRequest{
 			Title:      alertname,
 			Subtitle:   text.Truncate(subtitle, 80),
-			ThreadID:   "grafana",
+			ThreadID:   text.Slug("grafana-", alertname),
 			CollapseID: text.SlugHash("grafana", alertname+":"+a.Fingerprint, 6),
 			Source:     "grafana",
 			Push:       true,
@@ -130,7 +130,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 			meta[k] = text.TruncateHard(v, 512)
 		}
 		// High-value labels first.
-		for _, key := range []string{"alertname", "severity", "instance", "job", "namespace", "cluster", "pod", "container", "service"} {
+		for _, key := range []string{"alertname", "severity", "instance", "job", "job_name", "namespace", "cluster", "pod", "container", "service"} {
 			addMeta(key, a.Labels[key])
 		}
 		// All annotations (prefixed to avoid collision with labels).

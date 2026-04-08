@@ -82,17 +82,51 @@ func TestMediaPending(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + ONGOING = 2 (no two-phase end for non-terminal)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	// notification + create + ONGOING = 3 (no two-phase end for non-terminal)
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(recorded))
+	}
+
+	// Verify notification
+	if recorded[0].Method != "POST" || recorded[0].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s %s", recorded[0].Method, recorded[0].Path)
+	}
+	var notif pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &notif)
+	if notif.Title != "Overseerr" {
+		t.Errorf("expected title 'Overseerr', got %s", notif.Title)
+	}
+	if notif.Subtitle != "Inception (2010)" {
+		t.Errorf("expected subtitle 'Inception (2010)', got %s", notif.Subtitle)
+	}
+	if notif.Body != "Requested" {
+		t.Errorf("expected body 'Requested', got %s", notif.Body)
+	}
+	if notif.ThreadID != "media-movie-27205" {
+		t.Errorf("expected thread_id 'media-movie-27205', got %s", notif.ThreadID)
+	}
+	if notif.Source != "overseerr" {
+		t.Errorf("expected source 'overseerr', got %s", notif.Source)
+	}
+	if notif.ImageURL != "https://image.tmdb.org/t/p/w600_and_h900_bestv2/inception.jpg" {
+		t.Errorf("expected image URL, got %s", notif.ImageURL)
+	}
+	if notif.Metadata["media_type"] != "movie" {
+		t.Errorf("expected media_type 'movie', got %s", notif.Metadata["media_type"])
+	}
+	if notif.Metadata["tmdb_id"] != "27205" {
+		t.Errorf("expected tmdb_id '27205', got %s", notif.Metadata["tmdb_id"])
+	}
+	if notif.Metadata["requested_by"] != "admin" {
+		t.Errorf("expected requested_by 'admin', got %s", notif.Metadata["requested_by"])
 	}
 
 	// Verify create
-	if recorded[0].Method != "POST" || recorded[0].Path != "/activities" {
-		t.Errorf("expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
+	if recorded[1].Method != "POST" || recorded[1].Path != "/activities" {
+		t.Errorf("expected POST /activities, got %s %s", recorded[1].Method, recorded[1].Path)
 	}
 	var createReq pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
+	testutil.UnmarshalBody(t, recorded[1].Body, &createReq)
 	if createReq.Slug != "overseerr-movie-27205" {
 		t.Errorf("expected slug overseerr-movie-27205, got %s", createReq.Slug)
 	}
@@ -105,7 +139,7 @@ func TestMediaPending(t *testing.T) {
 
 	// Verify ONGOING update
 	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
 	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
@@ -164,13 +198,20 @@ func TestMediaApproved(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + ONGOING = 2 (no two-phase end for non-terminal)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	// notification + create + ONGOING = 3 (no two-phase end for non-terminal)
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(recorded))
+	}
+
+	// Verify notification
+	var notif pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &notif)
+	if notif.Body != "Approved" {
+		t.Errorf("expected body 'Approved', got %s", notif.Body)
 	}
 
 	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
 	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
@@ -217,13 +258,13 @@ func TestMediaAvailable(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	// notification + create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 calls, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
 	if update.Content.State != "Available" {
 		t.Errorf("expected state 'Available', got %s", update.Content.State)
 	}
@@ -236,7 +277,7 @@ func TestMediaAvailable(t *testing.T) {
 
 	// Phase 1: ONGOING
 	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
+	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
 	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
@@ -246,7 +287,7 @@ func TestMediaAvailable(t *testing.T) {
 
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
@@ -284,13 +325,13 @@ func TestMediaDeclined(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	// notification + create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 calls, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
 	if update.Content.State != "Declined" {
 		t.Errorf("expected state 'Declined', got %s", update.Content.State)
 	}
@@ -307,7 +348,7 @@ func TestMediaDeclined(t *testing.T) {
 	}
 
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
@@ -342,13 +383,13 @@ func TestMediaFailed(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	// notification + create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 calls, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	testutil.UnmarshalBody(t, recorded[2].Body, &update)
 	if update.Content.State != "Failed" {
 		t.Errorf("expected state 'Failed', got %s", update.Content.State)
 	}
@@ -360,7 +401,7 @@ func TestMediaFailed(t *testing.T) {
 	}
 
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
@@ -406,36 +447,39 @@ func TestFullLifecycle(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// PENDING: create + ONGOING = 2
-	// APPROVED: create + ONGOING = 2
-	// AVAILABLE: create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 4
-	// Total = 8
-	if len(recorded) != 8 {
-		t.Fatalf("expected 8 calls, got %d", len(recorded))
+	// PENDING: notification + create + ONGOING = 3
+	// APPROVED: notification + create + ONGOING = 3
+	// AVAILABLE: notification + create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 5
+	// Total = 11
+	if len(recorded) != 11 {
+		t.Fatalf("expected 11 calls, got %d", len(recorded))
 	}
 
 	// Verify progression: step 1 -> step 2 -> step 4
+	// PENDING: [0]=notif, [1]=create, [2]=update
 	var pending pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &pending)
+	testutil.UnmarshalBody(t, recorded[2].Body, &pending)
 	if *pending.Content.CurrentStep != 1 {
 		t.Errorf("expected step 1, got %d", *pending.Content.CurrentStep)
 	}
 
+	// APPROVED: [3]=notif, [4]=create, [5]=update
 	var approved pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &approved)
+	testutil.UnmarshalBody(t, recorded[5].Body, &approved)
 	if *approved.Content.CurrentStep != 2 {
 		t.Errorf("expected step 2, got %d", *approved.Content.CurrentStep)
 	}
 
+	// AVAILABLE: [6]=notif, [7]=create, [8]=update, [9]=phase1, [10]=phase2
 	var available pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[5].Body, &available)
+	testutil.UnmarshalBody(t, recorded[8].Body, &available)
 	if *available.Content.CurrentStep != 4 {
 		t.Errorf("expected step 4, got %d", *available.Content.CurrentStep)
 	}
 
 	// Final ENDED
 	var ended pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[7].Body, &ended)
+	testutil.UnmarshalBody(t, recorded[10].Body, &ended)
 	if ended.State != pushward.StateEnded {
 		t.Errorf("expected ENDED, got %s", ended.State)
 	}
