@@ -395,6 +395,17 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog
 		subtitle = fmt.Sprintf("Jellyfin \u00b7 %d", p.ProductionYear)
 	}
 
+	var meta map[string]string
+	if p.ProviderTmdb != "" || p.ProviderTvdb != "" {
+		meta = make(map[string]string)
+		if p.ProviderTmdb != "" {
+			meta["tmdb_id"] = p.ProviderTmdb
+		}
+		if p.ProviderTvdb != "" {
+			meta["tvdb_id"] = p.ProviderTvdb
+		}
+	}
+
 	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      mediaName(p),
 		Subtitle:   subtitle,
@@ -405,6 +416,7 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog
 		Category:   "item-added",
 		Source:     "jellyfin",
 		Push:       true,
+		Metadata:   meta,
 	})
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
@@ -166,6 +167,9 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 	if len(p.Episodes) > 0 && p.Episodes[0].Title != "" {
 		sgMeta["episode_title"] = p.Episodes[0].Title
 	}
+	if p.Series.TvdbID > 0 {
+		sgMeta["tvdb_id"] = strconv.Itoa(p.Series.TvdbID)
+	}
 	sgReq.Metadata = sgMeta
 	if err := cl.SendNotification(ctx, sgReq); err != nil {
 		log.Error("failed to send notification", "slug", slug, "error", err)
@@ -257,6 +261,9 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 	if len(p.Episodes) > 0 && p.Episodes[0].Title != "" {
 		sdMeta["episode_title"] = p.Episodes[0].Title
 	}
+	if p.Series.TvdbID > 0 {
+		sdMeta["tvdb_id"] = strconv.Itoa(p.Series.TvdbID)
+	}
 	sdReq.Metadata = sdMeta
 	if err := cl.SendNotification(ctx, sdReq); err != nil {
 		log.Error("failed to send notification", "error", err)
@@ -311,6 +318,7 @@ func (h *Handler) handleSonarrRename(ctx context.Context, userKey string, log *s
 		ThreadID: "sonarr", CollapseID: "sonarr-rename",
 		Level: pushward.LevelPassive, Category: "rename", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
+		Metadata: sonarrSeriesMeta(p.Series),
 	})
 }
 
@@ -320,6 +328,7 @@ func (h *Handler) handleSonarrSeriesAdd(ctx context.Context, userKey string, log
 		ThreadID: "sonarr", CollapseID: "sonarr-series-add",
 		Level: pushward.LevelActive, Category: "series-add", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
+		Metadata: sonarrSeriesMeta(p.Series),
 	})
 }
 
@@ -333,6 +342,7 @@ func (h *Handler) handleSonarrSeriesDelete(ctx context.Context, userKey string, 
 		ThreadID: "sonarr", CollapseID: "sonarr-series-delete",
 		Level: pushward.LevelActive, Category: "series-delete", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
+		Metadata: sonarrSeriesMeta(p.Series),
 	})
 }
 
@@ -346,7 +356,16 @@ func (h *Handler) handleSonarrEpisodeFileDelete(ctx context.Context, userKey str
 		ThreadID: "sonarr", CollapseID: "sonarr-file-delete",
 		Level: pushward.LevelPassive, Category: "file-delete", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
+		Metadata: sonarrSeriesMeta(p.Series),
 	})
+}
+
+// sonarrSeriesMeta returns metadata with tvdb_id for a series.
+func sonarrSeriesMeta(s SonarrSeries) map[string]string {
+	if s.TvdbID > 0 {
+		return map[string]string{"tvdb_id": strconv.Itoa(s.TvdbID)}
+	}
+	return nil
 }
 
 func (h *Handler) handleSonarrImportComplete(ctx context.Context, userKey string, log *slog.Logger, p *SonarrImportCompletePayload) error {
@@ -359,5 +378,6 @@ func (h *Handler) handleSonarrImportComplete(ctx context.Context, userKey string
 		ThreadID: "sonarr", CollapseID: "sonarr-import-complete",
 		Level: pushward.LevelActive, Category: "import-complete", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
+		Metadata: sonarrSeriesMeta(p.Series),
 	})
 }

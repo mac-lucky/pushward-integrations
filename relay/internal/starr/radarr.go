@@ -185,6 +185,9 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 	if p.Release.Size > 0 {
 		meta["size"] = text.FormatBytes(p.Release.Size)
 	}
+	if p.Movie.TmdbID > 0 {
+		meta["tmdb_id"] = strconv.Itoa(p.Movie.TmdbID)
+	}
 	grabReq.Metadata = meta
 	if err := cl.SendNotification(ctx, grabReq); err != nil {
 		log.Error("failed to send notification", "slug", slug, "error", err)
@@ -274,6 +277,9 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 	if p.MovieFile.Size > 0 {
 		dlMeta["size"] = text.FormatBytes(p.MovieFile.Size)
 	}
+	if p.Movie.TmdbID > 0 {
+		dlMeta["tmdb_id"] = strconv.Itoa(p.Movie.TmdbID)
+	}
 	dlReq.Metadata = dlMeta
 	if err := cl.SendNotification(ctx, dlReq); err != nil {
 		log.Error("failed to send notification", "error", err)
@@ -330,6 +336,7 @@ func (h *Handler) handleRadarrRename(ctx context.Context, userKey string, log *s
 		ThreadID: "radarr", CollapseID: "radarr-rename",
 		Level: pushward.LevelPassive, Category: "rename", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
+		Metadata: radarrMovieMeta(p.Movie),
 	})
 }
 
@@ -339,6 +346,7 @@ func (h *Handler) handleRadarrMovieAdded(ctx context.Context, userKey string, lo
 		ThreadID: "radarr", CollapseID: "radarr-movie-added",
 		Level: pushward.LevelActive, Category: "movie-added", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
+		Metadata: radarrMovieMeta(p.Movie),
 	})
 }
 
@@ -352,6 +360,7 @@ func (h *Handler) handleRadarrMovieDelete(ctx context.Context, userKey string, l
 		ThreadID: "radarr", CollapseID: "radarr-movie-delete",
 		Level: pushward.LevelActive, Category: "movie-delete", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
+		Metadata: radarrMovieMeta(p.Movie),
 	})
 }
 
@@ -365,5 +374,14 @@ func (h *Handler) handleRadarrMovieFileDelete(ctx context.Context, userKey strin
 		ThreadID: "radarr", CollapseID: "radarr-file-delete",
 		Level: pushward.LevelPassive, Category: "file-delete", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
+		Metadata: radarrMovieMeta(p.Movie),
 	})
+}
+
+// radarrMovieMeta returns metadata with tmdb_id for a movie.
+func radarrMovieMeta(m RadarrMovie) map[string]string {
+	if m.TmdbID > 0 {
+		return map[string]string{"tmdb_id": strconv.Itoa(m.TmdbID)}
+	}
+	return nil
 }

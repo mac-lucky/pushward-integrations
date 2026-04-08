@@ -19,8 +19,11 @@ type webhookPayload struct {
 	PlaybackPositionTicks int64  `json:"PlaybackPositionTicks"`
 	IsPaused              bool   `json:"IsPaused"`
 	PlayedToCompletion    bool   `json:"PlayedToCompletion"`
+	// Provider IDs
+	ProviderTmdb string `json:"Provider_tmdb"`
+	ProviderTvdb string `json:"Provider_tvdb"`
 	// Task fields
-	TaskName   string `json:"TaskName"`
+	TaskName string `json:"TaskName"`
 	TaskID     string `json:"TaskId"`
 	TaskResult string `json:"TaskResult"`
 	// Auth fields

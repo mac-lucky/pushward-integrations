@@ -6,6 +6,7 @@ type SonarrSeries struct {
 	Title     string       `json:"title"`
 	Year      int          `json:"year"`
 	TitleSlug string       `json:"titleSlug"`
+	TvdbID    int          `json:"tvdbId"`
 	Images    []StarrImage `json:"images"`
 }
 
