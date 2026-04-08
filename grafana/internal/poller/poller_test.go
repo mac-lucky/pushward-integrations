@@ -10,14 +10,14 @@ func TestStartStop(t *testing.T) {
 	// metricsClient and pwClient are nil — the goroutine will tick but
 	// poll() will panic if called, so we stop before the first tick.
 	p := New(nil, nil, 1*time.Hour) // long interval so it won't tick
-	p.Start("test-slug", "up")
+	p.Start("test-slug", "up", "TestAlert")
 
 	if p.ActiveCount() != 1 {
 		t.Fatalf("ActiveCount = %d, want 1", p.ActiveCount())
 	}
 
 	// Start again — should be a no-op
-	p.Start("test-slug", "up")
+	p.Start("test-slug", "up", "TestAlert")
 	if p.ActiveCount() != 1 {
 		t.Fatalf("ActiveCount = %d after duplicate start, want 1", p.ActiveCount())
 	}
@@ -32,8 +32,8 @@ func TestStartStop(t *testing.T) {
 
 func TestStopAll(t *testing.T) {
 	p := New(nil, nil, 1*time.Hour)
-	p.Start("slug-1", "up")
-	p.Start("slug-2", "up")
+	p.Start("slug-1", "up", "Alert1")
+	p.Start("slug-2", "up", "Alert2")
 
 	if p.ActiveCount() != 2 {
 		t.Fatalf("ActiveCount = %d, want 2", p.ActiveCount())

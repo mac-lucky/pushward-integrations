@@ -176,7 +176,7 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	if isNew && expr != "" {
 		history := h.fetchHistory(ctx, logger, expr)
 		if len(history) > 0 {
-			content.History = map[string][]pushward.HistoryPoint{"": history}
+			content.History = map[string][]pushward.HistoryPoint{alertname: history}
 		}
 	}
 
@@ -190,7 +190,7 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	}
 
 	if isNew && expr != "" {
-		h.poller.Start(slug, expr)
+		h.poller.Start(slug, expr, alertname)
 		logger.Info("poller started")
 	}
 }

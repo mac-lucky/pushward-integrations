@@ -136,8 +136,8 @@ func TestWebhook_FiringWithAnnotation(t *testing.T) {
 	if len(up.Content.Thresholds) != 1 || up.Content.Thresholds[0].Value != 80 {
 		t.Errorf("thresholds = %+v, want [{Value:80}]", up.Content.Thresholds)
 	}
-	if up.Content.History == nil || len(up.Content.History[""]) != 2 {
-		t.Errorf("expected 2 history points from Prometheus, got %v", up.Content.History)
+	if up.Content.History == nil || len(up.Content.History["HighCPU"]) != 2 {
+		t.Errorf("expected 2 history points keyed by alertname, got %v", up.Content.History)
 	}
 	if up.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("accent_color = %q, want critical red", up.Content.AccentColor)

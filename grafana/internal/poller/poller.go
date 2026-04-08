@@ -33,8 +33,9 @@ func New(metricsClient *metrics.Client, pwClient *pushward.Client, interval time
 }
 
 // Start begins polling for the given slug and PromQL expression.
+// label is used as the value map key in timeline updates (must match the key used in History).
 // No-op if already polling for this slug.
-func (p *Poller) Start(slug, expr string) {
+func (p *Poller) Start(slug, expr, label string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -45,7 +46,7 @@ func (p *Poller) Start(slug, expr string) {
 	ctx, cancel := context.WithCancel(context.Background()) // #nosec G118 -- cancel is stored in p.active and called in Stop/StopAll
 	p.active[slug] = cancel
 	p.wg.Add(1)
-	go p.run(ctx, slug, expr)
+	go p.run(ctx, slug, expr, label)
 }
 
 // Stop cancels the polling goroutine for the given slug.
@@ -84,7 +85,7 @@ func (p *Poller) ActiveCount() int {
 	return len(p.active)
 }
 
-func (p *Poller) run(ctx context.Context, slug, expr string) {
+func (p *Poller) run(ctx context.Context, slug, expr, label string) {
 	defer p.wg.Done()
 
 	logger := slog.With("slug", slug)
@@ -97,12 +98,12 @@ func (p *Poller) run(ctx context.Context, slug, expr string) {
 			logger.Info("poller stopped")
 			return
 		case <-ticker.C:
-			p.poll(ctx, logger, slug, expr)
+			p.poll(ctx, logger, slug, expr, label)
 		}
 	}
 }
 
-func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr string) {
+func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, label string) {
 	point, err := p.metricsClient.QueryInstant(ctx, expr, time.Now())
 	if err != nil {
 		if ctx.Err() != nil {
@@ -120,7 +121,7 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr strin
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
 			Template: pushward.TemplateTimeline,
-			Value:    map[string]float64{"Value": point.V},
+			Value:    map[string]float64{label: point.V},
 		},
 	})
 	if err != nil {
