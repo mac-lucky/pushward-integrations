@@ -51,7 +51,7 @@ func (h *Handler) Ender() *lifecycle.Ender {
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
-	Body webhookPayload
+	Body uptimekumaPayload
 }) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "uptimekuma")
 	userKey := auth.KeyFromContext(ctx)
@@ -81,7 +81,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	return humautil.NewOK(), nil
 }
 
-func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) error {
+func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *uptimekumaPayload) error {
 	slug := fmt.Sprintf("uptime-%d", p.Monitor.ID)
 	mapKey := fmt.Sprintf("uptimekuma:%d", p.Monitor.ID)
 
@@ -148,7 +148,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 	return nil
 }
 
-func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) error {
+func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *uptimekumaPayload) error {
 	mapKey := fmt.Sprintf("uptimekuma:%d", p.Monitor.ID)
 
 	existing, err := h.store.Get(ctx, "uptimekuma", userKey, mapKey, "")
@@ -185,7 +185,7 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 	return nil
 }
 
-func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) error {
+func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *uptimekumaPayload) error {
 	slug := fmt.Sprintf("uptime-%d", p.Monitor.ID)
 	mapKey := fmt.Sprintf("uptimekuma:%d", p.Monitor.ID)
 

@@ -30,7 +30,7 @@ func RegisterRoutes(api huma.API, clients *client.Pool, cfg *config.GrafanaConfi
 		[]string{"Grafana"}, h.handleWebhook)
 }
 
-type webhookPayload struct {
+type grafanaPayload struct {
 	Alerts []alert `json:"alerts"`
 }
 
@@ -54,7 +54,7 @@ func isKnownSeverity(s string) bool {
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
-	Body webhookPayload
+	Body grafanaPayload
 }) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "grafana")
 	userKey := auth.KeyFromContext(ctx)

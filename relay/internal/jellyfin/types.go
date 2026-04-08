@@ -1,7 +1,7 @@
 package jellyfin
 
-// webhookPayload is the JSON body sent by the Jellyfin webhook plugin.
-type webhookPayload struct {
+// jellyfinPayload is the JSON body sent by the Jellyfin webhook plugin.
+type jellyfinPayload struct {
 	NotificationType      string `json:"NotificationType"`
 	ServerName            string `json:"ServerName"`
 	ServerURL             string `json:"ServerUrl"`

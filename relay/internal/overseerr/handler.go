@@ -51,7 +51,7 @@ func (h *Handler) Ender() *lifecycle.Ender {
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
-	Body webhookPayload
+	Body overseerrPayload
 }) (*humautil.WebhookResponse, error) {
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
@@ -85,7 +85,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	return humautil.NewOK(), nil
 }
 
-func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, step int, stateText, icon, accentColor string, terminal bool) error {
+func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Logger, p *overseerrPayload, step int, stateText, icon, accentColor string, terminal bool) error {
 	// Validate media type against allowlist
 	switch p.Media.MediaType {
 	case "movie", "tv":

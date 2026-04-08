@@ -22,7 +22,7 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var envelope webhookPayload
+	var envelope starrPayload
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		slog.Error("failed to decode event type", "error", err)
 		http.Error(w, "invalid payload", http.StatusBadRequest)

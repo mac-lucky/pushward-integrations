@@ -1,6 +1,6 @@
 package backrest
 
-type webhookPayload struct {
+type backrestPayload struct {
 	Event        string `json:"event"`
 	Plan         string `json:"plan"`
 	Repo         string `json:"repo"`

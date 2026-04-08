@@ -1,6 +1,6 @@
 package overseerr
 
-type webhookPayload struct {
+type overseerrPayload struct {
 	NotificationType string      `json:"notification_type"`
 	Event            string      `json:"event"`
 	Subject          string      `json:"subject"`

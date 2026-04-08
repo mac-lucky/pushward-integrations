@@ -1,6 +1,6 @@
 package changedetection
 
-type webhookPayload struct {
+type changedetectionPayload struct {
 	URL           string `json:"url"`
 	Title         string `json:"title"`
 	Tag           string `json:"tag"`

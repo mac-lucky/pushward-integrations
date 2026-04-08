@@ -1,6 +1,6 @@
 package paperless
 
-type webhookPayload struct {
+type paperlessPayload struct {
 	Event         string `json:"event"`
 	DocID         *int   `json:"doc_id"`
 	Title         string `json:"title"`

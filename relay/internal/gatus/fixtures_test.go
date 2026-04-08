@@ -23,9 +23,9 @@ func TestFixturesUnmarshal(t *testing.T) {
 				t.Fatalf("reading file: %v", err)
 			}
 
-			var payload webhookPayload
+			var payload gatusPayload
 			if err := json.Unmarshal(data, &payload); err != nil {
-				t.Errorf("unmarshal webhookPayload: %v", err)
+				t.Errorf("unmarshal gatusPayload: %v", err)
 			}
 			if payload.EndpointName == "" {
 				t.Error("expected non-empty endpoint_name")

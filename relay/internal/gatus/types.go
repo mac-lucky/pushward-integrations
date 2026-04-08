@@ -1,6 +1,6 @@
 package gatus
 
-type webhookPayload struct {
+type gatusPayload struct {
 	EndpointName  string `json:"endpoint_name"`
 	EndpointGroup string `json:"endpoint_group"`
 	EndpointURL   string `json:"endpoint_url"`

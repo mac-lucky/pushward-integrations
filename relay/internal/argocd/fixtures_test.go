@@ -22,9 +22,9 @@ func TestFixturesUnmarshal(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reading file: %v", err)
 			}
-			var payload webhookPayload
+			var payload argocdPayload
 			if err := json.Unmarshal(data, &payload); err != nil {
-				t.Errorf("unmarshal into webhookPayload: %v", err)
+				t.Errorf("unmarshal into argocdPayload: %v", err)
 			}
 			if payload.App == "" {
 				t.Error("expected non-empty app field")

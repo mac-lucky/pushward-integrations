@@ -94,14 +94,14 @@ func playbackSlug(itemID, userName string) string {
 	return text.SlugHash("jellyfin", itemID+userName, 5)
 }
 
-func mediaName(p *webhookPayload) string {
+func mediaName(p *jellyfinPayload) string {
 	if p.SeriesName != "" {
 		return p.SeriesName
 	}
 	return p.Name
 }
 
-func playbackSubtitle(p *webhookPayload) string {
+func playbackSubtitle(p *jellyfinPayload) string {
 	if p.SeriesName != "" {
 		return fmt.Sprintf("Jellyfin \u00b7 S%02dE%02d \u00b7 %s", p.SeasonNumber, p.EpisodeNumber, p.Name)
 	}
@@ -111,14 +111,14 @@ func playbackSubtitle(p *webhookPayload) string {
 	return fmt.Sprintf("Jellyfin \u00b7 %s", p.UserName)
 }
 
-func playbackProgress(p *webhookPayload) float64 {
+func playbackProgress(p *jellyfinPayload) float64 {
 	if p.RunTimeTicks <= 0 {
 		return 0
 	}
 	return float64(p.PlaybackPositionTicks) / float64(p.RunTimeTicks)
 }
 
-func remainingSeconds(p *webhookPayload) int {
+func remainingSeconds(p *jellyfinPayload) int {
 	if p.RunTimeTicks <= 0 {
 		return 0
 	}
@@ -126,7 +126,7 @@ func remainingSeconds(p *webhookPayload) int {
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
-	Body webhookPayload
+	Body jellyfinPayload
 }) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "jellyfin")
 	userKey := auth.KeyFromContext(ctx)
@@ -164,7 +164,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	return humautil.NewOK(), nil
 }
 
-func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
 	slug := playbackSlug(p.ItemID, p.UserName)
 
 	// Skip paused starts �� Jellyfin fires PlaybackStart with IsPaused=true
@@ -231,7 +231,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *
 	return nil
 }
 
-func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
 	slug := playbackSlug(p.ItemID, p.UserName)
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
@@ -352,7 +352,7 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 	return nil
 }
 
-func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) {
+func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) {
 	slug := playbackSlug(p.ItemID, p.UserName)
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
@@ -388,7 +388,7 @@ func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *s
 	log.Info("scheduled end", "slug", slug, "state", "Watched on "+p.DeviceName+" by "+p.UserName)
 }
 
-func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
 	subtitle := "Jellyfin"
 	if p.ProductionYear > 0 {
 		subtitle = fmt.Sprintf("Jellyfin \u00b7 %d", p.ProductionYear)
@@ -419,7 +419,7 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog
 	})
 }
 
-func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
 	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      p.TaskName,
 		Subtitle:   "Jellyfin",
@@ -433,7 +433,7 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *sl
 	})
 }
 
-func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
 	body := "Complete"
 	level := pushward.LevelPassive
 	if p.TaskResult != "Completed" {
@@ -454,7 +454,7 @@ func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, log *
 	})
 }
 
-func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
 	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      "Auth Failure",
 		Subtitle:   "Jellyfin",

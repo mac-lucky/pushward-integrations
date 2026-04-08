@@ -49,7 +49,7 @@ func (h *Handler) Ender() *lifecycle.Ender {
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
-	Body webhookPayload
+	Body gatusPayload
 }) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "gatus")
 	userKey := auth.KeyFromContext(ctx)
@@ -73,7 +73,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	return humautil.NewOK(), nil
 }
 
-func (h *Handler) slugAndKey(p *webhookPayload) (string, string) {
+func (h *Handler) slugAndKey(p *gatusPayload) (string, string) {
 	identifier := p.EndpointName
 	if p.EndpointGroup != "" {
 		identifier = p.EndpointGroup + "/" + p.EndpointName
@@ -83,7 +83,7 @@ func (h *Handler) slugAndKey(p *webhookPayload) (string, string) {
 	return slug, mapKey
 }
 
-func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) error {
+func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *gatusPayload) error {
 	slug, mapKey := h.slugAndKey(p)
 
 	// Cancel any pending end timer from a previous RESOLVED event
@@ -151,7 +151,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 	return nil
 }
 
-func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *webhookPayload) error {
+func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *gatusPayload) error {
 	slug, mapKey := h.slugAndKey(p)
 
 	existing, err := h.store.Get(ctx, "gatus", userKey, mapKey, "")

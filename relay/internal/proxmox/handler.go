@@ -54,7 +54,7 @@ func (h *Handler) Ender() *lifecycle.Ender {
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
-	Body webhookPayload
+	Body proxmoxPayload
 }) (*humautil.WebhookResponse, error) {
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
@@ -86,7 +86,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	return humautil.NewOK(), nil
 }
 
-func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Logger, p *proxmoxPayload) error {
 	vmid := "unknown"
 	if m := vmidRe.FindStringSubmatch(p.Message); len(m) > 1 {
 		vmid = m[1]
@@ -186,7 +186,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 
 var replicationJobRe = regexp.MustCompile(`(?:job|Job)\s+([\d/]+)`)
 
-func (h *Handler) handleReplication(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleReplication(ctx context.Context, userKey string, log *slog.Logger, p *proxmoxPayload) error {
 	// Extract job ID from message — titles differ between start/finish phases.
 	jobID := "unknown"
 	if m := replicationJobRe.FindStringSubmatch(p.Message); len(m) > 1 {
@@ -284,7 +284,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, log *sl
 	return nil
 }
 
-func (h *Handler) handleFencing(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleFencing(ctx context.Context, userKey string, log *slog.Logger, p *proxmoxPayload) error {
 	slug := text.SlugHash("proxmox-fence", p.Hostname, 4)
 	mapKey := fmt.Sprintf("fencing:%s", p.Hostname)
 	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
@@ -324,7 +324,7 @@ func (h *Handler) handleFencing(ctx context.Context, userKey string, log *slog.L
 	return nil
 }
 
-func (h *Handler) handleUpdates(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleUpdates(ctx context.Context, userKey string, log *slog.Logger, p *proxmoxPayload) error {
 	slug := text.SlugHash("proxmox-updates", p.Hostname, 4)
 	mapKey := fmt.Sprintf("updates:%s", p.Hostname)
 	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))

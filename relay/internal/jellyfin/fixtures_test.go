@@ -23,9 +23,9 @@ func TestFixturesUnmarshal(t *testing.T) {
 				t.Fatalf("reading file: %v", err)
 			}
 
-			var p webhookPayload
+			var p jellyfinPayload
 			if err := json.Unmarshal(data, &p); err != nil {
-				t.Errorf("unmarshal webhookPayload: %v", err)
+				t.Errorf("unmarshal jellyfinPayload: %v", err)
 			}
 
 			if p.NotificationType == "" {

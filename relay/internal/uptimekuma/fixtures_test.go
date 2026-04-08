@@ -23,9 +23,9 @@ func TestFixturesUnmarshal(t *testing.T) {
 				t.Fatalf("reading file: %v", err)
 			}
 
-			var payload webhookPayload
+			var payload uptimekumaPayload
 			if err := json.Unmarshal(data, &payload); err != nil {
-				t.Errorf("unmarshal webhookPayload: %v", err)
+				t.Errorf("unmarshal uptimekumaPayload: %v", err)
 			}
 			if payload.Monitor.ID <= 0 {
 				t.Error("expected positive monitor ID")

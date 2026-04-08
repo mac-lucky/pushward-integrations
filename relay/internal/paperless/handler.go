@@ -49,7 +49,7 @@ func (h *Handler) Ender() *lifecycle.Ender {
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
-	Body webhookPayload
+	Body paperlessPayload
 }) (*humautil.WebhookResponse, error) {
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
@@ -75,7 +75,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 }
 
 // handleDocument processes "added" and "updated" events.
-func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText string) error {
+func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.Logger, p *paperlessPayload, stateText string) error {
 	if p.DocID == nil {
 		log.Warn("document event missing doc_id", "event", p.Event)
 		return nil
@@ -131,7 +131,7 @@ func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.
 }
 
 // handleConsumptionStarted processes "consumption_started" events.
-func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, log *slog.Logger, p *paperlessPayload) error {
 	slug := text.SlugHash("paperless", p.Filename, 4)
 	mapKey := slug
 

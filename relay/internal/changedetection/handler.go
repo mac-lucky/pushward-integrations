@@ -37,7 +37,7 @@ func slugForURL(url string) string {
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
-	Body webhookPayload
+	Body changedetectionPayload
 }) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "changedetection")
 
@@ -47,7 +47,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	return humautil.NewOK(), nil
 }
 
-func (h *Handler) handleChange(ctx context.Context, payload *webhookPayload) error {
+func (h *Handler) handleChange(ctx context.Context, payload *changedetectionPayload) error {
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	pwClient := h.clients.Get(userKey)

@@ -52,7 +52,7 @@ func (h *Handler) Ender() *lifecycle.Ender {
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
-	Body webhookPayload
+	Body backrestPayload
 }) (*humautil.WebhookResponse, error) {
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
@@ -106,13 +106,13 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	return humautil.NewOK(), nil
 }
 
-func (h *Handler) slugAndKey(p *webhookPayload) (string, string) {
+func (h *Handler) slugAndKey(p *backrestPayload) (string, string) {
 	slug := text.SlugHash("backrest", p.Plan+p.Repo, 4)
 	mapKey := fmt.Sprintf("backrest:%s:%s", p.Plan, p.Repo)
 	return slug, mapKey
 }
 
-func (h *Handler) subtitle(p *webhookPayload) string {
+func (h *Handler) subtitle(p *backrestPayload) string {
 	subtitle := "Backrest"
 	if p.Plan != "" {
 		subtitle += " · " + text.TruncateHard(p.Plan, 50)
@@ -123,7 +123,7 @@ func (h *Handler) subtitle(p *webhookPayload) string {
 	return subtitle
 }
 
-func (h *Handler) createActivity(ctx context.Context, userKey string, log *slog.Logger, slug string, p *webhookPayload) (*pushward.Client, error) {
+func (h *Handler) createActivity(ctx context.Context, userKey string, log *slog.Logger, slug string, p *backrestPayload) (*pushward.Client, error) {
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
@@ -140,7 +140,7 @@ func (h *Handler) createActivity(ctx context.Context, userKey string, log *slog.
 	return cl, nil
 }
 
-func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText string) error {
+func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, stateText string) error {
 	slug, mapKey := h.slugAndKey(p)
 
 	cl, err := h.createActivity(ctx, userKey, log, slug, p)
@@ -180,7 +180,7 @@ func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Log
 	return nil
 }
 
-func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText, color, icon string) error {
+func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, stateText, color, icon string) error {
 	slug, mapKey := h.slugAndKey(p)
 
 	if _, err := h.createActivity(ctx, userKey, log, slug, p); err != nil {
@@ -211,7 +211,7 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 	return nil
 }
 
-func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, stateText, color, severity string) error {
+func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, stateText, color, severity string) error {
 	slug := text.SlugHash("backrest-alert", p.Plan+p.Repo+p.Event, 4)
 	mapKey := fmt.Sprintf("backrest:alert:%s:%s:%s", p.Plan, p.Repo, p.Event)
 

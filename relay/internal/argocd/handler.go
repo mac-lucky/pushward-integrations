@@ -24,8 +24,8 @@ import (
 
 const totalSteps = 3
 
-// webhookPayload is the JSON body sent by argocd-notifications webhook templates.
-type webhookPayload struct {
+// argocdPayload is the JSON body sent by argocd-notifications webhook templates.
+type argocdPayload struct {
 	App      string `json:"app"`
 	Event    string `json:"event"`
 	Revision string `json:"revision"`
@@ -193,7 +193,7 @@ func slugForApp(appName string) string {
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
-	Body webhookPayload
+	Body argocdPayload
 }) (*humautil.WebhookResponse, error) {
 	payload := &input.Body
 
@@ -227,7 +227,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	return humautil.NewOK(), nil
 }
 
-func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *slog.Logger, p *argocdPayload) error {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
@@ -334,7 +334,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 	return nil
 }
 
-func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *slog.Logger, p *argocdPayload) error {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
@@ -442,7 +442,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 	return nil
 }
 
-func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.Logger, p *argocdPayload) error {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
@@ -540,7 +540,7 @@ type errorPreambleResult struct {
 	wasPending  bool
 }
 
-func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload, event string) (*errorPreambleResult, error) {
+func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.Logger, p *argocdPayload, event string) (*errorPreambleResult, error) {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
@@ -599,7 +599,7 @@ func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.L
 	}, nil
 }
 
-func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, log *slog.Logger, p *argocdPayload) error {
 	unlock := h.lockApp(userKey, p.App)
 	defer unlock()
 
@@ -628,7 +628,7 @@ func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, log *slo
 	return nil
 }
 
-func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, log *slog.Logger, p *webhookPayload) error {
+func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, log *slog.Logger, p *argocdPayload) error {
 	slug := slugForApp(p.App)
 
 	unlock := h.lockApp(userKey, p.App)

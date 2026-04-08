@@ -22,9 +22,9 @@ func TestFixturesUnmarshal(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reading file: %v", err)
 			}
-			var payload webhookPayload
+			var payload grafanaPayload
 			if err := json.Unmarshal(data, &payload); err != nil {
-				t.Errorf("unmarshal into webhookPayload: %v", err)
+				t.Errorf("unmarshal into grafanaPayload: %v", err)
 			}
 			if len(payload.Alerts) == 0 {
 				t.Error("expected at least one alert")

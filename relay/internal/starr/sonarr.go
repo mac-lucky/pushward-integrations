@@ -21,7 +21,7 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var envelope webhookPayload
+	var envelope starrPayload
 	if err := json.Unmarshal(raw, &envelope); err != nil {
 		http.Error(w, "invalid payload", http.StatusBadRequest)
 		return

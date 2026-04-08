@@ -22,9 +22,9 @@ func TestFixturesUnmarshal(t *testing.T) {
 			if err != nil {
 				t.Fatalf("reading file: %v", err)
 			}
-			var payload webhookPayload
+			var payload changedetectionPayload
 			if err := json.Unmarshal(data, &payload); err != nil {
-				t.Errorf("unmarshal into webhookPayload: %v", err)
+				t.Errorf("unmarshal into changedetectionPayload: %v", err)
 			}
 			if payload.URL == "" {
 				t.Error("expected non-empty url")

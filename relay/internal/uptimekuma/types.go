@@ -1,6 +1,6 @@
 package uptimekuma
 
-type webhookPayload struct {
+type uptimekumaPayload struct {
 	Monitor   monitorInfo   `json:"monitor"`
 	Heartbeat heartbeatInfo `json:"heartbeat"`
 	Msg       string        `json:"msg"`

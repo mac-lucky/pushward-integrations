@@ -1,6 +1,6 @@
 package proxmox
 
-type webhookPayload struct {
+type proxmoxPayload struct {
 	Type     string `json:"type"`
 	Title    string `json:"title"`
 	Message  string `json:"message"`
