@@ -161,7 +161,7 @@ func main() {
 	}
 
 	if cfg.Providers.Grafana.Enabled {
-		grafana.RegisterRoutes(api, clients, &cfg.Providers.Grafana)
+		grafana.RegisterRoutes(api, store, clients, &cfg.Providers.Grafana)
 		slog.Info("enabled provider", "provider", "grafana")
 	}
 
