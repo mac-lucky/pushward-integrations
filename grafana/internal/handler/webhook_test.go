@@ -382,6 +382,89 @@ func TestWebhook_ValuesUseMetricLabels(t *testing.T) {
 	}
 }
 
+func TestWebhook_MultiInstancePartialResolve(t *testing.T) {
+	pw := newMockPWServer()
+	defer pw.close()
+
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	mc := metrics.NewClient("http://unused:9090")
+	p := poller.New(mc, pwClient, 1*time.Hour)
+	defer p.StopAll()
+
+	h := NewHandler(pwClient, mc, nil, p, Config{})
+
+	// Fire two instances of the same alert.
+	fire1 := `{"status":"firing","alerts":[{"status":"firing","labels":{"alertname":"CPUHigh"},"annotations":{},"values":{"A":90},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"inst1"}]}`
+	fireWebhook(t, h, fire1)
+
+	fire2 := `{"status":"firing","alerts":[{"status":"firing","labels":{"alertname":"CPUHigh"},"annotations":{},"values":{"A":85},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"inst2"}]}`
+	fireWebhook(t, h, fire2)
+
+	// Resolve one instance — activity should stay active.
+	resolve1 := `{"status":"resolved","alerts":[{"status":"resolved","labels":{"alertname":"CPUHigh"},"annotations":{},"values":{"A":5},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"inst1"}]}`
+	fireWebhook(t, h, resolve1)
+
+	if len(h.activeAlerts()) != 1 {
+		t.Errorf("expected 1 active alert after partial resolve, got %v", h.activeAlerts())
+	}
+
+	// Check no ENDED update was sent.
+	for _, u := range pw.getUpdates() {
+		if u.State == pushward.StateEnded {
+			t.Error("should not have sent ENDED when other instances are still firing")
+		}
+	}
+
+	// Resolve the second instance — now the activity should end.
+	resolve2 := `{"status":"resolved","alerts":[{"status":"resolved","labels":{"alertname":"CPUHigh"},"annotations":{},"values":{"A":3},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"inst2"}]}`
+	fireWebhook(t, h, resolve2)
+
+	if len(h.activeAlerts()) != 0 {
+		t.Errorf("expected 0 active alerts after full resolve, got %v", h.activeAlerts())
+	}
+
+	var foundEnd bool
+	for _, u := range pw.getUpdates() {
+		if u.State == pushward.StateEnded {
+			foundEnd = true
+		}
+	}
+	if !foundEnd {
+		t.Error("expected ENDED update after all instances resolved")
+	}
+}
+
+func TestWebhook_SamePayloadFireAndResolve(t *testing.T) {
+	pw := newMockPWServer()
+	defer pw.close()
+
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	mc := metrics.NewClient("http://unused:9090")
+	p := poller.New(mc, pwClient, 1*time.Hour)
+	defer p.StopAll()
+
+	h := NewHandler(pwClient, mc, nil, p, Config{})
+
+	// Grafana sends both firing (inst1) and resolved (inst2) in the same payload.
+	// inst2 should NOT kill the activity created by inst1.
+	body := `{"status":"firing","alerts":[
+		{"status":"firing","labels":{"alertname":"MixedAlert"},"annotations":{},"values":{"A":50},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"inst1"},
+		{"status":"resolved","labels":{"alertname":"MixedAlert"},"annotations":{},"values":{"A":5},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"inst2"}
+	]}`
+	fireWebhook(t, h, body)
+
+	if len(h.activeAlerts()) != 1 {
+		t.Errorf("expected 1 active alert, got %v", h.activeAlerts())
+	}
+
+	// No ENDED update should have been sent.
+	for _, u := range pw.getUpdates() {
+		if u.State == pushward.StateEnded {
+			t.Error("should not have ended activity when firing instance still exists")
+		}
+	}
+}
+
 func TestMakeSlug(t *testing.T) {
 	s1 := makeSlug("HighCPU")
 	s2 := makeSlug("HighCPU")

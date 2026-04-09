@@ -346,6 +346,8 @@ func TestSeriesKey(t *testing.T) {
 		{"prefer label hit", map[string]string{"instance": "10.0.0.1:9100", "job": "node"}, "instance", "10.0.0.1:9100"},
 		{"prefer label miss", map[string]string{"job": "node"}, "instance", "node"},
 		{"multiple labels no prefer", map[string]string{"instance": "X", "job": "Y"}, "", "instance=X, job=Y"},
+		{"truncated multi-label key", map[string]string{"instance": "192.168.1.100:9100", "job": "node-exporter", "namespace": "monitoring"}, "", "instance=192.168.1.100:9100, jo\u2026"},
+		{"truncated single label", map[string]string{"instance": "very-long-hostname-that-exceeds-the-thirty-two-rune-limit.example.com:9100"}, "", "very-long-hostname-that-exceeds\u2026"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

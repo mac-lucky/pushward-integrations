@@ -54,11 +54,12 @@ type Handler struct {
 }
 
 type alertState struct {
-	slug        string
-	expr        string
-	refID       string
-	seriesLabel string
-	lastSeen    time.Time
+	slug         string
+	expr         string
+	refID        string
+	seriesLabel  string
+	lastSeen     time.Time
+	fingerprints map[string]struct{}
 }
 
 func NewHandler(
@@ -146,9 +147,13 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	existing := h.active[alertname]
 	isNew := existing == nil
 	if isNew {
-		h.active[alertname] = &alertState{slug: slug, seriesLabel: seriesLabel, lastSeen: time.Now()}
+		h.active[alertname] = &alertState{
+			slug: slug, seriesLabel: seriesLabel, lastSeen: time.Now(),
+			fingerprints: map[string]struct{}{a.Fingerprint: {}},
+		}
 	} else {
 		existing.lastSeen = time.Now()
+		existing.fingerprints[a.Fingerprint] = struct{}{}
 	}
 	h.mu.Unlock()
 
@@ -188,6 +193,16 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 		values = h.resolveValues(a, refID, seriesLabel)
 	}
 
+	if len(values) == 0 {
+		logger.Warn("no values available, skipping initial update (poller will populate)",
+			"expr_resolved", expr != "", "refID", refID)
+		if isNew && expr != "" {
+			h.poller.Start(slug, expr, seriesLabel)
+			logger.Info("poller started")
+		}
+		return
+	}
+
 	content := h.buildContent(a, severity, values)
 	content.History = history
 
@@ -212,22 +227,29 @@ func (h *Handler) handleResolved(ctx context.Context, a alert) {
 		alertname = "Grafana Alert"
 	}
 	slug := makeSlug(alertname)
-	logger := slog.With("alertname", alertname, "slug", slug)
+	logger := slog.With("alertname", alertname, "slug", slug, "fingerprint", a.Fingerprint)
 
-	// Capture state before deleting so resolveValues uses the correct keys.
 	h.mu.Lock()
 	state, exists := h.active[alertname]
-	var refID, seriesLabel string
-	if exists {
-		refID = state.refID
-		seriesLabel = state.seriesLabel
-	}
-	delete(h.active, alertname)
-	h.mu.Unlock()
-
 	if !exists {
+		h.mu.Unlock()
 		return
 	}
+
+	delete(state.fingerprints, a.Fingerprint)
+
+	if len(state.fingerprints) > 0 {
+		remaining := len(state.fingerprints)
+		h.mu.Unlock()
+		logger.Info("instance resolved, other instances still firing", "remaining", remaining)
+		return
+	}
+
+	// All instances resolved — capture state and clean up.
+	refID := state.refID
+	seriesLabel := state.seriesLabel
+	delete(h.active, alertname)
+	h.mu.Unlock()
 
 	h.poller.Stop(slug)
 
@@ -428,6 +450,110 @@ func (h *Handler) sweepStale(maxAge time.Duration) {
 		}
 	}
 	h.mu.Unlock()
+}
+
+// StartAlertChecker runs a background goroutine that periodically queries
+// the Grafana alertmanager API to detect resolved alerts when webhooks are
+// missed. Requires the Grafana client to be configured.
+func (h *Handler) StartAlertChecker(ctx context.Context, interval time.Duration) {
+	if h.grafanaClient == nil || interval <= 0 {
+		return
+	}
+	slog.Info("alert state checker enabled", "interval", interval)
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				h.checkAlertStates(ctx)
+			}
+		}
+	}()
+}
+
+func (h *Handler) checkAlertStates(ctx context.Context) {
+	h.mu.Lock()
+	type entry struct {
+		name  string
+		state alertState // copy
+	}
+	entries := make([]entry, 0, len(h.active))
+	for name, state := range h.active {
+		entries = append(entries, entry{name: name, state: *state})
+	}
+	h.mu.Unlock()
+
+	for _, e := range entries {
+		firing, err := h.grafanaClient.IsAlertFiring(ctx, e.name)
+		if err != nil {
+			slog.Warn("alert state check failed", "alertname", e.name, "error", err)
+			continue
+		}
+		if firing {
+			continue
+		}
+
+		// Alert is no longer firing — end the activity.
+		h.mu.Lock()
+		_, stillActive := h.active[e.name]
+		if stillActive {
+			delete(h.active, e.name)
+		}
+		h.mu.Unlock()
+
+		if !stillActive {
+			continue // already resolved by webhook while we were checking
+		}
+
+		h.poller.Stop(e.state.slug)
+		h.endAlertActivity(ctx, e.name, &e.state)
+	}
+}
+
+// endAlertActivity sends an ENDED update for an alert that is no longer firing.
+func (h *Handler) endAlertActivity(ctx context.Context, alertname string, state *alertState) {
+	logger := slog.With("alertname", alertname, "slug", state.slug)
+
+	// Fetch current metric values for the end update.
+	var values map[string]float64
+	if state.expr != "" {
+		points, err := h.metricsClient.QueryInstantAll(ctx, state.expr, time.Now())
+		if err == nil {
+			values = make(map[string]float64, len(points))
+			for _, lp := range points {
+				key := metrics.SeriesKey(lp.Labels, state.seriesLabel)
+				values[key] = lp.Point.V
+			}
+		}
+	}
+	if len(values) == 0 {
+		values = map[string]float64{"value": 0}
+	}
+
+	content := pushward.Content{
+		Template:    templateTimeline,
+		Value:       any(values),
+		Subtitle:    "Grafana",
+		Icon:        resolvedIcon,
+		AccentColor: pushward.ColorGreen,
+		State:       "Resolved",
+		Scale:       h.cfg.Scale,
+		Smoothing:   h.cfg.Smoothing,
+		Decimals:    h.cfg.Decimals,
+	}
+
+	err := h.pwClient.UpdateActivity(ctx, state.slug, pushward.UpdateRequest{
+		State:   pushward.StateEnded,
+		Content: content,
+	})
+	if err != nil {
+		logger.Error("failed to end resolved activity", "error", err)
+		return
+	}
+	logger.Info("activity ended (alert no longer firing)")
 }
 
 // WaitIdle blocks until all in-flight async webhook goroutines complete.

@@ -115,6 +115,37 @@ func (c *Client) GetRuleQuery(ctx context.Context, ruleUID string) (*RuleQuery, 
 	return rq, nil
 }
 
+// IsAlertFiring checks the Grafana alertmanager API to determine if any
+// instances of the given alertname are currently active (firing).
+func (c *Client) IsAlertFiring(ctx context.Context, alertname string) (bool, error) {
+	filter := fmt.Sprintf(`alertname="%s"`, alertname)
+	reqURL := fmt.Sprintf("%s/api/alertmanager/grafana/api/v2/alerts?filter=%s",
+		c.baseURL, url.QueryEscape(filter))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return false, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiToken)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("querying alertmanager: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("alertmanager API returned %d", resp.StatusCode)
+	}
+
+	var alerts []json.RawMessage
+	if err := json.NewDecoder(resp.Body).Decode(&alerts); err != nil {
+		return false, fmt.Errorf("decoding alerts: %w", err)
+	}
+
+	return len(alerts) > 0, nil
+}
+
 // alertRuleResponse is the Grafana provisioning API response for an alert rule.
 type alertRuleResponse struct {
 	Data []alertQuery `json:"data"`

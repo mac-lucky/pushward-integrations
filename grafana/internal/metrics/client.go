@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
@@ -31,34 +32,36 @@ type LabeledPoint struct {
 // If preferLabel is set and present, use its value.
 // If only one label exists, use its value.
 // Otherwise join all as "k=v, k=v" sorted by key.
+// The result is truncated to 32 runes to satisfy the server's key length limit.
 func SeriesKey(labels map[string]string, preferLabel string) string {
-	if len(labels) == 0 {
+	var key string
+	switch {
+	case len(labels) == 0:
 		return "value"
-	}
-
-	if preferLabel != "" {
-		if v, ok := labels[preferLabel]; ok {
-			return v
-		}
-	}
-
-	if len(labels) == 1 {
+	case preferLabel != "" && labels[preferLabel] != "":
+		key = labels[preferLabel]
+	case len(labels) == 1:
 		for _, v := range labels {
-			return v
+			key = v
 		}
+	default:
+		keys := make([]string, 0, len(labels))
+		for k := range labels {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		parts := make([]string, 0, len(keys))
+		for _, k := range keys {
+			parts = append(parts, k+"="+labels[k])
+		}
+		key = strings.Join(parts, ", ")
 	}
 
-	keys := make([]string, 0, len(labels))
-	for k := range labels {
-		keys = append(keys, k)
+	if utf8.RuneCountInString(key) > 32 {
+		key = string([]rune(key)[:31]) + "\u2026"
 	}
-	sort.Strings(keys)
-
-	parts := make([]string, 0, len(keys))
-	for _, k := range keys {
-		parts = append(parts, k+"="+labels[k])
-	}
-	return strings.Join(parts, ", ")
+	return key
 }
 
 // Client queries Prometheus or VictoriaMetrics for time-series data.

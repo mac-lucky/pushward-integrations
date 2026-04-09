@@ -28,8 +28,9 @@ type MetricsConfig struct {
 
 // GrafanaConfig holds optional Grafana API connection for auto-extracting queries.
 type GrafanaConfig struct {
-	URL      string `yaml:"url"`
-	APIToken string `yaml:"api_token"` // Editor-role service account token
+	URL                string        `yaml:"url"`
+	APIToken           string        `yaml:"api_token"` // Editor-role service account token
+	AlertCheckInterval time.Duration `yaml:"alert_check_interval"`
 }
 
 // TimelineConfig embeds shared visual settings and adds Grafana-specific fields.
@@ -113,6 +114,13 @@ func applyEnvOverrides(cfg *Config) error {
 	}
 	if v := os.Getenv("PUSHWARD_GRAFANA_API_TOKEN"); v != "" {
 		cfg.Grafana.APIToken = v
+	}
+	if v := os.Getenv("PUSHWARD_ALERT_CHECK_INTERVAL"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("invalid PUSHWARD_ALERT_CHECK_INTERVAL %q: %w", v, err)
+		}
+		cfg.Grafana.AlertCheckInterval = d
 	}
 	if v := os.Getenv("PUSHWARD_HISTORY_WINDOW"); v != "" {
 		d, err := time.ParseDuration(v)

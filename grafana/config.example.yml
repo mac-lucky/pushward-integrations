@@ -34,6 +34,7 @@ metrics:
 # grafana:
 #   url: "http://grafana:3000"
 #   api_token: "glsa_..."
+#   alert_check_interval: 5m  # Poll Grafana to detect resolved alerts when webhooks are missed
 
 # Timeline sparkline defaults
 timeline:

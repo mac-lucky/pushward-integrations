@@ -107,6 +107,41 @@ func TestGetRuleQuery_ForbiddenWithoutEditorRole(t *testing.T) {
 	}
 }
 
+func TestIsAlertFiring(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/alertmanager/grafana/api/v2/alerts" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		filter := r.URL.Query().Get("filter")
+		w.Header().Set("Content-Type", "application/json")
+		if filter == `alertname="FiringAlert"` {
+			w.Write([]byte(`[{"labels":{"alertname":"FiringAlert"},"status":{"state":"active"}}]`))
+		} else {
+			w.Write([]byte(`[]`))
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "token")
+
+	firing, err := c.IsAlertFiring(context.Background(), "FiringAlert")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !firing {
+		t.Error("expected FiringAlert to be firing")
+	}
+
+	firing, err = c.IsAlertFiring(context.Background(), "ResolvedAlert")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if firing {
+		t.Error("expected ResolvedAlert to not be firing")
+	}
+}
+
 func TestGetRuleQuery_NoDataQuery(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

@@ -157,13 +157,17 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url string,
 			lastErr = fmt.Errorf("conflict (409)")
 			continue
 		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
 			c.recordResult(ctx, operation, attempts, start, nil, false)
 			return nil
 		}
+
+		// Read body for error diagnostics (capped at 512 bytes).
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		_ = resp.Body.Close()
+
 		if resp.StatusCode == http.StatusTooManyRequests {
 			retryAfterOverride = parseRetryAfter(resp.Header.Get("Retry-After"))
 			slog.Warn("rate limited by PushWard", "url", url, "retry_after", retryAfterOverride)
@@ -172,6 +176,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url string,
 		}
 		lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			slog.Warn("PushWard client error", "status", resp.StatusCode, "url", url, "body", string(respBody))
 			// 4xx client errors are not retryable and don't trip the breaker.
 			c.recordResult(ctx, operation, attempts, start, lastErr, false)
 			return lastErr

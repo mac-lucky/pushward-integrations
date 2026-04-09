@@ -67,6 +67,7 @@ func main() {
 	})
 
 	h.StartSweeper(ctx, cfg.PushWard.StaleTimeout)
+	h.StartAlertChecker(ctx, cfg.Grafana.AlertCheckInterval)
 
 	mux := server.NewMux()
 	var webhookHandler http.Handler = h
