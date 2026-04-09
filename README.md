@@ -21,6 +21,7 @@ Each runs as its own container with a dedicated PushWard API key.
 | [pushward-sabnzbd](./sabnzbd/) | SABnzbd download and post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
 | [pushward-bambulab](./bambulab/) | BambuLab 3D printer progress via MQTT | - | `ghcr.io/mac-lucky/pushward-bambulab` |
 | [pushward-unraid](./unraid/) | Unraid parity checks, array state, disk alerts, and UPS events via GraphQL WebSocket | - | `ghcr.io/mac-lucky/pushward-unraid` |
+| [pushward-grafana](./grafana/) | Grafana alert timeline sparklines with Prometheus history backfill and multi-instance tracking | 8090 | `ghcr.io/mac-lucky/pushward-grafana` |
 
 ### Relay (Multi-Tenant Gateway)
 
@@ -59,7 +60,7 @@ See each integration's README or `config.example.yml` for the full list of confi
 
 ## Project Structure
 
-This is a Go workspace (`go.work`) with a shared module and five integration modules:
+This is a Go workspace (`go.work`) with a shared module and six integration modules:
 
 ```
 pushward-integrations/
@@ -69,6 +70,16 @@ pushward-integrations/
   sabnzbd/                   # SABnzbd webhook + download tracker
   bambulab/                  # BambuLab MQTT client
   unraid/                    # Unraid GraphQL WebSocket client
+  grafana/                   # Grafana alert timeline with Prometheus history
+    cmd/pushward-grafana/    # Entry point
+    internal/
+      config/                # YAML config with env overrides
+      grafana/               # Grafana API client (auto-extract, alert state checks)
+      handler/               # Webhook handler (multi-instance fingerprint tracking)
+      metrics/               # Prometheus/VictoriaMetrics query client
+      poller/                # Per-alert polling goroutines
+    config.example.yml
+    Dockerfile
   relay/                     # Multi-tenant webhook gateway (PostgreSQL)
     cmd/pushward-relay/      # Entry point
     internal/
@@ -108,6 +119,7 @@ go build ./sabnzbd/cmd/pushward-sabnzbd
 go build ./bambulab/cmd/pushward-bambulab
 go build ./unraid/cmd/pushward-unraid
 go build ./relay/cmd/pushward-relay
+go build ./grafana/cmd/pushward-grafana
 ```
 
 Run locally with a config file:
@@ -118,13 +130,14 @@ Run locally with a config file:
 ./pushward-bambulab -config bambulab/config.example.yml
 ./pushward-unraid -config unraid/config.example.yml
 ./pushward-relay -config relay/config.example.yml
+./pushward-grafana -config grafana/config.example.yml
 ```
 
 Run tests:
 
 ```bash
 # All tests
-go test ./shared/... ./github/... ./sabnzbd/... ./bambulab/... ./unraid/... ./relay/... -v -count=1
+go test ./shared/... ./github/... ./sabnzbd/... ./bambulab/... ./unraid/... ./relay/... ./grafana/... -v -count=1
 
 # Relay only (with race detector)
 go test ./relay/... -race -count=1 -v
@@ -138,6 +151,7 @@ docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd .
 docker build -f bambulab/Dockerfile -t pushward-bambulab .
 docker build -f unraid/Dockerfile -t pushward-unraid .
 docker build -f relay/Dockerfile -t pushward-relay .
+docker build -f grafana/Dockerfile -t pushward-grafana .
 ```
 
 ## CI/CD
@@ -149,5 +163,6 @@ Each integration has its own GitHub Actions workflow with path filters so only t
 - `.github/workflows/bambulab-ci-cd.yml` — triggers on `bambulab/**` and `shared/**` changes
 - `.github/workflows/unraid-ci-cd.yml` — triggers on `unraid/**` and `shared/**` changes
 - `.github/workflows/relay-ci-cd.yml` — triggers on `relay/**` and `shared/**` changes
+- `.github/workflows/grafana-ci-cd.yml` — triggers on `grafana/**` and `shared/**` changes
 
 All use the shared `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml` workflow. Triggers: push to `main`, tags (`v*`), pull requests to `main`, and manual `workflow_dispatch`. Docker images are built and pushed to GHCR on push to main or tags.
