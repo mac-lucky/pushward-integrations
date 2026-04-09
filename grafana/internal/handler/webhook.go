@@ -173,14 +173,23 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	}
 
 	severity := h.resolveSeverity(a)
-	content := h.buildContent(a, severity, h.resolveValues(a, refID, seriesLabel))
 
+	// For new alerts, fetch history first so we can derive current values
+	// with proper metric labels instead of Grafana expression ref IDs (B, C).
+	var history map[string][]pushward.HistoryPoint
 	if isNew && expr != "" {
-		history := h.fetchHistoryAll(ctx, logger, expr, seriesLabel)
-		if len(history) > 0 {
-			content.History = history
-		}
+		history = h.fetchHistoryAll(ctx, logger, expr, seriesLabel)
 	}
+
+	var values map[string]float64
+	if len(history) > 0 {
+		values = latestValues(history)
+	} else {
+		values = h.resolveValues(a, refID, seriesLabel)
+	}
+
+	content := h.buildContent(a, severity, values)
+	content.History = history
 
 	err := h.pwClient.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 		State:   pushward.StateOngoing,
@@ -308,6 +317,16 @@ func (h *Handler) resolveValues(a alert, preferredRefID, seriesLabel string) map
 		result[k] = v
 	}
 	return result
+}
+
+func latestValues(history map[string][]pushward.HistoryPoint) map[string]float64 {
+	values := make(map[string]float64, len(history))
+	for key, points := range history {
+		if len(points) > 0 {
+			values[key] = points[len(points)-1].V
+		}
+	}
+	return values
 }
 
 func (h *Handler) buildContent(a alert, severity string, values map[string]float64) pushward.Content {

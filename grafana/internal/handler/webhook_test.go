@@ -312,6 +312,76 @@ func TestWebhook_MultiSeriesHistory(t *testing.T) {
 	}
 }
 
+// TestWebhook_ValuesUseMetricLabels verifies that the initial update uses
+// Prometheus metric labels (e.g. "10.0.0.1:9100") instead of raw Grafana
+// expression ref IDs (B, C) for the value keys.
+func TestWebhook_ValuesUseMetricLabels(t *testing.T) {
+	pw := newMockPWServer()
+	defer pw.close()
+
+	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{
+			"status": "success",
+			"data": {
+				"resultType": "matrix",
+				"result": [
+					{"metric": {"instance": "home-server"}, "values": [[1700000000,"25"],[1700000015,"21.2"]]}
+				]
+			}
+		}`))
+	}))
+	defer promSrv.Close()
+
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	mc := metrics.NewClient(promSrv.URL)
+	p := poller.New(mc, pwClient, 1*time.Hour)
+	defer p.StopAll()
+
+	h := NewHandler(pwClient, mc, nil, p, Config{Priority: 5})
+
+	// Simulate a Grafana webhook with expression ref IDs B and C as value keys.
+	// B is the actual metric value, C is the threshold condition result.
+	body := `{
+		"status": "firing",
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "HomeServerCPULow"},
+			"annotations": {
+				"pushward_query": "100 - rate(cpu_idle[5m])",
+				"pushward_series_label": "instance"
+			},
+			"values": {"B": 21.2, "C": 1.0},
+			"startsAt": "2026-04-05T10:00:00Z",
+			"generatorURL": "",
+			"fingerprint": "cpu1"
+		}]
+	}`
+
+	fireWebhook(t, h, body)
+
+	updates := pw.getUpdates()
+	if len(updates) != 1 {
+		t.Fatalf("updates = %d, want 1", len(updates))
+	}
+
+	// Value should use Prometheus metric label, not Grafana ref IDs.
+	valMap, ok := updates[0].Content.Value.(map[string]interface{})
+	if !ok {
+		t.Fatalf("value is not a map: %T = %v", updates[0].Content.Value, updates[0].Content.Value)
+	}
+
+	if _, ok := valMap["B"]; ok {
+		t.Errorf("value map should not use ref ID 'B', got %v", valMap)
+	}
+	if _, ok := valMap["C"]; ok {
+		t.Errorf("value map should not use ref ID 'C', got %v", valMap)
+	}
+	if v, ok := valMap["home-server"]; !ok || v != 21.2 {
+		t.Errorf("expected value keyed by 'home-server' = 21.2, got %v", valMap)
+	}
+}
+
 func TestMakeSlug(t *testing.T) {
 	s1 := makeSlug("HighCPU")
 	s2 := makeSlug("HighCPU")
