@@ -130,6 +130,9 @@ func TestFiringSingleAlert(t *testing.T) {
 	if !req.Push {
 		t.Error("expected push=true")
 	}
+	if req.Metadata["fingerprint"] != "abc123def456" {
+		t.Errorf("expected fingerprint abc123def456 in metadata, got %q", req.Metadata["fingerprint"])
+	}
 }
 
 func TestResolvedAlert(t *testing.T) {

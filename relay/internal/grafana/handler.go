@@ -414,6 +414,7 @@ func (h *Handler) buildAlertMetadata(a alert) map[string]string {
 	for _, key := range []string{"alertname", "severity", "instance", "job", "job_name", "namespace", "cluster", "pod", "container", "service"} {
 		addMeta(key, a.Labels[key])
 	}
+	addMeta("fingerprint", a.Fingerprint)
 	for k, v := range a.Annotations {
 		addMeta("annotation_"+k, v)
 	}
