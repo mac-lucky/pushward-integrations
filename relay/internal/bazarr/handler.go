@@ -84,10 +84,10 @@ func (h *Handler) handleSubtitle(ctx context.Context, userKey string, log *slog.
 	}
 
 	req := pushward.SendNotificationRequest{
-		Title:      ev.media,
-		Subtitle:   action + " · " + ev.language,
+		Title:      action + " · " + ev.language,
+		Subtitle:   ev.media,
 		Body:       ev.score + "% from " + ev.provider,
-		ThreadID:   "bazarr",
+		ThreadID:   text.Slug("bazarr-", ev.media),
 		CollapseID: text.SlugHash("bazarr", ev.media, 4),
 		Level:      pushward.LevelActive,
 		Category:   "subtitle-" + strings.ReplaceAll(ev.action, " ", "-"),

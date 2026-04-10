@@ -67,14 +67,17 @@ func TestEpisodeDownloaded(t *testing.T) {
 
 	var req pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.Title != "Breaking Bad (2008) - S05E14 - Ozymandias" {
-		t.Errorf("expected media name in title, got %s", req.Title)
+	if req.Subtitle != "Breaking Bad (2008) - S05E14 - Ozymandias" {
+		t.Errorf("expected media name in subtitle, got %s", req.Subtitle)
 	}
-	if !strings.Contains(req.Subtitle, "Downloaded") {
-		t.Errorf("expected subtitle to contain 'Downloaded', got %s", req.Subtitle)
+	if !strings.Contains(req.Title, "Downloaded") {
+		t.Errorf("expected title to contain 'Downloaded', got %s", req.Title)
 	}
-	if !strings.Contains(req.Subtitle, "English") {
-		t.Errorf("expected subtitle to contain language, got %s", req.Subtitle)
+	if !strings.Contains(req.Title, "English") {
+		t.Errorf("expected title to contain language, got %s", req.Title)
+	}
+	if req.ThreadID != "bazarr-breaking-bad-2008-s05e14-ozymandias" {
+		t.Errorf("expected per-media thread_id, got %s", req.ThreadID)
 	}
 	if !strings.Contains(req.Body, "96.0%") {
 		t.Errorf("expected body to contain score, got %s", req.Body)
@@ -110,14 +113,17 @@ func TestMovieUpgraded(t *testing.T) {
 
 	var req pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.Title != "Dune: Part Two (2024)" {
-		t.Errorf("expected movie name with colon preserved, got %s", req.Title)
+	if req.Subtitle != "Dune: Part Two (2024)" {
+		t.Errorf("expected movie name with colon preserved in subtitle, got %s", req.Subtitle)
 	}
-	if !strings.Contains(req.Subtitle, "Upgraded") {
-		t.Errorf("expected subtitle with 'Upgraded', got %s", req.Subtitle)
+	if !strings.Contains(req.Title, "Upgraded") {
+		t.Errorf("expected title with 'Upgraded', got %s", req.Title)
 	}
-	if !strings.Contains(req.Subtitle, "French forced") {
-		t.Errorf("expected subtitle with forced modifier, got %s", req.Subtitle)
+	if !strings.Contains(req.Title, "French forced") {
+		t.Errorf("expected title with forced modifier, got %s", req.Title)
+	}
+	if req.ThreadID != "bazarr-dune-part-two-2024" {
+		t.Errorf("expected per-media thread_id, got %s", req.ThreadID)
 	}
 }
 

@@ -170,7 +170,7 @@ func Load(path string) (*Config, error) {
 			Grafana: GrafanaConfig{
 				BaseProviderConfig: BaseProviderConfig{
 					Enabled:      true,
-					Priority:     5,
+					Priority:     10,
 					CleanupDelay: 15 * time.Minute,
 					StaleTimeout: 24 * time.Hour,
 				},
