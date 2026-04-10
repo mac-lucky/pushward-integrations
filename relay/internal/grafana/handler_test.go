@@ -632,8 +632,8 @@ func TestGroupedNotification_AllFiring(t *testing.T) {
 	if req.Level != pushward.LevelActive {
 		t.Errorf("expected level active, got %s", req.Level)
 	}
-	if req.Body != "CPU high" {
-		t.Errorf("expected body from first firing alert, got %s", req.Body)
+	if req.Body != "node1:9100, node2:9100, node3:9100" {
+		t.Errorf("expected body listing instances, got %s", req.Body)
 	}
 
 	// Check metadata
@@ -910,8 +910,8 @@ func TestGroupedNotification_EmptySummary(t *testing.T) {
 
 	var req pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.Body != "2 alerts firing" {
-		t.Errorf("expected fallback body '2 alerts firing', got %s", req.Body)
+	if req.Body != "node1, node2" {
+		t.Errorf("expected body listing instances, got %s", req.Body)
 	}
 }
 

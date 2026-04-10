@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -352,24 +354,11 @@ func (h *Handler) buildGroupedNotification(g *alertGroup) pushward.SendNotificat
 		}
 		req.Category = highestSeverity(severities, h.config.DefaultSeverity)
 		req.Level = pushward.LevelActive
-
-		// Body: first firing alert's summary.
-		summary := h.firstNonEmptySummary(g.firing)
-		if summary != "" {
-			req.Body = text.Truncate(summary, 120)
-		} else {
-			req.Body = fmt.Sprintf("%d alerts firing", len(g.firing))
-		}
+		req.Body = formatGroupedBody(g.firing, "", "firing", 120)
 	} else {
 		req.Category = "resolved"
 		req.Level = pushward.LevelPassive
-
-		summary := h.firstNonEmptySummary(g.resolved)
-		if summary != "" {
-			req.Body = "Resolved · " + text.Truncate(summary, 100)
-		} else {
-			req.Body = fmt.Sprintf("%d alerts resolved", len(g.resolved))
-		}
+		req.Body = formatGroupedBody(g.resolved, "Resolved · ", "resolved", 100)
 	}
 
 	h.setURL(&req, representative)
@@ -380,14 +369,96 @@ func (h *Handler) buildGroupedNotification(g *alertGroup) pushward.SendNotificat
 	return req
 }
 
+// formatGroupedBody builds a body that lists instance names, fitting within maxLen.
+// prefix is prepended (e.g. "Resolved · "). status is used for the fallback count message.
+func formatGroupedBody(alerts []alert, prefix, status string, maxLen int) string {
+	instances := collectInstanceSlice(alerts)
+
+	if len(instances) > 0 {
+		budget := maxLen - utf8.RuneCountInString(prefix)
+		var included []string
+		used := 0
+		for i, inst := range instances {
+			if budget <= 0 {
+				break
+			}
+			sep := 0
+			if len(included) > 0 {
+				sep = 2 // ", "
+			}
+			instLen := utf8.RuneCountInString(inst)
+			remaining := len(instances) - i - 1
+
+			if remaining > 0 {
+				// Reserve space for ", +N more" suffix.
+				moreLen := 8 + len(strconv.Itoa(remaining)) // len(", +") + digits + len(" more")
+				if used+sep+instLen+moreLen > budget {
+					break
+				}
+			} else {
+				if used+sep+instLen > budget {
+					break
+				}
+			}
+			included = append(included, inst)
+			used += sep + instLen
+		}
+
+		if len(included) > 0 {
+			result := prefix + strings.Join(included, ", ")
+			if len(included) < len(instances) {
+				result += fmt.Sprintf(", +%d more", len(instances)-len(included))
+			}
+			return result
+		}
+	}
+
+	// Fallback: use summary if all alerts share the same one, else count.
+	summary := firstNonEmptySummary(alerts)
+	if summary != "" && allSummariesEqual(alerts) {
+		return text.Truncate(prefix+summary, maxLen)
+	}
+	return fmt.Sprintf("%s%d alerts %s", prefix, len(alerts), status)
+}
+
+// collectInstanceSlice returns instance labels from alerts (non-empty, preserving order).
+func collectInstanceSlice(alerts []alert) []string {
+	var out []string
+	for _, a := range alerts {
+		if inst := a.Labels["instance"]; inst != "" {
+			out = append(out, inst)
+		}
+	}
+	return out
+}
+
 // firstNonEmptySummary returns the first non-empty summary annotation from the given alerts.
-func (h *Handler) firstNonEmptySummary(alerts []alert) string {
+func firstNonEmptySummary(alerts []alert) string {
 	for _, a := range alerts {
 		if s := a.Annotations["summary"]; s != "" {
 			return s
 		}
 	}
 	return ""
+}
+
+// allSummariesEqual returns true if all non-empty summaries in alerts are identical.
+func allSummariesEqual(alerts []alert) bool {
+	var first string
+	found := false
+	for _, a := range alerts {
+		s := a.Annotations["summary"]
+		if s == "" {
+			continue
+		}
+		if !found {
+			first = s
+			found = true
+		} else if s != first {
+			return false
+		}
+	}
+	return true
 }
 
 // setURL picks the first non-empty dashboard/panel/generator URL.
@@ -438,6 +509,8 @@ func (h *Handler) buildGroupedMetadata(g *alertGroup, representative alert) map[
 		meta[k] = text.TruncateHard(v, 512)
 	}
 
+	allAlerts := slices.Concat(g.firing, g.resolved)
+
 	// Counts.
 	addMeta("firing_count", strconv.Itoa(len(g.firing)))
 	addMeta("resolved_count", strconv.Itoa(len(g.resolved)))
@@ -446,17 +519,55 @@ func (h *Handler) buildGroupedMetadata(g *alertGroup, representative alert) map[
 	addMeta("firing_instances", collectInstances(g.firing))
 	addMeta("resolved_instances", collectInstances(g.resolved))
 
-	// Representative alert labels.
-	for _, key := range []string{"alertname", "severity", "job", "job_name", "namespace", "cluster"} {
-		addMeta(key, representative.Labels[key])
+	// Alertname.
+	addMeta("alertname", representative.Labels["alertname"])
+
+	// Common labels shared across ALL alerts.
+	for _, key := range []string{"severity", "job", "job_name", "namespace", "cluster"} {
+		if v := commonLabelValue(allAlerts, key); v != "" {
+			addMeta(key, v)
+		}
 	}
-	for k, v := range representative.Annotations {
+
+	// Per-instance values (high value, budget-aware).
+	// Reserve 4 slots: starts_at, generator_url, silence_url, and at least 1 annotation.
+	valueBudget := 20 - len(meta) - 4
+	if valueBudget > 0 {
+		added := 0
+		for _, a := range allAlerts {
+			if added >= valueBudget {
+				break
+			}
+			inst := a.Labels["instance"]
+			vs := a.ValueString
+			if inst == "" || vs == "" {
+				continue
+			}
+			key := "values·" + shortInstance(inst)
+			if _, exists := meta[key]; exists {
+				continue // avoid overwriting when instances share the same host
+			}
+			addMeta(key, vs)
+			added++
+		}
+	}
+
+	// Common annotations (only those identical across all alerts).
+	for k, v := range intersectAnnotations(allAlerts) {
 		addMeta("annotation_"+k, v)
 	}
+
+	// Representative fallbacks.
 	addMeta("starts_at", representative.StartsAt)
-	addMeta("silence_url", representative.SilenceURL)
+
+	// Silence URL: shared if all same, else representative's.
+	silenceURL := commonFieldValue(allAlerts, func(a alert) string { return a.SilenceURL })
+	if silenceURL == "" {
+		silenceURL = representative.SilenceURL
+	}
+	addMeta("silence_url", silenceURL)
 	addMeta("generator_url", representative.GeneratorURL)
-	addMeta("values", representative.ValueString)
+
 	if len(meta) > 0 {
 		return meta
 	}
@@ -465,11 +576,75 @@ func (h *Handler) buildGroupedMetadata(g *alertGroup, representative alert) map[
 
 // collectInstances returns a comma-separated list of instance labels from the alerts.
 func collectInstances(alerts []alert) string {
-	var instances []string
-	for _, a := range alerts {
-		if inst := a.Labels["instance"]; inst != "" {
-			instances = append(instances, inst)
+	return text.TruncateHard(strings.Join(collectInstanceSlice(alerts), ", "), 512)
+}
+
+// commonLabelValue returns the label value if it is identical across all alerts, else "".
+func commonLabelValue(alerts []alert, key string) string {
+	if len(alerts) == 0 {
+		return ""
+	}
+	first := alerts[0].Labels[key]
+	if first == "" {
+		return ""
+	}
+	for _, a := range alerts[1:] {
+		if a.Labels[key] != first {
+			return ""
 		}
 	}
-	return text.TruncateHard(strings.Join(instances, ", "), 512)
+	return first
+}
+
+// intersectAnnotations returns annotations that are present with the same value in every alert.
+func intersectAnnotations(alerts []alert) map[string]string {
+	if len(alerts) == 0 {
+		return nil
+	}
+	result := make(map[string]string)
+	for k, v := range alerts[0].Annotations {
+		if v == "" {
+			continue
+		}
+		shared := true
+		for _, a := range alerts[1:] {
+			if a.Annotations[k] != v {
+				shared = false
+				break
+			}
+		}
+		if shared {
+			result[k] = v
+		}
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+// commonFieldValue returns the extracted value if identical across all alerts, else "".
+func commonFieldValue(alerts []alert, extract func(alert) string) string {
+	if len(alerts) == 0 {
+		return ""
+	}
+	first := extract(alerts[0])
+	if first == "" {
+		return ""
+	}
+	for _, a := range alerts[1:] {
+		if extract(a) != first {
+			return ""
+		}
+	}
+	return first
+}
+
+// shortInstance strips the port from an instance label for use as a metadata key suffix.
+func shortInstance(instance string) string {
+	host, _, err := net.SplitHostPort(instance)
+	if err != nil {
+		return instance
+	}
+	return host
 }

@@ -254,7 +254,11 @@ func (h *Handler) handleResolved(ctx context.Context, a alert) {
 	h.poller.Stop(slug)
 
 	severity := h.resolveSeverity(a)
-	content := h.buildContent(a, severity, h.resolveValues(a, refID, seriesLabel))
+	values := h.resolveValues(a, refID, seriesLabel)
+	if len(values) == 0 {
+		values = map[string]float64{"value": 0}
+	}
+	content := h.buildContent(a, severity, values)
 	content.Icon = resolvedIcon
 	content.AccentColor = pushward.ColorGreen
 
