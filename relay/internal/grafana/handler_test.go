@@ -643,9 +643,11 @@ func TestGroupedNotification_AllFiring(t *testing.T) {
 	if req.Metadata["resolved_count"] != "0" {
 		t.Errorf("expected resolved_count 0, got %s", req.Metadata["resolved_count"])
 	}
-	instances := req.Metadata["firing_instances"]
-	if !strings.Contains(instances, "node1:9100") || !strings.Contains(instances, "node2:9100") || !strings.Contains(instances, "node3:9100") {
-		t.Errorf("expected firing_instances to contain all 3 instances, got %s", instances)
+	// Per-instance metadata entries should exist for each instance.
+	for _, inst := range []string{"node1:9100", "node2:9100", "node3:9100"} {
+		if _, ok := req.Metadata[inst]; !ok {
+			t.Errorf("expected per-instance metadata key %q, got keys %v", inst, req.Metadata)
+		}
 	}
 }
 
@@ -926,6 +928,7 @@ func TestGroupedNotification_Metadata(t *testing.T) {
 				"annotations": {"summary": "CPU high"},
 				"fingerprint": "fp1",
 				"startsAt": "2026-02-18T10:30:00Z",
+				"values": {"A": 95},
 				"valueString": "[ var='A' value=95 ]"
 			},
 			{
@@ -953,11 +956,17 @@ func TestGroupedNotification_Metadata(t *testing.T) {
 	if req.Metadata["resolved_count"] != "1" {
 		t.Errorf("expected resolved_count 1, got %s", req.Metadata["resolved_count"])
 	}
-	if req.Metadata["firing_instances"] != "node1:9100" {
-		t.Errorf("expected firing_instances 'node1:9100', got %s", req.Metadata["firing_instances"])
+	// Per-instance detail entries.
+	node1Detail := req.Metadata["node1:9100"]
+	if !strings.Contains(node1Detail, "Firing") || !strings.Contains(node1Detail, "CPU high") {
+		t.Errorf("expected node1:9100 detail with status and summary, got %q", node1Detail)
 	}
-	if req.Metadata["resolved_instances"] != "node2:9100" {
-		t.Errorf("expected resolved_instances 'node2:9100', got %s", req.Metadata["resolved_instances"])
+	if !strings.Contains(node1Detail, "A = 95") {
+		t.Errorf("expected node1:9100 detail to contain values from Values map, got %q", node1Detail)
+	}
+	node2Detail := req.Metadata["node2:9100"]
+	if !strings.Contains(node2Detail, "Resolved") || !strings.Contains(node2Detail, "CPU recovered") {
+		t.Errorf("expected node2:9100 detail with status and summary, got %q", node2Detail)
 	}
 	if req.Metadata["alertname"] != "HighCPU10" {
 		t.Errorf("expected alertname in metadata, got %s", req.Metadata["alertname"])

@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -87,6 +87,30 @@ func (s *alertGroupState) equals(other *alertGroupState) bool {
 	slices.Sort(a)
 	slices.Sort(b)
 	return slices.Equal(a, b)
+}
+
+const (
+	maxMetaEntries  = 20  // PushWard API limit on metadata key-value pairs.
+	maxMetaValueLen = 512 // PushWard API limit on metadata value length.
+)
+
+// metaMap is a capped metadata map that silently drops entries beyond the limit.
+type metaMap map[string]string
+
+func newMetaMap() metaMap { return make(metaMap, maxMetaEntries) }
+
+func (m metaMap) add(k, v string) {
+	if len(m) >= maxMetaEntries || v == "" {
+		return
+	}
+	m[k] = text.TruncateHard(v, maxMetaValueLen)
+}
+
+func (m metaMap) result() map[string]string {
+	if len(m) > 0 {
+		return m
+	}
+	return nil
 }
 
 var severityRank = map[string]int{
@@ -475,108 +499,119 @@ func (h *Handler) setURL(req *pushward.SendNotificationRequest, a alert) {
 
 // buildAlertMetadata builds metadata for a single-alert notification.
 func (h *Handler) buildAlertMetadata(a alert) map[string]string {
-	meta := make(map[string]string, 20)
-	addMeta := func(k, v string) {
-		if len(meta) >= 20 || v == "" {
-			return
-		}
-		meta[k] = text.TruncateHard(v, 512)
-	}
+	meta := newMetaMap()
 	for _, key := range []string{"alertname", "severity", "instance", "job", "job_name", "namespace", "cluster", "pod", "container", "service"} {
-		addMeta(key, a.Labels[key])
+		meta.add(key, a.Labels[key])
 	}
-	addMeta("fingerprint", a.Fingerprint)
-	for k, v := range a.Annotations {
-		addMeta("annotation_"+k, v)
+	meta.add("fingerprint", a.Fingerprint)
+	for _, k := range slices.Sorted(maps.Keys(a.Annotations)) {
+		meta.add("annotation_"+k, a.Annotations[k])
 	}
-	addMeta("starts_at", a.StartsAt)
-	addMeta("silence_url", a.SilenceURL)
-	addMeta("generator_url", a.GeneratorURL)
-	addMeta("values", a.ValueString)
-	if len(meta) > 0 {
-		return meta
-	}
-	return nil
+	meta.add("starts_at", a.StartsAt)
+	meta.add("silence_url", a.SilenceURL)
+	meta.add("generator_url", a.GeneratorURL)
+	meta.add("values", formatValues(a))
+	return meta.result()
 }
 
 // buildGroupedMetadata builds metadata for a grouped notification.
+// Each alert gets a dedicated metadata entry with all its details packed into
+// one value, matching the level of detail that Pushover/other tools provide.
 func (h *Handler) buildGroupedMetadata(g *alertGroup, representative alert) map[string]string {
-	meta := make(map[string]string, 20)
-	addMeta := func(k, v string) {
-		if len(meta) >= 20 || v == "" {
-			return
-		}
-		meta[k] = text.TruncateHard(v, 512)
-	}
-
+	meta := newMetaMap()
 	allAlerts := slices.Concat(g.firing, g.resolved)
 
-	// Counts.
-	addMeta("firing_count", strconv.Itoa(len(g.firing)))
-	addMeta("resolved_count", strconv.Itoa(len(g.resolved)))
+	// Fixed entries first so they are never evicted by the slot cap.
+	meta.add("firing_count", strconv.Itoa(len(g.firing)))
+	meta.add("resolved_count", strconv.Itoa(len(g.resolved)))
+	meta.add("alertname", representative.Labels["alertname"])
+	meta.add("starts_at", representative.StartsAt)
+	meta.add("silence_url", representative.SilenceURL)
+	meta.add("generator_url", representative.GeneratorURL)
 
-	// Instance lists.
-	addMeta("firing_instances", collectInstances(g.firing))
-	addMeta("resolved_instances", collectInstances(g.resolved))
-
-	// Alertname.
-	addMeta("alertname", representative.Labels["alertname"])
-
-	// Common labels shared across ALL alerts.
-	for _, key := range []string{"severity", "job", "job_name", "namespace", "cluster"} {
+	for _, key := range []string{"severity", "job", "job_name", "namespace", "cluster", "grafana_folder"} {
 		if v := commonLabelValue(allAlerts, key); v != "" {
-			addMeta(key, v)
+			meta.add(key, v)
 		}
 	}
 
-	// Per-instance values (high value, budget-aware).
-	// Reserve 4 slots: starts_at, generator_url, silence_url, and at least 1 annotation.
-	valueBudget := 20 - len(meta) - 4
-	if valueBudget > 0 {
-		added := 0
-		for _, a := range allAlerts {
-			if added >= valueBudget {
-				break
-			}
-			inst := a.Labels["instance"]
-			vs := a.ValueString
-			if inst == "" || vs == "" {
-				continue
-			}
-			key := "values·" + shortInstance(inst)
-			if _, exists := meta[key]; exists {
-				continue // avoid overwriting when instances share the same host
-			}
-			addMeta(key, vs)
-			added++
+	// Per-instance detail: fill remaining slots with packed alert data.
+	for _, a := range allAlerts {
+		inst := a.Labels["instance"]
+		if inst == "" {
+			inst = a.Fingerprint
 		}
+		meta.add(inst, formatAlertDetail(a))
 	}
 
-	// Common annotations (only those identical across all alerts).
-	for k, v := range intersectAnnotations(allAlerts) {
-		addMeta("annotation_"+k, v)
-	}
-
-	// Representative fallbacks.
-	addMeta("starts_at", representative.StartsAt)
-
-	// Silence URL: shared if all same, else representative's.
-	silenceURL := commonFieldValue(allAlerts, func(a alert) string { return a.SilenceURL })
-	if silenceURL == "" {
-		silenceURL = representative.SilenceURL
-	}
-	addMeta("silence_url", silenceURL)
-	addMeta("generator_url", representative.GeneratorURL)
-
-	if len(meta) > 0 {
-		return meta
-	}
-	return nil
+	return meta.result()
 }
 
-// collectInstances returns a comma-separated list of instance labels from the alerts.
-func collectInstances(alerts []alert) string {
-	return text.TruncateHard(strings.Join(collectInstanceSlice(alerts), ", "), 512)
+// formatAlertDetail packs all useful fields from a single alert into a
+// human-readable string for display in the metadata section.
+func formatAlertDetail(a alert) string {
+	var b strings.Builder
+
+	switch a.Status {
+	case "firing":
+		b.WriteString("Firing")
+	case "resolved":
+		b.WriteString("Resolved")
+	default:
+		b.WriteString(a.Status)
+	}
+
+	if s := a.Annotations["summary"]; s != "" {
+		b.WriteString(" · ")
+		b.WriteString(s)
+	}
+
+	if v := formatValues(a); v != "" {
+		b.WriteString("\nValues: ")
+		b.WriteString(v)
+	}
+
+	// Annotations in sorted order for stable output (skip summary, already shown).
+	for _, k := range slices.Sorted(maps.Keys(a.Annotations)) {
+		if k == "summary" {
+			continue
+		}
+		if v := a.Annotations[k]; v != "" {
+			b.WriteString("\n")
+			b.WriteString(k)
+			b.WriteString(": ")
+			b.WriteString(v)
+		}
+	}
+
+	if a.SilenceURL != "" {
+		b.WriteString("\nSilence: ")
+		b.WriteString(a.SilenceURL)
+	}
+
+	return b.String()
+}
+
+// formatValues returns a compact representation of an alert's metric values.
+// Prefers the typed Values map over the deprecated ValueString field.
+func formatValues(a alert) string {
+	if len(a.Values) > 0 {
+		var parts []string
+		for _, k := range slices.Sorted(maps.Keys(a.Values)) {
+			parts = append(parts, k+" = "+formatAny(a.Values[k]))
+		}
+		return strings.Join(parts, ", ")
+	}
+	return a.ValueString
+}
+
+// formatAny renders a value for display, using decimal notation for floats
+// to avoid scientific notation (e.g. 1234567 instead of 1.234567e+06).
+func formatAny(v any) string {
+	if f, ok := v.(float64); ok {
+		return strconv.FormatFloat(f, 'f', -1, 64)
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 // commonLabelValue returns the label value if it is identical across all alerts, else "".
@@ -594,57 +629,4 @@ func commonLabelValue(alerts []alert, key string) string {
 		}
 	}
 	return first
-}
-
-// intersectAnnotations returns annotations that are present with the same value in every alert.
-func intersectAnnotations(alerts []alert) map[string]string {
-	if len(alerts) == 0 {
-		return nil
-	}
-	result := make(map[string]string)
-	for k, v := range alerts[0].Annotations {
-		if v == "" {
-			continue
-		}
-		shared := true
-		for _, a := range alerts[1:] {
-			if a.Annotations[k] != v {
-				shared = false
-				break
-			}
-		}
-		if shared {
-			result[k] = v
-		}
-	}
-	if len(result) == 0 {
-		return nil
-	}
-	return result
-}
-
-// commonFieldValue returns the extracted value if identical across all alerts, else "".
-func commonFieldValue(alerts []alert, extract func(alert) string) string {
-	if len(alerts) == 0 {
-		return ""
-	}
-	first := extract(alerts[0])
-	if first == "" {
-		return ""
-	}
-	for _, a := range alerts[1:] {
-		if extract(a) != first {
-			return ""
-		}
-	}
-	return first
-}
-
-// shortInstance strips the port from an instance label for use as a metadata key suffix.
-func shortInstance(instance string) string {
-	host, _, err := net.SplitHostPort(instance)
-	if err != nil {
-		return instance
-	}
-	return host
 }
