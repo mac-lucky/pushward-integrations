@@ -66,9 +66,9 @@ func TestMonitorDown(t *testing.T) {
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + ONGOING = 2
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	// create + ONGOING + notification = 3
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(recorded))
 	}
 
 	// Verify create
@@ -114,6 +114,28 @@ func TestMonitorDown(t *testing.T) {
 	if update.Content.URL != "https://example.com" {
 		t.Errorf("expected URL https://example.com, got %s", update.Content.URL)
 	}
+
+	// Verify notification
+	if recorded[2].Method != "POST" || recorded[2].Path != "/notifications" {
+		t.Errorf("expected POST /notifications, got %s %s", recorded[2].Method, recorded[2].Path)
+	}
+	var notif pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[2].Body, &notif)
+	if notif.Title != "My Website" {
+		t.Errorf("expected notification title 'My Website', got %s", notif.Title)
+	}
+	if notif.Category != "critical" {
+		t.Errorf("expected category critical, got %s", notif.Category)
+	}
+	if notif.Source != "uptimekuma" {
+		t.Errorf("expected source uptimekuma, got %s", notif.Source)
+	}
+	if notif.Metadata["alert_name"] != "My Website" {
+		t.Errorf("expected alert_name 'My Website', got %s", notif.Metadata["alert_name"])
+	}
+	if notif.Metadata["fingerprint"] != "1" {
+		t.Errorf("expected fingerprint '1', got %s", notif.Metadata["fingerprint"])
+	}
 }
 
 func TestMonitorDownThenUp(t *testing.T) {
@@ -143,14 +165,31 @@ func TestMonitorDownThenUp(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + DOWN(ONGOING) + phase1(ONGOING) + phase2(ENDED) = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	// create + DOWN(ONGOING) + down_notif + up_notif + phase1(ONGOING) + phase2(ENDED) = 6
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
+	}
+
+	// Verify DOWN notification
+	var downNotif pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[2].Body, &downNotif)
+	if downNotif.Category != "critical" {
+		t.Errorf("expected DOWN notification category critical, got %s", downNotif.Category)
+	}
+
+	// Verify UP notification
+	var upNotif pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[3].Body, &upNotif)
+	if upNotif.Category != "resolved" {
+		t.Errorf("expected UP notification category resolved, got %s", upNotif.Category)
+	}
+	if upNotif.Level != pushward.LevelPassive {
+		t.Errorf("expected passive level for resolved, got %s", upNotif.Level)
 	}
 
 	// Phase 1: ONGOING with resolved content
 	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
+	testutil.UnmarshalBody(t, recorded[4].Body, &phase1)
 	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
@@ -169,7 +208,7 @@ func TestMonitorDownThenUp(t *testing.T) {
 
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[5].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}

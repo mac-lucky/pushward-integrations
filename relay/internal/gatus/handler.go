@@ -83,6 +83,38 @@ func (h *Handler) slugAndKey(p *gatusPayload) (string, string) {
 	return slug, mapKey
 }
 
+func (h *Handler) subtitle(p *gatusPayload) string {
+	name := p.EndpointName
+	if p.EndpointGroup != "" {
+		name = p.EndpointGroup + "/" + p.EndpointName
+	}
+	return "Gatus \u00b7 " + text.TruncateHard(name, 50)
+}
+
+func (h *Handler) buildMetadata(p *gatusPayload, slug string) map[string]string {
+	meta := map[string]string{
+		"alert_name":    p.EndpointName,
+		"endpoint_name": p.EndpointName,
+		"fingerprint":   slug,
+	}
+	if p.EndpointGroup != "" {
+		meta["endpoint_group"] = p.EndpointGroup
+	}
+	return meta
+}
+
+func (h *Handler) buildNotification(p *gatusPayload, slug, subtitle string) pushward.SendNotificationRequest {
+	return pushward.SendNotificationRequest{
+		Title:      text.TruncateHard(p.EndpointName, 100),
+		Subtitle:   subtitle,
+		ThreadID:   text.Slug("gatus-", p.EndpointName),
+		CollapseID: slug,
+		Source:     "gatus",
+		Push:       true,
+		Metadata:   h.buildMetadata(p, slug),
+	}
+}
+
 func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *gatusPayload) error {
 	slug, mapKey := h.slugAndKey(p)
 
@@ -101,7 +133,8 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 		return nil
 	}
 
-	if existing == nil {
+	isNew := existing == nil
+	if isNew {
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.EndpointName, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
@@ -123,11 +156,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 	}
 
 	firedAt := pushward.Int64Ptr(time.Now().Unix())
-
-	subtitle := "Gatus \u00b7 " + text.TruncateHard(p.EndpointName, 50)
-	if p.EndpointGroup != "" {
-		subtitle = "Gatus \u00b7 " + text.TruncateHard(p.EndpointGroup+"/"+p.EndpointName, 50)
-	}
+	subtitle := h.subtitle(p)
 
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
@@ -148,6 +177,16 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 		return err
 	}
 	log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "error")
+
+	if isNew {
+		notifReq := h.buildNotification(p, slug, subtitle)
+		notifReq.Body = stateText
+		notifReq.Level = pushward.LevelActive
+		notifReq.Category = "critical"
+		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
+			log.Error("failed to send notification", "slug", slug, "error", err)
+		}
+	}
 	return nil
 }
 
@@ -162,10 +201,8 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 	if existing == nil {
 		return nil // No prior TRIGGERED — skip routine RESOLVED
 	}
-	subtitle := "Gatus \u00b7 " + text.TruncateHard(p.EndpointName, 50)
-	if p.EndpointGroup != "" {
-		subtitle = "Gatus \u00b7 " + text.TruncateHard(p.EndpointGroup+"/"+p.EndpointName, 50)
-	}
+
+	subtitle := h.subtitle(p)
 
 	content := pushward.Content{
 		Template:    "alert",
@@ -179,6 +216,14 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 	}
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
+
+	notifReq := h.buildNotification(p, slug, subtitle)
+	notifReq.Body = "Resolved"
+	notifReq.Level = pushward.LevelPassive
+	notifReq.Category = "resolved"
+	if err := pwClient.SendNotification(ctx, notifReq); err != nil {
+		log.Error("failed to send notification", "slug", slug, "error", err)
+	}
 
 	log.Info("scheduled end for activity", "slug", slug, "endpoint", p.EndpointName)
 	return nil

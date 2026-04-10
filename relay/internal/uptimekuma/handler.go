@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -81,9 +82,35 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	return humautil.NewOK(), nil
 }
 
+func (h *Handler) slugAndKey(p *uptimekumaPayload) (slug, mapKey, monitorIDStr string) {
+	monitorIDStr = strconv.Itoa(p.Monitor.ID)
+	slug = "uptime-" + monitorIDStr
+	mapKey = "uptimekuma:" + monitorIDStr
+	return
+}
+
+func (h *Handler) subtitle(p *uptimekumaPayload) string {
+	return "Uptime Kuma \u00b7 " + text.TruncateHard(p.Monitor.Name, 50)
+}
+
+func (h *Handler) buildNotification(p *uptimekumaPayload, subtitle string, monitorIDStr string) pushward.SendNotificationRequest {
+	return pushward.SendNotificationRequest{
+		Title:      text.TruncateHard(p.Monitor.Name, 100),
+		Subtitle:   subtitle,
+		ThreadID:   text.Slug("uptimekuma-", p.Monitor.Name),
+		CollapseID: text.SlugHash("uptimekuma", monitorIDStr, 6),
+		Source:     "uptimekuma",
+		Push:       true,
+		Metadata: map[string]string{
+			"alert_name":  p.Monitor.Name,
+			"monitor_id":  monitorIDStr,
+			"fingerprint": monitorIDStr,
+		},
+	}
+}
+
 func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *uptimekumaPayload) error {
-	slug := fmt.Sprintf("uptime-%d", p.Monitor.ID)
-	mapKey := fmt.Sprintf("uptimekuma:%d", p.Monitor.ID)
+	slug, mapKey, monitorIDStr := h.slugAndKey(p)
 
 	// Cancel any pending end timer from a previous UP event to prevent
 	// a race where ENDED fires after this new ONGOING update.
@@ -101,7 +128,8 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 		return nil
 	}
 
-	if existing == nil {
+	isNew := existing == nil
+	if isNew {
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.Monitor.Name, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
@@ -124,7 +152,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 		firedAtPtr = pushward.Int64Ptr(t.Unix())
 	}
 
-	subtitle := "Uptime Kuma \u00b7 " + text.TruncateHard(p.Monitor.Name, 50)
+	subtitle := h.subtitle(p)
 
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
@@ -145,11 +173,21 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 		return err
 	}
 	log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "critical")
+
+	if isNew {
+		notifReq := h.buildNotification(p, subtitle, monitorIDStr)
+		notifReq.Body = stateText
+		notifReq.Level = pushward.LevelActive
+		notifReq.Category = "critical"
+		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
+			log.Error("failed to send notification", "slug", slug, "error", err)
+		}
+	}
 	return nil
 }
 
 func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *uptimekumaPayload) error {
-	mapKey := fmt.Sprintf("uptimekuma:%d", p.Monitor.ID)
+	_, mapKey, _ := h.slugAndKey(p)
 
 	existing, err := h.store.Get(ctx, "uptimekuma", userKey, mapKey, "")
 	if err != nil {
@@ -160,8 +198,8 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 		return nil // No prior DOWN — skip routine UP checks
 	}
 
-	slug := fmt.Sprintf("uptime-%d", p.Monitor.ID)
-	subtitle := "Uptime Kuma \u00b7 " + text.TruncateHard(p.Monitor.Name, 50)
+	slug, _, monitorIDStr := h.slugAndKey(p)
+	subtitle := h.subtitle(p)
 
 	stateText := "Resolved"
 	if p.Heartbeat.Ping != nil {
@@ -181,13 +219,20 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
+	notifReq := h.buildNotification(p, subtitle, monitorIDStr)
+	notifReq.Body = stateText
+	notifReq.Level = pushward.LevelPassive
+	notifReq.Category = "resolved"
+	if err := pwClient.SendNotification(ctx, notifReq); err != nil {
+		log.Error("failed to send notification", "slug", slug, "error", err)
+	}
+
 	log.Info("scheduled end for activity", "slug", slug, "monitor", p.Monitor.Name)
 	return nil
 }
 
 func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *uptimekumaPayload) error {
-	slug := fmt.Sprintf("uptime-%d", p.Monitor.ID)
-	mapKey := fmt.Sprintf("uptimekuma:%d", p.Monitor.ID)
+	slug, mapKey, _ := h.slugAndKey(p)
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "uptimekuma", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
@@ -206,7 +251,7 @@ func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.L
 	}
 
 	stateText := "Checking..."
-	subtitle := "Uptime Kuma \u00b7 " + text.TruncateHard(p.Monitor.Name, 50)
+	subtitle := h.subtitle(p)
 
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,

@@ -69,9 +69,9 @@ func TestTriggered(t *testing.T) {
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + ONGOING = 2
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	// create + ONGOING + notification = 3
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(recorded))
 	}
 
 	// Verify create
@@ -114,6 +114,25 @@ func TestTriggered(t *testing.T) {
 	if update.Content.URL != "https://api.example.com/health" {
 		t.Errorf("expected URL https://api.example.com/health, got %s", update.Content.URL)
 	}
+
+	// Verify notification
+	var notif pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[2].Body, &notif)
+	if notif.Title != "My API" {
+		t.Errorf("expected notification title 'My API', got %s", notif.Title)
+	}
+	if notif.Category != "critical" {
+		t.Errorf("expected category critical, got %s", notif.Category)
+	}
+	if notif.Source != "gatus" {
+		t.Errorf("expected source gatus, got %s", notif.Source)
+	}
+	if notif.Metadata["alert_name"] != "My API" {
+		t.Errorf("expected alert_name 'My API', got %s", notif.Metadata["alert_name"])
+	}
+	if notif.Metadata["fingerprint"] == "" {
+		t.Error("expected non-empty fingerprint in metadata")
+	}
 }
 
 func TestTriggeredThenResolved(t *testing.T) {
@@ -149,14 +168,24 @@ func TestTriggeredThenResolved(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + TRIGGERED(ONGOING) + phase1(ONGOING) + phase2(ENDED) = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	// create + TRIGGERED(ONGOING) + triggered_notif + resolved_notif + phase1(ONGOING) + phase2(ENDED) = 6
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
+	}
+
+	// Verify resolved notification
+	var resolvedNotif pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[3].Body, &resolvedNotif)
+	if resolvedNotif.Category != "resolved" {
+		t.Errorf("expected resolved notification category, got %s", resolvedNotif.Category)
+	}
+	if resolvedNotif.Level != pushward.LevelPassive {
+		t.Errorf("expected passive level for resolved, got %s", resolvedNotif.Level)
 	}
 
 	// Phase 1: ONGOING with resolved content
 	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
+	testutil.UnmarshalBody(t, recorded[4].Body, &phase1)
 	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
@@ -175,7 +204,7 @@ func TestTriggeredThenResolved(t *testing.T) {
 
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[5].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
@@ -221,14 +250,22 @@ func TestTriggeredWithGroup(t *testing.T) {
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	// create + ONGOING + notification = 3
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
 	if update.Content.Subtitle != "Gatus \u00b7 production/My API" {
 		t.Errorf("expected subtitle 'Gatus \u00b7 production/My API', got %q", update.Content.Subtitle)
+	}
+
+	// Verify notification includes endpoint_group
+	var notif pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[2].Body, &notif)
+	if notif.Metadata["endpoint_group"] != "production" {
+		t.Errorf("expected endpoint_group 'production', got %s", notif.Metadata["endpoint_group"])
 	}
 }
 
@@ -249,8 +286,9 @@ func TestTriggeredFallbackState(t *testing.T) {
 	}
 
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls, got %d", len(recorded))
+	// create + ONGOING + notification = 3
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(recorded))
 	}
 
 	var update pushward.UpdateRequest
