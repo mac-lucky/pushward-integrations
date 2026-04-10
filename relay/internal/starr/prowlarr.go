@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
@@ -13,6 +14,25 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
+
+var (
+	reTV   = regexp.MustCompile(`(?i)^(.+?)\.S\d{2}`)
+	reYear = regexp.MustCompile(`^(.+?)\.(?:19|20)\d{2}\.`)
+)
+
+// releaseBaseTitle extracts the media name from a scene release title.
+// TV: "Show.Name.S01E02.1080p..." → "Show.Name"
+// Movie: "Movie.Name.2024.1080p..." → "Movie.Name"
+// Returns empty string if the title cannot be parsed.
+func releaseBaseTitle(title string) string {
+	if m := reTV.FindStringSubmatch(title); m != nil {
+		return m[1]
+	}
+	if m := reYear.FindStringSubmatch(title); m != nil {
+		return m[1]
+	}
+	return ""
+}
 
 func (h *Handler) handleProwlarrWebhook(w http.ResponseWriter, r *http.Request) {
 	raw, ok := decodePayload(w, r)
@@ -92,11 +112,16 @@ func (h *Handler) handleProwlarrGrab(ctx context.Context, userKey string, log *s
 		meta["categories"] = strings.Join(p.Release.Categories, ", ")
 	}
 
+	threadID := "prowlarr"
+	if base := releaseBaseTitle(p.Release.ReleaseTitle); base != "" {
+		threadID = text.Slug("prowlarr-", base)
+	}
+
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      "Prowlarr",
 		Subtitle:   text.Truncate(p.Release.ReleaseTitle, 80),
 		Body:       body,
-		ThreadID:   "prowlarr",
+		ThreadID:   threadID,
 		CollapseID: text.SlugHash("prowlarr-grab", p.Release.ReleaseTitle, 6),
 		Level:      pushward.LevelActive,
 		Category:   "grab",
