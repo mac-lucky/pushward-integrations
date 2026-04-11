@@ -23,6 +23,13 @@ type BambuLabConfig struct {
 
 type TLSConfig struct {
 	InsecureSkipVerify bool `yaml:"insecure_skip_verify"`
+	// CertFingerprintSHA256 pins the printer's self-signed cert by SHA-256
+	// fingerprint. When set, TLS verification uses fingerprint comparison
+	// instead of accepting any cert. Format: hex with optional ":" separators,
+	// e.g. "aa:bb:cc:..." or "aabbcc...". Extract via:
+	//   openssl s_client -connect <printer-ip>:8883 </dev/null 2>/dev/null \
+	//     | openssl x509 -fingerprint -sha256 -noout
+	CertFingerprintSHA256 string `yaml:"cert_fingerprint_sha256"`
 }
 
 type PollingConfig struct {
@@ -61,6 +68,9 @@ func Load(path string) (*Config, error) {
 	}
 	if v := os.Getenv("PUSHWARD_BAMBULAB_SERIAL"); v != "" {
 		cfg.BambuLab.Serial = v
+	}
+	if v := os.Getenv("PUSHWARD_BAMBULAB_CERT_FINGERPRINT"); v != "" {
+		cfg.BambuLab.TLS.CertFingerprintSHA256 = v
 	}
 	if v := os.Getenv("PUSHWARD_POLL_INTERVAL"); v != "" {
 		d, err := time.ParseDuration(v)

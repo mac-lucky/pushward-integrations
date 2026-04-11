@@ -27,7 +27,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	bambu := bambulab.NewClient(cfg.BambuLab.Host, cfg.BambuLab.AccessCode, cfg.BambuLab.Serial, cfg.BambuLab.TLS.InsecureSkipVerify)
+	bambu, err := bambulab.NewClient(
+		cfg.BambuLab.Host,
+		cfg.BambuLab.AccessCode,
+		cfg.BambuLab.Serial,
+		cfg.BambuLab.TLS.InsecureSkipVerify,
+		cfg.BambuLab.TLS.CertFingerprintSHA256,
+	)
+	if err != nil {
+		slog.Error("failed to build bambulab client", "error", err)
+		os.Exit(1)
+	}
 	pw := pushward.NewClient(cfg.PushWard.URL, cfg.PushWard.APIKey)
 
 	slog.Info("connecting to BambuLab printer", "host", cfg.BambuLab.Host, "serial", cfg.BambuLab.Serial)

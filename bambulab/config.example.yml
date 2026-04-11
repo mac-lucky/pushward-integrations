@@ -3,7 +3,18 @@ bambulab:
   access_code: ""    # 8-char access code from printer Settings > WLAN (set PUSHWARD_BAMBULAB_ACCESS_CODE)
   serial: ""         # Printer serial number (set PUSHWARD_BAMBULAB_SERIAL)
   tls:
-    insecure_skip_verify: true  # Required for BambuLab printers (self-signed certs); default: false
+    # BambuLab printers use a self-signed cert with no public PKI. Two options:
+    #
+    # 1. (Recommended) Pin the printer's cert by SHA-256 fingerprint. Extract:
+    #      openssl s_client -connect <printer-ip>:8883 </dev/null 2>/dev/null \
+    #        | openssl x509 -fingerprint -sha256 -noout
+    #    Note: the fingerprint changes if the printer regenerates its cert
+    #    (some firmware updates do this).
+    cert_fingerprint_sha256: ""   # or set PUSHWARD_BAMBULAB_CERT_FINGERPRINT
+    #
+    # 2. Skip verification entirely (accepts any cert). Used only when
+    #    cert_fingerprint_sha256 is empty. Logs a warning at startup.
+    insecure_skip_verify: true
 
 pushward:
   url: ""            # PushWard server URL (set PUSHWARD_URL)

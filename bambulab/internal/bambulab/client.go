@@ -1,10 +1,15 @@
 package bambulab
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +22,7 @@ type Client struct {
 	accessCode         string
 	serial             string
 	insecureSkipVerify bool
+	certFingerprint    []byte // SHA-256, parsed from hex; len(0) means no pinning
 
 	mqttClient mqtt.Client
 	mu         sync.Mutex
@@ -24,15 +30,30 @@ type Client struct {
 	updateCh   chan struct{} // signals new data available
 }
 
-// NewClient creates a new BambuLab MQTT client.
-func NewClient(host, accessCode, serial string, insecureSkipVerify bool) *Client {
-	return &Client{
+// NewClient creates a new BambuLab MQTT client. When certFingerprintSHA256 is
+// non-empty, TLS verification uses fingerprint pinning against the printer's
+// self-signed cert instead of skipping verification.
+func NewClient(host, accessCode, serial string, insecureSkipVerify bool, certFingerprintSHA256 string) (*Client, error) {
+	c := &Client{
 		host:               host,
 		accessCode:         accessCode,
 		serial:             serial,
 		insecureSkipVerify: insecureSkipVerify,
 		updateCh:           make(chan struct{}, 1),
 	}
+
+	if fp := strings.TrimSpace(certFingerprintSHA256); fp != "" {
+		raw, err := hex.DecodeString(strings.ReplaceAll(fp, ":", ""))
+		if err != nil {
+			return nil, fmt.Errorf("parsing cert_fingerprint_sha256: %w", err)
+		}
+		if len(raw) != sha256.Size {
+			return nil, fmt.Errorf("cert_fingerprint_sha256 must be %d bytes (SHA-256), got %d", sha256.Size, len(raw))
+		}
+		c.certFingerprint = raw
+	}
+
+	return c, nil
 }
 
 // Connect establishes the MQTT connection and subscribes to the report topic.
@@ -48,7 +69,7 @@ func (c *Client) Connect() error {
 		SetKeepAlive(60 * time.Second).
 		SetAutoReconnect(true).
 		SetMaxReconnectInterval(30 * time.Second).
-		SetTLSConfig(&tls.Config{InsecureSkipVerify: c.insecureSkipVerify}). // #nosec G402 -- Bambu Lab printers use self-signed certs
+		SetTLSConfig(c.tlsConfig()).
 		SetConnectionLostHandler(func(_ mqtt.Client, err error) {
 			slog.Warn("MQTT connection lost", "error", err)
 		}).
@@ -71,6 +92,28 @@ func (c *Client) Connect() error {
 	// Request full status to populate initial state
 	c.RequestStatus()
 	return nil
+}
+
+func (c *Client) tlsConfig() *tls.Config {
+	if len(c.certFingerprint) == sha256.Size {
+		return &tls.Config{ // #nosec G402 -- pinned via VerifyConnection
+			InsecureSkipVerify: true,
+			VerifyConnection: func(cs tls.ConnectionState) error {
+				if len(cs.PeerCertificates) == 0 {
+					return errors.New("bambulab: no peer certificate")
+				}
+				got := sha256.Sum256(cs.PeerCertificates[0].Raw)
+				if subtle.ConstantTimeCompare(got[:], c.certFingerprint) != 1 {
+					return errors.New("bambulab: peer cert fingerprint mismatch")
+				}
+				return nil
+			},
+		}
+	}
+	if c.insecureSkipVerify {
+		slog.Warn("BambuLab TLS verification disabled; set bambulab.tls.cert_fingerprint_sha256 to pin the printer cert")
+	}
+	return &tls.Config{InsecureSkipVerify: c.insecureSkipVerify} // #nosec G402
 }
 
 // Disconnect cleanly shuts down the MQTT connection.
