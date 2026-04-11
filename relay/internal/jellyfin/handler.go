@@ -178,7 +178,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *
 	// for stale sessions, causing false-positive activities. Record debounce
 	// state so a real resume (IsPaused=false) triggers late-join creation.
 	if p.IsPaused {
-		debounceKey := userKey + ":" + slug
+		debounceKey := auth.MapKeyPrefix(userKey) + ":" + slug
 		h.mu.Lock()
 		h.lastPaused[debounceKey] = true
 		h.lastProgress[debounceKey] = playbackProgress(p)
@@ -228,7 +228,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *
 
 	// Record last update time and paused state for debounce
 	h.mu.Lock()
-	debounceKey := userKey + ":" + slug
+	debounceKey := auth.MapKeyPrefix(userKey) + ":" + slug
 	h.lastUpdate[debounceKey] = time.Now()
 	h.lastPaused[debounceKey] = false
 	h.lastProgress[debounceKey] = playbackProgress(p)
@@ -243,7 +243,7 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
 	// Debounce check — bypass on state change, suppress while paused
-	debounceKey := userKey + ":" + slug
+	debounceKey := auth.MapKeyPrefix(userKey) + ":" + slug
 	h.mu.Lock()
 	last, hasLast := h.lastUpdate[debounceKey]
 	prevPaused, hasPrev := h.lastPaused[debounceKey]
@@ -364,7 +364,7 @@ func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *s
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
 	// Cancel pause timer if running
-	debounceKey := userKey + ":" + slug
+	debounceKey := auth.MapKeyPrefix(userKey) + ":" + slug
 	h.mu.Lock()
 	if t, ok := h.pauseTimers[debounceKey]; ok {
 		t.Stop()
@@ -497,7 +497,7 @@ func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, log *sl
 // scheduleEnd schedules a two-phase end for an activity via lifecycle.Ender,
 // with an onComplete callback that cleans up debounce state.
 func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Content) {
-	debounceKey := userKey + ":" + slug
+	debounceKey := auth.MapKeyPrefix(userKey) + ":" + slug
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content, func() {
 		// Clean up debounce entries for playback slugs
 		h.mu.Lock()

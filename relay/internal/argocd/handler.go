@@ -41,20 +41,28 @@ type trackedAppState struct {
 	Pending  bool   `json:"pending"`
 }
 
+// graceEntry holds a grace timer along with the original userKey and appName
+// so cleanup code can retrieve them without parsing the hashed map key.
+type graceEntry struct {
+	timer   *time.Timer
+	userKey string
+	appName string
+}
+
 // Lock ordering: appLocks (per-app) → mu (graceTimers). Never acquire mu before appLocks.
 type Handler struct {
 	store       state.Store
 	clients     *client.Pool
 	config      *config.ArgoCDConfig
 	ender       *lifecycle.Ender
-	mu          sync.Mutex             // protects graceTimers map only
-	appLocks    sync.Map               // "userKey:appName" → *sync.Mutex
-	graceTimers map[string]*time.Timer // "userKey:appName" → grace timer
+	mu          sync.Mutex              // protects graceTimers map only
+	appLocks    sync.Map                // hash(userKey)+":"+appName → *sync.Mutex
+	graceTimers map[string]*graceEntry  // hash(userKey)+":"+appName → grace entry
 }
 
 // lockApp returns an unlock function for per-app serialization.
 func (h *Handler) lockApp(userKey, appName string) func() {
-	key := userKey + ":" + appName
+	key := timerKey(userKey, appName)
 	val, _ := h.appLocks.LoadOrStore(key, &sync.Mutex{})
 	m := val.(*sync.Mutex)
 	m.Lock()
@@ -71,7 +79,7 @@ func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *
 			EndDelay:       cfg.EndDelay,
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
-		graceTimers: make(map[string]*time.Timer),
+		graceTimers: make(map[string]*graceEntry),
 	}
 	humautil.RegisterWebhook(api, "/argocd", "post-argocd-webhook",
 		"Receive ArgoCD sync webhook",
@@ -106,21 +114,21 @@ func (h *Handler) StartCleanup(ctx context.Context) { // #nosec G118 -- intentio
 
 				// Check each candidate outside the lock
 				for _, tk := range candidates {
-					parts := strings.SplitN(tk, ":", 2)
-					if len(parts) != 2 {
-						h.mu.Lock()
-						if gt, ok := h.graceTimers[tk]; ok {
-							gt.Stop()
-							delete(h.graceTimers, tk)
-						}
+					h.mu.Lock()
+					ge, ok := h.graceTimers[tk]
+					if !ok {
 						h.mu.Unlock()
 						continue
 					}
-					app, ok, _ := h.loadApp(context.Background(), parts[0], parts[1])
+					userKey := ge.userKey
+					appName := ge.appName
+					h.mu.Unlock()
+
+					app, ok, _ := h.loadApp(context.Background(), userKey, appName)
 					if !ok || !app.Pending {
 						h.mu.Lock()
-						if gt, ok := h.graceTimers[tk]; ok {
-							gt.Stop()
+						if ge, ok := h.graceTimers[tk]; ok {
+							ge.timer.Stop()
 							delete(h.graceTimers, tk)
 						}
 						h.mu.Unlock()
@@ -161,7 +169,7 @@ func (h *Handler) RecoverPending(ctx context.Context) {
 }
 
 func timerKey(userKey, appName string) string {
-	return userKey + ":" + appName
+	return auth.MapKeyPrefix(userKey) + ":" + appName
 }
 
 func (h *Handler) saveApp(ctx context.Context, userKey, appName string, app *trackedAppState) error {
@@ -282,8 +290,8 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 	if needsCreate {
 		if exists {
 			h.mu.Lock()
-			if gt, ok := h.graceTimers[tk]; ok {
-				gt.Stop()
+			if ge, ok := h.graceTimers[tk]; ok {
+				ge.timer.Stop()
 				delete(h.graceTimers, tk)
 			}
 			h.mu.Unlock()
@@ -312,12 +320,16 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 			log.Error("failed to save app state", "app", p.App, "error", err)
 		}
 		h.mu.Lock()
-		if gt, ok := h.graceTimers[tk]; ok {
-			gt.Stop()
+		if ge, ok := h.graceTimers[tk]; ok {
+			ge.timer.Stop()
 		}
-		h.graceTimers[tk] = time.AfterFunc(gracePeriod, func() {
-			h.graceExpired(userKey, p.App)
-		})
+		h.graceTimers[tk] = &graceEntry{
+			timer: time.AfterFunc(gracePeriod, func() {
+				h.graceExpired(userKey, p.App)
+			}),
+			userKey: userKey,
+			appName: p.App,
+		}
 		h.mu.Unlock()
 		log.Info("sync started (grace period)", "slug", slug, "app", p.App, "grace", gracePeriod)
 		return nil
@@ -408,9 +420,13 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 				log.Error("failed to save app state", "app", p.App, "error", err)
 			}
 			h.mu.Lock()
-			h.graceTimers[tk] = time.AfterFunc(gracePeriod, func() {
-				h.graceExpired(userKey, p.App)
-			})
+			h.graceTimers[tk] = &graceEntry{
+				timer: time.AfterFunc(gracePeriod, func() {
+					h.graceExpired(userKey, p.App)
+				}),
+				userKey: userKey,
+				appName: p.App,
+			}
 			h.mu.Unlock()
 			log.Info("sync succeeded (untracked, grace period)", "slug", slug, "app", p.App)
 			return nil
@@ -487,8 +503,8 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.
 	// Completed during grace period — no-op sync, skip entirely
 	if exists && app.Pending {
 		h.mu.Lock()
-		if gt, ok := h.graceTimers[tk]; ok {
-			gt.Stop()
+		if ge, ok := h.graceTimers[tk]; ok {
+			ge.timer.Stop()
 			delete(h.graceTimers, tk)
 		}
 		h.mu.Unlock()
@@ -585,8 +601,8 @@ func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.L
 		wasPending = app.Pending
 		if app.Pending {
 			h.mu.Lock()
-			if gt, ok := h.graceTimers[tk]; ok {
-				gt.Stop()
+			if ge, ok := h.graceTimers[tk]; ok {
+				ge.timer.Stop()
 				delete(h.graceTimers, tk)
 			}
 			h.mu.Unlock()

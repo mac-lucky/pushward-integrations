@@ -6,6 +6,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -75,7 +76,7 @@ func NewEnder(clients *client.Pool, store state.Store, provider string, cfg EndC
 // The optional onComplete callback runs after the activity is ended and state
 // is cleaned up. It is called outside the Ender's lock.
 func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Content, onComplete ...func()) {
-	timerKey := userKey + ":" + mapKey
+	timerKey := auth.MapKeyPrefix(userKey) + ":" + mapKey
 	cl := e.clients.Get(userKey)
 
 	e.mu.Lock()
@@ -157,7 +158,7 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 
 // StopTimer cancels a pending end timer if one exists for the given key.
 func (e *Ender) StopTimer(userKey, mapKey string) {
-	timerKey := userKey + ":" + mapKey
+	timerKey := auth.MapKeyPrefix(userKey) + ":" + mapKey
 	e.mu.Lock()
 	if tp, ok := e.timers[timerKey]; ok {
 		if tp.phase1.Stop() {

@@ -20,6 +20,14 @@ func KeyHash(key string) string {
 	return fmt.Sprintf("%x", h[:4])
 }
 
+// MapKeyPrefix returns a short hex hash of an API key for use as an
+// in-memory map key prefix. Uses 8 bytes (16 hex chars) of SHA-256
+// for collision resistance across many tenants.
+func MapKeyPrefix(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return fmt.Sprintf("%x", h[:8])
+}
+
 // KeyFromContext retrieves the hlk_ integration key from the request context.
 func KeyFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(contextKey{}).(string); ok {

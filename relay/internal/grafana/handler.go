@@ -339,7 +339,7 @@ func (h *Handler) buildSingleNotification(g *alertGroup) pushward.SendNotificati
 
 	h.setURL(&req, a)
 	if a.ImageURL != "" {
-		req.ImageURL = a.ImageURL
+		req.ImageURL = text.SanitizeURL(a.ImageURL)
 	}
 	req.Metadata = h.buildAlertMetadata(a)
 	return req
@@ -387,7 +387,7 @@ func (h *Handler) buildGroupedNotification(g *alertGroup) pushward.SendNotificat
 
 	h.setURL(&req, representative)
 	if representative.ImageURL != "" {
-		req.ImageURL = representative.ImageURL
+		req.ImageURL = text.SanitizeURL(representative.ImageURL)
 	}
 	req.Metadata = h.buildGroupedMetadata(g, representative)
 	return req
@@ -489,11 +489,11 @@ func allSummariesEqual(alerts []alert) bool {
 func (h *Handler) setURL(req *pushward.SendNotificationRequest, a alert) {
 	switch {
 	case a.DashboardURL != "":
-		req.URL = a.DashboardURL
+		req.URL = text.SanitizeURL(a.DashboardURL)
 	case a.PanelURL != "":
-		req.URL = a.PanelURL
+		req.URL = text.SanitizeURL(a.PanelURL)
 	case a.GeneratorURL != "":
-		req.URL = a.GeneratorURL
+		req.URL = text.SanitizeURL(a.GeneratorURL)
 	}
 }
 
@@ -508,8 +508,8 @@ func (h *Handler) buildAlertMetadata(a alert) map[string]string {
 		meta.add("annotation_"+k, a.Annotations[k])
 	}
 	meta.add("starts_at", a.StartsAt)
-	meta.add("silence_url", a.SilenceURL)
-	meta.add("generator_url", a.GeneratorURL)
+	meta.add("silence_url", text.SanitizeURL(a.SilenceURL))
+	meta.add("generator_url", text.SanitizeURL(a.GeneratorURL))
 	meta.add("values", formatValues(a))
 	return meta.result()
 }
@@ -526,8 +526,8 @@ func (h *Handler) buildGroupedMetadata(g *alertGroup, representative alert) map[
 	meta.add("resolved_count", strconv.Itoa(len(g.resolved)))
 	meta.add("alertname", representative.Labels["alertname"])
 	meta.add("starts_at", representative.StartsAt)
-	meta.add("silence_url", representative.SilenceURL)
-	meta.add("generator_url", representative.GeneratorURL)
+	meta.add("silence_url", text.SanitizeURL(representative.SilenceURL))
+	meta.add("generator_url", text.SanitizeURL(representative.GeneratorURL))
 
 	for _, key := range []string{"severity", "job", "job_name", "namespace", "cluster", "grafana_folder"} {
 		if v := commonLabelValue(allAlerts, key); v != "" {
@@ -584,9 +584,9 @@ func formatAlertDetail(a alert) string {
 		}
 	}
 
-	if a.SilenceURL != "" {
+	if s := text.SanitizeURL(a.SilenceURL); s != "" {
 		b.WriteString("\nSilence: ")
-		b.WriteString(a.SilenceURL)
+		b.WriteString(s)
 	}
 
 	return b.String()

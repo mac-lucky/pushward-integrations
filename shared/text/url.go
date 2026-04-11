@@ -6,7 +6,7 @@ import "net/url"
 // or an empty string otherwise.
 func SanitizeURL(rawURL string) string {
 	u, err := url.Parse(rawURL)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return ""
 	}
 	return rawURL

@@ -42,6 +42,11 @@ func main() {
 		t.Cleanup(ctx)
 	}
 
+	if cfg.SABnzbd.WebhookSecret == "" {
+		slog.Warn("webhook secret not configured — webhook endpoint is unauthenticated",
+			"hint", "set sabnzbd.webhook_secret or PUSHWARD_SABNZBD_WEBHOOK_SECRET")
+	}
+
 	slog.Info("starting pushward-sabnzbd", "address", cfg.Server.Address, "priority", cfg.PushWard.Priority, "cleanup_delay", cfg.PushWard.CleanupDelay)
 	if err := server.ListenAndServe(ctx, cfg.Server.Address, mux); err != nil {
 		slog.Error("server error", "error", err)
