@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -125,8 +126,8 @@ func TestFlushAll_CleansStateStore(t *testing.T) {
 	})
 
 	// Pre-seed state store entries.
-	_ = store.Set(nil, "test-provider", "user1", "key1", "", json.RawMessage(`{}`), 0)
-	_ = store.Set(nil, "test-provider", "user1", "key2", "", json.RawMessage(`{}`), 0)
+	_ = store.Set(context.Background(), "test-provider", "user1", "key1", "", json.RawMessage(`{}`), 0)
+	_ = store.Set(context.Background(), "test-provider", "user1", "key2", "", json.RawMessage(`{}`), 0)
 
 	e.ScheduleEnd("user1", "key1", "slug-a", pushward.Content{State: "done"})
 	e.ScheduleEnd("user1", "key2", "slug-b", pushward.Content{State: "done"})
@@ -135,8 +136,8 @@ func TestFlushAll_CleansStateStore(t *testing.T) {
 	e.Wait()
 
 	// Verify state store entries were deleted.
-	v1, _ := store.Get(nil, "test-provider", "user1", "key1", "")
-	v2, _ := store.Get(nil, "test-provider", "user1", "key2", "")
+	v1, _ := store.Get(context.Background(), "test-provider", "user1", "key1", "")
+	v2, _ := store.Get(context.Background(), "test-provider", "user1", "key2", "")
 	if v1 != nil {
 		t.Fatal("expected key1 state to be deleted")
 	}
