@@ -2,7 +2,12 @@ server:
   address: ":8090"
 
 sabnzbd:
-  url: ""               # or set PUSHWARD_SABNZBD_URL
+  url: ""               # or set PUSHWARD_SABNZBD_URL — http:// is fine for trusted internal networks
+  # SECURITY NOTE: SABnzbd's API only accepts the key as a URL query parameter
+  # (no header auth in SABnzbd 4.5+). Over plain http://, intermediate proxies
+  # or routers may capture the key from access logs. The integration redacts
+  # the key from its own logs. For exposure outside trusted networks, front
+  # SABnzbd with HTTPS.
   api_key: ""           # or set PUSHWARD_SABNZBD_API_KEY
   webhook_secret: ""    # or set PUSHWARD_SABNZBD_WEBHOOK_SECRET
   template: "generic"   # or set PUSHWARD_SABNZBD_TEMPLATE ("generic" or "timeline")
