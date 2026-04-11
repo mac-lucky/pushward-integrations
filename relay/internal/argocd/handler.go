@@ -161,7 +161,7 @@ func (h *Handler) RecoverPending(ctx context.Context) {
 			continue
 		}
 		recovered++
-		go h.graceExpired(entry.UserKey, entry.Key)
+		go h.graceExpired(entry.UserKey, entry.Key) // #nosec G118 -- startup recovery, no request context
 	}
 	if recovered > 0 {
 		slog.Info("recovered pending argocd apps", "count", recovered)
