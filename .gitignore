@@ -13,6 +13,8 @@
 /unraid/pushward-unraid
 /pushward-octoprint
 /octoprint/pushward-octoprint
+/pushward-grafana
+/grafana/pushward-grafana
 *.exe
 
 # IDE
