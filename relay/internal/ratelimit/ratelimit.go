@@ -30,7 +30,7 @@ func (m *limiterMap) get(key string) *rate.Limiter {
 	})
 }
 
-var keyLimiters = newLimiterMap(1, 10, 10_000)
+var keyLimiters = newLimiterMap(1, 10, 100_000)
 
 func init() {
 	keyLimiters.entries.SetOnEvict(func(key string, _ *rate.Limiter) {
