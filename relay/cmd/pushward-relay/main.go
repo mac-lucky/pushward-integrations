@@ -169,6 +169,7 @@ func main() {
 		ah := argocd.RegisterRoutes(api, store, clients, &cfg.Providers.ArgoCD)
 		collectEnder(ah)
 		ah.StartCleanup(ctx)
+		ah.RecoverPending(ctx)
 		slog.Info("enabled provider", "provider", "argocd")
 	}
 
@@ -267,6 +268,9 @@ func main() {
 				} else if n > 0 {
 					slog.Info("state cleanup", "removed", n)
 				}
+				if n := ratelimit.SweepStale(5 * time.Minute); n > 0 {
+					slog.Debug("rate limiter sweep", "removed", n)
+				}
 			}
 		}
 	}()
@@ -299,9 +303,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Stop all pending ender timers, then wait for in-flight callbacks.
+	// Flush all pending ender timers (send ENDED immediately), then wait for in-flight callbacks.
 	for _, e := range enders {
-		e.StopAll()
+		e.FlushAll()
 	}
 	for _, e := range enders {
 		e.Wait()

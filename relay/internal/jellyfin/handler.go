@@ -70,6 +70,12 @@ func (h *Handler) StartCleanup(ctx context.Context) {
 		for {
 			select {
 			case <-ctx.Done():
+				h.mu.Lock()
+				for key, t := range h.pauseTimers {
+					t.Stop()
+					delete(h.pauseTimers, key)
+				}
+				h.mu.Unlock()
 				return
 			case <-ticker.C:
 				h.mu.Lock()

@@ -143,6 +143,31 @@ func (s *PostgresStore) Exists(ctx context.Context, provider, userKey, key, subK
 	return exists, nil
 }
 
+func (s *PostgresStore) ListByProvider(ctx context.Context, provider string) ([]Entry, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT user_key, key, sub_key, value FROM relay_state
+		WHERE provider = $1
+		  AND (expires_at IS NULL OR expires_at > now())
+	`, provider)
+	if err != nil {
+		return nil, fmt.Errorf("state list-by-provider %s: %w", provider, err)
+	}
+	defer rows.Close()
+
+	var entries []Entry
+	for rows.Next() {
+		var e Entry
+		if err := rows.Scan(&e.UserKey, &e.Key, &e.SubKey, &e.Value); err != nil {
+			return nil, fmt.Errorf("state list-by-provider %s scan: %w", provider, err)
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("state list-by-provider %s rows: %w", provider, err)
+	}
+	return entries, nil
+}
+
 func (s *PostgresStore) Cleanup(ctx context.Context) (int64, error) {
 	tag, err := s.pool.Exec(ctx, `
 		DELETE FROM relay_state WHERE expires_at IS NOT NULL AND expires_at <= now()

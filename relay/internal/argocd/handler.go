@@ -131,6 +131,35 @@ func (h *Handler) StartCleanup(ctx context.Context) { // #nosec G118 -- intentio
 	}()
 }
 
+// RecoverPending scans the state store for ArgoCD entries that are still
+// pending (grace timer was lost on pod restart) and fires graceExpired for each.
+func (h *Handler) RecoverPending(ctx context.Context) {
+	entries, err := h.store.ListByProvider(ctx, "argocd")
+	if err != nil {
+		slog.Error("failed to list argocd state entries for recovery", "error", err)
+		return
+	}
+	var recovered int
+	for _, entry := range entries {
+		if entry.SubKey != "" {
+			continue // skip tombstones
+		}
+		var app trackedAppState
+		if err := json.Unmarshal(entry.Value, &app); err != nil {
+			slog.Warn("failed to unmarshal argocd state entry, skipping", "key", entry.Key, "error", err)
+			continue
+		}
+		if !app.Pending {
+			continue
+		}
+		recovered++
+		go h.graceExpired(entry.UserKey, entry.Key)
+	}
+	if recovered > 0 {
+		slog.Info("recovered pending argocd apps", "count", recovered)
+	}
+}
+
 func timerKey(userKey, appName string) string {
 	return userKey + ":" + appName
 }

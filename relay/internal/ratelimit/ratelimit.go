@@ -3,6 +3,7 @@ package ratelimit
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"golang.org/x/time/rate"
 
@@ -34,8 +35,14 @@ var keyLimiters = newLimiterMap(1, 10, 100_000)
 
 func init() {
 	keyLimiters.entries.SetOnEvict(func(key string, _ *rate.Limiter) {
-		slog.Warn("rate limiter evicted", "limiter_key", key)
+		slog.Debug("rate limiter evicted", "limiter_key", key)
 	})
+}
+
+// SweepStale removes rate limiter entries not accessed in the given duration.
+// Returns the number of entries removed.
+func SweepStale(maxAge time.Duration) int {
+	return keyLimiters.entries.Sweep(maxAge)
 }
 
 // AllowKey checks whether a request with the given route pattern and auth key

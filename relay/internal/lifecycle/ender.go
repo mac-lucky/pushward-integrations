@@ -34,9 +34,13 @@ type EndConfig struct {
 // The gen field is incremented on each ScheduleEnd so that a superseded phase-1
 // goroutine can detect it has been replaced and avoid arming an orphaned phase-2.
 type timerPair struct {
-	phase1 *time.Timer
-	phase2 *time.Timer
-	gen    uint64
+	phase1  *time.Timer
+	phase2  *time.Timer
+	gen     uint64
+	userKey string
+	mapKey  string
+	slug    string
+	content pushward.Content
 }
 
 // Ender manages two-phase activity end scheduling.
@@ -84,7 +88,13 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 		}
 	}
 	e.nextGen++
-	tp := &timerPair{gen: e.nextGen}
+	tp := &timerPair{
+		gen:     e.nextGen,
+		userKey: userKey,
+		mapKey:  mapKey,
+		slug:    slug,
+		content: content,
+	}
 	myGen := tp.gen
 	e.wg.Add(1)
 	tp.phase1 = time.AfterFunc(e.config.EndDelay, func() {
@@ -173,6 +183,59 @@ func (e *Ender) StopAll() {
 			e.wg.Done() // callback will never run
 		}
 		delete(e.timers, key)
+	}
+}
+
+// FlushAll stops all pending ender timers and immediately sends an ENDED
+// update for each. Use this during graceful shutdown instead of StopAll to
+// ensure activities are properly ended before the process exits.
+func (e *Ender) FlushAll() {
+	e.mu.Lock()
+	pending := make([]*timerPair, 0, len(e.timers))
+	for key, tp := range e.timers {
+		if tp.phase1.Stop() {
+			e.wg.Done()
+		}
+		if tp.phase2 != nil && tp.phase2.Stop() {
+			e.wg.Done()
+		}
+		pending = append(pending, tp)
+		delete(e.timers, key)
+	}
+	e.mu.Unlock()
+
+	if len(pending) == 0 {
+		return
+	}
+
+	// Wait for any in-flight callbacks that were already running when
+	// Stop() returned false. This prevents a phase-1 ONGOING update from
+	// landing after our ENDED update.
+	e.wg.Wait()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	for i, tp := range pending {
+		if ctx.Err() != nil {
+			slog.Warn("flush timed out, dropping remaining enders", "remaining", len(pending)-i)
+			break
+		}
+		cl := e.clients.Get(tp.userKey)
+		endReq := pushward.UpdateRequest{
+			State:   pushward.StateEnded,
+			Content: tp.content,
+		}
+		if err := cl.UpdateActivity(ctx, tp.slug, endReq); err != nil {
+			slog.Error("flush: failed to end activity", "slug", tp.slug, "error", err)
+		} else {
+			slog.Info("flush: ended activity", "slug", tp.slug)
+		}
+		if e.store != nil {
+			if err := e.store.Delete(ctx, e.provider, tp.userKey, tp.mapKey, ""); err != nil {
+				slog.Warn("flush: state store delete failed", "error", err, "provider", e.provider)
+			}
+		}
 	}
 }
 

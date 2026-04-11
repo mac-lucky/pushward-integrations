@@ -97,6 +97,22 @@ func (m *Map[V]) GetOrCreate(key string, create func() V) V {
 	return v
 }
 
+// Sweep removes entries whose lastAccess is older than maxAge.
+// Returns the number of entries removed.
+func (m *Map[V]) Sweep(maxAge time.Duration) int {
+	cutoff := time.Now().Add(-maxAge).UnixNano()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	removed := 0
+	for key, e := range m.entries {
+		if e.lastAccess.Load() < cutoff {
+			delete(m.entries, key)
+			removed++
+		}
+	}
+	return removed
+}
+
 // Delete removes the entry for key, if present.
 func (m *Map[V]) Delete(key string) {
 	m.mu.Lock()

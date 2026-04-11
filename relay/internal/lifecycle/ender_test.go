@@ -1,12 +1,17 @@
 package lifecycle
 
 import (
+	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
@@ -75,5 +80,67 @@ func TestUpdateWithRetry_FailsBothAttempts(t *testing.T) {
 	}
 	if got := calls.Load(); got != 2 {
 		t.Fatalf("expected 2 HTTP calls, got %d", got)
+	}
+}
+
+func TestFlushAll_SendsEndedPush(t *testing.T) {
+	var endedCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `"ENDED"`) {
+			endedCalls.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	pool := client.NewPool(srv.URL, nil)
+	e := NewEnder(pool, nil, "test", EndConfig{
+		EndDelay:       1 * time.Hour, // long delay so timer won't fire
+		EndDisplayTime: 1 * time.Hour,
+	})
+
+	e.ScheduleEnd("user1", "key1", "slug-a", pushward.Content{State: "done"})
+	e.ScheduleEnd("user1", "key2", "slug-b", pushward.Content{State: "done"})
+
+	e.FlushAll()
+	e.Wait()
+
+	if got := endedCalls.Load(); got != 2 {
+		t.Fatalf("expected 2 ENDED calls, got %d", got)
+	}
+}
+
+func TestFlushAll_CleansStateStore(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	store := state.NewMemoryStore()
+	pool := client.NewPool(srv.URL, nil)
+	e := NewEnder(pool, store, "test-provider", EndConfig{
+		EndDelay:       1 * time.Hour,
+		EndDisplayTime: 1 * time.Hour,
+	})
+
+	// Pre-seed state store entries.
+	_ = store.Set(nil, "test-provider", "user1", "key1", "", json.RawMessage(`{}`), 0)
+	_ = store.Set(nil, "test-provider", "user1", "key2", "", json.RawMessage(`{}`), 0)
+
+	e.ScheduleEnd("user1", "key1", "slug-a", pushward.Content{State: "done"})
+	e.ScheduleEnd("user1", "key2", "slug-b", pushward.Content{State: "done"})
+
+	e.FlushAll()
+	e.Wait()
+
+	// Verify state store entries were deleted.
+	v1, _ := store.Get(nil, "test-provider", "user1", "key1", "")
+	v2, _ := store.Get(nil, "test-provider", "user1", "key2", "")
+	if v1 != nil {
+		t.Fatal("expected key1 state to be deleted")
+	}
+	if v2 != nil {
+		t.Fatal("expected key2 state to be deleted")
 	}
 }

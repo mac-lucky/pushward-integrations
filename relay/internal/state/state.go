@@ -6,6 +6,14 @@ import (
 	"time"
 )
 
+// Entry represents a single state store entry returned by ListByProvider.
+type Entry struct {
+	UserKey string
+	Key     string
+	SubKey  string
+	Value   json.RawMessage
+}
+
 // Store provides multi-tenant ephemeral state for relay handlers.
 // Each method is keyed by (provider, userKey) where userKey is the hlk_ integration key hash.
 type Store interface {
@@ -26,6 +34,10 @@ type Store interface {
 
 	// Exists checks if an entry exists and has not expired.
 	Exists(ctx context.Context, provider, userKey, key, subKey string) (bool, error)
+
+	// ListByProvider returns all non-expired entries for a given provider.
+	// Used for startup recovery (e.g., finding pending ArgoCD entries).
+	ListByProvider(ctx context.Context, provider string) ([]Entry, error)
 
 	// Cleanup removes all expired entries. Called by the background sweep goroutine.
 	Cleanup(ctx context.Context) (int64, error)
