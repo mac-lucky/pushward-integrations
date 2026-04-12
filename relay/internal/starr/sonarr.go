@@ -145,7 +145,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 	sgReq := pushward.SendNotificationRequest{
 		Title:      "Sonarr",
 		Subtitle:   text.Truncate(subtitle, 100),
-		Body:       "Grabbed · " + p.Release.Quality,
+		Body:       "Grabbed · " + text.Truncate(subtitle, 80),
 		ThreadID:   sonarrMediaThreadID(p.Series),
 		CollapseID: "sonarr-grab",
 		Level:      pushward.LevelActive,
@@ -245,7 +245,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 	sdReq := pushward.SendNotificationRequest{
 		Title:      "Sonarr",
 		Subtitle:   text.Truncate(subtitle, 100),
-		Body:       state,
+		Body:       state + " · " + text.Truncate(subtitle, 80),
 		ThreadID:   sonarrMediaThreadID(p.Series),
 		CollapseID: "sonarr-download",
 		Level:      pushward.LevelActive,
@@ -315,7 +315,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 
 func (h *Handler) handleSonarrRename(ctx context.Context, userKey string, log *slog.Logger, p *SonarrSeriesEventPayload) error {
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Files renamed",
+		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Renamed · " + p.Series.Title,
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-rename",
 		Level: pushward.LevelPassive, Category: "rename", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
@@ -325,7 +325,7 @@ func (h *Handler) handleSonarrRename(ctx context.Context, userKey string, log *s
 
 func (h *Handler) handleSonarrSeriesAdd(ctx context.Context, userKey string, log *slog.Logger, p *SonarrSeriesEventPayload) error {
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Added to library",
+		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Added · " + p.Series.Title,
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-series-add",
 		Level: pushward.LevelActive, Category: "series-add", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
@@ -334,9 +334,9 @@ func (h *Handler) handleSonarrSeriesAdd(ctx context.Context, userKey string, log
 }
 
 func (h *Handler) handleSonarrSeriesDelete(ctx context.Context, userKey string, log *slog.Logger, p *SonarrSeriesDeletePayload) error {
-	body := "Removed"
+	body := "Removed · " + p.Series.Title
 	if p.DeletedFiles {
-		body = "Removed (files deleted)"
+		body = "Removed (files deleted) · " + p.Series.Title
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Sonarr", Subtitle: p.Series.Title, Body: body,
@@ -348,12 +348,13 @@ func (h *Handler) handleSonarrSeriesDelete(ctx context.Context, userKey string, 
 }
 
 func (h *Handler) handleSonarrEpisodeFileDelete(ctx context.Context, userKey string, log *slog.Logger, p *SonarrEpisodeFileDeletePayload) error {
-	body := "File deleted"
+	subtitle := FormatSubtitle(p.Series, p.Episodes, "")
+	body := "File deleted · " + text.Truncate(subtitle, 60)
 	if p.DeleteReason != "" {
-		body += " · " + deleteReasonText(p.DeleteReason)
+		body = "File deleted · " + deleteReasonText(p.DeleteReason) + " · " + text.Truncate(subtitle, 50)
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title: "Sonarr", Subtitle: text.Truncate(FormatSubtitle(p.Series, p.Episodes, ""), 100), Body: body,
+		Title: "Sonarr", Subtitle: text.Truncate(subtitle, 100), Body: body,
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-file-delete",
 		Level: pushward.LevelPassive, Category: "file-delete", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
@@ -378,12 +379,13 @@ func sonarrMediaThreadID(s SonarrSeries) string {
 }
 
 func (h *Handler) handleSonarrImportComplete(ctx context.Context, userKey string, log *slog.Logger, p *SonarrImportCompletePayload) error {
-	body := "Import complete"
+	subtitle := FormatSubtitle(p.Series, p.Episodes, "")
+	body := "Imported · " + text.Truncate(subtitle, 80)
 	if p.IsUpgrade {
-		body = "Upgrade complete"
+		body = "Upgraded · " + text.Truncate(subtitle, 80)
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title: "Sonarr", Subtitle: text.Truncate(FormatSubtitle(p.Series, p.Episodes, ""), 100), Body: body,
+		Title: "Sonarr", Subtitle: text.Truncate(subtitle, 100), Body: body,
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-import-complete",
 		Level: pushward.LevelActive, Category: "import-complete", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),

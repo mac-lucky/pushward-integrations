@@ -329,9 +329,9 @@ func (h *Handler) buildSingleNotification(g *alertGroup) pushward.SendNotificati
 		req.Level = pushward.LevelActive
 		req.Category = severity
 	case "resolved":
-		req.Body = "Resolved"
+		req.Body = "Resolved · " + g.alertname
 		if summary != "" {
-			req.Body = "Resolved · " + text.Truncate(summary, 100)
+			req.Body = "Resolved · " + g.alertname + " · " + text.Truncate(summary, 80)
 		}
 		req.Level = pushward.LevelPassive
 		req.Category = "resolved"
@@ -378,11 +378,11 @@ func (h *Handler) buildGroupedNotification(g *alertGroup) pushward.SendNotificat
 		}
 		req.Category = highestSeverity(severities, h.config.DefaultSeverity)
 		req.Level = pushward.LevelActive
-		req.Body = formatGroupedBody(g.firing, "", "firing", 120)
+		req.Body = formatGroupedBody(g.firing, g.alertname+" · ", "firing", 120)
 	} else {
 		req.Category = "resolved"
 		req.Level = pushward.LevelPassive
-		req.Body = formatGroupedBody(g.resolved, "Resolved · ", "resolved", 100)
+		req.Body = formatGroupedBody(g.resolved, "Resolved · "+g.alertname+" · ", "resolved", 100)
 	}
 
 	h.setURL(&req, representative)

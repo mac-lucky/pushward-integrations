@@ -415,7 +415,7 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog
 	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      mediaName(p),
 		Subtitle:   subtitle,
-		Body:       "Added to library",
+		Body:       "Added · " + mediaName(p),
 		ThreadID:   jellyfinMediaThreadID(p),
 		CollapseID: "jellyfin-item-" + p.ItemID,
 		Level:      pushward.LevelPassive,
@@ -448,7 +448,7 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *sl
 	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      p.TaskName,
 		Subtitle:   "Jellyfin",
-		Body:       "Started",
+		Body:       "Started · " + p.TaskName,
 		ThreadID:   "jellyfin-tasks",
 		CollapseID: "jellyfin-task-" + p.TaskName,
 		Level:      pushward.LevelPassive,
@@ -459,10 +459,10 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *sl
 }
 
 func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
-	body := "Complete"
+	body := "Complete · " + p.TaskName
 	level := pushward.LevelPassive
 	if p.TaskResult != "Completed" {
-		body = "Failed"
+		body = "Failed · " + p.TaskName
 		level = pushward.LevelActive
 	}
 

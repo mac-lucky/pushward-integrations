@@ -566,8 +566,8 @@ func TestItemAdded(t *testing.T) {
 	if req.Title != "Dune: Part Two" {
 		t.Errorf("expected title 'Dune: Part Two', got %s", req.Title)
 	}
-	if req.Body != "Added to library" {
-		t.Errorf("expected body 'Added to library', got %s", req.Body)
+	if req.Body != "Added · Dune: Part Two" {
+		t.Errorf("expected body 'Added · Dune: Part Two', got %s", req.Body)
 	}
 	if req.Subtitle != "Jellyfin \u00b7 2024" {
 		t.Errorf("expected subtitle 'Jellyfin · 2024', got %s", req.Subtitle)
@@ -795,8 +795,8 @@ func TestTaskStartedAndCompleted(t *testing.T) {
 	if started.Title != "Scan All Libraries" {
 		t.Errorf("expected title 'Scan All Libraries', got %s", started.Title)
 	}
-	if started.Body != "Started" {
-		t.Errorf("expected body 'Started', got %s", started.Body)
+	if started.Body != "Started · Scan All Libraries" {
+		t.Errorf("expected body 'Started · Scan All Libraries', got %s", started.Body)
 	}
 
 	// Task completed
@@ -817,8 +817,8 @@ func TestTaskStartedAndCompleted(t *testing.T) {
 	if completed.Title != "Scan All Libraries" {
 		t.Errorf("expected title 'Scan All Libraries', got %s", completed.Title)
 	}
-	if completed.Body != "Complete" {
-		t.Errorf("expected body 'Complete', got %s", completed.Body)
+	if completed.Body != "Complete · Scan All Libraries" {
+		t.Errorf("expected body 'Complete · Scan All Libraries', got %s", completed.Body)
 	}
 	if completed.CollapseID != "jellyfin-task-Scan All Libraries" {
 		t.Errorf("expected collapse_id to match started, got %s", completed.CollapseID)
@@ -842,8 +842,8 @@ func TestTaskFailed(t *testing.T) {
 
 	var req pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.Body != "Failed" {
-		t.Errorf("expected body 'Failed', got %s", req.Body)
+	if req.Body != "Failed · Scan All Libraries" {
+		t.Errorf("expected body 'Failed · Scan All Libraries', got %s", req.Body)
 	}
 	if req.Level != pushward.LevelActive {
 		t.Errorf("expected level 'active' for failure, got %s", req.Level)

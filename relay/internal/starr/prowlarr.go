@@ -96,7 +96,7 @@ func (h *Handler) handleProwlarrWebhook(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *Handler) handleProwlarrGrab(ctx context.Context, userKey string, log *slog.Logger, p *ProwlarrGrabPayload) error {
-	body := "Grabbed · " + p.Release.Indexer
+	body := "Grabbed · " + text.Truncate(p.Release.ReleaseTitle, 60) + " · " + p.Release.Indexer
 	if p.Source != "" {
 		body += " → " + p.Source
 	}

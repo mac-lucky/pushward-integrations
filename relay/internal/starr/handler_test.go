@@ -742,8 +742,8 @@ func TestRadarrHealth(t *testing.T) {
 	if req.Title != "Radarr Health" {
 		t.Errorf("expected title 'Radarr Health', got %s", req.Title)
 	}
-	if req.Body != "Warning" {
-		t.Errorf("expected body 'Warning', got %s", req.Body)
+	if req.Body != "Warning · Indexer NZBgeek is unavailable due to failures" {
+		t.Errorf("expected body with health message, got %s", req.Body)
 	}
 	if req.Category != "health" {
 		t.Errorf("expected category 'health', got %s", req.Category)
@@ -774,8 +774,8 @@ func TestRadarrHealthError(t *testing.T) {
 
 	var req pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.Body != "Critical" {
-		t.Errorf("expected body 'Critical', got %s", req.Body)
+	if req.Body != "Critical · Disk space low" {
+		t.Errorf("expected body with health message, got %s", req.Body)
 	}
 	if req.Source != "radarr" {
 		t.Errorf("expected source 'radarr', got %s", req.Source)
@@ -812,15 +812,15 @@ func TestRadarrHealthAndRestored(t *testing.T) {
 	// Health notification
 	var healthReq pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &healthReq)
-	if healthReq.Body != "Warning" {
-		t.Errorf("expected body 'Warning', got %s", healthReq.Body)
+	if healthReq.Body != "Warning · Indexer NZBgeek is unavailable" {
+		t.Errorf("expected body with health message, got %s", healthReq.Body)
 	}
 
 	// Restored notification
 	var restoredReq pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &restoredReq)
-	if restoredReq.Body != "Resolved" {
-		t.Errorf("expected body 'Resolved', got %s", restoredReq.Body)
+	if restoredReq.Body != "Resolved · Indexer NZBgeek is available again" {
+		t.Errorf("expected body with restored message, got %s", restoredReq.Body)
 	}
 	if restoredReq.Category != "health-restored" {
 		t.Errorf("expected category 'health-restored', got %s", restoredReq.Category)
@@ -851,8 +851,8 @@ func TestSonarrHealth(t *testing.T) {
 	if req.Title != "Sonarr Health" {
 		t.Errorf("expected title 'Sonarr Health', got %s", req.Title)
 	}
-	if req.Body != "Critical" {
-		t.Errorf("expected body 'Critical', got %s", req.Body)
+	if req.Body != "Critical · No indexers available" {
+		t.Errorf("expected body with health message, got %s", req.Body)
 	}
 }
 
@@ -1155,8 +1155,8 @@ func TestRadarrDownload_SmartMode_SendsNotification(t *testing.T) {
 
 	var req pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.Body != "Imported" {
-		t.Errorf("expected body 'Imported', got %s", req.Body)
+	if req.Body != "Imported · Inception (2010)" {
+		t.Errorf("expected body with movie title, got %s", req.Body)
 	}
 }
 

@@ -180,7 +180,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 
 	if isNew {
 		notifReq := h.buildNotification(p, slug, subtitle)
-		notifReq.Body = stateText
+		notifReq.Body = p.EndpointName + " · " + stateText
 		notifReq.Level = pushward.LevelActive
 		notifReq.Category = "critical"
 		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
@@ -218,7 +218,7 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
 	notifReq := h.buildNotification(p, slug, subtitle)
-	notifReq.Body = "Resolved"
+	notifReq.Body = "Resolved · " + p.EndpointName
 	notifReq.Level = pushward.LevelPassive
 	notifReq.Category = "resolved"
 	if err := pwClient.SendNotification(ctx, notifReq); err != nil {

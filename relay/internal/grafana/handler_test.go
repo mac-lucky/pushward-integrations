@@ -474,8 +474,8 @@ func TestResolvedWithEmptySummary(t *testing.T) {
 
 	var req pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.Body != "Resolved" {
-		t.Errorf("expected body 'Resolved' when no summary, got %s", req.Body)
+	if req.Body != "Resolved · TestEmptySummary" {
+		t.Errorf("expected body 'Resolved · TestEmptySummary', got %s", req.Body)
 	}
 }
 
@@ -632,7 +632,7 @@ func TestGroupedNotification_AllFiring(t *testing.T) {
 	if req.Level != pushward.LevelActive {
 		t.Errorf("expected level active, got %s", req.Level)
 	}
-	if req.Body != "node1:9100, node2:9100, node3:9100" {
+	if req.Body != "HighCPU3 · node1:9100, node2:9100, node3:9100" {
 		t.Errorf("expected body listing instances, got %s", req.Body)
 	}
 
@@ -912,7 +912,7 @@ func TestGroupedNotification_EmptySummary(t *testing.T) {
 
 	var req pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.Body != "node1, node2" {
+	if req.Body != "HighCPU9 · node1, node2" {
 		t.Errorf("expected body listing instances, got %s", req.Body)
 	}
 }

@@ -82,8 +82,8 @@ func TestEpisodeDownloaded(t *testing.T) {
 	if !strings.Contains(req.Body, "96.0%") {
 		t.Errorf("expected body to contain score, got %s", req.Body)
 	}
-	if !strings.Contains(req.Body, "opensubtitles") {
-		t.Errorf("expected body to contain provider, got %s", req.Body)
+	if !strings.HasPrefix(req.Body, "Breaking Bad") {
+		t.Errorf("expected body to start with media name, got %s", req.Body)
 	}
 	if req.Source != "bazarr" {
 		t.Errorf("expected source bazarr, got %s", req.Source)

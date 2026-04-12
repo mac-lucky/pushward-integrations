@@ -99,8 +99,8 @@ func TestMediaPending(t *testing.T) {
 	if notif.Subtitle != "Inception (2010)" {
 		t.Errorf("expected subtitle 'Inception (2010)', got %s", notif.Subtitle)
 	}
-	if notif.Body != "Requested" {
-		t.Errorf("expected body 'Requested', got %s", notif.Body)
+	if notif.Body != "Requested · Inception (2010)" {
+		t.Errorf("expected body 'Requested · Inception (2010)', got %s", notif.Body)
 	}
 	if notif.ThreadID != "media-movie-27205" {
 		t.Errorf("expected thread_id 'media-movie-27205', got %s", notif.ThreadID)
@@ -206,8 +206,8 @@ func TestMediaApproved(t *testing.T) {
 	// Verify notification
 	var notif pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &notif)
-	if notif.Body != "Approved" {
-		t.Errorf("expected body 'Approved', got %s", notif.Body)
+	if notif.Body != "Approved · Inception (2010)" {
+		t.Errorf("expected body 'Approved · Inception (2010)', got %s", notif.Body)
 	}
 
 	var update pushward.UpdateRequest

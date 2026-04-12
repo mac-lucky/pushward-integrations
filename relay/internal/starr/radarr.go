@@ -166,7 +166,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 	grabReq := pushward.SendNotificationRequest{
 		Title:      "Radarr",
 		Subtitle:   title,
-		Body:       "Grabbed · " + p.Release.Quality,
+		Body:       "Grabbed · " + title + " · " + p.Release.Quality,
 		ThreadID:   radarrMediaThreadID(p.Movie),
 		CollapseID: "radarr-grab",
 		Level:      pushward.LevelActive,
@@ -264,7 +264,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 	dlReq := pushward.SendNotificationRequest{
 		Title:      "Radarr",
 		Subtitle:   title,
-		Body:       state,
+		Body:       state + " · " + title,
 		ThreadID:   radarrMediaThreadID(p.Movie),
 		CollapseID: "radarr-download",
 		Level:      pushward.LevelActive,
@@ -332,8 +332,9 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 }
 
 func (h *Handler) handleRadarrRename(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieEventPayload) error {
+	title := movieTitle(p.Movie)
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: "Files renamed",
+		Title: "Radarr", Subtitle: title, Body: "Renamed · " + title,
 		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-rename",
 		Level: pushward.LevelPassive, Category: "rename", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
@@ -342,8 +343,9 @@ func (h *Handler) handleRadarrRename(ctx context.Context, userKey string, log *s
 }
 
 func (h *Handler) handleRadarrMovieAdded(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieEventPayload) error {
+	title := movieTitle(p.Movie)
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: "Added to library",
+		Title: "Radarr", Subtitle: title, Body: "Added · " + title,
 		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-movie-added",
 		Level: pushward.LevelActive, Category: "movie-added", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
@@ -352,12 +354,13 @@ func (h *Handler) handleRadarrMovieAdded(ctx context.Context, userKey string, lo
 }
 
 func (h *Handler) handleRadarrMovieDelete(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieDeletePayload) error {
-	body := "Removed"
+	title := movieTitle(p.Movie)
+	body := "Removed · " + title
 	if p.DeletedFiles {
-		body = "Removed (files deleted)"
+		body = "Removed (files deleted) · " + title
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: body,
+		Title: "Radarr", Subtitle: title, Body: body,
 		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-movie-delete",
 		Level: pushward.LevelActive, Category: "movie-delete", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
@@ -366,12 +369,13 @@ func (h *Handler) handleRadarrMovieDelete(ctx context.Context, userKey string, l
 }
 
 func (h *Handler) handleRadarrMovieFileDelete(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieFileDeletePayload) error {
-	body := "File deleted"
+	title := movieTitle(p.Movie)
+	body := "File deleted · " + title
 	if p.DeleteReason != "" {
-		body += " · " + deleteReasonText(p.DeleteReason)
+		body = "File deleted · " + deleteReasonText(p.DeleteReason) + " · " + title
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title: "Radarr", Subtitle: movieTitle(p.Movie), Body: body,
+		Title: "Radarr", Subtitle: title, Body: body,
 		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-file-delete",
 		Level: pushward.LevelPassive, Category: "file-delete", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),

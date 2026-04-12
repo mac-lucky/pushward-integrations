@@ -176,7 +176,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 
 	if isNew {
 		notifReq := h.buildNotification(p, subtitle, monitorIDStr)
-		notifReq.Body = stateText
+		notifReq.Body = p.Monitor.Name + " · " + stateText
 		notifReq.Level = pushward.LevelActive
 		notifReq.Category = "critical"
 		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
@@ -201,15 +201,17 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 	slug, _, monitorIDStr := h.slugAndKey(p)
 	subtitle := h.subtitle(p)
 
-	stateText := "Resolved"
+	activityState := "Resolved"
+	notifBody := "Resolved · " + p.Monitor.Name
 	if p.Heartbeat.Ping != nil {
-		stateText = fmt.Sprintf("Resolved \u00b7 %dms", *p.Heartbeat.Ping)
+		activityState = fmt.Sprintf("Resolved \u00b7 %dms", *p.Heartbeat.Ping)
+		notifBody = fmt.Sprintf("Resolved \u00b7 %s \u00b7 %dms", p.Monitor.Name, *p.Heartbeat.Ping)
 	}
 
 	content := pushward.Content{
 		Template:    "alert",
 		Progress:    1.0,
-		State:       stateText,
+		State:       activityState,
 		Icon:        "checkmark.circle.fill",
 		Subtitle:    subtitle,
 		AccentColor: pushward.ColorGreen,
@@ -220,7 +222,7 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
 	notifReq := h.buildNotification(p, subtitle, monitorIDStr)
-	notifReq.Body = stateText
+	notifReq.Body = notifBody
 	notifReq.Level = pushward.LevelPassive
 	notifReq.Category = "resolved"
 	if err := pwClient.SendNotification(ctx, notifReq); err != nil {

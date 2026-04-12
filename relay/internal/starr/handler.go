@@ -188,10 +188,11 @@ func titleCase(s string) string {
 
 // handleHealth sends a push notification for a health issue.
 func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Logger, provider string, p *HealthPayload) error {
-	body := "Warning"
+	level := "Warning"
 	if p.Level == "error" {
-		body = "Critical"
+		level = "Critical"
 	}
+	body := level + " · " + text.Truncate(p.Message, 100)
 
 	req := pushward.SendNotificationRequest{
 		Title:      titleCase(provider) + " Health",
@@ -218,7 +219,7 @@ func (h *Handler) handleHealthRestored(ctx context.Context, userKey string, log 
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      titleCase(provider) + " Health",
 		Subtitle:   text.Truncate(p.Message, 80),
-		Body:       "Resolved",
+		Body:       "Resolved · " + text.Truncate(p.Message, 100),
 		ThreadID:   provider + "-health",
 		CollapseID: provider + "-health-restored",
 		Level:      pushward.LevelPassive,
@@ -260,7 +261,7 @@ func (h *Handler) handleApplicationUpdate(ctx context.Context, userKey string, l
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      titleCase(provider),
 		Subtitle:   p.PreviousVersion + " → " + p.NewVersion,
-		Body:       "Updated",
+		Body:       "Updated · " + p.PreviousVersion + " → " + p.NewVersion,
 		ThreadID:   provider,
 		CollapseID: provider + "-update",
 		Level:      pushward.LevelPassive,
