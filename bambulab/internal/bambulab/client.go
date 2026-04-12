@@ -96,8 +96,8 @@ func (c *Client) Connect() error {
 
 func (c *Client) tlsConfig() *tls.Config {
 	if len(c.certFingerprint) == sha256.Size {
-		return &tls.Config{ // #nosec G402 -- pinned via VerifyConnection
-			InsecureSkipVerify: true,
+		return &tls.Config{
+			InsecureSkipVerify: true, // #nosec G402 -- pinned via VerifyConnection
 			VerifyConnection: func(cs tls.ConnectionState) error {
 				if len(cs.PeerCertificates) == 0 {
 					return errors.New("bambulab: no peer certificate")
