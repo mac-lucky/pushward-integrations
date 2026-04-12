@@ -26,7 +26,7 @@ COPY --from=builder /pushward-relay /pushward-relay
 
 USER 1000
 
-EXPOSE 8090
+EXPOSE 8090 9090
 
 ENTRYPOINT ["/pushward-relay"]
 CMD ["-config", "/config/config.yml"]

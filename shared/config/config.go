@@ -21,7 +21,8 @@ type PushWardConfig struct {
 
 // ServerConfig holds the HTTP server settings for webhook-based integrations.
 type ServerConfig struct {
-	Address string `yaml:"address"`
+	Address        string `yaml:"address"`
+	MetricsAddress string `yaml:"metrics_address"` // Listen address for the internal metrics server (default :9090).
 }
 
 // LoadYAML reads a YAML config file into target. Missing files are tolerated (ENOENT).
@@ -98,9 +99,12 @@ func (c *PushWardConfig) Validate() error {
 	return nil
 }
 
-// ApplyEnvOverrides applies the PUSHWARD_SERVER_ADDRESS environment variable.
+// ApplyEnvOverrides applies PUSHWARD_SERVER_* environment variable overrides.
 func (c *ServerConfig) ApplyEnvOverrides() {
 	if v := os.Getenv("PUSHWARD_SERVER_ADDRESS"); v != "" {
 		c.Address = v
+	}
+	if v := os.Getenv("PUSHWARD_SERVER_METRICS_ADDRESS"); v != "" {
+		c.MetricsAddress = v
 	}
 }

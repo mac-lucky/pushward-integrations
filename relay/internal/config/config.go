@@ -160,7 +160,8 @@ type UptimeKumaConfig struct {
 func Load(path string) (*Config, error) {
 	cfg := &Config{
 		Server: sharedconfig.ServerConfig{
-			Address: ":8090",
+			Address:        ":8090",
+			MetricsAddress: ":9090",
 		},
 		CircuitBreaker: CircuitBreakerConfig{
 			Threshold: 5,
@@ -308,6 +309,11 @@ func Load(path string) (*Config, error) {
 
 	if err := cfg.applyEnvOverrides(); err != nil {
 		return nil, err
+	}
+
+	if cfg.Server.MetricsAddress != "" && cfg.Server.MetricsAddress == cfg.Server.Address {
+		return nil, fmt.Errorf("server.metrics_address (%s) must differ from server.address (%s)",
+			cfg.Server.MetricsAddress, cfg.Server.Address)
 	}
 
 	if cfg.Database.DSN == "" {

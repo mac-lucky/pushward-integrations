@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log/slog"
 	"net/http"
@@ -130,7 +131,6 @@ func main() {
 
 	// Router
 	mux := server.NewMux(pool.Ping)
-	mux.Handle("GET /metrics", metrics.Handler())
 
 	// Huma API — auto-generates OpenAPI 3.1 spec at /openapi.json and docs at /docs.
 	humaConfig := huma.DefaultConfig("PushWard Relay", "1.0.0")
@@ -249,7 +249,7 @@ func main() {
 				return r.Method
 			}),
 			otelhttp.WithFilter(func(r *http.Request) bool {
-				return r.URL.Path != "/health" && r.URL.Path != "/metrics" && r.URL.Path != "/ready"
+				return r.URL.Path != "/health" && r.URL.Path != "/ready"
 			}),
 		)
 	}
@@ -297,10 +297,41 @@ func main() {
 		}
 	}()
 
+	// Internal-only metrics server. Scraped via in-cluster ServiceMonitor.
+	// Shut down after the main server so Prometheus can scrape final drain metrics.
+	var metricsSrv *http.Server
+	if cfg.Server.MetricsAddress != "" {
+		metricsMux := http.NewServeMux()
+		metricsMux.Handle("GET /metrics", metrics.Handler())
+		metricsSrv = &http.Server{
+			Addr:              cfg.Server.MetricsAddress,
+			Handler:           metricsMux,
+			ReadHeaderTimeout: 5 * time.Second,
+			ReadTimeout:       10 * time.Second,
+			WriteTimeout:      30 * time.Second,
+			IdleTimeout:       60 * time.Second,
+		}
+		go func() {
+			slog.Info("starting metrics server", "address", cfg.Server.MetricsAddress)
+			if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				slog.Error("metrics server failed", "error", err)
+			}
+		}()
+	}
+
 	slog.Info("starting pushward-relay", "address", cfg.Server.Address)
 	if err := server.ListenAndServe(ctx, cfg.Server.Address, handler); err != nil {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
+	}
+
+	// Main server drained — shut down metrics server.
+	if metricsSrv != nil {
+		metricsCtx, metricsCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer metricsCancel()
+		if err := metricsSrv.Shutdown(metricsCtx); err != nil {
+			slog.Error("metrics server shutdown error", "error", err)
+		}
 	}
 
 	// Flush all pending ender timers (send ENDED immediately), then wait for in-flight callbacks.

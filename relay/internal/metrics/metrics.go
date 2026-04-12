@@ -82,7 +82,9 @@ var (
 
 // Handler returns the Prometheus metrics HTTP handler.
 func Handler() http.Handler {
-	return promhttp.Handler()
+	return promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{
+		MaxRequestsInFlight: 3,
+	})
 }
 
 // RecordAPICall records PushWard API call metrics from a ResultInfo callback.
@@ -102,7 +104,7 @@ func RecordAPICall(ctx context.Context, info pushward.ResultInfo) {
 // Middleware records HTTP request metrics (duration, count, in-flight).
 func Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/metrics" || r.URL.Path == "/health" || r.URL.Path == "/ready" {
+		if r.URL.Path == "/health" || r.URL.Path == "/ready" {
 			next.ServeHTTP(w, r)
 			return
 		}

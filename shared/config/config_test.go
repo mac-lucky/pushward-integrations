@@ -185,11 +185,23 @@ func TestServerConfig_ApplyEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestServerConfig_ApplyEnvOverrides_MetricsAddress(t *testing.T) {
+	t.Setenv("PUSHWARD_SERVER_METRICS_ADDRESS", ":9191")
+	cfg := ServerConfig{MetricsAddress: ":9090"}
+	cfg.ApplyEnvOverrides()
+	if cfg.MetricsAddress != ":9191" {
+		t.Errorf("expected ':9191', got %q", cfg.MetricsAddress)
+	}
+}
+
 func TestServerConfig_ApplyEnvOverrides_NoVar(t *testing.T) {
-	cfg := ServerConfig{Address: ":8090"}
+	cfg := ServerConfig{Address: ":8090", MetricsAddress: ":9090"}
 	cfg.ApplyEnvOverrides()
 	if cfg.Address != ":8090" {
 		t.Errorf("expected ':8090' unchanged, got %q", cfg.Address)
+	}
+	if cfg.MetricsAddress != ":9090" {
+		t.Errorf("expected ':9090' unchanged, got %q", cfg.MetricsAddress)
 	}
 }
 
