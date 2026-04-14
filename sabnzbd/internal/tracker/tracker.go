@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/config"
@@ -40,14 +41,15 @@ var ppIcons = map[string]string{
 }
 
 type Tracker struct {
-	cfg         *config.Config
-	sab         *sabnzbd.Client
-	pw          *pushward.Client
-	mu          sync.Mutex
-	active      bool
-	wg          sync.WaitGroup
-	ctx         context.Context
-	historySent bool
+	cfg           *config.Config
+	sab           *sabnzbd.Client
+	pw            *pushward.Client
+	mu            sync.Mutex
+	active        bool
+	wg            sync.WaitGroup
+	ctx           context.Context
+	historySent   bool
+	shuttingDown  atomic.Bool
 }
 
 func New(ctx context.Context, cfg *config.Config, sab *sabnzbd.Client, pw *pushward.Client) *Tracker {
@@ -99,8 +101,10 @@ func (t *Tracker) ResumeIfActive() bool {
 	return false
 }
 
-// Wait blocks until all active tracking goroutines finish.
+// Wait marks the tracker as shutting down and blocks until all active
+// tracking goroutines finish. After Wait is called, launchTracker is a no-op.
 func (t *Tracker) Wait() {
+	t.shuttingDown.Store(true)
 	t.wg.Wait()
 }
 
@@ -140,6 +144,13 @@ func (t *Tracker) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 func (t *Tracker) launchTracker(resumed bool) {
+	if t.shuttingDown.Load() {
+		t.mu.Lock()
+		t.active = false
+		t.mu.Unlock()
+		slog.Info("tracker shutting down, skipping launch")
+		return
+	}
 	t.wg.Add(1)
 	go func() {
 		defer t.wg.Done()
