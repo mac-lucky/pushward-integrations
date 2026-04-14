@@ -132,7 +132,7 @@ func (c *Client) GetRuleQuery(ctx context.Context, ruleUID string) (*RuleQuery, 
 	if err != nil {
 		return nil, fmt.Errorf("fetching alert rule: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("alert rule API returned %d (Editor role required)", resp.StatusCode)
@@ -188,7 +188,7 @@ func (c *Client) IsAlertFiring(ctx context.Context, alertname string) (bool, err
 	if err != nil {
 		return false, fmt.Errorf("querying alertmanager: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return false, fmt.Errorf("alertmanager API returned %d", resp.StatusCode)

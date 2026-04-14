@@ -131,13 +131,13 @@ func TestMerge_SequentialAccumulation(t *testing.T) {
 
 	// Initial full state (like X1 series pushall response)
 	s.Merge(&PrintStatus{
-		GcodeState:    ptr("PREPARE"),
-		SubtaskName:   ptr("Model.gcode"),
-		Percent:       ptr(0),
-		RemainingTime: ptr(180),
-		LayerNum:      ptr(0),
-		TotalLayerNum: ptr(300),
-		NozzleTemper:  ptr(25.0),
+		GcodeState:         ptr("PREPARE"),
+		SubtaskName:        ptr("Model.gcode"),
+		Percent:            ptr(0),
+		RemainingTime:      ptr(180),
+		LayerNum:           ptr(0),
+		TotalLayerNum:      ptr(300),
+		NozzleTemper:       ptr(25.0),
 		NozzleTargetTemper: ptr(220.0),
 	})
 

@@ -156,7 +156,8 @@ func formatGroupSubtitle(firing, resolved int) string {
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	Body grafanaPayload
-}) (*humautil.WebhookResponse, error) {
+},
+) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "grafana")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))

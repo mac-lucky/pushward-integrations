@@ -9,9 +9,9 @@ import (
 )
 
 type Config struct {
-	BambuLab BambuLabConfig             `yaml:"bambulab"`
+	BambuLab BambuLabConfig              `yaml:"bambulab"`
 	PushWard sharedconfig.PushWardConfig `yaml:"pushward"`
-	Polling  PollingConfig              `yaml:"polling"`
+	Polling  PollingConfig               `yaml:"polling"`
 }
 
 type BambuLabConfig struct {

@@ -37,9 +37,9 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/telemetry"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/uptimekuma"
-	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/server"
+	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 )
 
 func main() {
@@ -240,7 +240,7 @@ func main() {
 	}
 
 	// Wrap mux with metrics middleware and optional OTel tracing.
-	var handler http.Handler = metrics.Middleware(mux)
+	handler := metrics.Middleware(mux)
 	if cfg.Telemetry.Endpoint != "" {
 		handler = otelhttp.NewHandler(handler, "pushward-relay",
 			otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {

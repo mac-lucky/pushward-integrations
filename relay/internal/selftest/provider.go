@@ -210,4 +210,3 @@ func SendTest(ctx context.Context, cl *pushward.Client, provider string) error {
 	slog.Info("test notification sent", "provider", provider, "slug", slug)
 	return nil
 }
-

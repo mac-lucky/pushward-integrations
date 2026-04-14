@@ -154,7 +154,7 @@ func (c *Client) runSubscription(ctx context.Context, query string, handler func
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 
 	// Connection init
 	if err := wsjson.Write(ctx, conn, map[string]any{"type": "connection_init"}); err != nil {

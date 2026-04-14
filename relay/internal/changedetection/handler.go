@@ -38,7 +38,8 @@ func slugForURL(url string) string {
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	Body changedetectionPayload
-}) (*humautil.WebhookResponse, error) {
+},
+) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "changedetection")
 
 	if err := h.handleChange(ctx, &input.Body); err != nil {

@@ -43,7 +43,7 @@ func TestGetRuleQuery(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"data": [
 				{
 					"refId": "A",
@@ -81,7 +81,7 @@ func TestGetRuleQuery_Cached(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"data":[{"refId":"A","datasourceUid":"prom","model":{"expr":"up"}}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"refId":"A","datasourceUid":"prom","model":{"expr":"up"}}]}`))
 	}))
 	defer srv.Close()
 
@@ -116,9 +116,9 @@ func TestIsAlertFiring(t *testing.T) {
 		filter := r.URL.Query().Get("filter")
 		w.Header().Set("Content-Type", "application/json")
 		if filter == `alertname="FiringAlert"` {
-			w.Write([]byte(`[{"labels":{"alertname":"FiringAlert"},"status":{"state":"active"}}]`))
+			_, _ = w.Write([]byte(`[{"labels":{"alertname":"FiringAlert"},"status":{"state":"active"}}]`))
 		} else {
-			w.Write([]byte(`[]`))
+			_, _ = w.Write([]byte(`[]`))
 		}
 	}))
 	defer srv.Close()
@@ -146,7 +146,7 @@ func TestGetRuleQuery_NoDataQuery(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		// Only expression nodes, no real datasource query
-		w.Write([]byte(`{"data":[{"refId":"B","datasourceUid":"-100","model":{"type":"classic_conditions"}}]}`))
+		_, _ = w.Write([]byte(`{"data":[{"refId":"B","datasourceUid":"-100","model":{"type":"classic_conditions"}}]}`))
 	}))
 	defer srv.Close()
 

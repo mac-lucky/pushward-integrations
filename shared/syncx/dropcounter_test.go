@@ -7,10 +7,10 @@ import (
 
 func TestDropCounter(t *testing.T) {
 	tests := []struct {
-		name      string
-		logEvery  uint64
-		drops     int
-		wantLogs  []uint64 // totals at which shouldLog was true
+		name     string
+		logEvery uint64
+		drops    int
+		wantLogs []uint64 // totals at which shouldLog was true
 	}{
 		{"first drop logs", 100, 1, []uint64{1}},
 		{"second drop does not log", 100, 2, []uint64{1}},

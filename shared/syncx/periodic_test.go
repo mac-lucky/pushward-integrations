@@ -9,8 +9,8 @@ import (
 
 func TestPeriodic(t *testing.T) {
 	tests := []struct {
-		name    string
-		run     func(t *testing.T)
+		name string
+		run  func(t *testing.T)
 	}{
 		{"runs fn at interval", func(t *testing.T) {
 			var n atomic.Int32

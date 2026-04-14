@@ -134,7 +134,8 @@ func remainingSeconds(p *jellyfinPayload) int {
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	Body jellyfinPayload
-}) (*humautil.WebhookResponse, error) {
+},
+) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "jellyfin")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))

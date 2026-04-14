@@ -32,8 +32,8 @@ func parseRetryAfter(header string) time.Duration {
 
 // ResultInfo is passed to the onResult callback after each API call completes.
 type ResultInfo struct {
-	Operation string        // "create" or "update"
-	Attempts  int           // 1 = no retries
+	Operation string // "create" or "update"
+	Attempts  int    // 1 = no retries
 	Err       error
 	Duration  time.Duration
 }

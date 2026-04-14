@@ -28,7 +28,7 @@ func newMockPWServer() *mockPWServer {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/activities":
 			var req pushward.CreateActivityRequest
-			json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewDecoder(r.Body).Decode(&req)
 			m.mu.Lock()
 			m.creates = append(m.creates, req)
 			m.mu.Unlock()
@@ -36,7 +36,7 @@ func newMockPWServer() *mockPWServer {
 
 		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/activity/"):
 			var req pushward.UpdateRequest
-			json.NewDecoder(r.Body).Decode(&req)
+			_ = json.NewDecoder(r.Body).Decode(&req)
 			m.mu.Lock()
 			m.updates = append(m.updates, req)
 			m.mu.Unlock()

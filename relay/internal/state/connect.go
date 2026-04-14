@@ -115,7 +115,7 @@ func watchPasswordFile(ctx context.Context, pool *pgxpool.Pool, passwordFile str
 		slog.Error("failed to create password file watcher", "error", err)
 		return
 	}
-	defer watcher.Close()
+	defer func() { _ = watcher.Close() }()
 
 	if err := watcher.Add(dir); err != nil {
 		slog.Error("failed to watch password directory", "dir", dir, "error", err)

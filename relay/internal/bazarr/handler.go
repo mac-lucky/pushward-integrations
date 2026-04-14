@@ -42,7 +42,8 @@ func RegisterRoutes(api huma.API, clients *client.Pool, cfg *config.BazarrConfig
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	Body apprise.Payload
-}) (*humautil.WebhookResponse, error) {
+},
+) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "bazarr")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))

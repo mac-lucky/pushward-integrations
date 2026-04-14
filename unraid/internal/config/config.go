@@ -9,7 +9,7 @@ import (
 )
 
 type Config struct {
-	Unraid   UnraidConfig               `yaml:"unraid"`
+	Unraid   UnraidConfig                `yaml:"unraid"`
 	PushWard sharedconfig.PushWardConfig `yaml:"pushward"`
 }
 

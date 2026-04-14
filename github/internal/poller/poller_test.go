@@ -601,8 +601,10 @@ func TestPollIdle_DiscoversAndTracksWorkflow(t *testing.T) {
 		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
 			TotalCount: 1,
 			WorkflowRuns: []ghclient.WorkflowRun{
-				{ID: 42, Name: "CI", Status: "in_progress", HeadBranch: "main",
-					HTMLURL: "https://github.com/owner/repo/actions/runs/42"},
+				{
+					ID: 42, Name: "CI", Status: "in_progress", HeadBranch: "main",
+					HTMLURL: "https://github.com/owner/repo/actions/runs/42",
+				},
 			},
 		})
 	})

@@ -83,7 +83,7 @@ func TestDoWithRetry_SetsAuthHeader(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "hlk_secret")
-	c.doWithRetry(context.Background(), "test", http.MethodGet, srv.URL+"/test", nil, nil)
+	_ = c.doWithRetry(context.Background(), "test", http.MethodGet, srv.URL+"/test", nil, nil)
 	if gotAuth != "Bearer hlk_secret" {
 		t.Errorf("expected 'Bearer hlk_secret', got %q", gotAuth)
 	}
@@ -98,7 +98,7 @@ func TestDoWithRetry_SetsContentType(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "key")
-	c.doWithRetry(context.Background(), "test", http.MethodPost, srv.URL+"/test", map[string]string{"a": "b"}, nil)
+	_ = c.doWithRetry(context.Background(), "test", http.MethodPost, srv.URL+"/test", map[string]string{"a": "b"}, nil)
 	if gotCT != "application/json" {
 		t.Errorf("expected 'application/json', got %q", gotCT)
 	}
@@ -113,7 +113,7 @@ func TestDoWithRetry_NoContentTypeWithoutBody(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "key")
-	c.doWithRetry(context.Background(), "test", http.MethodGet, srv.URL+"/test", nil, nil)
+	_ = c.doWithRetry(context.Background(), "test", http.MethodGet, srv.URL+"/test", nil, nil)
 	if gotCT != "" {
 		t.Errorf("expected empty Content-Type, got %q", gotCT)
 	}
@@ -190,7 +190,7 @@ func TestDoWithRetry_429_RetriesWithRetryAfter(t *testing.T) {
 func TestDoWithRetry_Conflict_HandleConflictDone(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
-		w.Write([]byte(`{"error":"already exists"}`))
+		_, _ = w.Write([]byte(`{"error":"already exists"}`))
 	}))
 	defer srv.Close()
 
@@ -207,7 +207,7 @@ func TestDoWithRetry_Conflict_HandleConflictDone(t *testing.T) {
 func TestDoWithRetry_Conflict_HandleConflictError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
-		w.Write([]byte(`{"error":"limit reached"}`))
+		_, _ = w.Write([]byte(`{"error":"limit reached"}`))
 	}))
 	defer srv.Close()
 
@@ -227,7 +227,7 @@ func TestDoWithRetry_Conflict_NotDone_Retries(t *testing.T) {
 		n := count.Add(1)
 		if n < 3 {
 			w.WriteHeader(http.StatusConflict)
-			w.Write([]byte(`{"error":"transient"}`))
+			_, _ = w.Write([]byte(`{"error":"transient"}`))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -304,7 +304,7 @@ func TestCreateActivity_Success(t *testing.T) {
 		if r.URL.Path != "/activities" {
 			t.Errorf("expected /activities, got %s", r.URL.Path)
 		}
-		json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusCreated)
 	}))
 	defer srv.Close()
@@ -334,7 +334,7 @@ func TestCreateActivity_Success(t *testing.T) {
 func TestCreateActivity_AlreadyExists(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
-		w.Write([]byte(`{"error":"activity already exists"}`))
+		_, _ = w.Write([]byte(`{"error":"activity already exists"}`))
 	}))
 	defer srv.Close()
 
@@ -348,7 +348,7 @@ func TestCreateActivity_AlreadyExists(t *testing.T) {
 func TestCreateActivity_LimitReached(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
-		w.Write([]byte(`{"error":"activity limit reached"}`))
+		_, _ = w.Write([]byte(`{"error":"activity limit reached"}`))
 	}))
 	defer srv.Close()
 
@@ -373,7 +373,7 @@ func TestUpdateActivity_Success(t *testing.T) {
 		if r.URL.Path != "/activity/gh-repo" {
 			t.Errorf("expected /activity/gh-repo, got %s", r.URL.Path)
 		}
-		json.NewDecoder(r.Body).Decode(&gotBody)
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()

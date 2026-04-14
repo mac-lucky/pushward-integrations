@@ -293,7 +293,8 @@ func slugForApp(appName string) string {
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	Body argocdPayload
-}) (*humautil.WebhookResponse, error) {
+},
+) (*humautil.WebhookResponse, error) {
 	payload := &input.Body
 
 	if payload.App == "" || payload.Event == "" {

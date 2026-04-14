@@ -74,19 +74,22 @@ func (h *Handler) Ender() *lifecycle.Ender {
 // because starr does two-phase JSON parsing (envelope → type-specific struct).
 func (h *Handler) handleRadarrHuma(ctx context.Context, input *struct {
 	RawBody []byte
-}) (*humautil.WebhookResponse, error) {
+},
+) (*humautil.WebhookResponse, error) {
 	return h.dispatchRaw(ctx, input.RawBody, h.handleRadarrWebhook)
 }
 
 func (h *Handler) handleSonarrHuma(ctx context.Context, input *struct {
 	RawBody []byte
-}) (*humautil.WebhookResponse, error) {
+},
+) (*humautil.WebhookResponse, error) {
 	return h.dispatchRaw(ctx, input.RawBody, h.handleSonarrWebhook)
 }
 
 func (h *Handler) handleProwlarrHuma(ctx context.Context, input *struct {
 	RawBody []byte
-}) (*humautil.WebhookResponse, error) {
+},
+) (*humautil.WebhookResponse, error) {
 	return h.dispatchRaw(ctx, input.RawBody, h.handleProwlarrWebhook)
 }
 

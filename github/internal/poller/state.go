@@ -21,7 +21,7 @@ type trackedRun struct {
 	// GitHub lazily creates jobs behind unsatisfied needs/if conditions,
 	// so new steps appear as the workflow progresses. We never decrease
 	// the total to avoid confusing step jumps (e.g. 1/5 → 5/6 → 6/7).
-	maxTotalSteps  int
-	maxStepRows    []int
-	maxStepLabels  []string
+	maxTotalSteps int
+	maxStepRows   []int
+	maxStepLabels []string
 }

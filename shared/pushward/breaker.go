@@ -13,7 +13,7 @@ var ErrCircuitOpen = errors.New("circuit breaker is open")
 type circuitState int
 
 const (
-	stateClosed   circuitState = iota
+	stateClosed circuitState = iota
 	stateOpen
 	stateHalfOpen
 )

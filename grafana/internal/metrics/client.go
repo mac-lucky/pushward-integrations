@@ -156,7 +156,7 @@ func (c *Client) QueryRangeAll(ctx context.Context, expr string, from, to time.T
 	if err != nil {
 		return nil, fmt.Errorf("querying metrics: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("metrics query returned %d", resp.StatusCode)
@@ -211,7 +211,7 @@ func (c *Client) QueryInstantAll(ctx context.Context, expr string, ts time.Time)
 	if err != nil {
 		return nil, fmt.Errorf("querying metrics: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("metrics query returned %d", resp.StatusCode)
@@ -262,14 +262,14 @@ type instantQueryResponse struct {
 	ErrorType string `json:"errorType"`
 	Error     string `json:"error"`
 	Data      struct {
-		ResultType string         `json:"resultType"`
+		ResultType string          `json:"resultType"`
 		Result     []instantResult `json:"result"`
 	} `json:"data"`
 }
 
 type instantResult struct {
-	Metric map[string]string  `json:"metric"`
-	Value  []json.RawMessage  `json:"value"` // [timestamp, "value"]
+	Metric map[string]string `json:"metric"`
+	Value  []json.RawMessage `json:"value"` // [timestamp, "value"]
 }
 
 func parseInstantValue(pair []json.RawMessage) (*pushward.HistoryPoint, error) {
@@ -318,8 +318,8 @@ type queryRangeResponse struct {
 }
 
 type matrixResult struct {
-	Metric map[string]string    `json:"metric"`
-	Values [][]json.RawMessage  `json:"values"`
+	Metric map[string]string   `json:"metric"`
+	Values [][]json.RawMessage `json:"values"`
 }
 
 // parseValues converts the Prometheus [timestamp, "value"] pairs to HistoryPoints.

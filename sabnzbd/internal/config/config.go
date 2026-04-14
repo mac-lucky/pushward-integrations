@@ -10,16 +10,16 @@ import (
 
 type Config struct {
 	Server   sharedconfig.ServerConfig   `yaml:"server"`
-	SABnzbd  SABnzbdConfig              `yaml:"sabnzbd"`
+	SABnzbd  SABnzbdConfig               `yaml:"sabnzbd"`
 	PushWard sharedconfig.PushWardConfig `yaml:"pushward"`
-	Polling  PollingConfig              `yaml:"polling"`
+	Polling  PollingConfig               `yaml:"polling"`
 }
 
 type SABnzbdConfig struct {
-	URL           string                    `yaml:"url"`
-	APIKey        string                    `yaml:"api_key"`
-	WebhookSecret string                    `yaml:"webhook_secret"`
-	Template      string                    `yaml:"template"`
+	URL           string                      `yaml:"url"`
+	APIKey        string                      `yaml:"api_key"`
+	WebhookSecret string                      `yaml:"webhook_secret"`
+	Template      string                      `yaml:"template"`
 	Timeline      sharedconfig.TimelineConfig `yaml:"timeline"`
 }
 

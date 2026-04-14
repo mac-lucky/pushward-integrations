@@ -10,9 +10,9 @@ import (
 )
 
 type Config struct {
-	GitHub   GitHubConfig              `yaml:"github"`
+	GitHub   GitHubConfig                `yaml:"github"`
 	PushWard sharedconfig.PushWardConfig `yaml:"pushward"`
-	Polling  PollingConfig             `yaml:"polling"`
+	Polling  PollingConfig               `yaml:"polling"`
 }
 
 type GitHubConfig struct {

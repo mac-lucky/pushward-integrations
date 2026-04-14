@@ -53,7 +53,8 @@ func (h *Handler) Ender() *lifecycle.Ender {
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	Body uptimekumaPayload
-}) (*humautil.WebhookResponse, error) {
+},
+) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "uptimekuma")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))

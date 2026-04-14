@@ -21,9 +21,9 @@ const (
 	alertStatusFiring   = "firing"
 	alertStatusResolved = "resolved"
 
-	templateTimeline    = pushward.TemplateTimeline
-	defaultWarningIcon  = "exclamationmark.triangle.fill"
-	resolvedIcon        = "checkmark.circle.fill"
+	templateTimeline   = pushward.TemplateTimeline
+	defaultWarningIcon = "exclamationmark.triangle.fill"
+	resolvedIcon       = "checkmark.circle.fill"
 )
 
 // Config holds timeline display and lifecycle settings for the handler.

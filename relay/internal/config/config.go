@@ -90,7 +90,7 @@ type NotificationMode string
 const (
 	ModeActivity NotificationMode = "activity" // All events → Live Activity (default, current behavior)
 	ModeNotify   NotificationMode = "notify"   // All events → push notification
-	ModeSmart    NotificationMode = "smart"     // Handler decides per event type
+	ModeSmart    NotificationMode = "smart"    // Handler decides per event type
 )
 
 // StarrConfig holds Radarr/Sonarr-specific settings.

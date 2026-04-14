@@ -55,7 +55,7 @@ func (c *Client) GetQueue(ctx context.Context) (*Queue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching queue from %s: %w", redactURL(req.URL), err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)
@@ -86,7 +86,7 @@ func (c *Client) GetHistory(ctx context.Context, limit int) (*History, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching history from %s: %w", redactURL(req.URL), err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		_, _ = io.Copy(io.Discard, resp.Body)

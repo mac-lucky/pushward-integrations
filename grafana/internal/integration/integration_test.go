@@ -307,7 +307,7 @@ func createAlertRule(t *testing.T, grafanaURL, dsUID, expr, title string, annota
 							"type":      "query",
 						},
 					},
-					"datasource": map[string]any{"type": "__expr__", "uid": "-100"},
+					"datasource":    map[string]any{"type": "__expr__", "uid": "-100"},
 					"hide":          false,
 					"intervalMs":    1000,
 					"maxDataPoints": 43200,

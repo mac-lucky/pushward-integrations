@@ -57,13 +57,13 @@ func mockSABnzbd(t *testing.T) (*httptest.Server, *sabMock) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			json.NewEncoder(w).Encode(m.queueResp)
+			_ = json.NewEncoder(w).Encode(m.queueResp)
 		case "history":
 			if m.historyErr {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			json.NewEncoder(w).Encode(m.historyResp)
+			_ = json.NewEncoder(w).Encode(m.historyResp)
 		default:
 			w.WriteHeader(http.StatusBadRequest)
 		}
@@ -746,7 +746,7 @@ func TestSendDownloadProgress_Timeline_SendsValueAndUnit(t *testing.T) {
 	if req.Content.Template != "timeline" {
 		t.Errorf("expected template timeline, got %s", req.Content.Template)
 	}
-	if values := testutil.RequireValueMap(t,req.Content.Value); values == nil {
+	if values := testutil.RequireValueMap(t, req.Content.Value); values == nil {
 		// already failed
 	} else if v, ok := values[seriesKey]; !ok {
 		t.Fatal("expected value map with 'Download' key")
@@ -864,7 +864,7 @@ func TestSendDownloadProgress_Timeline_Paused_SendsZeroValue(t *testing.T) {
 	if req.Content.Template != "timeline" {
 		t.Errorf("expected timeline template for paused download, got %s", req.Content.Template)
 	}
-	if values := testutil.RequireValueMap(t,req.Content.Value); values == nil {
+	if values := testutil.RequireValueMap(t, req.Content.Value); values == nil {
 		// already failed
 	} else if v, ok := values[seriesKey]; !ok {
 		t.Fatal("expected value map with 'Speed' key for paused")

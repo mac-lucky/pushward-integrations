@@ -48,36 +48,36 @@ type updateRequest struct {
 }
 
 type apiContent struct {
-	Template          string   `json:"template"`
-	Progress          float64  `json:"progress"`
-	State             string   `json:"state,omitempty"`
-	Icon              string   `json:"icon,omitempty"`
-	Subtitle          string   `json:"subtitle,omitempty"`
-	AccentColor       string   `json:"accent_color,omitempty"`
-	BackgroundColor   string   `json:"background_color,omitempty"`
-	TextColor         string   `json:"text_color,omitempty"`
-	CurrentStep       *int     `json:"current_step,omitempty"`
-	TotalSteps        *int     `json:"total_steps,omitempty"`
-	StepRows          []int    `json:"step_rows,omitempty"`
-	StepLabels        []string `json:"step_labels,omitempty"`
-	URL               string   `json:"url,omitempty"`
-	SecondaryURL      string   `json:"secondary_url,omitempty"`
-	Severity          string   `json:"severity,omitempty"`
-	FiredAt           *int64   `json:"fired_at,omitempty"`
-	RemainingTime     *int     `json:"remaining_time,omitempty"`
-	CompletionMessage string   `json:"completion_message,omitempty"`
-	EndDate           *int64   `json:"end_date,omitempty"`
-	StartDate         *int64   `json:"start_date,omitempty"`
-	WarningThreshold  *int     `json:"warning_threshold,omitempty"`
-	Value             any                `json:"value,omitempty"`
-	MinValue          *float64           `json:"min_value,omitempty"`
-	MaxValue          *float64           `json:"max_value,omitempty"`
-	Unit              string             `json:"unit,omitempty"`
-	Scale             string             `json:"scale,omitempty"`
-	Decimals          *int               `json:"decimals,omitempty"`
-	Smoothing         *bool              `json:"smoothing,omitempty"`
-	Thresholds        []testThreshold    `json:"thresholds,omitempty"`
-	Duration          *string            `json:"duration,omitempty"`
+	Template          string          `json:"template"`
+	Progress          float64         `json:"progress"`
+	State             string          `json:"state,omitempty"`
+	Icon              string          `json:"icon,omitempty"`
+	Subtitle          string          `json:"subtitle,omitempty"`
+	AccentColor       string          `json:"accent_color,omitempty"`
+	BackgroundColor   string          `json:"background_color,omitempty"`
+	TextColor         string          `json:"text_color,omitempty"`
+	CurrentStep       *int            `json:"current_step,omitempty"`
+	TotalSteps        *int            `json:"total_steps,omitempty"`
+	StepRows          []int           `json:"step_rows,omitempty"`
+	StepLabels        []string        `json:"step_labels,omitempty"`
+	URL               string          `json:"url,omitempty"`
+	SecondaryURL      string          `json:"secondary_url,omitempty"`
+	Severity          string          `json:"severity,omitempty"`
+	FiredAt           *int64          `json:"fired_at,omitempty"`
+	RemainingTime     *int            `json:"remaining_time,omitempty"`
+	CompletionMessage string          `json:"completion_message,omitempty"`
+	EndDate           *int64          `json:"end_date,omitempty"`
+	StartDate         *int64          `json:"start_date,omitempty"`
+	WarningThreshold  *int            `json:"warning_threshold,omitempty"`
+	Value             any             `json:"value,omitempty"`
+	MinValue          *float64        `json:"min_value,omitempty"`
+	MaxValue          *float64        `json:"max_value,omitempty"`
+	Unit              string          `json:"unit,omitempty"`
+	Scale             string          `json:"scale,omitempty"`
+	Decimals          *int            `json:"decimals,omitempty"`
+	Smoothing         *bool           `json:"smoothing,omitempty"`
+	Thresholds        []testThreshold `json:"thresholds,omitempty"`
+	Duration          *string         `json:"duration,omitempty"`
 }
 
 type testThreshold struct {
@@ -220,7 +220,6 @@ func respondError(w http.ResponseWriter, code int, msg string) {
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
 }
-
 
 func validateCreateRequest(req *createRequest) error {
 	if req.Slug == "" {

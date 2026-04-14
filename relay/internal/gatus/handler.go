@@ -50,7 +50,8 @@ func (h *Handler) Ender() *lifecycle.Ender {
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	Body gatusPayload
-}) (*humautil.WebhookResponse, error) {
+},
+) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "gatus")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
@@ -228,4 +229,3 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 	log.Info("scheduled end for activity", "slug", slug, "endpoint", p.EndpointName)
 	return nil
 }
-

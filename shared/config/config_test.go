@@ -12,7 +12,7 @@ import (
 func TestLoadYAML_ValidFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yml")
-	os.WriteFile(path, []byte("url: http://localhost:8080\napi_key: hlk_test\npriority: 3\n"), 0644)
+	_ = os.WriteFile(path, []byte("url: http://localhost:8080\napi_key: hlk_test\npriority: 3\n"), 0o600)
 
 	var cfg PushWardConfig
 	if err := LoadYAML(path, &cfg); err != nil {
@@ -40,7 +40,7 @@ func TestLoadYAML_MissingFile(t *testing.T) {
 func TestLoadYAML_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bad.yml")
-	os.WriteFile(path, []byte(":::invalid yaml{{{"), 0644)
+	_ = os.WriteFile(path, []byte(":::invalid yaml{{{"), 0o600)
 
 	var cfg PushWardConfig
 	err := LoadYAML(path, &cfg)
@@ -52,9 +52,9 @@ func TestLoadYAML_InvalidYAML(t *testing.T) {
 func TestLoadYAML_PermissionError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "noperm.yml")
-	os.WriteFile(path, []byte("url: test"), 0644)
-	os.Chmod(path, 0000)
-	t.Cleanup(func() { os.Chmod(path, 0644) })
+	_ = os.WriteFile(path, []byte("url: test"), 0o600)
+	_ = os.Chmod(path, 0o000)
+	t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
 
 	var cfg PushWardConfig
 	err := LoadYAML(path, &cfg)
@@ -66,7 +66,7 @@ func TestLoadYAML_PermissionError(t *testing.T) {
 func TestLoadYAML_DurationFields(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yml")
-	os.WriteFile(path, []byte("cleanup_delay: 15m\nstale_timeout: 30m\nend_delay: 5s\nend_display_time: 4s\n"), 0644)
+	_ = os.WriteFile(path, []byte("cleanup_delay: 15m\nstale_timeout: 30m\nend_delay: 5s\nend_display_time: 4s\n"), 0o600)
 
 	var cfg PushWardConfig
 	if err := LoadYAML(path, &cfg); err != nil {

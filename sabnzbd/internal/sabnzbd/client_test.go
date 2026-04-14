@@ -30,7 +30,7 @@ func TestGetQueue_Success(t *testing.T) {
 		if r.URL.Query().Get("output") != "json" {
 			t.Errorf("expected output=json, got %s", r.URL.Query().Get("output"))
 		}
-		json.NewEncoder(w).Encode(QueueResponse{Queue: expected})
+		_ = json.NewEncoder(w).Encode(QueueResponse{Queue: expected})
 	}))
 	defer srv.Close()
 
@@ -72,7 +72,7 @@ func TestGetQueue_ServerError(t *testing.T) {
 
 func TestGetQueue_InvalidJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte("not json"))
+		_, _ = w.Write([]byte("not json"))
 	}))
 	defer srv.Close()
 
@@ -85,7 +85,7 @@ func TestGetQueue_InvalidJSON(t *testing.T) {
 
 func TestGetQueue_ContextCancelled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(QueueResponse{})
+		_ = json.NewEncoder(w).Encode(QueueResponse{})
 	}))
 	defer srv.Close()
 
@@ -114,7 +114,7 @@ func TestGetHistory_Success(t *testing.T) {
 		if r.URL.Query().Get("limit") != "5" {
 			t.Errorf("expected limit=5, got %s", r.URL.Query().Get("limit"))
 		}
-		json.NewEncoder(w).Encode(HistoryResponse{History: expected})
+		_ = json.NewEncoder(w).Encode(HistoryResponse{History: expected})
 	}))
 	defer srv.Close()
 
@@ -150,7 +150,7 @@ func TestGetHistory_ServerError(t *testing.T) {
 
 func TestGetHistory_ContextCancelled(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(HistoryResponse{})
+		_ = json.NewEncoder(w).Encode(HistoryResponse{})
 	}))
 	defer srv.Close()
 

@@ -46,7 +46,7 @@ func TestGetInProgressRuns_Success(t *testing.T) {
 		if r.URL.Query().Get("status") != "in_progress" {
 			t.Errorf("expected status=in_progress query param")
 		}
-		json.NewEncoder(w).Encode(WorkflowRunsResponse{
+		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{
 			TotalCount: 1,
 			WorkflowRuns: []WorkflowRun{
 				{ID: 42, Name: "CI", Status: "in_progress", HeadBranch: "main"},
@@ -73,7 +73,7 @@ func TestGetInProgressRuns_Success(t *testing.T) {
 func TestGetInProgressRuns_Empty(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(WorkflowRunsResponse{TotalCount: 0})
+		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{TotalCount: 0})
 	})
 	c := testClient(t, mux)
 
@@ -97,7 +97,7 @@ func TestGetInProgressRuns_InvalidRepo(t *testing.T) {
 func TestGetJobs_Success(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(JobsResponse{
+		_ = json.NewEncoder(w).Encode(JobsResponse{
 			TotalCount: 2,
 			Jobs: []Job{
 				{ID: 1, Name: "Build", Status: "completed", Conclusion: "success"},
@@ -130,9 +130,9 @@ func TestGetJobs_Pagination(t *testing.T) {
 			for i := range jobs {
 				jobs[i] = Job{ID: int64(i + 1), Name: "Job", Status: "queued"}
 			}
-			json.NewEncoder(w).Encode(JobsResponse{TotalCount: 101, Jobs: jobs})
+			_ = json.NewEncoder(w).Encode(JobsResponse{TotalCount: 101, Jobs: jobs})
 		} else {
-			json.NewEncoder(w).Encode(JobsResponse{
+			_ = json.NewEncoder(w).Encode(JobsResponse{
 				TotalCount: 101,
 				Jobs:       []Job{{ID: 101, Name: "LastJob", Status: "queued"}},
 			})
@@ -163,7 +163,7 @@ func TestGetJobs_InvalidRepo(t *testing.T) {
 func TestListRepos_FiltersArchivedAndDisabled(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]Repository{
+		_ = json.NewEncoder(w).Encode([]Repository{
 			{FullName: "owner/active1"},
 			{FullName: "owner/archived", Archived: true},
 			{FullName: "owner/disabled", Disabled: true},
@@ -187,7 +187,7 @@ func TestListRepos_FiltersArchivedAndDisabled(t *testing.T) {
 func TestListRepos_Empty(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]Repository{})
+		_ = json.NewEncoder(w).Encode([]Repository{})
 	})
 	c := testClient(t, mux)
 
@@ -213,7 +213,7 @@ func TestDoRequest_SetsAuthHeaders(t *testing.T) {
 			t.Errorf("expected 2022-11-28, got %s", got)
 		}
 		w.WriteHeader(200)
-		w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`{}`))
 	})
 	c := testClient(t, mux)
 
@@ -234,7 +234,7 @@ func TestDoRequest_RateLimitRetry(t *testing.T) {
 			return
 		}
 		w.WriteHeader(200)
-		w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`{}`))
 	})
 	c := testClient(t, mux)
 
@@ -275,7 +275,7 @@ func TestDoRequest_ServerErrorRetries(t *testing.T) {
 			return
 		}
 		w.WriteHeader(200)
-		w.Write([]byte(`{}`))
+		_, _ = w.Write([]byte(`{}`))
 	})
 	c := testClient(t, mux)
 

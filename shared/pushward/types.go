@@ -75,18 +75,18 @@ type Content struct {
 
 	// Gauge template: Value is float64
 	// Timeline template: Value is map[string]float64
-	Value    any         `json:"value,omitempty"`
-	MinValue *float64    `json:"min_value,omitempty"`
-	MaxValue *float64    `json:"max_value,omitempty"`
-	Unit     string      `json:"unit,omitempty"`
+	Value    any      `json:"value,omitempty"`
+	MinValue *float64 `json:"min_value,omitempty"`
+	MaxValue *float64 `json:"max_value,omitempty"`
+	Unit     string   `json:"unit,omitempty"`
 
 	// Timeline template
-	Scale      string                       `json:"scale,omitempty"`
-	Decimals   *int                         `json:"decimals,omitempty"`
-	Smoothing  *bool                        `json:"smoothing,omitempty"`
-	Thresholds []Threshold                  `json:"thresholds,omitempty"`
-	Units      map[string]string            `json:"units,omitempty"`
-	History    map[string][]HistoryPoint    `json:"history,omitempty"`
+	Scale      string                    `json:"scale,omitempty"`
+	Decimals   *int                      `json:"decimals,omitempty"`
+	Smoothing  *bool                     `json:"smoothing,omitempty"`
+	Thresholds []Threshold               `json:"thresholds,omitempty"`
+	Units      map[string]string         `json:"units,omitempty"`
+	History    map[string][]HistoryPoint `json:"history,omitempty"`
 }
 
 // CreateActivityRequest is the body for POST /activities.

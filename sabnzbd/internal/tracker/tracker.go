@@ -18,9 +18,11 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
-const slug = "sabnzbd"
-const seriesKey    = "Speed" // timeline values/units/history map key
-const avgSeriesKey = "Avg"   // timeline key used in completion summary
+const (
+	slug         = "sabnzbd"
+	seriesKey    = "Speed" // timeline values/units/history map key
+	avgSeriesKey = "Avg"   // timeline key used in completion summary
+)
 
 var ppStatuses = map[string]bool{
 	"Queued":     true,
@@ -41,15 +43,15 @@ var ppIcons = map[string]string{
 }
 
 type Tracker struct {
-	cfg           *config.Config
-	sab           *sabnzbd.Client
-	pw            *pushward.Client
-	mu            sync.Mutex
-	active        bool
-	wg            sync.WaitGroup
-	ctx           context.Context
-	historySent   bool
-	shuttingDown  atomic.Bool
+	cfg          *config.Config
+	sab          *sabnzbd.Client
+	pw           *pushward.Client
+	mu           sync.Mutex
+	active       bool
+	wg           sync.WaitGroup
+	ctx          context.Context
+	historySent  bool
+	shuttingDown atomic.Bool
 }
 
 func New(ctx context.Context, cfg *config.Config, sab *sabnzbd.Client, pw *pushward.Client) *Tracker {
@@ -130,7 +132,7 @@ func (t *Tracker) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 		t.mu.Unlock()
 		slog.Info("tracking already active, skipping webhook")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprintln(w, `{"status":"already_tracking"}`)
+		_, _ = fmt.Fprintln(w, `{"status":"already_tracking"}`)
 		return
 	}
 	t.active = true
@@ -140,7 +142,7 @@ func (t *Tracker) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 	t.launchTracker(false)
 
 	w.WriteHeader(http.StatusOK)
-	fmt.Fprintln(w, `{"status":"tracking_started"}`)
+	_, _ = fmt.Fprintln(w, `{"status":"tracking_started"}`)
 }
 
 func (t *Tracker) launchTracker(resumed bool) {

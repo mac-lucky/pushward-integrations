@@ -12,10 +12,10 @@ import (
 type Config struct {
 	Server       sharedconfig.ServerConfig   `yaml:"server"`
 	PushWard     sharedconfig.PushWardConfig `yaml:"pushward"`
-	Metrics      MetricsConfig              `yaml:"metrics"`
-	Grafana      GrafanaConfig              `yaml:"grafana"`
-	Timeline     TimelineConfig             `yaml:"timeline"`
-	WebhookToken string                     `yaml:"webhook_token"`
+	Metrics      MetricsConfig               `yaml:"metrics"`
+	Grafana      GrafanaConfig               `yaml:"grafana"`
+	Timeline     TimelineConfig              `yaml:"timeline"`
+	WebhookToken string                      `yaml:"webhook_token"`
 }
 
 // MetricsConfig holds the Prometheus/VictoriaMetrics connection details.
