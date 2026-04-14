@@ -59,12 +59,18 @@ func TestSweep_KeepsRecentEntries(t *testing.T) {
 func TestGetOrCreate_EvictsLRU(t *testing.T) {
 	m := New[int](3)
 
+	// Small sleeps ensure each access has a strictly monotonic UnixNano
+	// timestamp even on systems with coarse clock resolution.
 	m.GetOrCreate("a", func() int { return 1 })
+	time.Sleep(time.Millisecond)
 	m.GetOrCreate("b", func() int { return 2 })
+	time.Sleep(time.Millisecond)
 	m.GetOrCreate("c", func() int { return 3 })
+	time.Sleep(time.Millisecond)
 
 	// Access "a" to make it recently used; "b" becomes LRU.
 	m.GetOrCreate("a", func() int { return 99 })
+	time.Sleep(time.Millisecond)
 
 	// Insert "d" — should evict "b" (least recently used).
 	var evictedKey string

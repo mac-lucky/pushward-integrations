@@ -131,7 +131,12 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 				slog.Info("ended activity", "slug", slug, "state", content.State)
 			}
 
-			// Clean up state store
+			// Clean up state store.
+			// Detached from any request ctx on purpose: the phase-2 timer
+			// fires EndDisplayTime after phase-1 completes, which is well
+			// beyond any sensible request/trace lifetime. Using a fresh
+			// background ctx with a bounded timeout keeps the cleanup
+			// budget consistent with the updateWithRetry calls above.
 			if e.store != nil {
 				delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer delCancel()
@@ -248,22 +253,17 @@ func (e *Ender) Wait() {
 // updateWithRetry attempts an UpdateActivity call and retries once after
 // enderRetryDelay on failure. Each UpdateActivity call already does up to 5
 // internal retries, so worst case is:
-// attempt (5 retries) → 5s wait → attempt (5 retries).
+// attempt (5 retries) → enderRetryDelay wait → attempt (5 retries).
 func updateWithRetry(cl *pushward.Client, slug string, req pushward.UpdateRequest, perAttemptTimeout time.Duration) error {
-	ctx, cancel := context.WithTimeout(context.Background(), perAttemptTimeout)
-	defer cancel()
-
-	err := cl.UpdateActivity(ctx, slug, req)
+	ctx1, cancel1 := context.WithTimeout(context.Background(), perAttemptTimeout)
+	err := cl.UpdateActivity(ctx1, slug, req)
+	cancel1()
 	if err == nil {
 		return nil
 	}
-	slog.Warn("ender update failed, retrying in 5s", "slug", slug, "error", err)
+	slog.Warn("ender update failed, retrying", "slug", slug, "delay", enderRetryDelay, "error", err)
 
-	select {
-	case <-time.After(enderRetryDelay):
-	case <-ctx.Done():
-		return err
-	}
+	time.Sleep(enderRetryDelay)
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), perAttemptTimeout)
 	defer cancel2()

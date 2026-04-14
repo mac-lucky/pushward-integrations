@@ -49,24 +49,85 @@ type graceEntry struct {
 	appName string
 }
 
+// appLock is a per-key mutex with a refcount tracking acquirers + waiters.
+// count is only read/written while holding appLocks.mu.
+type appLock struct {
+	mu    sync.Mutex
+	count int
+}
+
+// appLocks is a refcounted map of per-key mutexes. Entries are created on first
+// Acquire and deleted when the last holder Releases, so the map size stays
+// proportional to concurrently-in-flight keys rather than unique keys ever seen.
+type appLocks struct {
+	mu    sync.Mutex
+	locks map[string]*appLock
+}
+
+func newAppLocks() *appLocks {
+	return &appLocks{locks: make(map[string]*appLock)}
+}
+
+// Acquire increments the refcount (creating the entry on first use) and locks
+// the per-key mutex. The caller must pair this with exactly one Release.
+func (a *appLocks) Acquire(key string) *sync.Mutex {
+	a.mu.Lock()
+	l, ok := a.locks[key]
+	if !ok {
+		l = &appLock{}
+		a.locks[key] = l
+	}
+	l.count++
+	a.mu.Unlock()
+	l.mu.Lock()
+	return &l.mu
+}
+
+// Release decrements the refcount and deletes the entry when it reaches zero.
+// A concurrent Acquire after the deletion will find no entry and create a new
+// one — correct because the deleted lock had no remaining holders or waiters.
+func (a *appLocks) Release(key string) {
+	a.mu.Lock()
+	l, ok := a.locks[key]
+	if !ok {
+		a.mu.Unlock()
+		return
+	}
+	l.count--
+	if l.count == 0 {
+		delete(a.locks, key)
+	}
+	a.mu.Unlock()
+}
+
+// size returns the current number of entries (for tests).
+func (a *appLocks) size() int {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return len(a.locks)
+}
+
 // Lock ordering: appLocks (per-app) → mu (graceTimers). Never acquire mu before appLocks.
 type Handler struct {
 	store       state.Store
 	clients     *client.Pool
 	config      *config.ArgoCDConfig
 	ender       *lifecycle.Ender
-	mu          sync.Mutex              // protects graceTimers map only
-	appLocks    sync.Map                // hash(userKey)+":"+appName → *sync.Mutex
-	graceTimers map[string]*graceEntry  // hash(userKey)+":"+appName → grace entry
+	mu          sync.Mutex             // protects graceTimers map only
+	appLocks    *appLocks              // refcounted per-app mutexes
+	graceTimers map[string]*graceEntry // hash(userKey)+":"+appName → grace entry
 }
 
-// lockApp returns an unlock function for per-app serialization.
+// lockApp returns an unlock function for per-app serialization. The returned
+// function unlocks the mutex and releases the refcount so the map entry can be
+// reclaimed once no goroutine holds or is waiting on this key.
 func (h *Handler) lockApp(userKey, appName string) func() {
 	key := timerKey(userKey, appName)
-	val, _ := h.appLocks.LoadOrStore(key, &sync.Mutex{})
-	m := val.(*sync.Mutex)
-	m.Lock()
-	return m.Unlock
+	m := h.appLocks.Acquire(key)
+	return func() {
+		m.Unlock()
+		h.appLocks.Release(key)
+	}
 }
 
 // RegisterRoutes registers the ArgoCD webhook endpoint and returns the Handler.
@@ -79,6 +140,7 @@ func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *
 			EndDelay:       cfg.EndDelay,
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
+		appLocks:    newAppLocks(),
 		graceTimers: make(map[string]*graceEntry),
 	}
 	humautil.RegisterWebhook(api, "/argocd", "post-argocd-webhook",
