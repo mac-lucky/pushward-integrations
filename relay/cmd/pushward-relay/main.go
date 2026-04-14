@@ -37,6 +37,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/telemetry"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/uptimekuma"
+	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/server"
 )
@@ -254,48 +255,31 @@ func main() {
 		)
 	}
 
-	// Background cleanup goroutine
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				if n, err := store.Cleanup(ctx); err != nil {
-					slog.Error("state cleanup failed", "error", err)
-				} else if n > 0 {
-					slog.Info("state cleanup", "removed", n)
-				}
-				if n := ratelimit.SweepStale(5 * time.Minute); n > 0 {
-					slog.Debug("rate limiter sweep", "removed", n)
-				}
-			}
+	var stateCleanup, metricsCollect syncx.Periodic
+	stateCleanup.Start(ctx, 30*time.Second, func(ctx context.Context) {
+		if n, err := store.Cleanup(ctx); err != nil {
+			slog.Error("state cleanup failed", "error", err)
+		} else if n > 0 {
+			slog.Info("state cleanup", "removed", n)
 		}
-	}()
+		if n := ratelimit.SweepStale(5 * time.Minute); n > 0 {
+			slog.Debug("rate limiter sweep", "removed", n)
+		}
+	})
+	defer stateCleanup.Stop()
 
-	// Background goroutine: collect DB + circuit breaker metrics every 15s
-	go func() {
-		ticker := time.NewTicker(15 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				stat := pool.Stat()
-				metrics.DBPoolTotalConns.Set(float64(stat.TotalConns()))
-				metrics.DBPoolIdleConns.Set(float64(stat.IdleConns()))
-				metrics.DBPoolAcquiredConns.Set(float64(stat.AcquiredConns()))
-				val := 0.0
-				if breaker.IsOpen() {
-					val = 1
-				}
-				metrics.CircuitBreakerOpen.Set(val)
-			}
+	metricsCollect.Start(ctx, 15*time.Second, func(context.Context) {
+		stat := pool.Stat()
+		metrics.DBPoolTotalConns.Set(float64(stat.TotalConns()))
+		metrics.DBPoolIdleConns.Set(float64(stat.IdleConns()))
+		metrics.DBPoolAcquiredConns.Set(float64(stat.AcquiredConns()))
+		val := 0.0
+		if breaker.IsOpen() {
+			val = 1
 		}
-	}()
+		metrics.CircuitBreakerOpen.Set(val)
+	})
+	defer metricsCollect.Stop()
 
 	// Internal-only metrics server. Scraped via in-cluster ServiceMonitor.
 	// Shut down after the main server so Prometheus can scrape final drain metrics.
