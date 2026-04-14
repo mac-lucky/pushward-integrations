@@ -10,7 +10,17 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+
+	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 )
+
+// dialTimeout bounds the WebSocket handshake. The read loop uses the
+// caller's ctx (no timeout) since subscriptions are long-lived.
+const dialTimeout = 30 * time.Second
+
+// dropLogEvery throttles "channel full, dropping update" warnings to at
+// most one per N drops so a slow consumer can't spam the logs.
+const dropLogEvery = 100
 
 // ArrayStatus represents the current state of the Unraid array.
 type ArrayStatus struct {
@@ -49,11 +59,21 @@ type Client struct {
 	port   int
 	apiKey string
 	useTLS bool
+
+	arrayDrops *syncx.DropCounter
+	notifDrops *syncx.DropCounter
 }
 
 // NewClient creates a new Unraid GraphQL client.
 func NewClient(host string, port int, apiKey string, useTLS bool) *Client {
-	return &Client{host: host, port: port, apiKey: apiKey, useTLS: useTLS}
+	return &Client{
+		host:       host,
+		port:       port,
+		apiKey:     apiKey,
+		useTLS:     useTLS,
+		arrayDrops: syncx.NewDropCounter(dropLogEvery),
+		notifDrops: syncx.NewDropCounter(dropLogEvery),
+	}
 }
 
 // SubscribeArray subscribes to array status changes.
@@ -71,7 +91,9 @@ func (c *Client) SubscribeArray(ctx context.Context, ch chan<- ArrayStatus) erro
 		select {
 		case ch <- wrapper.ArraySubscription:
 		default:
-			slog.Warn("array status channel full, dropping update")
+			if total, log := c.arrayDrops.Drop(); log {
+				slog.Warn("array status channel full, dropping update", "total_drops", total)
+			}
 		}
 	})
 }
@@ -90,7 +112,9 @@ func (c *Client) SubscribeNotifications(ctx context.Context, ch chan<- Notificat
 		select {
 		case ch <- wrapper.NotificationAdded:
 		default:
-			slog.Warn("notification channel full, dropping update")
+			if total, log := c.notifDrops.Drop(); log {
+				slog.Warn("notification channel full, dropping update", "total_drops", total)
+			}
 		}
 	})
 }
@@ -119,12 +143,14 @@ func (c *Client) runSubscription(ctx context.Context, query string, handler func
 	}
 	url := fmt.Sprintf("%s://%s:%d/graphql", scheme, c.host, c.port)
 
-	conn, _, err := websocket.Dial(ctx, url, &websocket.DialOptions{
+	dialCtx, dialCancel := context.WithTimeout(ctx, dialTimeout)
+	conn, _, err := websocket.Dial(dialCtx, url, &websocket.DialOptions{
 		HTTPHeader: http.Header{
 			"Authorization": []string{"Bearer " + c.apiKey},
 		},
 		Subprotocols: []string{"graphql-transport-ws"},
 	})
+	dialCancel()
 	if err != nil {
 		return fmt.Errorf("dial: %w", err)
 	}
