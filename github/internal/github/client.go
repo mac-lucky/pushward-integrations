@@ -87,6 +87,8 @@ func (c *Client) doWithRetry(ctx context.Context, url, operation string) ([]byte
 			}
 		}
 
+		// context.WithTimeout clamps to the parent deadline if it is earlier,
+		// so retries cannot collectively exceed the caller's budget.
 		reqCtx, cancel := context.WithTimeout(ctx, requestTimeout)
 		body, err := c.doRequest(reqCtx, url)
 		cancel()
