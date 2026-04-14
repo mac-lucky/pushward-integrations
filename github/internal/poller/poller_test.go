@@ -598,7 +598,7 @@ func mockGitHubClient(t *testing.T, handler http.Handler) *ghclient.Client {
 func TestPollIdle_DiscoversAndTracksWorkflow(t *testing.T) {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
 			TotalCount: 1,
 			WorkflowRuns: []ghclient.WorkflowRun{
 				{
@@ -609,7 +609,7 @@ func TestPollIdle_DiscoversAndTracksWorkflow(t *testing.T) {
 		})
 	})
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.JobsResponse{
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
 			TotalCount: 2,
 			Jobs: []ghclient.Job{
 				{ID: 1, Name: "Build", Status: "in_progress"},
@@ -721,7 +721,7 @@ func TestPollIdle_SkipsAlreadyTrackedRepo(t *testing.T) {
 func TestPollIdle_NoRunsFound(t *testing.T) {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
 	})
 	gh := mockGitHubClient(t, ghMux)
 
@@ -754,7 +754,7 @@ func TestPollIdle_PicksMostRecentRun(t *testing.T) {
 	now := time.Now()
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
 			TotalCount: 2,
 			WorkflowRuns: []ghclient.WorkflowRun{
 				{ID: 10, Name: "Old", CreatedAt: now.Add(-time.Hour)},
@@ -763,7 +763,7 @@ func TestPollIdle_PicksMostRecentRun(t *testing.T) {
 		})
 	})
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs/20/jobs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.JobsResponse{TotalCount: 0})
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{TotalCount: 0})
 	})
 	gh := mockGitHubClient(t, ghMux)
 
@@ -796,7 +796,7 @@ func TestPollIdle_PicksMostRecentRun(t *testing.T) {
 func TestPollActive_UpdatesOngoingWorkflow(t *testing.T) {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.JobsResponse{
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
 			TotalCount: 3,
 			Jobs: []ghclient.Job{
 				{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
@@ -856,7 +856,7 @@ func TestPollActive_UpdatesOngoingWorkflow(t *testing.T) {
 func TestPollActive_CompletesSuccessfulWorkflow(t *testing.T) {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.JobsResponse{
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
 			TotalCount: 2,
 			Jobs: []ghclient.Job{
 				{ID: 1, Name: "Build", Status: "completed", Conclusion: "success"},
@@ -920,7 +920,7 @@ func TestPollActive_CompletesSuccessfulWorkflow(t *testing.T) {
 func TestPollActive_CompletesFailedWorkflow(t *testing.T) {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.JobsResponse{
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
 			TotalCount: 2,
 			Jobs: []ghclient.Job{
 				{ID: 1, Name: "Build", Status: "completed", Conclusion: "failure"},
@@ -1005,7 +1005,7 @@ func TestPollActive_SkipsRepoWithPendingEnd(t *testing.T) {
 func TestPollActive_NoJobs(t *testing.T) {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.JobsResponse{TotalCount: 0})
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{TotalCount: 0})
 	})
 	gh := mockGitHubClient(t, ghMux)
 
@@ -1039,7 +1039,7 @@ func TestPollActive_MaxStepsClamping(t *testing.T) {
 	// Simulate lazy job creation: initially 3 steps tracked, poll returns only 2
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.JobsResponse{
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
 			TotalCount: 2,
 			Jobs: []ghclient.Job{
 				{ID: 1, Name: "Build", Status: "in_progress"},
@@ -1108,7 +1108,7 @@ func TestRefreshRepos_NoOwner(t *testing.T) {
 func TestRefreshRepos_MergesDiscoveredAndConfigured(t *testing.T) {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]ghclient.Repository{
+		_ = json.NewEncoder(w).Encode([]ghclient.Repository{
 			{FullName: "testowner/discovered1"},
 			{FullName: "testowner/discovered2"},
 		})
@@ -1140,7 +1140,7 @@ func TestRefreshRepos_SkipsCooldown(t *testing.T) {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
 		callCount++
-		json.NewEncoder(w).Encode([]ghclient.Repository{})
+		_ = json.NewEncoder(w).Encode([]ghclient.Repository{})
 	})
 	gh := mockGitHubClient(t, ghMux)
 
@@ -1173,7 +1173,7 @@ func TestRefreshRepos_SkipsCooldown(t *testing.T) {
 func TestRefreshRepos_DeduplicatesRepos(t *testing.T) {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode([]ghclient.Repository{
+		_ = json.NewEncoder(w).Encode([]ghclient.Repository{
 			{FullName: "owner/repo1"},
 			{FullName: "owner/repo2"},
 		})
@@ -1206,7 +1206,7 @@ func TestPoll_CallsBothPhases(t *testing.T) {
 	// poll() calls pollIdle then pollActive. Test that both run.
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
 	})
 	gh := mockGitHubClient(t, ghMux)
 
@@ -1245,7 +1245,7 @@ func TestScheduleEnd_UnknownRepo(t *testing.T) {
 func TestRun_ShutdownImmediately(t *testing.T) {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
 	})
 	gh := mockGitHubClient(t, ghMux)
 
@@ -1281,7 +1281,7 @@ func TestRun_ShutdownImmediately(t *testing.T) {
 func TestRun_CleansUpTimersOnShutdown(t *testing.T) {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
 	})
 	gh := mockGitHubClient(t, ghMux)
 

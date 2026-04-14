@@ -19,14 +19,14 @@ func TestNewMux_HealthEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}
-	go srv.Serve(ln)
-	defer srv.Close()
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Close() }()
 
 	resp, err := http.Get("http://" + ln.Addr().String() + "/health")
 	if err != nil {
 		t.Fatalf("GET /health failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
@@ -45,14 +45,14 @@ func TestNewMux_UnknownRoute(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
 	}
-	go srv.Serve(ln)
-	defer srv.Close()
+	go func() { _ = srv.Serve(ln) }()
+	defer func() { _ = srv.Close() }()
 
 	resp, err := http.Get("http://" + ln.Addr().String() + "/nonexistent")
 	if err != nil {
 		t.Fatalf("GET /nonexistent failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
@@ -71,7 +71,7 @@ func TestListenAndServe_GracefulShutdown(t *testing.T) {
 		t.Fatalf("failed to find free port: %v", err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
+	_ = ln.Close()
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -83,7 +83,7 @@ func TestListenAndServe_GracefulShutdown(t *testing.T) {
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -94,7 +94,7 @@ func TestListenAndServe_GracefulShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("server not responding: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
@@ -139,7 +139,7 @@ func TestListenAndServe_ServerTimeouts(t *testing.T) {
 	mux := NewMux()
 	mux.HandleFunc("/custom", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("custom"))
+		_, _ = w.Write([]byte("custom"))
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -150,16 +150,16 @@ func TestListenAndServe_ServerTimeouts(t *testing.T) {
 		t.Fatalf("failed to find free port: %v", err)
 	}
 	addr := ln.Addr().String()
-	ln.Close()
+	_ = ln.Close()
 
-	go ListenAndServe(ctx, addr, mux)
+	go func() { _ = ListenAndServe(ctx, addr, mux) }()
 
 	// Wait for server to start
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		conn, err := net.DialTimeout("tcp", addr, 100*time.Millisecond)
 		if err == nil {
-			conn.Close()
+			_ = conn.Close()
 			break
 		}
 		time.Sleep(10 * time.Millisecond)

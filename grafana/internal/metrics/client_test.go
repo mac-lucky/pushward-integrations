@@ -18,7 +18,7 @@ func TestQueryRange(t *testing.T) {
 			t.Errorf("query = %q, want %q", q.Get("query"), "up")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"status": "success",
 			"data": {
 				"resultType": "matrix",
@@ -54,7 +54,7 @@ func TestQueryRange(t *testing.T) {
 func TestQueryRange_SkipsNaN(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"status": "success",
 			"data": {
 				"resultType": "matrix",
@@ -85,7 +85,7 @@ func TestQueryRange_SkipsNaN(t *testing.T) {
 func TestQueryRange_EmptyResult(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[]}}`))
 	}))
 	defer srv.Close()
 
@@ -102,7 +102,7 @@ func TestQueryRange_EmptyResult(t *testing.T) {
 func TestQueryRange_ErrorResponse(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"error","errorType":"bad_data","error":"parse error"}`))
+		_, _ = w.Write([]byte(`{"status":"error","errorType":"bad_data","error":"parse error"}`))
 	}))
 	defer srv.Close()
 
@@ -121,7 +121,7 @@ func TestQueryRange_BasicAuth(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1700000000,"1"]]}]}}`))
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1700000000,"1"]]}]}}`))
 	}))
 	defer srv.Close()
 
@@ -148,7 +148,7 @@ func TestQueryInstant(t *testing.T) {
 			t.Error("time parameter missing")
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"status": "success",
 			"data": {
 				"resultType": "vector",
@@ -177,7 +177,7 @@ func TestQueryInstant(t *testing.T) {
 func TestQueryInstant_EmptyResult(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[]}}`))
 	}))
 	defer srv.Close()
 
@@ -194,7 +194,7 @@ func TestQueryInstant_EmptyResult(t *testing.T) {
 func TestQueryInstant_NaN(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1700000000,"NaN"]}]}}`))
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{},"value":[1700000000,"NaN"]}]}}`))
 	}))
 	defer srv.Close()
 
@@ -211,7 +211,7 @@ func TestQueryInstant_NaN(t *testing.T) {
 func TestQueryRangeAll_MultiSeries(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"status": "success",
 			"data": {
 				"resultType": "matrix",
@@ -246,7 +246,7 @@ func TestQueryRangeAll_MultiSeries(t *testing.T) {
 func TestQueryRangeAll_FiltersNameLabel(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"status": "success",
 			"data": {
 				"resultType": "matrix",
@@ -275,7 +275,7 @@ func TestQueryRangeAll_FiltersNameLabel(t *testing.T) {
 func TestQueryInstantAll_MultiSeries(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"status": "success",
 			"data": {
 				"resultType": "vector",
@@ -310,7 +310,7 @@ func TestQueryInstantAll_MultiSeries(t *testing.T) {
 func TestQueryInstantAll_SkipsNaN(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"status": "success",
 			"data": {
 				"resultType": "vector",
