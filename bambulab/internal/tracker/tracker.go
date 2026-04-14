@@ -10,6 +10,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/bambulab/internal/bambulab"
 	"github.com/mac-lucky/pushward-integrations/bambulab/internal/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
@@ -28,8 +29,9 @@ type Tracker struct {
 	slug  string
 
 	tracking  bool
-	lastState string      // last gcode_state we acted on
-	endTimer  *time.Timer // pending two-phase end
+	lastState string // last gcode_state we acted on
+
+	endTimers syncx.TimerGroup // two-phase end scheduling
 }
 
 func New(cfg *config.Config, bambu Printer, pw *pushward.Client) *Tracker {
@@ -58,12 +60,11 @@ func (t *Tracker) Run(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
-			if t.endTimer != nil {
-				t.endTimer.Stop()
-			}
+			t.endTimers.Stop()
 			if t.tracking {
 				t.endActivity(ctx, "Interrupted", "xmark.circle.fill", "orange")
 			}
+			t.endTimers.Wait()
 			return nil
 
 		case <-t.bambu.UpdateCh():
@@ -123,10 +124,7 @@ func (t *Tracker) process(ctx context.Context) {
 }
 
 func (t *Tracker) startTracking(ctx context.Context, state *bambulab.MergedState) {
-	if t.endTimer != nil {
-		t.endTimer.Stop()
-		t.endTimer = nil
-	}
+	t.endTimers.Stop()
 	t.tracking = true
 	t.lastState = state.GcodeState
 
@@ -179,7 +177,7 @@ func (t *Tracker) sendPreparing(ctx context.Context, state *bambulab.MergedState
 	t.send(ctx, 0.0, "Preparing...", "arrow.triangle.2.circlepath", "blue", nil, subtitle, pushward.StateOngoing)
 }
 
-func (t *Tracker) finishActivity(_ context.Context, state *bambulab.MergedState) {
+func (t *Tracker) finishActivity(ctx context.Context, state *bambulab.MergedState) {
 	subtitle := ""
 	if state.SubtaskName != "" {
 		subtitle = text.Truncate(state.SubtaskName, 30)
@@ -192,16 +190,17 @@ func (t *Tracker) finishActivity(_ context.Context, state *bambulab.MergedState)
 	t.tracking = false
 	t.lastState = ""
 
-	t.endTimer = time.AfterFunc(endDelay, func() {
+	parent := context.WithoutCancel(ctx)
+	t.endTimers.Reset(endDelay, func() {
 		// Phase 1: ONGOING with final content
-		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx1, cancel1 := context.WithTimeout(parent, 30*time.Second)
 		t.send(ctx1, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, pushward.StateOngoing)
 		cancel1()
 		slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
 
 		// Phase 2: ENDED
-		time.AfterFunc(displayTime, func() {
-			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+		t.endTimers.Reset(displayTime, func() {
+			ctx2, cancel2 := context.WithTimeout(parent, 30*time.Second)
 			defer cancel2()
 			t.send(ctx2, 1.0, "Complete", "checkmark.circle.fill", "green", nil, subtitle, pushward.StateEnded)
 			slog.Info("print tracking complete")
@@ -209,7 +208,7 @@ func (t *Tracker) finishActivity(_ context.Context, state *bambulab.MergedState)
 	})
 }
 
-func (t *Tracker) failActivity(_ context.Context, state *bambulab.MergedState) {
+func (t *Tracker) failActivity(ctx context.Context, state *bambulab.MergedState) {
 	progress := float64(state.Percent) / 100.0
 	subtitle := ""
 	if state.SubtaskName != "" {
@@ -223,16 +222,17 @@ func (t *Tracker) failActivity(_ context.Context, state *bambulab.MergedState) {
 	t.tracking = false
 	t.lastState = ""
 
-	t.endTimer = time.AfterFunc(endDelay, func() {
+	parent := context.WithoutCancel(ctx)
+	t.endTimers.Reset(endDelay, func() {
 		// Phase 1: ONGOING with failure content
-		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx1, cancel1 := context.WithTimeout(parent, 30*time.Second)
 		t.send(ctx1, progress, "Failed", "xmark.circle.fill", "red", nil, subtitle, pushward.StateOngoing)
 		cancel1()
 		slog.Info("two-phase end: sent ONGOING with failure content", "display_time", displayTime)
 
 		// Phase 2: ENDED
-		time.AfterFunc(displayTime, func() {
-			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+		t.endTimers.Reset(displayTime, func() {
+			ctx2, cancel2 := context.WithTimeout(parent, 30*time.Second)
 			defer cancel2()
 			t.send(ctx2, progress, "Failed", "xmark.circle.fill", "red", nil, subtitle, pushward.StateEnded)
 			slog.Info("print failure tracking complete")
