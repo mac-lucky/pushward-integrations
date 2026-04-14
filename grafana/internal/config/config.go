@@ -20,10 +20,11 @@ type Config struct {
 
 // MetricsConfig holds the Prometheus/VictoriaMetrics connection details.
 type MetricsConfig struct {
-	URL         string `yaml:"url"`
-	Username    string `yaml:"username"`
-	Password    string `yaml:"password"`
-	BearerToken string `yaml:"bearer_token"`
+	URL         string        `yaml:"url"`
+	Username    string        `yaml:"username"`
+	Password    string        `yaml:"password"`
+	BearerToken string        `yaml:"bearer_token"`
+	Timeout     time.Duration `yaml:"timeout"`
 }
 
 // GrafanaConfig holds optional Grafana API connection for auto-extracting queries.
@@ -108,6 +109,13 @@ func applyEnvOverrides(cfg *Config) error {
 	}
 	if v := os.Getenv("PUSHWARD_METRICS_BEARER_TOKEN"); v != "" {
 		cfg.Metrics.BearerToken = v
+	}
+	if v := os.Getenv("PUSHWARD_METRICS_TIMEOUT"); v != "" {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return fmt.Errorf("invalid PUSHWARD_METRICS_TIMEOUT %q: %w", v, err)
+		}
+		cfg.Metrics.Timeout = d
 	}
 	if v := os.Getenv("PUSHWARD_GRAFANA_URL"); v != "" {
 		cfg.Grafana.URL = v

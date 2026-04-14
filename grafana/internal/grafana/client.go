@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 )
 
 // RuleQuery holds the extracted query details from a Grafana alert rule.
@@ -29,18 +31,64 @@ type Client struct {
 
 	mu    sync.RWMutex
 	cache map[string]*RuleQuery
+
+	cleanup syncx.Periodic
 }
 
-const cacheTTL = 1 * time.Hour
+const (
+	cacheTTL        = 1 * time.Hour
+	cacheMaxEntries = 500
+	cleanupInterval = 5 * time.Minute
+)
 
-// NewClient creates a new Grafana API client.
+// NewClient creates a new Grafana API client. Starts a background
+// goroutine that prunes expired cache entries; call Close to stop it.
 func NewClient(baseURL, apiToken string) *Client {
-	return &Client{
+	c := &Client{
 		httpClient: &http.Client{Timeout: 10 * time.Second},
 		baseURL:    baseURL,
 		apiToken:   apiToken,
 		cache:      make(map[string]*RuleQuery),
 	}
+	c.cleanup.Start(context.Background(), cleanupInterval, func(context.Context) {
+		c.pruneCache()
+	})
+	return c
+}
+
+// Close stops the background cache-cleanup goroutine. Safe to call
+// multiple times.
+func (c *Client) Close() {
+	c.cleanup.Stop()
+}
+
+// pruneCache removes expired entries using a two-pass scan: an RLock'd
+// pass collects stale UIDs, then a Lock'd pass deletes them. Each entry
+// is re-checked under the write lock to avoid evicting an entry that
+// was concurrently refreshed.
+func (c *Client) pruneCache() {
+	cutoff := time.Now().Add(-cacheTTL)
+
+	c.mu.RLock()
+	stale := make([]string, 0)
+	for uid, cached := range c.cache {
+		if cached.FetchedAt.Before(cutoff) {
+			stale = append(stale, uid)
+		}
+	}
+	c.mu.RUnlock()
+
+	if len(stale) == 0 {
+		return
+	}
+
+	c.mu.Lock()
+	for _, uid := range stale {
+		if cached, ok := c.cache[uid]; ok && cached.FetchedAt.Before(cutoff) {
+			delete(c.cache, uid)
+		}
+	}
+	c.mu.Unlock()
 }
 
 // ruleUIDPattern extracts the rule UID from a generatorURL like
@@ -103,11 +151,19 @@ func (c *Client) GetRuleQuery(ctx context.Context, ruleUID string) (*RuleQuery, 
 
 	c.mu.Lock()
 	c.cache[ruleUID] = rq
-	if len(c.cache) > 500 {
+	if len(c.cache) > cacheMaxEntries {
+		// Evict the single oldest entry to keep the map bounded
+		// between periodic sweeps.
+		var oldestUID string
+		var oldestAt time.Time
 		for uid, cached := range c.cache {
-			if time.Since(cached.FetchedAt) > 2*cacheTTL {
-				delete(c.cache, uid)
+			if oldestUID == "" || cached.FetchedAt.Before(oldestAt) {
+				oldestUID = uid
+				oldestAt = cached.FetchedAt
 			}
+		}
+		if oldestUID != "" {
+			delete(c.cache, oldestUID)
 		}
 	}
 	c.mu.Unlock()

@@ -73,10 +73,14 @@ type Client struct {
 	bearer     string
 }
 
-// NewClient creates a new metrics client.
+// defaultTimeout is used when WithTimeout is not supplied.
+const defaultTimeout = 30 * time.Second
+
+// NewClient creates a new metrics client. Default HTTP timeout is 30s;
+// override with WithTimeout.
 func NewClient(baseURL string, opts ...Option) *Client {
 	c := &Client{
-		httpClient: &http.Client{Timeout: 10 * time.Second},
+		httpClient: &http.Client{Timeout: defaultTimeout},
 		baseURL:    baseURL,
 	}
 	for _, o := range opts {
@@ -87,6 +91,15 @@ func NewClient(baseURL string, opts ...Option) *Client {
 
 // Option configures the metrics client.
 type Option func(*Client)
+
+// WithTimeout sets the HTTP client timeout. Non-positive values are ignored.
+func WithTimeout(d time.Duration) Option {
+	return func(c *Client) {
+		if d > 0 {
+			c.httpClient.Timeout = d
+		}
+	}
+}
 
 // WithBasicAuth sets basic authentication credentials.
 func WithBasicAuth(username, password string) Option {

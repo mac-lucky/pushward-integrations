@@ -44,11 +44,15 @@ func main() {
 	if cfg.Metrics.BearerToken != "" {
 		metricsOpts = append(metricsOpts, metrics.WithBearerToken(cfg.Metrics.BearerToken))
 	}
+	if cfg.Metrics.Timeout > 0 {
+		metricsOpts = append(metricsOpts, metrics.WithTimeout(cfg.Metrics.Timeout))
+	}
 	mc := metrics.NewClient(cfg.Metrics.URL, metricsOpts...)
 
 	var gc *grafanaapi.Client
 	if cfg.AutoExtractEnabled() {
 		gc = grafanaapi.NewClient(cfg.Grafana.URL, cfg.Grafana.APIToken)
+		defer gc.Close()
 		slog.Info("grafana auto-extract enabled", "url", cfg.Grafana.URL)
 	}
 
