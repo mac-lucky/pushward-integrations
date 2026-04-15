@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -22,6 +23,20 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
+
+// upstreamStatus maps a pushward API error to the HTTP status the webhook
+// caller should see. Auth/authz failures surface unchanged so the caller
+// (Sonarr/Radarr/etc.) reports "auth failed" instead of a generic 502.
+func upstreamStatus(err error) int {
+	var he *pushward.HTTPError
+	if errors.As(err, &he) {
+		switch he.StatusCode {
+		case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests:
+			return he.StatusCode
+		}
+	}
+	return http.StatusBadGateway
+}
 
 // trackedSlug is stored in the state store as JSON.
 type trackedSlug struct {
@@ -103,11 +118,21 @@ func (h *Handler) dispatchRaw(ctx context.Context, raw []byte, handler func(http
 	r = r.WithContext(ctx)
 	w := httptest.NewRecorder()
 	handler(w, r)
-	if w.Code == http.StatusBadGateway {
+	switch w.Code {
+	case http.StatusBadGateway:
 		return nil, huma.Error502BadGateway("upstream API error")
-	}
-	if w.Code == http.StatusBadRequest {
+	case http.StatusUnauthorized:
+		return nil, huma.Error401Unauthorized("upstream rejected integration key")
+	case http.StatusForbidden:
+		return nil, huma.Error403Forbidden("upstream denied integration key")
+	case http.StatusTooManyRequests:
+		return nil, huma.Error429TooManyRequests("upstream rate limited")
+	case http.StatusBadRequest:
 		return nil, huma.Error400BadRequest("invalid payload")
+	default:
+		if w.Code >= 400 {
+			return nil, huma.Error502BadGateway("upstream API error")
+		}
 	}
 	return humautil.NewOK(), nil
 }

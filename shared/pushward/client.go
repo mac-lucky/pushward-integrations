@@ -174,7 +174,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url string,
 			lastErr = fmt.Errorf("rate limited (429)")
 			continue
 		}
-		lastErr = fmt.Errorf("unexpected status %d", resp.StatusCode)
+		lastErr = &HTTPError{StatusCode: resp.StatusCode}
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			slog.Warn("PushWard client error", "status", resp.StatusCode, "url", url, "body", string(respBody))
 			// 4xx client errors are not retryable and don't trip the breaker.
@@ -186,6 +186,20 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url string,
 	c.recordResult(ctx, operation, attempts, start, err, true)
 	return err
 }
+
+// HTTPError is returned when PushWard responds with a non-2xx, non-retryable
+// status that is not handled by handleConflict. Callers can use errors.As to
+// inspect the status code (e.g. to surface 401/403 upstream instead of masking
+// as a 502).
+type HTTPError struct {
+	StatusCode int
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("unexpected status %d", e.StatusCode)
+}
+
+var _ error = (*HTTPError)(nil)
 
 // recordResult records the breaker outcome and fires the onResult callback.
 // Only retryable failures (5xx/network exhaustion) trip the breaker; 4xx client

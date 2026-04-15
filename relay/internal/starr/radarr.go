@@ -107,7 +107,7 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if apiErr != nil {
-		w.WriteHeader(http.StatusBadGateway)
+		w.WriteHeader(upstreamStatus(apiErr))
 		return
 	}
 	w.WriteHeader(http.StatusOK)
