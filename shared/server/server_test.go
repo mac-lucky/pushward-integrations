@@ -14,7 +14,7 @@ import (
 func TestNewMux_HealthEndpoint(t *testing.T) {
 	mux := NewMux()
 
-	srv := &http.Server{Handler: mux}
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
@@ -40,7 +40,7 @@ func TestNewMux_HealthEndpoint(t *testing.T) {
 func TestNewMux_UnknownRoute(t *testing.T) {
 	mux := NewMux()
 
-	srv := &http.Server{Handler: mux}
+	srv := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("failed to listen: %v", err)
@@ -169,7 +169,7 @@ func TestListenAndServe_ServerTimeouts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET /custom failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "custom" {
 		t.Errorf("expected 'custom', got %q", string(body))

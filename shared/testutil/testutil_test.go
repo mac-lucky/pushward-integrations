@@ -17,7 +17,7 @@ func createActivity(t *testing.T, url, slug, name string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 201 {
 		t.Fatalf("setup: create activity got %d", resp.StatusCode)
 	}
@@ -83,7 +83,7 @@ func TestCreateActivity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode != tt.wantStatus {
 				t.Errorf("got status %d, want %d", resp.StatusCode, tt.wantStatus)
 			}
@@ -100,7 +100,7 @@ func TestCreateActivity_DuplicateSlug(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 409 {
 		t.Errorf("got status %d, want 409", resp.StatusCode)
 	}
@@ -198,7 +198,7 @@ func TestUpdateActivity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode != tt.wantStatus {
 				t.Errorf("got status %d, want %d", resp.StatusCode, tt.wantStatus)
 			}
@@ -219,7 +219,7 @@ func TestUpdateActivity_NonExistentSlug(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 404 {
 		t.Errorf("got status %d, want 404", resp.StatusCode)
 	}
@@ -232,7 +232,7 @@ func TestUnknownRoute_Passthrough(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("got status %d, want 200", resp.StatusCode)
 	}
@@ -253,7 +253,7 @@ func TestAPICallRecording(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 2 {

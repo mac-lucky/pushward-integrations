@@ -78,7 +78,7 @@ func TestWebhook_FiringWithAnnotation(t *testing.T) {
 
 	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"10.0.0.1:9100"},"values":[[1700000000,"10"],[1700000015,"20"]]}]}}`))
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"10.0.0.1:9100"},"values":[[1700000000,"10"],[1700000015,"20"]]}]}}`))
 	}))
 	defer promSrv.Close()
 
@@ -160,7 +160,7 @@ func TestWebhook_Resolved(t *testing.T) {
 
 	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1700000000,"10"]]}]}}`))
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1700000000,"10"]]}]}}`))
 	}))
 	defer promSrv.Close()
 
@@ -253,7 +253,7 @@ func TestWebhook_MultiSeriesHistory(t *testing.T) {
 
 	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"status": "success",
 			"data": {
 				"resultType": "matrix",
@@ -321,7 +321,7 @@ func TestWebhook_ValuesUseMetricLabels(t *testing.T) {
 
 	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{
+		_, _ = w.Write([]byte(`{
 			"status": "success",
 			"data": {
 				"resultType": "matrix",

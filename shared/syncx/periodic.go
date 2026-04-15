@@ -28,6 +28,7 @@ func (p *Periodic) Start(ctx context.Context, interval time.Duration, fn func(co
 	p.cancel = cancel
 	p.done = make(chan struct{})
 	go func() {
+		defer cancel()
 		defer close(p.done)
 		t := time.NewTicker(interval)
 		defer t.Stop()
