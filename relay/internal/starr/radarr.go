@@ -2,10 +2,8 @@ package starr
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"strconv"
 	"strings"
 
@@ -17,20 +15,12 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
-func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
-	raw, ok := decodePayload(w, r)
-	if !ok {
-		return
+func (h *Handler) handleRadarrWebhook(ctx context.Context, raw []byte) error {
+	envelope, err := decodeEnvelope(raw)
+	if err != nil {
+		return err
 	}
 
-	var envelope starrPayload
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		slog.Error("failed to decode event type", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
 	ctx = metrics.WithProvider(ctx, "starr")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
@@ -38,15 +28,15 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 	var apiErr error
 	switch envelope.EventType {
 	case "Grab":
-		p, ok := unmarshalPayload[RadarrGrabPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[RadarrGrabPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleRadarrGrab(ctx, userKey, log, p)
 	case "Download":
-		p, ok := unmarshalPayload[RadarrDownloadPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[RadarrDownloadPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleRadarrDownload(ctx, userKey, log, p)
 	case "Test":
@@ -55,51 +45,51 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Error("test notification failed", "provider", "radarr", "error", err)
 		}
 	case "Health":
-		p, ok := unmarshalPayload[HealthPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[HealthPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleHealth(ctx, userKey, log, "radarr", p)
 	case "HealthRestored":
-		p, ok := unmarshalPayload[HealthRestoredPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[HealthRestoredPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleHealthRestored(ctx, userKey, log, "radarr", p)
 	case "ManualInteractionRequired":
-		p, ok := unmarshalPayload[ManualInteractionPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[ManualInteractionPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleManualInteraction(ctx, userKey, log, "radarr", p)
 	case "Rename":
-		p, ok := unmarshalPayload[RadarrMovieEventPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[RadarrMovieEventPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleRadarrRename(ctx, userKey, log, p)
 	case "MovieAdded":
-		p, ok := unmarshalPayload[RadarrMovieEventPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[RadarrMovieEventPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleRadarrMovieAdded(ctx, userKey, log, p)
 	case "MovieDelete":
-		p, ok := unmarshalPayload[RadarrMovieDeletePayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[RadarrMovieDeletePayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleRadarrMovieDelete(ctx, userKey, log, p)
 	case "MovieFileDelete":
-		p, ok := unmarshalPayload[RadarrMovieFileDeletePayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[RadarrMovieFileDeletePayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleRadarrMovieFileDelete(ctx, userKey, log, p)
 	case "ApplicationUpdate":
-		p, ok := unmarshalPayload[ApplicationUpdatePayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[ApplicationUpdatePayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleApplicationUpdate(ctx, userKey, log, "radarr", p)
 	default:
@@ -107,11 +97,9 @@ func (h *Handler) handleRadarrWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if apiErr != nil {
-		w.WriteHeader(upstreamStatus(apiErr))
-		return
+		return upstreamHumaError(apiErr)
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return nil
 }
 
 func movieTitle(m RadarrMovie) string {

@@ -1,14 +1,12 @@
 package starr
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -24,18 +22,22 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
-// upstreamStatus maps a pushward API error to the HTTP status the webhook
+// upstreamHumaError maps a pushward API error to the huma error the webhook
 // caller should see. Auth/authz failures surface unchanged so the caller
 // (Sonarr/Radarr/etc.) reports "auth failed" instead of a generic 502.
-func upstreamStatus(err error) int {
+func upstreamHumaError(err error) error {
 	var he *pushward.HTTPError
 	if errors.As(err, &he) {
 		switch he.StatusCode {
-		case http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests:
-			return he.StatusCode
+		case http.StatusUnauthorized:
+			return huma.Error401Unauthorized("upstream rejected integration key")
+		case http.StatusForbidden:
+			return huma.Error403Forbidden("upstream denied integration key")
+		case http.StatusTooManyRequests:
+			return huma.Error429TooManyRequests("upstream rate limited")
 		}
 	}
-	return http.StatusBadGateway
+	return huma.Error502BadGateway("upstream API error")
 }
 
 // trackedSlug is stored in the state store as JSON.
@@ -85,54 +87,32 @@ func (h *Handler) Ender() *lifecycle.Ender {
 	return h.ender
 }
 
-// handleRadarrHuma is the Huma handler for Radarr webhooks. Uses RawBody
-// because starr does two-phase JSON parsing (envelope → type-specific struct).
 func (h *Handler) handleRadarrHuma(ctx context.Context, input *struct {
 	RawBody []byte
 },
 ) (*humautil.WebhookResponse, error) {
-	return h.dispatchRaw(ctx, input.RawBody, h.handleRadarrWebhook)
+	if err := h.handleRadarrWebhook(ctx, input.RawBody); err != nil {
+		return nil, err
+	}
+	return humautil.NewOK(), nil
 }
 
 func (h *Handler) handleSonarrHuma(ctx context.Context, input *struct {
 	RawBody []byte
 },
 ) (*humautil.WebhookResponse, error) {
-	return h.dispatchRaw(ctx, input.RawBody, h.handleSonarrWebhook)
+	if err := h.handleSonarrWebhook(ctx, input.RawBody); err != nil {
+		return nil, err
+	}
+	return humautil.NewOK(), nil
 }
 
 func (h *Handler) handleProwlarrHuma(ctx context.Context, input *struct {
 	RawBody []byte
 },
 ) (*humautil.WebhookResponse, error) {
-	return h.dispatchRaw(ctx, input.RawBody, h.handleProwlarrWebhook)
-}
-
-// dispatchRaw creates an httptest request/response pair and delegates to the
-// existing http.HandlerFunc. This avoids rewriting the complex two-phase parsing
-// logic in each starr sub-handler during the initial migration.
-// TODO: refactor sub-handlers to accept (ctx, raw []byte) directly.
-func (h *Handler) dispatchRaw(ctx context.Context, raw []byte, handler func(http.ResponseWriter, *http.Request)) (*humautil.WebhookResponse, error) {
-	// Import is at file level; these are only used in this bridge.
-	r := httptest.NewRequest(http.MethodPost, "/", bytes.NewReader(raw))
-	r = r.WithContext(ctx)
-	w := httptest.NewRecorder()
-	handler(w, r)
-	switch w.Code {
-	case http.StatusBadGateway:
-		return nil, huma.Error502BadGateway("upstream API error")
-	case http.StatusUnauthorized:
-		return nil, huma.Error401Unauthorized("upstream rejected integration key")
-	case http.StatusForbidden:
-		return nil, huma.Error403Forbidden("upstream denied integration key")
-	case http.StatusTooManyRequests:
-		return nil, huma.Error429TooManyRequests("upstream rate limited")
-	case http.StatusBadRequest:
-		return nil, huma.Error400BadRequest("invalid payload")
-	default:
-		if w.Code >= 400 {
-			return nil, huma.Error502BadGateway("upstream API error")
-		}
+	if err := h.handleProwlarrWebhook(ctx, input.RawBody); err != nil {
+		return nil, err
 	}
 	return humautil.NewOK(), nil
 }
@@ -154,26 +134,24 @@ func slugForDownload(prefix, downloadID string) string {
 	return text.Slug(prefix, downloadID)
 }
 
-func decodePayload(w http.ResponseWriter, r *http.Request) (json.RawMessage, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	var raw json.RawMessage
-	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+// decodeEnvelope unmarshals the webhook body into the shared eventType envelope.
+// Request body size is bounded by huma's MaxBodyBytes default (1 MiB).
+func decodeEnvelope(raw []byte) (starrPayload, error) {
+	var envelope starrPayload
+	if err := json.Unmarshal(raw, &envelope); err != nil {
 		slog.Error("failed to decode webhook payload", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return nil, false
+		return envelope, huma.Error400BadRequest("invalid payload")
 	}
-	return raw, true
+	return envelope, nil
 }
 
-func unmarshalPayload[T any](raw json.RawMessage, w http.ResponseWriter) (*T, bool) {
+func unmarshalPayload[T any](raw []byte) (*T, error) {
 	var p T
 	if err := json.Unmarshal(raw, &p); err != nil {
 		slog.Error("failed to decode payload", "type", fmt.Sprintf("%T", p), "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return nil, false
+		return nil, huma.Error400BadRequest("invalid payload")
 	}
-	return &p, true
+	return &p, nil
 }
 
 // getTrackedSlug retrieves a tracked download slug from the state store.

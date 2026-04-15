@@ -2,9 +2,7 @@ package starr
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
-	"net/http"
 	"regexp"
 	"strings"
 
@@ -34,20 +32,12 @@ func releaseBaseTitle(title string) string {
 	return ""
 }
 
-func (h *Handler) handleProwlarrWebhook(w http.ResponseWriter, r *http.Request) {
-	raw, ok := decodePayload(w, r)
-	if !ok {
-		return
+func (h *Handler) handleProwlarrWebhook(ctx context.Context, raw []byte) error {
+	envelope, err := decodeEnvelope(raw)
+	if err != nil {
+		return err
 	}
 
-	var envelope starrPayload
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		slog.Error("failed to decode event type", "error", err)
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
 	ctx = metrics.WithProvider(ctx, "starr")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
@@ -60,27 +50,27 @@ func (h *Handler) handleProwlarrWebhook(w http.ResponseWriter, r *http.Request) 
 			log.Error("test notification failed", "provider", "prowlarr", "error", err)
 		}
 	case "Grab":
-		p, ok := unmarshalPayload[ProwlarrGrabPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[ProwlarrGrabPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleProwlarrGrab(ctx, userKey, log, p)
 	case "Health":
-		p, ok := unmarshalPayload[HealthPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[HealthPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleHealth(ctx, userKey, log, "prowlarr", p)
 	case "HealthRestored":
-		p, ok := unmarshalPayload[HealthRestoredPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[HealthRestoredPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleHealthRestored(ctx, userKey, log, "prowlarr", p)
 	case "ApplicationUpdate":
-		p, ok := unmarshalPayload[ApplicationUpdatePayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[ApplicationUpdatePayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleApplicationUpdate(ctx, userKey, log, "prowlarr", p)
 	default:
@@ -88,11 +78,9 @@ func (h *Handler) handleProwlarrWebhook(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if apiErr != nil {
-		w.WriteHeader(upstreamStatus(apiErr))
-		return
+		return upstreamHumaError(apiErr)
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return nil
 }
 
 func (h *Handler) handleProwlarrGrab(ctx context.Context, userKey string, log *slog.Logger, p *ProwlarrGrabPayload) error {

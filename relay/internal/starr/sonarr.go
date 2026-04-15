@@ -2,9 +2,7 @@ package starr
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
-	"net/http"
 	"strconv"
 	"strings"
 
@@ -16,19 +14,12 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
-func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
-	raw, ok := decodePayload(w, r)
-	if !ok {
-		return
+func (h *Handler) handleSonarrWebhook(ctx context.Context, raw []byte) error {
+	envelope, err := decodeEnvelope(raw)
+	if err != nil {
+		return err
 	}
 
-	var envelope starrPayload
-	if err := json.Unmarshal(raw, &envelope); err != nil {
-		http.Error(w, "invalid payload", http.StatusBadRequest)
-		return
-	}
-
-	ctx := r.Context()
 	ctx = metrics.WithProvider(ctx, "starr")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
@@ -36,15 +27,15 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 	var apiErr error
 	switch envelope.EventType {
 	case "Grab":
-		p, ok := unmarshalPayload[SonarrGrabPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[SonarrGrabPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleSonarrGrab(ctx, userKey, log, p)
 	case "Download":
-		p, ok := unmarshalPayload[SonarrDownloadPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[SonarrDownloadPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleSonarrDownload(ctx, userKey, log, p)
 	case "Test":
@@ -53,57 +44,57 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 			log.Error("test notification failed", "provider", "sonarr", "error", err)
 		}
 	case "Health":
-		p, ok := unmarshalPayload[HealthPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[HealthPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleHealth(ctx, userKey, log, "sonarr", p)
 	case "HealthRestored":
-		p, ok := unmarshalPayload[HealthRestoredPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[HealthRestoredPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleHealthRestored(ctx, userKey, log, "sonarr", p)
 	case "ManualInteractionRequired":
-		p, ok := unmarshalPayload[ManualInteractionPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[ManualInteractionPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleManualInteraction(ctx, userKey, log, "sonarr", p)
 	case "Rename":
-		p, ok := unmarshalPayload[SonarrSeriesEventPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[SonarrSeriesEventPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleSonarrRename(ctx, userKey, log, p)
 	case "SeriesAdd":
-		p, ok := unmarshalPayload[SonarrSeriesEventPayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[SonarrSeriesEventPayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleSonarrSeriesAdd(ctx, userKey, log, p)
 	case "SeriesDelete":
-		p, ok := unmarshalPayload[SonarrSeriesDeletePayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[SonarrSeriesDeletePayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleSonarrSeriesDelete(ctx, userKey, log, p)
 	case "EpisodeFileDelete":
-		p, ok := unmarshalPayload[SonarrEpisodeFileDeletePayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[SonarrEpisodeFileDeletePayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleSonarrEpisodeFileDelete(ctx, userKey, log, p)
 	case "ApplicationUpdate":
-		p, ok := unmarshalPayload[ApplicationUpdatePayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[ApplicationUpdatePayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleApplicationUpdate(ctx, userKey, log, "sonarr", p)
 	case "ImportComplete":
-		p, ok := unmarshalPayload[SonarrImportCompletePayload](raw, w)
-		if !ok {
-			return
+		p, err := unmarshalPayload[SonarrImportCompletePayload](raw)
+		if err != nil {
+			return err
 		}
 		apiErr = h.handleSonarrImportComplete(ctx, userKey, log, p)
 	default:
@@ -111,11 +102,9 @@ func (h *Handler) handleSonarrWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if apiErr != nil {
-		w.WriteHeader(upstreamStatus(apiErr))
-		return
+		return upstreamHumaError(apiErr)
 	}
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write([]byte("ok"))
+	return nil
 }
 
 // sonarrSeriesURL constructs a deep link to a series in the Sonarr UI.
