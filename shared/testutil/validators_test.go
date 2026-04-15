@@ -19,7 +19,7 @@ func patchActivity(t *testing.T, url, slug, body string) int {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return resp.StatusCode
 }
 
