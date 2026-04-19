@@ -15,6 +15,13 @@ const (
 	LevelPassive = "passive"
 )
 
+// ActivitySound is a Live Activity alert-sound identifier. The typed alias
+// stops the value being confused with other string arguments at call sites.
+// Any string is accepted by the SDK — the server is the source of truth for
+// the allowlist (it returns 400 on unrecognised values), so clients don't
+// mirror it and avoid drift as new sounds are added server-side.
+type ActivitySound string
+
 // BoolPtr returns a pointer to the given bool value.
 func BoolPtr(v bool) *bool { return &v }
 
@@ -99,9 +106,12 @@ type CreateActivityRequest struct {
 }
 
 // UpdateRequest is the body for PATCH /activity/{slug}.
+// Sound is an optional Live Activity alert sound — request-scoped, not persisted.
+// Only applies to ONGOING transitions; iOS silently drops alerts on end events.
 type UpdateRequest struct {
-	State   string  `json:"state"`
-	Content Content `json:"content"`
+	State   string        `json:"state"`
+	Content Content       `json:"content"`
+	Sound   ActivitySound `json:"sound,omitempty"`
 }
 
 // SendNotificationRequest is the body for POST /notifications.
