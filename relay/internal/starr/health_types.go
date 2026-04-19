@@ -19,10 +19,17 @@ type HealthRestoredPayload struct {
 }
 
 // ManualInteractionPayload is sent when a download needs manual import.
+// Movie/Series/Episodes are optional and provider-specific: Radarr populates
+// Movie; Sonarr populates Series and Episodes. These are used to derive a
+// content-based activity key so the failed-download Live Activity can be
+// updated rather than orphaned.
 type ManualInteractionPayload struct {
-	EventType    string       `json:"eventType"`
-	DownloadID   string       `json:"downloadId"`
-	DownloadInfo ManualDLInfo `json:"downloadInfo"`
+	EventType    string          `json:"eventType"`
+	DownloadID   string          `json:"downloadId"`
+	DownloadInfo ManualDLInfo    `json:"downloadInfo"`
+	Movie        *RadarrMovie    `json:"movie,omitempty"`
+	Series       *SonarrSeries   `json:"series,omitempty"`
+	Episodes     []SonarrEpisode `json:"episodes,omitempty"`
 }
 
 // ManualDLInfo contains download details for manual interaction events.

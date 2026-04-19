@@ -101,7 +101,7 @@ func TestRadarrGrab(t *testing.T) {
 
 	w := sendRadarr(t, mux, `{
 		"eventType": "Grab",
-		"movie": {"id": 1, "title": "Inception", "year": 2010},
+		"movie": {"id": 1, "title": "Inception", "year": 2010, "tmdbId": 27205},
 		"release": {"quality": "Bluray-1080p", "size": 5368709120, "indexer": "NZBgeek", "releaseTitle": "Inception.2010.1080p.BluRay"},
 		"downloadClient": "SABnzbd",
 		"downloadId": "SABnzbd_nzo_abc123"
@@ -126,8 +126,8 @@ func TestRadarrGrab(t *testing.T) {
 	}
 	var createReq pushward.CreateActivityRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &createReq)
-	if createReq.Slug != slugForDownload("radarr-", "SABnzbd_nzo_abc123") {
-		t.Errorf("expected slug %s, got %s", slugForDownload("radarr-", "SABnzbd_nzo_abc123"), createReq.Slug)
+	if createReq.Slug != "radarr-movie-27205" {
+		t.Errorf("expected slug radarr-movie-27205, got %s", createReq.Slug)
 	}
 	if createReq.Name != "Inception (2010)" {
 		t.Errorf("expected name 'Inception (2010)', got %s", createReq.Name)
@@ -308,10 +308,10 @@ func TestRadarrConcurrentDownloads(t *testing.T) {
 		t.Fatalf("expected 9 calls, got %d", len(recorded))
 	}
 
-	// Movie 2 should still be tracked in state store
-	_, stillTracked := h.getTrackedSlug(t.Context(), "hlk_test", "radarr:dl-2")
+	// Movie 2 (internal id=2, no tmdbId) should still be tracked in state store
+	_, stillTracked := h.getTrackedSlug(t.Context(), "hlk_test", "radarr:movie:id:2")
 	if !stillTracked {
-		t.Error("expected dl-2 to still be tracked")
+		t.Error("expected movie 2 to still be tracked")
 	}
 }
 
@@ -434,13 +434,14 @@ func TestSonarrGrab(t *testing.T) {
 	}
 	var create pushward.CreateActivityRequest
 	testutil.UnmarshalBody(t, got[1].Body, &create)
-	if create.Slug != "sonarr-abc-123" {
-		t.Errorf("expected slug sonarr-abc-123, got %s", create.Slug)
+	// No tvdbId in payload → series-id fallback; no episode id → series-level slug.
+	if create.Slug != "sonarr-series-id-1" {
+		t.Errorf("expected slug sonarr-series-id-1, got %s", create.Slug)
 	}
 
 	// Call 3: ONGOING update
-	if got[2].Method != "PATCH" || got[2].Path != "/activity/sonarr-abc-123" {
-		t.Errorf("call 2: expected PATCH /activity/sonarr-abc-123, got %s %s", got[2].Method, got[2].Path)
+	if got[2].Method != "PATCH" || got[2].Path != "/activity/sonarr-series-id-1" {
+		t.Errorf("call 2: expected PATCH /activity/sonarr-series-id-1, got %s %s", got[2].Method, got[2].Path)
 	}
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[2].Body, &update)
@@ -587,8 +588,9 @@ func TestSonarrConcurrentDownloads(t *testing.T) {
 			slugs[create.Slug] = true
 		}
 	}
-	if !slugs["sonarr-dl-1"] || !slugs["sonarr-dl-2"] {
-		t.Errorf("expected slugs sonarr-dl-1 and sonarr-dl-2, got %v", slugs)
+	// Content-keyed: no tvdbId → series-id fallback per series.
+	if !slugs["sonarr-series-id-1"] || !slugs["sonarr-series-id-2"] {
+		t.Errorf("expected slugs sonarr-series-id-1 and sonarr-series-id-2, got %v", slugs)
 	}
 
 	// Complete both
@@ -670,8 +672,9 @@ func TestSonarrDownloadWithoutGrab(t *testing.T) {
 	}
 	var create pushward.CreateActivityRequest
 	testutil.UnmarshalBody(t, got[1].Body, &create)
-	if create.Slug != "sonarr-no-grab-1" {
-		t.Errorf("expected slug sonarr-no-grab-1, got %s", create.Slug)
+	// Content-keyed: series-id fallback (no tvdbId, no episode id).
+	if create.Slug != "sonarr-series-id-1" {
+		t.Errorf("expected slug sonarr-series-id-1, got %s", create.Slug)
 	}
 
 	// Phase 2: ENDED with Downloaded
@@ -1236,6 +1239,285 @@ func TestRadarrGrab_NotifyMode_SendsNotification(t *testing.T) {
 	}
 	if recorded[0].Path != "/notifications" {
 		t.Errorf("expected POST /notifications, got %s", recorded[0].Path)
+	}
+}
+
+// ============================================================
+// Retry consolidation tests (content-based dedup)
+// ============================================================
+
+// TestRadarrRetryConsolidatesActivity verifies that a failed download followed
+// by a retry (different downloadId, same movie) keeps a single Live Activity
+// instead of spawning a second orphaned one.
+func TestRadarrRetryConsolidatesActivity(t *testing.T) {
+	mux, _, calls, mu := newHandler(t, testConfig())
+
+	// First grab — release A
+	sendRadarr(t, mux, `{
+		"eventType": "Grab",
+		"movie": {"id": 1, "title": "Inception", "year": 2010, "tmdbId": 27205},
+		"release": {"quality": "Bluray-1080p", "size": 5368709120},
+		"downloadClient": "SABnzbd",
+		"downloadId": "dl-A"
+	}`)
+
+	// Release A fails — ManualInteractionRequired (with movie so activity updates)
+	sendRadarr(t, mux, `{
+		"eventType": "ManualInteractionRequired",
+		"downloadId": "dl-A",
+		"movie": {"id": 1, "title": "Inception", "year": 2010, "tmdbId": 27205},
+		"downloadInfo": {
+			"quality": "Bluray-1080p",
+			"title": "Inception.Release.A",
+			"status": "Warning",
+			"statusMessages": [{"title": "t", "messages": ["No files eligible"]}]
+		}
+	}`)
+
+	// User picks release B — different downloadId, same movie
+	sendRadarr(t, mux, `{
+		"eventType": "Grab",
+		"movie": {"id": 1, "title": "Inception", "year": 2010, "tmdbId": 27205},
+		"release": {"quality": "Bluray-1080p", "size": 5368709120},
+		"downloadClient": "SABnzbd",
+		"downloadId": "dl-B"
+	}`)
+
+	recorded := testutil.GetCalls(calls, mu)
+
+	// Only one CreateActivity should be recorded, slugged by tmdbId.
+	var creates []pushward.CreateActivityRequest
+	for _, c := range recorded {
+		if c.Method == "POST" && c.Path == "/activities" {
+			var cr pushward.CreateActivityRequest
+			testutil.UnmarshalBody(t, c.Body, &cr)
+			creates = append(creates, cr)
+		}
+	}
+	if len(creates) != 1 {
+		t.Fatalf("expected 1 CreateActivity, got %d", len(creates))
+	}
+	if creates[0].Slug != "radarr-movie-27205" {
+		t.Errorf("expected slug radarr-movie-27205, got %s", creates[0].Slug)
+	}
+
+	// PATCHes must all target the same slug.
+	for _, c := range recorded {
+		if c.Method == "PATCH" && !strings.HasSuffix(c.Path, "/radarr-movie-27205") {
+			t.Errorf("unexpected PATCH target %s", c.Path)
+		}
+	}
+
+	// Manual-interaction must have produced a "Needs attention" update.
+	var sawNeedsAttention bool
+	for _, c := range recorded {
+		if c.Method != "PATCH" {
+			continue
+		}
+		var u pushward.UpdateRequest
+		testutil.UnmarshalBody(t, c.Body, &u)
+		if u.Content.State == "Needs attention" && u.Content.AccentColor == pushward.ColorOrange {
+			sawNeedsAttention = true
+		}
+	}
+	if !sawNeedsAttention {
+		t.Error("expected a PATCH updating activity to 'Needs attention'")
+	}
+}
+
+// TestSonarrRetryConsolidatesActivity verifies that Sonarr's retry flow also
+// collapses into a single activity (same series + episode set).
+func TestSonarrRetryConsolidatesActivity(t *testing.T) {
+	mux, _, calls, mu := newHandler(t, testConfig())
+
+	// Release A
+	sendSonarr(t, mux, `{
+		"eventType": "Grab",
+		"series": {"id": 1, "title": "Breaking Bad", "tvdbId": 81189},
+		"episodes": [{"id": 67, "episodeNumber": 5, "seasonNumber": 2, "title": "Breakage"}],
+		"release": {"quality": "1080p", "size": 1500000000},
+		"downloadClient": "SABnzbd",
+		"downloadId": "dl-A"
+	}`)
+
+	// Release B — same series + same episode set
+	sendSonarr(t, mux, `{
+		"eventType": "Grab",
+		"series": {"id": 1, "title": "Breaking Bad", "tvdbId": 81189},
+		"episodes": [{"id": 67, "episodeNumber": 5, "seasonNumber": 2, "title": "Breakage"}],
+		"release": {"quality": "720p", "size": 800000000},
+		"downloadClient": "SABnzbd",
+		"downloadId": "dl-B"
+	}`)
+
+	recorded := testutil.GetCalls(calls, mu)
+	var creates []pushward.CreateActivityRequest
+	for _, c := range recorded {
+		if c.Method == "POST" && c.Path == "/activities" {
+			var cr pushward.CreateActivityRequest
+			testutil.UnmarshalBody(t, c.Body, &cr)
+			creates = append(creates, cr)
+		}
+	}
+	if len(creates) != 1 {
+		t.Fatalf("expected 1 CreateActivity, got %d", len(creates))
+	}
+	if creates[0].Slug != "sonarr-series-81189-e-67" {
+		t.Errorf("expected slug sonarr-series-81189-e-67, got %s", creates[0].Slug)
+	}
+}
+
+// TestSonarrDifferentEpisodesProduceDistinctSlugs verifies two activities are
+// created when the user downloads different episodes of the same series.
+func TestSonarrDifferentEpisodesProduceDistinctSlugs(t *testing.T) {
+	mux, _, calls, mu := newHandler(t, testConfig())
+
+	sendSonarr(t, mux, `{
+		"eventType": "Grab",
+		"series": {"id": 1, "title": "Breaking Bad", "tvdbId": 81189},
+		"episodes": [{"id": 67, "episodeNumber": 5, "seasonNumber": 2, "title": "Breakage"}],
+		"release": {"quality": "1080p", "size": 1500000000},
+		"downloadClient": "SABnzbd",
+		"downloadId": "dl-A"
+	}`)
+	sendSonarr(t, mux, `{
+		"eventType": "Grab",
+		"series": {"id": 1, "title": "Breaking Bad", "tvdbId": 81189},
+		"episodes": [{"id": 68, "episodeNumber": 6, "seasonNumber": 2, "title": "Peekaboo"}],
+		"release": {"quality": "1080p", "size": 1500000000},
+		"downloadClient": "SABnzbd",
+		"downloadId": "dl-B"
+	}`)
+
+	recorded := testutil.GetCalls(calls, mu)
+	slugs := map[string]bool{}
+	for _, c := range recorded {
+		if c.Method == "POST" && c.Path == "/activities" {
+			var cr pushward.CreateActivityRequest
+			testutil.UnmarshalBody(t, c.Body, &cr)
+			slugs[cr.Slug] = true
+		}
+	}
+	if !slugs["sonarr-series-81189-e-67"] || !slugs["sonarr-series-81189-e-68"] {
+		t.Errorf("expected distinct slugs per episode, got %v", slugs)
+	}
+}
+
+// TestRadarrManualInteractionUpdatesActivity verifies that ManualInteractionRequired
+// with a tracked activity flips it to "Needs attention" (no second activity).
+func TestRadarrManualInteractionUpdatesActivity(t *testing.T) {
+	mux, _, calls, mu := newHandler(t, testConfig())
+
+	sendRadarr(t, mux, `{
+		"eventType": "Grab",
+		"movie": {"id": 1, "title": "Inception", "year": 2010, "tmdbId": 27205},
+		"release": {"quality": "Bluray-1080p", "size": 5368709120},
+		"downloadClient": "SABnzbd",
+		"downloadId": "dl-A"
+	}`)
+	sendRadarr(t, mux, `{
+		"eventType": "ManualInteractionRequired",
+		"downloadId": "dl-A",
+		"movie": {"id": 1, "title": "Inception", "year": 2010, "tmdbId": 27205},
+		"downloadInfo": {
+			"quality": "Bluray-1080p",
+			"title": "Inception.1080p",
+			"status": "Warning",
+			"statusMessages": [{"title": "t", "messages": ["Cannot import"]}]
+		}
+	}`)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// grab_notify + create + grab_update + mi_notify + mi_update = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	}
+
+	var mi pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[4].Body, &mi)
+	if mi.State != pushward.StateOngoing {
+		t.Errorf("expected ONGOING on needs-attention update, got %s", mi.State)
+	}
+	if mi.Content.State != "Needs attention" {
+		t.Errorf("expected content state 'Needs attention', got %s", mi.Content.State)
+	}
+	if mi.Content.AccentColor != pushward.ColorOrange {
+		t.Errorf("expected orange accent, got %s", mi.Content.AccentColor)
+	}
+	if mi.Content.Icon != "exclamationmark.triangle.fill" {
+		t.Errorf("expected warning icon, got %s", mi.Content.Icon)
+	}
+	if !strings.Contains(mi.Content.Subtitle, "Cannot import") {
+		t.Errorf("expected subtitle to contain reason, got %q", mi.Content.Subtitle)
+	}
+}
+
+// TestRadarrManualInteractionNoMovieFieldNotifiesOnly verifies that older
+// payloads lacking the movie field fall through to notification-only.
+func TestRadarrManualInteractionNoMovieFieldNotifiesOnly(t *testing.T) {
+	mux, _, calls, mu := newHandler(t, testConfig())
+
+	// Grab creates a tracked activity.
+	sendRadarr(t, mux, `{
+		"eventType": "Grab",
+		"movie": {"id": 1, "title": "Inception", "year": 2010, "tmdbId": 27205},
+		"release": {"quality": "Bluray-1080p", "size": 5368709120},
+		"downloadClient": "SABnzbd",
+		"downloadId": "dl-A"
+	}`)
+	// ManualInteractionRequired without movie field.
+	sendRadarr(t, mux, `{
+		"eventType": "ManualInteractionRequired",
+		"downloadId": "dl-A",
+		"downloadInfo": {"quality": "x", "title": "t", "status": "Warning", "statusMessages": []}
+	}`)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// grab_notify + create + grab_update + mi_notify = 4 (no mi_update)
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	}
+	if recorded[3].Path != "/notifications" {
+		t.Errorf("expected manual-interaction notification, got %s %s", recorded[3].Method, recorded[3].Path)
+	}
+}
+
+// TestSonarrLargeEpisodeSetHashesSlug verifies slug stays within the 128-char
+// server limit when a season pack lists many episodes.
+func TestSonarrLargeEpisodeSetHashesSlug(t *testing.T) {
+	series := SonarrSeries{TvdbID: 81189}
+	eps := make([]SonarrEpisode, 50)
+	for i := range eps {
+		eps[i] = SonarrEpisode{ID: 1000 + i}
+	}
+	slug1, _ := sonarrContentKey(series, eps, "dl-X")
+	if len(slug1) > 128 {
+		t.Errorf("slug exceeds 128-char limit: len=%d", len(slug1))
+	}
+	// Determinism: same inputs produce the same slug.
+	slug2, _ := sonarrContentKey(series, eps, "dl-Y")
+	if slug1 != slug2 {
+		t.Errorf("expected deterministic slug, got %s then %s", slug1, slug2)
+	}
+	// And the hashed form must use the series prefix.
+	if !strings.HasPrefix(slug1, "sonarr-series-81189-e-") {
+		t.Errorf("expected hashed slug to preserve series prefix, got %s", slug1)
+	}
+}
+
+// TestRadarrContentKeyFallbacks exercises the fallback chain.
+func TestRadarrContentKeyFallbacks(t *testing.T) {
+	s1, mk1 := radarrContentKey(RadarrMovie{TmdbID: 27205, ID: 1}, "dl-1")
+	if s1 != "radarr-movie-27205" || mk1 != "radarr:movie:tmdb:27205" {
+		t.Errorf("tmdb path: got (%s, %s)", s1, mk1)
+	}
+	s2, mk2 := radarrContentKey(RadarrMovie{ID: 42}, "dl-1")
+	if s2 != "radarr-movie-id-42" || mk2 != "radarr:movie:id:42" {
+		t.Errorf("id fallback: got (%s, %s)", s2, mk2)
+	}
+	s3, mk3 := radarrContentKey(RadarrMovie{}, "SAB_nzo_1")
+	if s3 != "radarr-sab-nzo-1" || mk3 != "radarr:SAB_nzo_1" {
+		t.Errorf("downloadId fallback: got (%s, %s)", s3, mk3)
 	}
 }
 

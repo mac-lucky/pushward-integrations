@@ -12,6 +12,7 @@ type SonarrSeries struct {
 
 // SonarrEpisode represents an episode in Sonarr webhook payloads.
 type SonarrEpisode struct {
+	ID            int    `json:"id"`
 	EpisodeNumber int    `json:"episodeNumber"`
 	SeasonNumber  int    `json:"seasonNumber"`
 	Title         string `json:"title"`

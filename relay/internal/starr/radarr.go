@@ -61,7 +61,7 @@ func (h *Handler) handleRadarrWebhook(ctx context.Context, raw []byte) error {
 		if err != nil {
 			return err
 		}
-		apiErr = h.handleManualInteraction(ctx, userKey, log, "radarr", p)
+		apiErr = h.handleRadarrManualInteraction(ctx, userKey, log, p)
 	case "Rename":
 		p, err := unmarshalPayload[RadarrMovieEventPayload](raw)
 		if err != nil {
@@ -141,9 +141,8 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 		return nil
 	}
 
-	slug := slugForDownload("radarr-", p.DownloadID)
+	slug, mapKey := radarrContentKey(p.Movie, p.DownloadID)
 	title := movieTitle(p.Movie)
-	mapKey := "radarr:" + p.DownloadID
 
 	// Cancel any existing end timer for this download
 	h.ender.StopTimer(userKey, mapKey)
@@ -189,21 +188,25 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 		return nil
 	}
 
-	// Activity mode: create Live Activity (existing behavior)
+	// Activity mode. If the same content key was already tracked (retry of a
+	// failed release), skip CreateActivity — the update below refreshes the
+	// existing activity back to "Grabbed".
+	_, alreadyTracked := h.getTrackedSlug(ctx, userKey, mapKey)
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
 		log.Error("failed to track download", "slug", slug, "error", err)
 		return nil
 	}
 
-	endedTTL := int(h.config.CleanupDelay.Seconds())
-	staleTTL := int(h.config.StaleTimeout.Seconds())
-
-	if err := cl.CreateActivity(ctx, slug, title, h.config.Priority, endedTTL, staleTTL); err != nil {
-		log.Error("failed to create activity", "slug", slug, "error", err)
-		h.deleteTrackedSlug(ctx, userKey, mapKey)
-		return err
+	if !alreadyTracked {
+		endedTTL := int(h.config.CleanupDelay.Seconds())
+		staleTTL := int(h.config.StaleTimeout.Seconds())
+		if err := cl.CreateActivity(ctx, slug, title, h.config.Priority, endedTTL, staleTTL); err != nil {
+			log.Error("failed to create activity", "slug", slug, "error", err)
+			h.deleteTrackedSlug(ctx, userKey, mapKey)
+			return err
+		}
+		log.Info("created activity", "slug", slug, "title", title)
 	}
-	log.Info("created activity", "slug", slug, "title", title)
 
 	step := 1
 	total := 2
@@ -236,7 +239,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 	}
 
 	title := movieTitle(p.Movie)
-	mapKey := "radarr:" + p.DownloadID
+	slug, mapKey := radarrContentKey(p.Movie, p.DownloadID)
 
 	// Cancel any existing end timer
 	h.ender.StopTimer(userKey, mapKey)
@@ -276,16 +279,16 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 
 	// In notify/smart mode for Download, skip Live Activity
 	if h.shouldNotify("Download") {
-		log.Info("download notification sent", "slug", slugForDownload("radarr-", p.DownloadID), "title", title, "mode", h.config.Mode)
+		log.Info("download notification sent", "slug", slug, "title", title, "mode", h.config.Mode)
 		return nil
 	}
 
-	// Activity mode: existing behavior
-	slug, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
-
-	if !tracked {
-		slug = slugForDownload("radarr-", p.DownloadID)
-
+	// Prefer the slug stored at Grab time to preserve continuity across any
+	// payload drift between events.
+	stored, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
+	if tracked {
+		slug = stored
+	} else {
 		if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
 			log.Error("failed to track download", "slug", slug, "error", err)
 			return nil
@@ -316,6 +319,43 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	log.Info("scheduled end", "slug", slug, "state", state)
+	return nil
+}
+
+// handleRadarrManualInteraction sends the manual-interaction push notification
+// and, when there is a tracked Live Activity for the movie, flips it into a
+// "Needs attention" state so the user sees the failure on lock screen. The
+// activity is intentionally left ONGOING — a subsequent Grab for a new release
+// (different downloadId, same tmdbId) will update the same slug back to
+// "Grabbed", and a successful Download will end it normally.
+func (h *Handler) handleRadarrManualInteraction(ctx context.Context, userKey string, log *slog.Logger, p *ManualInteractionPayload) error {
+	if err := h.handleManualInteractionNotify(ctx, userKey, log, "radarr", p); err != nil {
+		log.Error("manual interaction notify failed", "error", err)
+	}
+
+	if p.Movie == nil || h.shouldNotify("ManualInteractionRequired") {
+		return nil
+	}
+
+	slug, mapKey := radarrContentKey(*p.Movie, p.DownloadID)
+	stored, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
+	if !tracked {
+		return nil
+	}
+	slug = stored
+	h.ender.StopTimer(userKey, mapKey)
+
+	subtitle := radarrSubtitle(movieTitle(*p.Movie), p.DownloadInfo.Quality)
+	if reason := manualInteractionReason(p); reason != "" {
+		subtitle = text.Truncate(reason, 100)
+	}
+
+	cl := h.clients.Get(userKey)
+	if err := cl.UpdateActivity(ctx, slug, manualInteractionUpdate(subtitle)); err != nil {
+		log.Error("failed to update activity (manual interaction)", "slug", slug, "error", err)
+		return err
+	}
+	log.Info("activity marked needs attention", "slug", slug)
 	return nil
 }
 

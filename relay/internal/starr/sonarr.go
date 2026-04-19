@@ -60,7 +60,7 @@ func (h *Handler) handleSonarrWebhook(ctx context.Context, raw []byte) error {
 		if err != nil {
 			return err
 		}
-		apiErr = h.handleManualInteraction(ctx, userKey, log, "sonarr", p)
+		apiErr = h.handleSonarrManualInteraction(ctx, userKey, log, p)
 	case "Rename":
 		p, err := unmarshalPayload[SonarrSeriesEventPayload](raw)
 		if err != nil {
@@ -121,9 +121,8 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 		return nil
 	}
 
-	slug := slugForDownload("sonarr-", p.DownloadID)
+	slug, mapKey := sonarrContentKey(p.Series, p.Episodes, p.DownloadID)
 	subtitle := FormatSubtitle(p.Series, p.Episodes, p.Release.Quality)
-	mapKey := "sonarr:" + p.DownloadID
 
 	// Cancel any existing end timer
 	h.ender.StopTimer(userKey, mapKey)
@@ -171,18 +170,23 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 		return nil
 	}
 
-	// Activity mode: existing behavior
+	// Activity mode. If the same content key was already tracked (retry of a
+	// failed release), skip CreateActivity — the update below refreshes the
+	// existing activity back to "Grabbed".
+	_, alreadyTracked := h.getTrackedSlug(ctx, userKey, mapKey)
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
 		log.Error("failed to track download", "slug", slug, "error", err)
 		return nil
 	}
 
-	endedTTL := int(h.config.CleanupDelay.Seconds())
-	staleTTL := int(h.config.StaleTimeout.Seconds())
-	if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
-		log.Error("failed to create activity", "slug", slug, "error", err)
-		h.deleteTrackedSlug(ctx, userKey, mapKey)
-		return err
+	if !alreadyTracked {
+		endedTTL := int(h.config.CleanupDelay.Seconds())
+		staleTTL := int(h.config.StaleTimeout.Seconds())
+		if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+			log.Error("failed to create activity", "slug", slug, "error", err)
+			h.deleteTrackedSlug(ctx, userKey, mapKey)
+			return err
+		}
 	}
 
 	step := 1
@@ -214,8 +218,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 		return nil
 	}
 
-	slug := slugForDownload("sonarr-", p.DownloadID)
-	mapKey := "sonarr:" + p.DownloadID
+	slug, mapKey := sonarrContentKey(p.Series, p.Episodes, p.DownloadID)
 
 	// Cancel any existing end timer
 	h.ender.StopTimer(userKey, mapKey)
@@ -265,10 +268,12 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 		return nil
 	}
 
-	// Activity mode: existing behavior
-	_, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
-
-	if !tracked {
+	// Activity mode. Prefer the slug stored at Grab time to preserve
+	// continuity across any payload drift between events.
+	stored, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
+	if tracked {
+		slug = stored
+	} else {
 		if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
 			log.Error("failed to track download", "slug", slug, "error", err)
 			return nil
@@ -299,6 +304,41 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	log.Info("download complete", "slug", slug, "state", state, "series", p.Series.Title)
+	return nil
+}
+
+// handleSonarrManualInteraction sends the manual-interaction push notification
+// and, when there is a tracked Live Activity for the series+episode set, flips
+// it into a "Needs attention" state. The activity stays ONGOING so a later
+// Grab (user picks another release) can update it back to "Grabbed".
+func (h *Handler) handleSonarrManualInteraction(ctx context.Context, userKey string, log *slog.Logger, p *ManualInteractionPayload) error {
+	if err := h.handleManualInteractionNotify(ctx, userKey, log, "sonarr", p); err != nil {
+		log.Error("manual interaction notify failed", "error", err)
+	}
+
+	if p.Series == nil || h.shouldNotify("ManualInteractionRequired") {
+		return nil
+	}
+
+	slug, mapKey := sonarrContentKey(*p.Series, p.Episodes, p.DownloadID)
+	stored, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
+	if !tracked {
+		return nil
+	}
+	slug = stored
+	h.ender.StopTimer(userKey, mapKey)
+
+	subtitle := FormatSubtitle(*p.Series, p.Episodes, p.DownloadInfo.Quality)
+	if reason := manualInteractionReason(p); reason != "" {
+		subtitle = text.Truncate(reason, 100)
+	}
+
+	cl := h.clients.Get(userKey)
+	if err := cl.UpdateActivity(ctx, slug, manualInteractionUpdate(subtitle)); err != nil {
+		log.Error("failed to update activity (manual interaction)", "slug", slug, "error", err)
+		return err
+	}
+	log.Info("activity marked needs attention", "slug", slug)
 	return nil
 }
 

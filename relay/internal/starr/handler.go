@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -134,6 +136,63 @@ func slugForDownload(prefix, downloadID string) string {
 	return text.Slug(prefix, downloadID)
 }
 
+// maxSlugLen matches the server's activity slug maxLength (openapi/activity model).
+const maxSlugLen = 128
+
+// radarrContentKey derives a stable (slug, mapKey) from a Radarr movie so that
+// retries of the same movie (different downloadId) collapse into one Live
+// Activity. Falls back to the internal movie ID and finally to downloadId.
+func radarrContentKey(m RadarrMovie, downloadID string) (slug, mapKey string) {
+	switch {
+	case m.TmdbID > 0:
+		suffix := strconv.Itoa(m.TmdbID)
+		return "radarr-movie-" + suffix, "radarr:movie:tmdb:" + suffix
+	case m.ID > 0:
+		suffix := strconv.Itoa(m.ID)
+		return "radarr-movie-id-" + suffix, "radarr:movie:id:" + suffix
+	default:
+		return slugForDownload("radarr-", downloadID), "radarr:" + downloadID
+	}
+}
+
+// sonarrContentKey derives a stable (slug, mapKey) from a Sonarr series and
+// its episode list. Different episode sets for the same series produce
+// different slugs; a huge season-pack list is collapsed via a deterministic
+// hash so the slug stays within the 128-char server limit.
+func sonarrContentKey(s SonarrSeries, eps []SonarrEpisode, downloadID string) (slug, mapKey string) {
+	var seriesID string
+	switch {
+	case s.TvdbID > 0:
+		seriesID = "series-" + strconv.Itoa(s.TvdbID)
+	case s.ID > 0:
+		seriesID = "series-id-" + strconv.Itoa(s.ID)
+	default:
+		return slugForDownload("sonarr-", downloadID), "sonarr:" + downloadID
+	}
+
+	ids := make([]int, 0, len(eps))
+	for _, e := range eps {
+		if e.ID > 0 {
+			ids = append(ids, e.ID)
+		}
+	}
+	contentID := seriesID
+	if len(ids) > 0 {
+		slices.Sort(ids)
+		parts := make([]string, len(ids))
+		for i, id := range ids {
+			parts[i] = strconv.Itoa(id)
+		}
+		joined := strings.Join(parts, "-")
+		contentID = seriesID + "-e-" + joined
+		if len("sonarr-")+len(contentID) > maxSlugLen {
+			// SlugHash returns "-<hex>"; strip leading dash for clean joining.
+			contentID = seriesID + "-e-" + strings.TrimPrefix(text.SlugHash("", joined, 8), "-")
+		}
+	}
+	return "sonarr-" + contentID, "sonarr:" + contentID
+}
+
 // decodeEnvelope unmarshals the webhook body into the shared eventType envelope.
 // Request body size is bounded by huma's MaxBodyBytes default (1 MiB).
 func decodeEnvelope(raw []byte) (starrPayload, error) {
@@ -235,17 +294,29 @@ func (h *Handler) handleHealthRestored(ctx context.Context, userKey string, log 
 	})
 }
 
-// handleManualInteraction sends a push notification when a download needs manual import.
-func (h *Handler) handleManualInteraction(ctx context.Context, userKey string, log *slog.Logger, provider string, p *ManualInteractionPayload) error {
-	reason := "Import requires manual interaction"
+// manualInteractionReason returns the human-readable failure reason from the
+// webhook payload, or "" when the payload carries no status message.
+func manualInteractionReason(p *ManualInteractionPayload) string {
 	if len(p.DownloadInfo.StatusMessages) > 0 && len(p.DownloadInfo.StatusMessages[0].Messages) > 0 {
-		reason = p.DownloadInfo.StatusMessages[0].Messages[0]
+		return p.DownloadInfo.StatusMessages[0].Messages[0]
 	}
+	return ""
+}
 
+const manualInteractionDefaultReason = "Import requires manual interaction"
+
+// handleManualInteractionNotify sends a push notification when a download
+// needs manual import. Callers (Radarr/Sonarr wrappers) invoke this in
+// addition to updating any tracked Live Activity.
+func (h *Handler) handleManualInteractionNotify(ctx context.Context, userKey string, log *slog.Logger, provider string, p *ManualInteractionPayload) error {
+	body := manualInteractionReason(p)
+	if body == "" {
+		body = manualInteractionDefaultReason
+	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      titleCase(provider),
 		Subtitle:   text.Truncate(p.DownloadInfo.Title, 80),
-		Body:       reason,
+		Body:       body,
 		ThreadID:   provider,
 		CollapseID: provider + "-manual-interaction",
 		Level:      pushward.LevelActive,
@@ -253,6 +324,25 @@ func (h *Handler) handleManualInteraction(ctx context.Context, userKey string, l
 		Source:     provider,
 		Push:       true,
 	})
+}
+
+// manualInteractionUpdate returns the UpdateRequest used to flip a tracked
+// activity into a "Needs attention" state on manual-interaction events.
+func manualInteractionUpdate(subtitle string) pushward.UpdateRequest {
+	step, total := 1, 2
+	return pushward.UpdateRequest{
+		State: pushward.StateOngoing,
+		Content: pushward.Content{
+			Template:    "steps",
+			Progress:    0.5,
+			State:       "Needs attention",
+			Icon:        "exclamationmark.triangle.fill",
+			Subtitle:    subtitle,
+			AccentColor: pushward.ColorOrange,
+			CurrentStep: &step,
+			TotalSteps:  &total,
+		},
+	}
 }
 
 func (h *Handler) sendNotification(ctx context.Context, userKey string, log *slog.Logger, req pushward.SendNotificationRequest) error {
