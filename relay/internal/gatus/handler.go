@@ -108,7 +108,7 @@ func (h *Handler) buildNotification(p *gatusPayload, slug, subtitle string) push
 	return pushward.SendNotificationRequest{
 		Title:      text.TruncateHard(p.EndpointName, 100),
 		Subtitle:   subtitle,
-		ThreadID:   text.Slug("gatus-", p.EndpointName),
+		ThreadID:   "gatus",
 		CollapseID: slug,
 		Source:     "gatus",
 		Push:       true,

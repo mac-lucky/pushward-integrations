@@ -98,7 +98,7 @@ func (h *Handler) buildNotification(p *uptimekumaPayload, subtitle string, monit
 	return pushward.SendNotificationRequest{
 		Title:      text.TruncateHard(p.Monitor.Name, 100),
 		Subtitle:   subtitle,
-		ThreadID:   text.Slug("uptimekuma-", p.Monitor.Name),
+		ThreadID:   "uptimekuma",
 		CollapseID: text.SlugHash("uptimekuma", monitorIDStr, 6),
 		Source:     "uptimekuma",
 		Push:       true,

@@ -124,8 +124,8 @@ func TestFiringSingleAlert(t *testing.T) {
 	if req.Source != "grafana" {
 		t.Errorf("expected source grafana, got %s", req.Source)
 	}
-	if req.ThreadID != "grafana-highcpuusage" {
-		t.Errorf("expected thread_id grafana-highcpuusage, got %s", req.ThreadID)
+	if req.ThreadID != "grafana" {
+		t.Errorf("expected thread_id grafana, got %s", req.ThreadID)
 	}
 	if !req.Push {
 		t.Error("expected push=true")
@@ -479,7 +479,7 @@ func TestResolvedWithEmptySummary(t *testing.T) {
 	}
 }
 
-func TestThreadID_PerAlertname(t *testing.T) {
+func TestThreadID_SharedAcrossAlertnames(t *testing.T) {
 	handler, calls, mu, _ := setup(t)
 
 	payload := `{
@@ -508,14 +508,11 @@ func TestThreadID_PerAlertname(t *testing.T) {
 	var req1, req2 pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &req1)
 	testutil.UnmarshalBody(t, recorded[1].Body, &req2)
-	if req1.ThreadID == req2.ThreadID {
-		t.Errorf("expected different thread IDs for different alertnames, both got %s", req1.ThreadID)
+	if req1.ThreadID != "grafana" || req2.ThreadID != "grafana" {
+		t.Errorf("expected both thread IDs to be 'grafana', got %q and %q", req1.ThreadID, req2.ThreadID)
 	}
-	if req1.ThreadID != "grafana-highcpu1" {
-		t.Errorf("expected thread_id grafana-highcpu1, got %s", req1.ThreadID)
-	}
-	if req2.ThreadID != "grafana-diskfull1" {
-		t.Errorf("expected thread_id grafana-diskfull1, got %s", req2.ThreadID)
+	if req1.CollapseID == req2.CollapseID {
+		t.Errorf("expected different collapse IDs per alertname, both got %s", req1.CollapseID)
 	}
 }
 
@@ -1165,12 +1162,9 @@ func TestSingleAlertPreservesCollapseID(t *testing.T) {
 	var req pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &req)
 
-	// Single alert should use fingerprint-based CollapseID
-	expectedCollapseID := "grafana-" // just verify prefix format
-	if !strings.HasPrefix(req.CollapseID, expectedCollapseID) {
+	if !strings.HasPrefix(req.CollapseID, "grafana-") {
 		t.Errorf("expected collapse ID with grafana prefix, got %s", req.CollapseID)
 	}
-	// Subtitle should show instance, not counts
 	if !strings.Contains(req.Subtitle, "node1") {
 		t.Errorf("expected subtitle to contain instance, got %s", req.Subtitle)
 	}

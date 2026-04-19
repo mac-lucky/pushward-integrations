@@ -294,7 +294,6 @@ func (h *Handler) updateState(ctx context.Context, userKey, stateKey string, g *
 }
 
 // buildSingleNotification constructs a notification for a group with exactly one alert.
-// This preserves the original per-alert behavior (instance in subtitle, per-fingerprint collapse ID).
 func (h *Handler) buildSingleNotification(g *alertGroup) pushward.SendNotificationRequest {
 	var a alert
 	if len(g.firing) > 0 {
@@ -318,8 +317,8 @@ func (h *Handler) buildSingleNotification(g *alertGroup) pushward.SendNotificati
 	req := pushward.SendNotificationRequest{
 		Title:      g.alertname,
 		Subtitle:   text.Truncate(subtitle, 80),
-		ThreadID:   text.Slug("grafana-", g.alertname),
-		CollapseID: text.SlugHash("grafana", g.alertname+":"+a.Fingerprint, 6),
+		ThreadID:   "grafana",
+		CollapseID: text.SlugHash("grafana", g.alertname, 6),
 		Source:     "grafana",
 		Push:       true,
 	}
@@ -361,7 +360,7 @@ func (h *Handler) buildGroupedNotification(g *alertGroup) pushward.SendNotificat
 	req := pushward.SendNotificationRequest{
 		Title:      g.alertname,
 		Subtitle:   text.Truncate(subtitle, 80),
-		ThreadID:   text.Slug("grafana-", g.alertname),
+		ThreadID:   "grafana",
 		CollapseID: text.SlugHash("grafana", g.alertname, 6),
 		Source:     "grafana",
 		Push:       true,
