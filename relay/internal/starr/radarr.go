@@ -337,12 +337,11 @@ func (h *Handler) handleRadarrManualInteraction(ctx context.Context, userKey str
 		return nil
 	}
 
-	slug, mapKey := radarrContentKey(*p.Movie, p.DownloadID)
-	stored, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
+	_, mapKey := radarrContentKey(*p.Movie, p.DownloadID)
+	slug, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
 	if !tracked {
 		return nil
 	}
-	slug = stored
 	h.ender.StopTimer(userKey, mapKey)
 
 	subtitle := radarrSubtitle(movieTitle(*p.Movie), p.DownloadInfo.Quality)

@@ -320,12 +320,11 @@ func (h *Handler) handleSonarrManualInteraction(ctx context.Context, userKey str
 		return nil
 	}
 
-	slug, mapKey := sonarrContentKey(*p.Series, p.Episodes, p.DownloadID)
-	stored, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
+	_, mapKey := sonarrContentKey(*p.Series, p.Episodes, p.DownloadID)
+	slug, tracked := h.getTrackedSlug(ctx, userKey, mapKey)
 	if !tracked {
 		return nil
 	}
-	slug = stored
 	h.ender.StopTimer(userKey, mapKey)
 
 	subtitle := FormatSubtitle(*p.Series, p.Episodes, p.DownloadInfo.Quality)
