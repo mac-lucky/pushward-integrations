@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +23,18 @@ import (
 const (
 	slug      = "sabnzbd"
 	seriesKey = "Speed" // timeline values/units/history map key
+
+	// Mode keys for the change-detection guard. These are the semantic dedup
+	// keys — different from the human-readable state string passed to send(),
+	// which for downloads is "%.1f MB/s" and would defeat speed bucketing.
+	modeDownloading = "downloading"
+	modePaused      = "paused"
+
+	// Change-detection thresholds for the polling loops. Send when any
+	// threshold is crossed, otherwise skip until heartbeatInterval elapses so
+	// the server's stale_ttl doesn't auto-end the activity.
+	heartbeatInterval  = 30 * time.Second
+	progressChangeFrac = 0.02
 )
 
 var ppStatuses = map[string]bool{
@@ -49,16 +62,20 @@ type Tracker struct {
 	mu     sync.Mutex // guards active
 	active bool
 	wg     sync.WaitGroup
-	ctx    context.Context
-	// historySent and maxSlots are owned by the tracker goroutine;
-	// do not access from other goroutines.
+	// historySent, maxSlots and the last* fields are owned by the tracker
+	// goroutine; do not access from other goroutines.
 	historySent  bool
 	maxSlots     int
+	lastProgress float64
+	lastSpeedMB  float64
+	lastMode     string
+	lastSubtitle string
+	lastSendTime time.Time
 	shuttingDown atomic.Bool
 }
 
-func New(ctx context.Context, cfg *config.Config, sab *sabnzbd.Client, pw *pushward.Client) *Tracker {
-	return &Tracker{ctx: ctx, cfg: cfg, sab: sab, pw: pw}
+func New(cfg *config.Config, sab *sabnzbd.Client, pw *pushward.Client) *Tracker {
+	return &Tracker{cfg: cfg, sab: sab, pw: pw}
 }
 
 // Cleanup ends any stale activity left over from a previous run (e.g. crash).
@@ -76,8 +93,8 @@ func (t *Tracker) Cleanup(ctx context.Context) {
 
 // ResumeIfActive checks SABnzbd for in-progress downloads or post-processing
 // and starts tracking if found. Returns true if tracking was resumed.
-func (t *Tracker) ResumeIfActive() bool {
-	queue, err := t.sab.GetQueue(t.ctx)
+func (t *Tracker) ResumeIfActive(ctx context.Context) bool {
+	queue, err := t.sab.GetQueue(ctx)
 	if err != nil {
 		slog.Warn("failed to check SABnzbd queue on startup", "error", err)
 		return false
@@ -89,17 +106,17 @@ func (t *Tracker) ResumeIfActive() bool {
 		t.mu.Lock()
 		t.active = true
 		t.mu.Unlock()
-		t.launchTracker(true)
+		t.launchTracker(ctx, true)
 		return true
 	}
 
-	ppStatus, _ := t.getPPStatus(t.ctx)
+	ppStatus, _ := t.getPPStatus(ctx)
 	if ppStatus != "" {
 		slog.Info("active post-processing found on startup, resuming tracking", "status", ppStatus)
 		t.mu.Lock()
 		t.active = true
 		t.mu.Unlock()
-		t.launchTracker(true)
+		t.launchTracker(ctx, true)
 		return true
 	}
 
@@ -113,42 +130,46 @@ func (t *Tracker) Wait() {
 	t.wg.Wait()
 }
 
-// HandleWebhook is the HTTP handler for POST /webhook.
-func (t *Tracker) HandleWebhook(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
-
-	// Webhook secret validation
-	if t.cfg.SABnzbd.WebhookSecret != "" {
-		if !sharedauth.CheckHeader(r, "X-Webhook-Secret", t.cfg.SABnzbd.WebhookSecret) {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+// WebhookHandler returns the HTTP handler for POST /webhook. The returned
+// handler launches tracking goroutines on the provided lifecycle context — not
+// the request context, which is cancelled when the HTTP response completes.
+func (t *Tracker) WebhookHandler(lifecycleCtx context.Context) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-	}
 
-	t.mu.Lock()
-	if t.active {
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+
+		// Webhook secret validation
+		if t.cfg.SABnzbd.WebhookSecret != "" {
+			if !sharedauth.CheckHeader(r, "X-Webhook-Secret", t.cfg.SABnzbd.WebhookSecret) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+
+		t.mu.Lock()
+		if t.active {
+			t.mu.Unlock()
+			slog.Info("tracking already active, skipping webhook")
+			w.WriteHeader(http.StatusOK)
+			_, _ = fmt.Fprintln(w, `{"status":"already_tracking"}`)
+			return
+		}
+		t.active = true
 		t.mu.Unlock()
-		slog.Info("tracking already active, skipping webhook")
+
+		slog.Info("webhook received, starting tracker")
+		t.launchTracker(lifecycleCtx, false)
+
 		w.WriteHeader(http.StatusOK)
-		_, _ = fmt.Fprintln(w, `{"status":"already_tracking"}`)
-		return
+		_, _ = fmt.Fprintln(w, `{"status":"tracking_started"}`)
 	}
-	t.active = true
-	t.mu.Unlock()
-
-	slog.Info("webhook received, starting tracker")
-	t.launchTracker(false)
-
-	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprintln(w, `{"status":"tracking_started"}`)
 }
 
-func (t *Tracker) launchTracker(resumed bool) {
+func (t *Tracker) launchTracker(ctx context.Context, resumed bool) {
 	if t.shuttingDown.Load() {
 		t.mu.Lock()
 		t.active = false
@@ -164,7 +185,7 @@ func (t *Tracker) launchTracker(resumed bool) {
 			t.active = false
 			t.mu.Unlock()
 		}()
-		t.track(t.ctx, resumed)
+		t.track(ctx, resumed)
 	}()
 }
 
@@ -215,6 +236,11 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 func (t *Tracker) track(ctx context.Context, resumed bool) {
 	t.historySent = false
 	t.maxSlots = 0
+	t.lastProgress = 0
+	t.lastSpeedMB = 0
+	t.lastMode = ""
+	t.lastSubtitle = ""
+	t.lastSendTime = time.Time{}
 
 	// Ensure activity exists (no ended_ttl so the slug persists)
 	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
@@ -409,7 +435,10 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 		}
 		subtitle := text.Truncate(ppName, 30)
 		stateStr := ppStatus + "..."
-		t.send(ctx, 1.0, stateStr, icon, "orange", nil, subtitle, pushward.StateOngoing, nil)
+		if t.shouldSend(1.0, 0, ppStatus, subtitle) {
+			t.send(ctx, 1.0, stateStr, icon, "orange", nil, subtitle, pushward.StateOngoing, nil)
+			t.recordSent(1.0, 0, ppStatus, subtitle)
+		}
 		select {
 		case <-ctx.Done():
 			return time.Since(ppStart)
@@ -458,15 +487,54 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 	}
 
 	if status == "Paused" {
+		if !t.shouldSend(progress, 0, modePaused, subtitle) {
+			return true
+		}
 		t.send(ctx, progress, "Paused", "pause.circle.fill", "blue", nil, subtitle, pushward.StateOngoing, pushward.Float64Ptr(0))
+		t.recordSent(progress, 0, modePaused, subtitle)
 		return true
 	}
 
 	remainingSeconds := parseTimeLeft(queue.TimeLeft)
 	stateStr := fmt.Sprintf("%.1f MB/s", speedMB)
 
+	// Skip redundant polls on a steady download. Heartbeat every heartbeatInterval
+	// so the server's stale_ttl doesn't auto-end the activity, and so the capped
+	// MaxHistoryStorage covers a longer wall-clock window.
+	if !t.shouldSend(progress, speedMB, modeDownloading, subtitle) {
+		return true
+	}
+
 	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", "blue", remainingSeconds, subtitle, pushward.StateOngoing, pushward.Float64Ptr(speedMB))
+	t.recordSent(progress, speedMB, modeDownloading, subtitle)
 	return true
+}
+
+func (t *Tracker) shouldSend(progress, speedMB float64, mode, subtitle string) bool {
+	if t.lastSendTime.IsZero() {
+		return true
+	}
+	if mode != t.lastMode {
+		return true
+	}
+	if subtitle != t.lastSubtitle {
+		return true
+	}
+	if math.Round(speedMB) != math.Round(t.lastSpeedMB) {
+		return true
+	}
+	if math.Abs(progress-t.lastProgress) >= progressChangeFrac {
+		return true
+	}
+	return time.Since(t.lastSendTime) >= heartbeatInterval
+}
+
+func (t *Tracker) recordSent(progress, speedMB float64, mode, subtitle string) {
+	t.lastProgress = progress
+	t.lastSpeedMB = speedMB
+	t.lastMode = mode
+	t.lastSubtitle = subtitle
+	t.lastSendTime = time.Now()
 }
 
 // getPPStatus checks history for active post-processing jobs.

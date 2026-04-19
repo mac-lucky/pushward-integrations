@@ -109,11 +109,12 @@ func TestHandleWebhook_ValidPost(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tr := New(ctx, cfg, sab, pw)
+	tr := New(cfg, sab, pw)
+	handler := tr.WebhookHandler(ctx)
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	w := httptest.NewRecorder()
-	tr.HandleWebhook(w, req)
+	handler(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -128,12 +129,13 @@ func TestHandleWebhook_ValidPost(t *testing.T) {
 func TestHandleWebhook_WrongMethod(t *testing.T) {
 	cfg := testConfig()
 	ctx := context.Background()
-	tr := New(ctx, cfg, nil, nil)
+	tr := New(cfg, nil, nil)
+	handler := tr.WebhookHandler(ctx)
 
 	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
 		req := httptest.NewRequest(method, "/webhook", nil)
 		w := httptest.NewRecorder()
-		tr.HandleWebhook(w, req)
+		handler(w, req)
 
 		if w.Code != http.StatusMethodNotAllowed {
 			t.Errorf("method %s: expected 405, got %d", method, w.Code)
@@ -156,13 +158,14 @@ func TestHandleWebhook_SecretValidation(t *testing.T) {
 	sab := sabnzbd.NewClient(sabSrv.URL, "test-key")
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 
-	tr := New(ctx, cfg, sab, pw)
+	tr := New(cfg, sab, pw)
+	handler := tr.WebhookHandler(ctx)
 
 	// Wrong secret → 401
 	req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	req.Header.Set("X-Webhook-Secret", "wrong-secret")
 	w := httptest.NewRecorder()
-	tr.HandleWebhook(w, req)
+	handler(w, req)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("wrong secret: expected 401, got %d", w.Code)
 	}
@@ -170,7 +173,7 @@ func TestHandleWebhook_SecretValidation(t *testing.T) {
 	// Missing secret → 401
 	req = httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	w = httptest.NewRecorder()
-	tr.HandleWebhook(w, req)
+	handler(w, req)
 	if w.Code != http.StatusUnauthorized {
 		t.Fatalf("missing secret: expected 401, got %d", w.Code)
 	}
@@ -179,7 +182,7 @@ func TestHandleWebhook_SecretValidation(t *testing.T) {
 	req = httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	req.Header.Set("X-Webhook-Secret", "my-secret")
 	w = httptest.NewRecorder()
-	tr.HandleWebhook(w, req)
+	handler(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("correct secret: expected 200, got %d", w.Code)
 	}
@@ -202,12 +205,13 @@ func TestHandleWebhook_AlreadyActive(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tr := New(ctx, cfg, sab, pw)
+	tr := New(cfg, sab, pw)
+	handler := tr.WebhookHandler(ctx)
 
 	// First webhook → tracking_started
 	req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	w := httptest.NewRecorder()
-	tr.HandleWebhook(w, req)
+	handler(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("first webhook: expected 200, got %d", w.Code)
 	}
@@ -219,7 +223,7 @@ func TestHandleWebhook_AlreadyActive(t *testing.T) {
 	// Need to ensure first goroutine is still running; send immediately
 	req = httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	w = httptest.NewRecorder()
-	tr.HandleWebhook(w, req)
+	handler(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("second webhook: expected 200, got %d", w.Code)
 	}
@@ -327,7 +331,7 @@ func TestCleanup_SendsEndedUpdate(t *testing.T) {
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
 
-	tr := New(ctx, cfg, nil, pw)
+	tr := New(cfg, nil, pw)
 	tr.Cleanup(ctx)
 
 	got := testutil.GetCalls(calls, mu)
@@ -370,11 +374,12 @@ func TestContextCancellation_StopsTracking(t *testing.T) {
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx, cancel := context.WithCancel(context.Background())
 
-	tr := New(ctx, cfg, sab, pw)
+	tr := New(cfg, sab, pw)
+	handler := tr.WebhookHandler(ctx)
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	w := httptest.NewRecorder()
-	tr.HandleWebhook(w, req)
+	handler(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -423,11 +428,12 @@ func TestTrackingLifecycle_Download_PP_Complete(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tr := New(ctx, cfg, sab, pw)
+	tr := New(cfg, sab, pw)
+	handler := tr.WebhookHandler(ctx)
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	w := httptest.NewRecorder()
-	tr.HandleWebhook(w, req)
+	handler(w, req)
 
 	// Let download tracking run for a bit
 	time.Sleep(80 * time.Millisecond)
@@ -501,8 +507,8 @@ func TestResumeIfActive_ActiveDownload(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tr := New(ctx, cfg, sab, pw)
-	resumed := tr.ResumeIfActive()
+	tr := New(cfg, sab, pw)
+	resumed := tr.ResumeIfActive(ctx)
 	if !resumed {
 		t.Fatal("expected ResumeIfActive to return true")
 	}
@@ -533,8 +539,8 @@ func TestResumeIfActive_ActivePostProcessing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tr := New(ctx, cfg, sab, pw)
-	resumed := tr.ResumeIfActive()
+	tr := New(cfg, sab, pw)
+	resumed := tr.ResumeIfActive(ctx)
 	if !resumed {
 		t.Fatal("expected ResumeIfActive to return true for active PP")
 	}
@@ -561,8 +567,8 @@ func TestResumeIfActive_NoActivity(t *testing.T) {
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
 
-	tr := New(ctx, cfg, sab, pw)
-	resumed := tr.ResumeIfActive()
+	tr := New(cfg, sab, pw)
+	resumed := tr.ResumeIfActive(ctx)
 	if resumed {
 		t.Fatal("expected ResumeIfActive to return false when idle")
 	}
@@ -575,7 +581,7 @@ func TestSendDownloadProgress_Paused(t *testing.T) {
 	cfg := testConfig()
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
-	tr := New(ctx, cfg, nil, pw)
+	tr := New(cfg, nil, pw)
 
 	queue := &sabnzbd.Queue{
 		Status:   "Paused",
@@ -608,7 +614,7 @@ func TestSendDownloadProgress_Paused(t *testing.T) {
 func TestSendDownloadProgress_Idle_ReturnsFalse(t *testing.T) {
 	cfg := testConfig()
 	ctx := context.Background()
-	tr := New(ctx, cfg, nil, nil)
+	tr := New(cfg, nil, nil)
 
 	queue := &sabnzbd.Queue{
 		Status: "Idle",
@@ -627,7 +633,7 @@ func TestSendDownloadProgress_MultipleSlots(t *testing.T) {
 	cfg := testConfig()
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
-	tr := New(ctx, cfg, nil, pw)
+	tr := New(cfg, nil, pw)
 
 	queue := &sabnzbd.Queue{
 		Status:   "Downloading",
@@ -680,13 +686,13 @@ func TestResumedTracking_SkipsTwoPhaseEnd(t *testing.T) {
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
 
-	tr := New(ctx, cfg, sab, pw)
+	tr := New(cfg, sab, pw)
 
 	// Simulate resumed tracking (directly call track with resumed=true)
 	// We can't easily call track directly, so we use ResumeIfActive with pre-active queue
 	// Instead, set queue active, resume, then immediately go idle
 	sabMk.setQueue(sabnzbd.Queue{Status: "Downloading", MB: "100", MBLeft: "50"})
-	resumed := tr.ResumeIfActive()
+	resumed := tr.ResumeIfActive(ctx)
 	if !resumed {
 		t.Fatal("expected resume")
 	}
@@ -723,7 +729,7 @@ func TestSendDownloadProgress_Timeline_SendsValueAndUnit(t *testing.T) {
 	cfg.SABnzbd.Template = "timeline"
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
-	tr := New(ctx, cfg, nil, pw)
+	tr := New(cfg, nil, pw)
 
 	queue := &sabnzbd.Queue{
 		Status:   "Downloading",
@@ -772,7 +778,7 @@ func TestSendDownloadProgress_Generic_NoValueOrUnit(t *testing.T) {
 	// Template is "generic" by default from testConfig()
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
-	tr := New(ctx, cfg, nil, pw)
+	tr := New(cfg, nil, pw)
 
 	queue := &sabnzbd.Queue{
 		Status:   "Downloading",
@@ -812,7 +818,7 @@ func TestTimeline_NonDownloadPhase_SkipsValue(t *testing.T) {
 	cfg.SABnzbd.Template = "timeline"
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
-	tr := New(ctx, cfg, nil, pw)
+	tr := New(cfg, nil, pw)
 
 	// Non-download sends (e.g. "Starting...", PP) pass nil for value → timeline fields skipped
 	tr.send(ctx, 0.0, "Starting...", "arrow.down.circle", "blue", nil, "", pushward.StateOngoing, nil)
@@ -841,7 +847,7 @@ func TestSendDownloadProgress_Timeline_Paused_SendsZeroValue(t *testing.T) {
 	cfg.SABnzbd.Template = "timeline"
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
-	tr := New(ctx, cfg, nil, pw)
+	tr := New(cfg, nil, pw)
 
 	queue := &sabnzbd.Queue{
 		Status:   "Paused",
@@ -906,11 +912,11 @@ func TestTimeline_FullLifecycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	tr := New(ctx, cfg, sab, pw)
+	tr := New(cfg, sab, pw)
 
 	req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	w := httptest.NewRecorder()
-	tr.HandleWebhook(w, req)
+	tr.WebhookHandler(ctx)(w, req)
 
 	// Let download tracking run briefly
 	time.Sleep(80 * time.Millisecond)
@@ -989,7 +995,7 @@ func TestTimeline_HistorySeeding(t *testing.T) {
 	cfg.SABnzbd.Template = "timeline"
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
-	tr := New(ctx, cfg, nil, pw)
+	tr := New(cfg, nil, pw)
 
 	speed := pushward.Float64Ptr(50.0)
 
@@ -1043,7 +1049,7 @@ func TestTimeline_DisplaySettings(t *testing.T) {
 	}
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
-	tr := New(ctx, cfg, nil, pw)
+	tr := New(cfg, nil, pw)
 
 	tr.send(ctx, 0.5, "50.0 MB/s", "arrow.down.circle.fill", "blue", nil, "test.nzb", pushward.StateOngoing, pushward.Float64Ptr(50.0))
 
@@ -1062,5 +1068,184 @@ func TestTimeline_DisplaySettings(t *testing.T) {
 	}
 	if req.Content.Decimals == nil || *req.Content.Decimals != 2 {
 		t.Error("expected decimals=2 from config")
+	}
+}
+
+// --- Change-detection guard tests ---
+
+func downloadingQueue(kbPerSec string, mbLeft string) *sabnzbd.Queue {
+	return &sabnzbd.Queue{
+		Status:   "Downloading",
+		MB:       "1000",
+		MBLeft:   mbLeft,
+		KBPerSec: kbPerSec,
+		TimeLeft: "0:00:10",
+		Slots:    []sabnzbd.QueueSlot{{Filename: "test.nzb"}},
+	}
+}
+
+func TestSendDownloadProgress_SkipsUnchangedPoll(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(cfg, nil, pw)
+
+	q := downloadingQueue("51200", "500") // 50 MB/s, progress 0.5
+	tr.sendDownloadProgress(ctx, q)
+	tr.sendDownloadProgress(ctx, q) // identical — should be deduped
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH (second poll deduped), got %d", len(got))
+	}
+}
+
+func TestSendDownloadProgress_HeartbeatAfterInterval(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(cfg, nil, pw)
+
+	q := downloadingQueue("51200", "500")
+	tr.sendDownloadProgress(ctx, q) // first poll, sends
+	// Rewind lastSendTime past the heartbeat interval.
+	tr.lastSendTime = time.Now().Add(-heartbeatInterval - time.Second)
+	tr.sendDownloadProgress(ctx, q) // unchanged, but heartbeat due → should send
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PATCH calls (heartbeat fires), got %d", len(got))
+	}
+}
+
+func TestSendDownloadProgress_SpeedBoundary(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(cfg, nil, pw)
+
+	// 45.1 MB/s → rounds to 45
+	tr.sendDownloadProgress(ctx, downloadingQueue("46182", "500"))
+	// 45.4 MB/s → still rounds to 45, and progress unchanged → dedup
+	tr.sendDownloadProgress(ctx, downloadingQueue("46489", "500"))
+	// 45.6 MB/s → rounds to 46, crosses boundary → send
+	tr.sendDownloadProgress(ctx, downloadingQueue("46694", "500"))
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PATCH calls (boundary cross), got %d", len(got))
+	}
+}
+
+func TestSendDownloadProgress_ProgressBucket(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(cfg, nil, pw)
+
+	// progress 0.500 (mbLeft=500/1000)
+	tr.sendDownloadProgress(ctx, downloadingQueue("51200", "500"))
+	// progress 0.515 (mbLeft=485/1000) — <2%, speed identical → dedup
+	tr.sendDownloadProgress(ctx, downloadingQueue("51200", "485"))
+	// progress 0.525 (mbLeft=475/1000) — >=2% vs last sent (0.500) → send
+	tr.sendDownloadProgress(ctx, downloadingQueue("51200", "475"))
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PATCH calls (progress bucket crossed), got %d", len(got))
+	}
+}
+
+func TestSendDownloadProgress_SubtitleChange(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(cfg, nil, pw)
+
+	q1 := downloadingQueue("51200", "500")
+	q1.Slots = []sabnzbd.QueueSlot{{Filename: "first.nzb"}}
+	tr.sendDownloadProgress(ctx, q1)
+
+	q2 := downloadingQueue("51200", "500")
+	q2.Slots = []sabnzbd.QueueSlot{{Filename: "second.nzb"}}
+	tr.sendDownloadProgress(ctx, q2) // filename changed → send
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PATCH calls (subtitle change), got %d", len(got))
+	}
+}
+
+func TestSendDownloadProgress_PausedDedupsRepeatedPolls(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(cfg, nil, pw)
+
+	pausedQ := &sabnzbd.Queue{
+		Status: "Paused", MB: "1000", MBLeft: "500", KBPerSec: "0",
+		TimeLeft: "0:00:00", Slots: []sabnzbd.QueueSlot{{Filename: "test.nzb"}},
+	}
+	tr.sendDownloadProgress(ctx, pausedQ)
+	tr.sendDownloadProgress(ctx, pausedQ) // identical pause state → dedup
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH (second paused poll deduped), got %d", len(got))
+	}
+}
+
+func TestSendDownloadProgress_PauseResumeTransitionsSend(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(cfg, nil, pw)
+
+	// Downloading → Paused → Downloading. Each transition changes mode → send.
+	tr.sendDownloadProgress(ctx, downloadingQueue("51200", "500"))
+	tr.sendDownloadProgress(ctx, &sabnzbd.Queue{
+		Status: "Paused", MB: "1000", MBLeft: "500", KBPerSec: "0",
+		TimeLeft: "0:00:00", Slots: []sabnzbd.QueueSlot{{Filename: "test.nzb"}},
+	})
+	tr.sendDownloadProgress(ctx, downloadingQueue("51200", "500"))
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 PATCH calls (mode transitions), got %d", len(got))
+	}
+}
+
+func TestShouldSend_PPStageTransitions(t *testing.T) {
+	cfg := testConfig()
+	tr := New(cfg, nil, nil)
+
+	// First PP poll always sends.
+	if !tr.shouldSend(1.0, 0, "Verifying", "ubuntu-24.04") {
+		t.Fatal("first PP poll should send")
+	}
+	tr.recordSent(1.0, 0, "Verifying", "ubuntu-24.04")
+
+	// Same stage, same subtitle → dedup.
+	if tr.shouldSend(1.0, 0, "Verifying", "ubuntu-24.04") {
+		t.Fatal("repeated same-stage poll should dedup")
+	}
+
+	// Stage change → send.
+	if !tr.shouldSend(1.0, 0, "Repairing", "ubuntu-24.04") {
+		t.Fatal("stage transition should send")
+	}
+	tr.recordSent(1.0, 0, "Repairing", "ubuntu-24.04")
+
+	// Heartbeat fires after interval even if stage unchanged.
+	tr.lastSendTime = time.Now().Add(-heartbeatInterval - time.Second)
+	if !tr.shouldSend(1.0, 0, "Repairing", "ubuntu-24.04") {
+		t.Fatal("heartbeat should force send after interval")
 	}
 }

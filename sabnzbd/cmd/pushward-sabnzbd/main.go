@@ -33,12 +33,12 @@ func main() {
 
 	sab := sabnzbd.NewClient(cfg.SABnzbd.URL, cfg.SABnzbd.APIKey)
 	pw := pushward.NewClient(cfg.PushWard.URL, cfg.PushWard.APIKey)
-	t := tracker.New(ctx, cfg, sab, pw)
+	t := tracker.New(cfg, sab, pw)
 
 	mux := server.NewMux()
-	mux.HandleFunc("/webhook", t.HandleWebhook)
+	mux.HandleFunc("/webhook", t.WebhookHandler(ctx))
 
-	if !t.ResumeIfActive() {
+	if !t.ResumeIfActive(ctx) {
 		t.Cleanup(ctx)
 	}
 
