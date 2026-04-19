@@ -10,6 +10,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/config"
 	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/sabnzbd"
@@ -19,9 +20,8 @@ import (
 )
 
 const (
-	slug         = "sabnzbd"
-	seriesKey    = "Speed" // timeline values/units/history map key
-	avgSeriesKey = "Avg"   // timeline key used in completion summary
+	slug      = "sabnzbd"
+	seriesKey = "Speed" // timeline values/units/history map key
 )
 
 var ppStatuses = map[string]bool{
@@ -43,14 +43,17 @@ var ppIcons = map[string]string{
 }
 
 type Tracker struct {
-	cfg          *config.Config
-	sab          *sabnzbd.Client
-	pw           *pushward.Client
-	mu           sync.Mutex
-	active       bool
-	wg           sync.WaitGroup
-	ctx          context.Context
+	cfg    *config.Config
+	sab    *sabnzbd.Client
+	pw     *pushward.Client
+	mu     sync.Mutex // guards active
+	active bool
+	wg     sync.WaitGroup
+	ctx    context.Context
+	// historySent and maxSlots are owned by the tracker goroutine;
+	// do not access from other goroutines.
 	historySent  bool
+	maxSlots     int
 	shuttingDown atomic.Bool
 }
 
@@ -211,6 +214,7 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 
 func (t *Tracker) track(ctx context.Context, resumed bool) {
 	t.historySent = false
+	t.maxSlots = 0
 
 	// Ensure activity exists (no ended_ttl so the slug persists)
 	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
@@ -276,7 +280,10 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 
 	slog.Info("complete", "total_mb", totalMB, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed, "state", stateStr, "subtitle", subtitle)
 
-	// Build final content with "Avg" series key showing average speed.
+	// Keep the "Speed" series so the server retains the accumulated download
+	// history. Switching series keys here would cause AccumulateHistory to
+	// prune the prior series and leave the chart with only the final points.
+	// Download is done, so the final sample is 0 — chart tapers to zero.
 	finalContent := pushward.Content{
 		Template:    t.cfg.SABnzbd.Template,
 		Progress:    1.0,
@@ -285,9 +292,9 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		AccentColor: "green",
 		Subtitle:    subtitle,
 	}
-	if t.cfg.SABnzbd.Template == "timeline" && avgSpeed > 0 {
-		finalContent.Value = map[string]float64{avgSeriesKey: avgSpeed}
-		finalContent.Units = map[string]string{avgSeriesKey: "MB/s"}
+	if t.cfg.SABnzbd.Template == "timeline" {
+		finalContent.Value = map[string]float64{seriesKey: 0}
+		finalContent.Units = map[string]string{seriesKey: "MB/s"}
 		t.cfg.SABnzbd.Timeline.Apply(&finalContent)
 	}
 
@@ -431,12 +438,20 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 		progress = (mbTotal - mbLeft) / mbTotal
 	}
 
-	// Build subtitle from current slot filename
+	// Build subtitle from current slot filename. When multiple downloads are
+	// queued, show "X/Y · filename" where X is the current job's position
+	// (computed from the max slot count observed across polls, since SABnzbd's
+	// queue is FIFO and slot[0] is the one being downloaded).
 	subtitle := formatSize(mbLeft)
 	if len(queue.Slots) > 0 {
+		if len(queue.Slots) > t.maxSlots {
+			t.maxSlots = len(queue.Slots)
+		}
 		name := queue.Slots[0].Filename
-		if len(queue.Slots) > 1 {
-			subtitle = fmt.Sprintf("%s +%d more", text.Truncate(name, 18), len(queue.Slots)-1)
+		if t.maxSlots > 1 {
+			current := t.maxSlots - len(queue.Slots) + 1
+			prefix := fmt.Sprintf("%d/%d · ", current, t.maxSlots)
+			subtitle = prefix + text.Truncate(name, 30-utf8.RuneCountInString(prefix))
 		} else {
 			subtitle = text.Truncate(name, 30)
 		}

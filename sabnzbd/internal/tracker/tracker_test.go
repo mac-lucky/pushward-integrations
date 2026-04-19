@@ -653,9 +653,12 @@ func TestSendDownloadProgress_MultipleSlots(t *testing.T) {
 	}
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req)
-	// Multiple slots → "name +N more" format
-	if !strings.Contains(req.Content.Subtitle, "+2 more") {
-		t.Errorf("expected subtitle with +2 more, got %q", req.Content.Subtitle)
+	// Multiple slots → "X/Y · name" format (current is first slot of 3).
+	if !strings.HasPrefix(req.Content.Subtitle, "1/3 · ") {
+		t.Errorf("expected subtitle prefixed with '1/3 · ', got %q", req.Content.Subtitle)
+	}
+	if !strings.Contains(req.Content.Subtitle, "first-download") {
+		t.Errorf("expected subtitle to contain current filename, got %q", req.Content.Subtitle)
 	}
 }
 
@@ -938,7 +941,6 @@ func TestTimeline_FullLifecycle(t *testing.T) {
 			if values == nil {
 				continue
 			}
-			// Download phases use "Speed", completion uses "Avg"
 			if v, ok := values[seriesKey]; ok && v > 0 {
 				hasPositiveValue = true
 			}
@@ -964,13 +966,20 @@ func TestTimeline_FullLifecycle(t *testing.T) {
 	if lastReq.Content.Subtitle != "test-file" {
 		t.Errorf("completion subtitle should be filename, got %s", lastReq.Content.Subtitle)
 	}
-	// Completion should use "Avg" series key with average speed
-	if lastReq.Content.Value != nil {
-		if values := testutil.RequireValueMap(t, lastReq.Content.Value); values != nil {
-			if _, ok := values["Avg"]; !ok {
-				t.Errorf("completion value should use 'Avg' key, got %v", values)
-			}
-		}
+	// Completion must keep the "Speed" series (not switch to a new key) so the
+	// server preserves the accumulated download history instead of pruning it.
+	if lastReq.Content.Value == nil {
+		t.Fatal("completion should include a value map to keep the Speed series")
+	}
+	values := testutil.RequireValueMap(t, lastReq.Content.Value)
+	if values == nil {
+		t.Fatal("completion value must be a map[string]float64")
+	}
+	if _, ok := values[seriesKey]; !ok {
+		t.Errorf("completion value should keep %q key, got %v", seriesKey, values)
+	}
+	if _, ok := values["Avg"]; ok {
+		t.Errorf("completion value must not introduce an 'Avg' key (would prune %q history), got %v", seriesKey, values)
 	}
 }
 
