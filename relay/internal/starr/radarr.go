@@ -149,11 +149,16 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 
 	cl := h.clients.Get(userKey)
 
+	body := "Grabbed"
+	if p.Release.Quality != "" {
+		body = "Grabbed · " + p.Release.Quality
+	}
+
 	// Always send notification record
 	grabReq := pushward.SendNotificationRequest{
 		Title:      "Radarr",
 		Subtitle:   title,
-		Body:       "Grabbed · " + title + " · " + p.Release.Quality,
+		Body:       body,
 		ThreadID:   radarrMediaThreadID(p.Movie),
 		CollapseID: "radarr-grab",
 		Level:      pushward.LevelActive,
@@ -172,6 +177,9 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 	}
 	if p.Release.Size > 0 {
 		meta["size"] = text.FormatBytes(p.Release.Size)
+	}
+	if p.Movie.Title != "" {
+		meta["media_title"] = movieTitle(p.Movie)
 	}
 	if p.Movie.TmdbID > 0 {
 		meta["tmdb_id"] = strconv.Itoa(p.Movie.TmdbID)
@@ -255,7 +263,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 	dlReq := pushward.SendNotificationRequest{
 		Title:      "Radarr",
 		Subtitle:   title,
-		Body:       state + " · " + title,
+		Body:       state,
 		ThreadID:   radarrMediaThreadID(p.Movie),
 		CollapseID: "radarr-download",
 		Level:      pushward.LevelActive,
@@ -268,6 +276,9 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 	dlMeta := map[string]string{"quality": p.MovieFile.Quality}
 	if p.MovieFile.Size > 0 {
 		dlMeta["size"] = text.FormatBytes(p.MovieFile.Size)
+	}
+	if p.Movie.Title != "" {
+		dlMeta["media_title"] = title
 	}
 	if p.Movie.TmdbID > 0 {
 		dlMeta["tmdb_id"] = strconv.Itoa(p.Movie.TmdbID)
@@ -361,7 +372,7 @@ func (h *Handler) handleRadarrManualInteraction(ctx context.Context, userKey str
 func (h *Handler) handleRadarrRename(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieEventPayload) error {
 	title := movieTitle(p.Movie)
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title: "Radarr", Subtitle: title, Body: "Renamed · " + title,
+		Title: "Radarr", Subtitle: title, Body: "Renamed",
 		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-rename",
 		Level: pushward.LevelPassive, Category: "rename", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
@@ -372,7 +383,7 @@ func (h *Handler) handleRadarrRename(ctx context.Context, userKey string, log *s
 func (h *Handler) handleRadarrMovieAdded(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieEventPayload) error {
 	title := movieTitle(p.Movie)
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title: "Radarr", Subtitle: title, Body: "Added · " + title,
+		Title: "Radarr", Subtitle: title, Body: "Added",
 		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-movie-added",
 		Level: pushward.LevelActive, Category: "movie-added", Source: "radarr", Push: true,
 		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
@@ -382,9 +393,9 @@ func (h *Handler) handleRadarrMovieAdded(ctx context.Context, userKey string, lo
 
 func (h *Handler) handleRadarrMovieDelete(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieDeletePayload) error {
 	title := movieTitle(p.Movie)
-	body := "Removed · " + title
+	body := "Removed"
 	if p.DeletedFiles {
-		body = "Removed (files deleted) · " + title
+		body = "Removed (files deleted)"
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Radarr", Subtitle: title, Body: body,
@@ -397,9 +408,9 @@ func (h *Handler) handleRadarrMovieDelete(ctx context.Context, userKey string, l
 
 func (h *Handler) handleRadarrMovieFileDelete(ctx context.Context, userKey string, log *slog.Logger, p *RadarrMovieFileDeletePayload) error {
 	title := movieTitle(p.Movie)
-	body := "File deleted · " + title
+	body := "File deleted"
 	if p.DeleteReason != "" {
-		body = "File deleted · " + deleteReasonText(p.DeleteReason) + " · " + title
+		body = "File deleted · " + deleteReasonText(p.DeleteReason)
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Radarr", Subtitle: title, Body: body,
@@ -410,12 +421,19 @@ func (h *Handler) handleRadarrMovieFileDelete(ctx context.Context, userKey strin
 	})
 }
 
-// radarrMovieMeta returns metadata with tmdb_id for a movie.
+// radarrMovieMeta returns metadata with media_title and tmdb_id for a movie.
 func radarrMovieMeta(m RadarrMovie) map[string]string {
-	if m.TmdbID > 0 {
-		return map[string]string{"tmdb_id": strconv.Itoa(m.TmdbID)}
+	meta := map[string]string{}
+	if m.Title != "" {
+		meta["media_title"] = movieTitle(m)
 	}
-	return nil
+	if m.TmdbID > 0 {
+		meta["tmdb_id"] = strconv.Itoa(m.TmdbID)
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	return meta
 }
 
 // radarrMediaThreadID returns a cross-provider thread ID for a movie, falling back to "radarr".

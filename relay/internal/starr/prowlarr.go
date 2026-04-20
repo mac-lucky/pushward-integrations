@@ -84,7 +84,7 @@ func (h *Handler) handleProwlarrWebhook(ctx context.Context, raw []byte) error {
 }
 
 func (h *Handler) handleProwlarrGrab(ctx context.Context, userKey string, log *slog.Logger, p *ProwlarrGrabPayload) error {
-	body := "Grabbed · " + text.Truncate(p.Release.ReleaseTitle, 60) + " · " + p.Release.Indexer
+	body := "Grabbed · " + p.Release.Indexer
 	if p.Source != "" {
 		body += " → " + p.Source
 	}
@@ -103,6 +103,7 @@ func (h *Handler) handleProwlarrGrab(ctx context.Context, userKey string, log *s
 	threadID := "prowlarr"
 	if base := releaseBaseTitle(p.Release.ReleaseTitle); base != "" {
 		threadID = text.Slug("prowlarr-", base)
+		meta["media_title"] = strings.ReplaceAll(base, ".", " ")
 	}
 
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{

@@ -3,6 +3,7 @@ package starr
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -133,9 +134,9 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 	sgReq := pushward.SendNotificationRequest{
 		Title:      "Sonarr",
 		Subtitle:   text.Truncate(subtitle, 100),
-		Body:       "Grabbed · " + text.Truncate(subtitle, 80),
+		Body:       "Grabbed",
 		ThreadID:   sonarrMediaThreadID(p.Series),
-		CollapseID: "sonarr-grab",
+		CollapseID: "sonarr-grab" + episodeCollapseSuffix(p.Episodes),
 		Level:      pushward.LevelActive,
 		Category:   "grab",
 		Source:     "sonarr",
@@ -155,6 +156,9 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 	}
 	if len(p.Episodes) > 0 && p.Episodes[0].Title != "" {
 		sgMeta["episode_title"] = p.Episodes[0].Title
+	}
+	if p.Series.Title != "" {
+		sgMeta["series_title"] = p.Series.Title
 	}
 	if p.Series.TvdbID > 0 {
 		sgMeta["tvdb_id"] = strconv.Itoa(p.Series.TvdbID)
@@ -237,9 +241,9 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 	sdReq := pushward.SendNotificationRequest{
 		Title:      "Sonarr",
 		Subtitle:   text.Truncate(subtitle, 100),
-		Body:       state + " · " + text.Truncate(subtitle, 80),
+		Body:       state,
 		ThreadID:   sonarrMediaThreadID(p.Series),
-		CollapseID: "sonarr-download",
+		CollapseID: "sonarr-download" + episodeCollapseSuffix(p.Episodes),
 		Level:      pushward.LevelActive,
 		Category:   "download",
 		Source:     "sonarr",
@@ -253,6 +257,9 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 	}
 	if len(p.Episodes) > 0 && p.Episodes[0].Title != "" {
 		sdMeta["episode_title"] = p.Episodes[0].Title
+	}
+	if p.Series.Title != "" {
+		sdMeta["series_title"] = p.Series.Title
 	}
 	if p.Series.TvdbID > 0 {
 		sdMeta["tvdb_id"] = strconv.Itoa(p.Series.TvdbID)
@@ -343,7 +350,7 @@ func (h *Handler) handleSonarrManualInteraction(ctx context.Context, userKey str
 
 func (h *Handler) handleSonarrRename(ctx context.Context, userKey string, log *slog.Logger, p *SonarrSeriesEventPayload) error {
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Renamed · " + p.Series.Title,
+		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Renamed",
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-rename",
 		Level: pushward.LevelPassive, Category: "rename", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
@@ -353,7 +360,7 @@ func (h *Handler) handleSonarrRename(ctx context.Context, userKey string, log *s
 
 func (h *Handler) handleSonarrSeriesAdd(ctx context.Context, userKey string, log *slog.Logger, p *SonarrSeriesEventPayload) error {
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Added · " + p.Series.Title,
+		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Added",
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-series-add",
 		Level: pushward.LevelActive, Category: "series-add", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
@@ -362,9 +369,9 @@ func (h *Handler) handleSonarrSeriesAdd(ctx context.Context, userKey string, log
 }
 
 func (h *Handler) handleSonarrSeriesDelete(ctx context.Context, userKey string, log *slog.Logger, p *SonarrSeriesDeletePayload) error {
-	body := "Removed · " + p.Series.Title
+	body := "Removed"
 	if p.DeletedFiles {
-		body = "Removed (files deleted) · " + p.Series.Title
+		body = "Removed (files deleted)"
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Sonarr", Subtitle: p.Series.Title, Body: body,
@@ -377,25 +384,32 @@ func (h *Handler) handleSonarrSeriesDelete(ctx context.Context, userKey string, 
 
 func (h *Handler) handleSonarrEpisodeFileDelete(ctx context.Context, userKey string, log *slog.Logger, p *SonarrEpisodeFileDeletePayload) error {
 	subtitle := FormatSubtitle(p.Series, p.Episodes, "")
-	body := "File deleted · " + text.Truncate(subtitle, 60)
+	body := "File deleted"
 	if p.DeleteReason != "" {
-		body = "File deleted · " + deleteReasonText(p.DeleteReason) + " · " + text.Truncate(subtitle, 50)
+		body = "File deleted · " + deleteReasonText(p.DeleteReason)
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Sonarr", Subtitle: text.Truncate(subtitle, 100), Body: body,
-		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-file-delete",
+		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-file-delete" + episodeCollapseSuffix(p.Episodes),
 		Level: pushward.LevelPassive, Category: "file-delete", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
 		Metadata: sonarrSeriesMeta(p.Series),
 	})
 }
 
-// sonarrSeriesMeta returns metadata with tvdb_id for a series.
+// sonarrSeriesMeta returns metadata with series_title and tvdb_id for a series.
 func sonarrSeriesMeta(s SonarrSeries) map[string]string {
-	if s.TvdbID > 0 {
-		return map[string]string{"tvdb_id": strconv.Itoa(s.TvdbID)}
+	meta := map[string]string{}
+	if s.Title != "" {
+		meta["series_title"] = s.Title
 	}
-	return nil
+	if s.TvdbID > 0 {
+		meta["tvdb_id"] = strconv.Itoa(s.TvdbID)
+	}
+	if len(meta) == 0 {
+		return nil
+	}
+	return meta
 }
 
 // sonarrMediaThreadID returns a cross-provider thread ID for a TV series, falling back to "sonarr".
@@ -406,15 +420,51 @@ func sonarrMediaThreadID(s SonarrSeries) string {
 	return "sonarr"
 }
 
+// episodeCollapseSuffix returns a deterministic "-id1-id2-..." suffix from a set
+// of episode IDs, used to differentiate APNs collapse IDs per episode so
+// concurrent pushes for different episodes of the same series don't replace
+// each other on the Lock Screen. Returns empty string if no episode IDs.
+//
+// APNs caps apns-collapse-id at 64 bytes total; the suffix is budgeted to
+// stay well below that when combined with prefixes like "sonarr-import-complete"
+// (22 bytes). Season-pack grabs with many episodes are truncated — the ones
+// that fit still uniquely identify the set for realistic concurrent-push cases.
+func episodeCollapseSuffix(episodes []SonarrEpisode) string {
+	if len(episodes) == 0 {
+		return ""
+	}
+	ids := make([]int, 0, len(episodes))
+	for _, ep := range episodes {
+		if ep.ID > 0 {
+			ids = append(ids, ep.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	sort.Ints(ids)
+	const maxSuffixLen = 40
+	var sb strings.Builder
+	for _, id := range ids {
+		idStr := strconv.Itoa(id)
+		if sb.Len()+1+len(idStr) > maxSuffixLen {
+			break
+		}
+		sb.WriteByte('-')
+		sb.WriteString(idStr)
+	}
+	return sb.String()
+}
+
 func (h *Handler) handleSonarrImportComplete(ctx context.Context, userKey string, log *slog.Logger, p *SonarrImportCompletePayload) error {
 	subtitle := FormatSubtitle(p.Series, p.Episodes, "")
-	body := "Imported · " + text.Truncate(subtitle, 80)
+	body := "Imported"
 	if p.IsUpgrade {
-		body = "Upgraded · " + text.Truncate(subtitle, 80)
+		body = "Upgraded"
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Sonarr", Subtitle: text.Truncate(subtitle, 100), Body: body,
-		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-import-complete",
+		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-import-complete" + episodeCollapseSuffix(p.Episodes),
 		Level: pushward.LevelActive, Category: "import-complete", Source: "sonarr", Push: true,
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
 		Metadata: sonarrSeriesMeta(p.Series),

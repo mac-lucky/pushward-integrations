@@ -1158,8 +1158,11 @@ func TestRadarrDownload_SmartMode_SendsNotification(t *testing.T) {
 
 	var req pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.Body != "Imported · Inception (2010)" {
-		t.Errorf("expected body with movie title, got %s", req.Body)
+	if req.Body != "Imported" {
+		t.Errorf("expected body 'Imported', got %s", req.Body)
+	}
+	if req.Metadata["media_title"] != "Inception (2010)" {
+		t.Errorf("expected media_title 'Inception (2010)', got %s", req.Metadata["media_title"])
 	}
 }
 

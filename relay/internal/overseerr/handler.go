@@ -112,7 +112,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 	notifReq := pushward.SendNotificationRequest{
 		Title:    "Overseerr",
 		Subtitle: text.TruncateHard(p.Subject, 100),
-		Body:     stateText + " · " + text.TruncateHard(p.Subject, 80),
+		Body:     stateText,
 		ThreadID: mediathread.ThreadID(p.Media.MediaType, p.Media.TmdbID, p.Media.TvdbID),
 		Level:    pushward.LevelActive,
 		Category: "media-" + strings.ToLower(stateText),
@@ -121,6 +121,9 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 		Push:     true,
 	}
 	meta := map[string]string{"media_type": p.Media.MediaType, "tmdb_id": p.Media.TmdbID}
+	if p.Subject != "" {
+		meta["media_title"] = text.TruncateHard(p.Subject, 100)
+	}
 	if p.Request.RequestedBy != "" {
 		meta["requested_by"] = p.Request.RequestedBy
 	}
