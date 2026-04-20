@@ -19,6 +19,25 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
+const (
+	stateBackingUp         = "Backing up..."
+	stateCompletePrefix    = "Complete · "
+	stateCompleteWarnings  = "Complete (warnings)"
+	stateFailed            = "Failed"
+	stateFailedPrefix      = "Failed: "
+	statePruning           = "Pruning..."
+	statePruned            = "Pruned"
+	statePruneFailed       = "Prune Failed"
+	stateChecking          = "Checking..."
+	stateCheckPassed       = "Check Passed"
+	stateCheckFailed       = "Check Failed"
+	stateApplyingRetention = "Applying retention..."
+	stateRetentionApplied  = "Retention applied"
+	stateRetentionFailed   = "Retention failed"
+	stateAlertError        = "Error"
+	stateSnapshotSkipped   = "Snapshot Skipped"
+)
+
 var stepLabels = []string{"Running", "Done"}
 
 type Handler struct {
@@ -63,40 +82,40 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	var err error
 	switch payload.Event {
 	case "CONDITION_SNAPSHOT_START":
-		err = h.handleStart(ctx, userKey, log, payload, "Backing up...")
+		err = h.handleStart(ctx, userKey, log, payload, stateBackingUp)
 	case "CONDITION_SNAPSHOT_SUCCESS":
-		stateText := "Complete · " + formatBytes(payload.DataAdded)
+		stateText := stateCompletePrefix + formatBytes(payload.DataAdded)
 		err = h.handleEnd(ctx, userKey, log, payload, stateText, pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_SNAPSHOT_WARNING":
-		err = h.handleEnd(ctx, userKey, log, payload, "Complete (warnings)", pushward.ColorOrange, "exclamationmark.triangle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, stateCompleteWarnings, pushward.ColorOrange, "exclamationmark.triangle.fill")
 	case "CONDITION_SNAPSHOT_ERROR":
-		stateText := "Failed"
+		stateText := stateFailed
 		if payload.Error != "" {
-			stateText = "Failed: " + text.TruncateHard(payload.Error, 50)
+			stateText = stateFailedPrefix + text.TruncateHard(payload.Error, 50)
 		}
 		err = h.handleEnd(ctx, userKey, log, payload, stateText, pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_PRUNE_START":
-		err = h.handleStart(ctx, userKey, log, payload, "Pruning...")
+		err = h.handleStart(ctx, userKey, log, payload, statePruning)
 	case "CONDITION_PRUNE_SUCCESS":
-		err = h.handleEnd(ctx, userKey, log, payload, "Pruned", pushward.ColorGreen, "checkmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, statePruned, pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_PRUNE_ERROR":
-		err = h.handleEnd(ctx, userKey, log, payload, "Prune Failed", pushward.ColorRed, "xmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, statePruneFailed, pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_CHECK_START":
-		err = h.handleStart(ctx, userKey, log, payload, "Checking...")
+		err = h.handleStart(ctx, userKey, log, payload, stateChecking)
 	case "CONDITION_CHECK_SUCCESS":
-		err = h.handleEnd(ctx, userKey, log, payload, "Check Passed", pushward.ColorGreen, "checkmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, stateCheckPassed, pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_CHECK_ERROR":
-		err = h.handleEnd(ctx, userKey, log, payload, "Check Failed", pushward.ColorRed, "xmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, stateCheckFailed, pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_FORGET_START":
-		err = h.handleStart(ctx, userKey, log, payload, "Forgetting...")
+		err = h.handleStart(ctx, userKey, log, payload, stateApplyingRetention)
 	case "CONDITION_FORGET_SUCCESS":
-		err = h.handleEnd(ctx, userKey, log, payload, "Forgotten", pushward.ColorGreen, "checkmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, stateRetentionApplied, pushward.ColorGreen, "checkmark.circle.fill")
 	case "CONDITION_FORGET_ERROR":
-		err = h.handleEnd(ctx, userKey, log, payload, "Forget Failed", pushward.ColorRed, "xmark.circle.fill")
+		err = h.handleEnd(ctx, userKey, log, payload, stateRetentionFailed, pushward.ColorRed, "xmark.circle.fill")
 	case "CONDITION_ANY_ERROR":
-		err = h.handleAlert(ctx, userKey, log, payload, "Error", pushward.ColorRed, "critical")
+		err = h.handleAlert(ctx, userKey, log, payload, stateAlertError, pushward.ColorRed, "critical")
 	case "CONDITION_SNAPSHOT_SKIPPED":
-		err = h.handleAlert(ctx, userKey, log, payload, "Snapshot Skipped", pushward.ColorBlue, "info")
+		err = h.handleAlert(ctx, userKey, log, payload, stateSnapshotSkipped, pushward.ColorBlue, "info")
 	default:
 		slog.Debug("unknown backrest event", "event", payload.Event)
 	}

@@ -456,9 +456,9 @@ Receives Backrest backup operation webhooks for snapshot, prune, and check opera
 | `CONDITION_CHECK_START` | Checking... | `arrow.triangle.2.circlepath` | blue |
 | `CONDITION_CHECK_SUCCESS` | Check Passed | `checkmark.circle.fill` | green |
 | `CONDITION_CHECK_ERROR` | Check Failed | `xmark.circle.fill` | red |
-| `CONDITION_FORGET_START` | Forgetting... | `arrow.triangle.2.circlepath` | blue |
-| `CONDITION_FORGET_SUCCESS` | Forgotten | `checkmark.circle.fill` | green |
-| `CONDITION_FORGET_ERROR` | Forget Failed | `xmark.circle.fill` | red |
+| `CONDITION_FORGET_START` | Applying retention... | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_FORGET_SUCCESS` | Retention applied | `checkmark.circle.fill` | green |
+| `CONDITION_FORGET_ERROR` | Retention failed | `xmark.circle.fill` | red |
 | `CONDITION_ANY_ERROR` | (error message) | `exclamationmark.triangle.fill` | red |
 | `CONDITION_SNAPSHOT_SKIPPED` | Snapshot Skipped | `info.circle.fill` | blue |
 

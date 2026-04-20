@@ -117,8 +117,8 @@ func TestSnapshotLifecycle(t *testing.T) {
 	if update.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", update.State)
 	}
-	if update.Content.State != "Backing up..." {
-		t.Errorf("expected state 'Backing up...', got %s", update.Content.State)
+	if update.Content.State != stateBackingUp {
+		t.Errorf("expected state %q, got %s", stateBackingUp, update.Content.State)
 	}
 	if update.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", update.Content.Template)
@@ -151,7 +151,7 @@ func TestSnapshotLifecycle(t *testing.T) {
 	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
-	if phase1.Content.State != "Complete · 2.3 GB" {
+	if phase1.Content.State != stateCompletePrefix+"2.3 GB" {
 		t.Errorf("expected state 'Complete · 2.3 GB', got %s", phase1.Content.State)
 	}
 	if phase1.Content.Template != "steps" {
@@ -179,7 +179,7 @@ func TestSnapshotLifecycle(t *testing.T) {
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
-	if phase2.Content.State != "Complete · 2.3 GB" {
+	if phase2.Content.State != stateCompletePrefix+"2.3 GB" {
 		t.Errorf("expected state 'Complete · 2.3 GB', got %s", phase2.Content.State)
 	}
 }
@@ -219,8 +219,8 @@ func TestSnapshotError(t *testing.T) {
 	// Phase 1: red/failed
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
-	if phase1.Content.State != "Failed: repository not found" {
-		t.Errorf("expected state 'Failed: repository not found', got %s", phase1.Content.State)
+	if phase1.Content.State != stateFailedPrefix+"repository not found" {
+		t.Errorf("expected state %q, got %s", stateFailedPrefix+"repository not found", phase1.Content.State)
 	}
 	if phase1.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
@@ -277,8 +277,8 @@ func TestSnapshotWarning(t *testing.T) {
 	// Phase 1: orange/warning
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
-	if phase1.Content.State != "Complete (warnings)" {
-		t.Errorf("expected state 'Complete (warnings)', got %s", phase1.Content.State)
+	if phase1.Content.State != stateCompleteWarnings {
+		t.Errorf("expected state %q, got %s", stateCompleteWarnings, phase1.Content.State)
 	}
 	if phase1.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
@@ -355,8 +355,8 @@ func TestPruneLifecycle(t *testing.T) {
 	// Verify PRUNE_START ONGOING
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.Content.State != "Pruning..." {
-		t.Errorf("expected state 'Pruning...', got %s", update.Content.State)
+	if update.Content.State != statePruning {
+		t.Errorf("expected state %q, got %s", statePruning, update.Content.State)
 	}
 	if update.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", update.Content.Template)
@@ -374,8 +374,8 @@ func TestPruneLifecycle(t *testing.T) {
 	// Phase 1: Pruned
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
-	if phase1.Content.State != "Pruned" {
-		t.Errorf("expected state 'Pruned', got %s", phase1.Content.State)
+	if phase1.Content.State != statePruned {
+		t.Errorf("expected state %q, got %s", statePruned, phase1.Content.State)
 	}
 	if phase1.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
@@ -424,8 +424,8 @@ func TestCheckLifecycle(t *testing.T) {
 	// Verify CHECK_START ONGOING
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.Content.State != "Checking..." {
-		t.Errorf("expected state 'Checking...', got %s", update.Content.State)
+	if update.Content.State != stateChecking {
+		t.Errorf("expected state %q, got %s", stateChecking, update.Content.State)
 	}
 	if update.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", update.Content.Template)
@@ -443,8 +443,8 @@ func TestCheckLifecycle(t *testing.T) {
 	// Phase 1: Check Passed
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
-	if phase1.Content.State != "Check Passed" {
-		t.Errorf("expected state 'Check Passed', got %s", phase1.Content.State)
+	if phase1.Content.State != stateCheckPassed {
+		t.Errorf("expected state %q, got %s", stateCheckPassed, phase1.Content.State)
 	}
 	if phase1.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
@@ -496,8 +496,8 @@ func TestForgetLifecycle(t *testing.T) {
 	// Verify FORGET_START ONGOING
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.Content.State != "Forgetting..." {
-		t.Errorf("expected state 'Forgetting...', got %s", update.Content.State)
+	if update.Content.State != stateApplyingRetention {
+		t.Errorf("expected state %q, got %s", stateApplyingRetention, update.Content.State)
 	}
 	if update.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", update.Content.Template)
@@ -512,11 +512,11 @@ func TestForgetLifecycle(t *testing.T) {
 		t.Errorf("expected step_labels [Running, Done], got %v", update.Content.StepLabels)
 	}
 
-	// Phase 1: Forgotten
+	// Phase 1: Retention applied
 	var phase1f pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1f)
-	if phase1f.Content.State != "Forgotten" {
-		t.Errorf("expected state 'Forgotten', got %s", phase1f.Content.State)
+	if phase1f.Content.State != stateRetentionApplied {
+		t.Errorf("expected state %q, got %s", stateRetentionApplied, phase1f.Content.State)
 	}
 	if phase1f.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", phase1f.Content.Template)
@@ -573,8 +573,8 @@ func TestForgetError(t *testing.T) {
 	// Phase 1: red/failed
 	var phase1fe pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1fe)
-	if phase1fe.Content.State != "Forget Failed" {
-		t.Errorf("expected state 'Forget Failed', got %s", phase1fe.Content.State)
+	if phase1fe.Content.State != stateRetentionFailed {
+		t.Errorf("expected state %q, got %s", stateRetentionFailed, phase1fe.Content.State)
 	}
 	if phase1fe.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", phase1fe.Content.Template)
@@ -709,8 +709,8 @@ func TestSnapshotSkipped(t *testing.T) {
 	if update.Content.Icon != "info.circle.fill" {
 		t.Errorf("expected icon info.circle.fill, got %s", update.Content.Icon)
 	}
-	if update.Content.State != "Snapshot Skipped" {
-		t.Errorf("expected state 'Snapshot Skipped', got %s", update.Content.State)
+	if update.Content.State != stateSnapshotSkipped {
+		t.Errorf("expected state %q, got %s", stateSnapshotSkipped, update.Content.State)
 	}
 	if update.Content.Subtitle != "Backrest · daily-backup · local-repo" {
 		t.Errorf("expected subtitle 'Backrest · daily-backup · local-repo', got %q", update.Content.Subtitle)
