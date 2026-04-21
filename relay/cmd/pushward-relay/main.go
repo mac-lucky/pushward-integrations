@@ -240,7 +240,7 @@ func main() {
 	}
 
 	// Wrap mux with metrics middleware and optional OTel tracing.
-	handler := metrics.Middleware(mux)
+	handler := metrics.Middleware(humautil.NormalizeJSONContentType(mux))
 	if cfg.Telemetry.Endpoint != "" {
 		handler = otelhttp.NewHandler(handler, "pushward-relay",
 			otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {

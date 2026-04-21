@@ -3,6 +3,7 @@ package humautil
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -38,6 +39,30 @@ func IPRateLimitMiddleware(api huma.API) func(huma.Context, func(huma.Context)) 
 		}
 		next(ctx)
 	}
+}
+
+// NormalizeJSONContentType rewrites Content-Type to application/json on POST
+// requests arriving with a missing or text/plain header, so Huma's strict
+// content negotiation accepts JSON bodies sent by misconfigured webhook
+// senders. A non-JSON body still fails — with a 400 from the decoder
+// instead of a 415 from negotiation.
+func NormalizeJSONContentType(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			ct := r.Header.Get("Content-Type")
+			if ct == "" || isTextPlain(ct) {
+				r.Header.Set("Content-Type", "application/json")
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// isTextPlain reports whether the Content-Type's media type (ignoring
+// parameters and whitespace) is text/plain, case-insensitively per RFC 9110.
+func isTextPlain(ct string) bool {
+	mediaType, _, _ := strings.Cut(ct, ";")
+	return strings.EqualFold(strings.TrimSpace(mediaType), "text/plain")
 }
 
 // KeyRateLimitMiddleware returns a Huma middleware that applies per-key rate limiting.
