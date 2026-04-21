@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -462,6 +463,119 @@ func TestWebhook_SamePayloadFireAndResolve(t *testing.T) {
 		if u.State == pushward.StateEnded {
 			t.Error("should not have ended activity when firing instance still exists")
 		}
+	}
+}
+
+// TestWebhook_ResolvePreservesSeriesKeys verifies that the ENDED update
+// uses the same metric-derived series keys as the firing update, so the
+// server's AccumulateHistory doesn't prune the accumulated history as
+// an orphaned series.
+func TestWebhook_ResolvePreservesSeriesKeys(t *testing.T) {
+	pw := newMockPWServer()
+	defer pw.close()
+
+	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/query_range") {
+			_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"10.0.0.1:9100"},"values":[[1700000000,"87"],[1700000015,"90"]]}]}}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[{"metric":{"instance":"10.0.0.1:9100"},"value":[1700000030,"42"]}]}}`))
+	}))
+	defer promSrv.Close()
+
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	mc := metrics.NewClient(promSrv.URL)
+	p := poller.New(mc, pwClient, 1*time.Hour)
+	defer p.StopAll()
+
+	h := NewHandler(pwClient, mc, nil, p, Config{})
+
+	fire := `{"status":"firing","alerts":[{"status":"firing","labels":{"alertname":"HighCPU"},"annotations":{"pushward_query":"rate(cpu[5m])","pushward_series_label":"instance"},"values":{"B":87},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"f1"}]}`
+	fireWebhook(t, h, fire)
+
+	resolve := `{"status":"resolved","alerts":[{"status":"resolved","labels":{"alertname":"HighCPU"},"annotations":{},"values":{"B":42},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"f1"}]}`
+	fireWebhook(t, h, resolve)
+
+	var end *pushward.UpdateRequest
+	for i := range pw.getUpdates() {
+		u := pw.getUpdates()[i]
+		if u.State == pushward.StateEnded {
+			end = &u
+		}
+	}
+	if end == nil {
+		t.Fatal("no ENDED update found")
+	}
+
+	valMap, ok := end.Content.Value.(map[string]interface{})
+	if !ok {
+		t.Fatalf("end value is not a map: %T = %v", end.Content.Value, end.Content.Value)
+	}
+	// Must use the same metric label key the firing update used, not "value"
+	// or a Grafana ref ID. Otherwise the server prunes accumulated history.
+	if _, ok := valMap["10.0.0.1:9100"]; !ok {
+		t.Errorf("end value should be keyed by instance label, got %v", valMap)
+	}
+	if _, ok := valMap["value"]; ok {
+		t.Errorf("end value should not fall back to generic 'value' key, got %v", valMap)
+	}
+	if _, ok := valMap["B"]; ok {
+		t.Errorf("end value should not use Grafana ref ID, got %v", valMap)
+	}
+}
+
+// TestWebhook_ResolveFallsBackToLastValues verifies that when the final
+// instant query fails (e.g. metrics source unreachable at resolve time),
+// the end update reuses the series keys last sent by the poller / firing.
+func TestWebhook_ResolveFallsBackToLastValues(t *testing.T) {
+	pw := newMockPWServer()
+	defer pw.close()
+
+	var down atomic.Bool
+	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() {
+			http.Error(w, "down", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"10.0.0.1:9100"},"values":[[1700000000,"87"]]}]}}`))
+	}))
+	defer promSrv.Close()
+
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	mc := metrics.NewClient(promSrv.URL)
+	p := poller.New(mc, pwClient, 1*time.Hour)
+	defer p.StopAll()
+
+	h := NewHandler(pwClient, mc, nil, p, Config{})
+
+	fire := `{"status":"firing","alerts":[{"status":"firing","labels":{"alertname":"HighCPU"},"annotations":{"pushward_query":"rate(cpu[5m])","pushward_series_label":"instance"},"values":{"B":87},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"f1"}]}`
+	fireWebhook(t, h, fire)
+
+	// Simulate metrics source going down before resolve.
+	down.Store(true)
+
+	resolve := `{"status":"resolved","alerts":[{"status":"resolved","labels":{"alertname":"HighCPU"},"annotations":{},"values":{"B":0},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"f1"}]}`
+	fireWebhook(t, h, resolve)
+
+	var end *pushward.UpdateRequest
+	for i := range pw.getUpdates() {
+		u := pw.getUpdates()[i]
+		if u.State == pushward.StateEnded {
+			end = &u
+		}
+	}
+	if end == nil {
+		t.Fatal("no ENDED update found")
+	}
+
+	valMap, ok := end.Content.Value.(map[string]interface{})
+	if !ok {
+		t.Fatalf("end value is not a map: %T = %v", end.Content.Value, end.Content.Value)
+	}
+	if _, ok := valMap["10.0.0.1:9100"]; !ok {
+		t.Errorf("end value should reuse last known instance key when query fails, got %v", valMap)
 	}
 }
 

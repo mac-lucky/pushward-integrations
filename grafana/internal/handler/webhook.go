@@ -60,6 +60,11 @@ type alertState struct {
 	seriesLabel  string
 	lastSeen     time.Time
 	fingerprints map[string]struct{}
+	// lastValues records the series keys + values most recently sent to the
+	// server. Reused on resolve to keep keys stable across the firing→end
+	// transition so the server's AccumulateHistory preserves accumulated
+	// history instead of pruning it as an orphaned series.
+	lastValues map[string]float64
 }
 
 func NewHandler(
@@ -75,13 +80,34 @@ func NewHandler(
 	if cfg.DefaultSeverity == "" {
 		cfg.DefaultSeverity = "warning"
 	}
-	return &Handler{
+	h := &Handler{
 		pwClient:      pwClient,
 		metricsClient: metricsClient,
 		grafanaClient: grafanaClient,
 		poller:        p,
 		cfg:           cfg,
 		active:        make(map[string]*alertState),
+	}
+	if p != nil {
+		p.SetUpdateCallback(h.recordPollerValues)
+	}
+	return h
+}
+
+// recordPollerValues is invoked by the poller after each successful poll.
+// It stores the values under the matching alertState so they can be reused
+// on resolve to preserve accumulated history.
+func (h *Handler) recordPollerValues(slug string, values map[string]float64) {
+	if len(values) == 0 {
+		return
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, state := range h.active {
+		if state.slug == slug {
+			state.lastValues = values
+			return
+		}
 	}
 }
 
@@ -215,6 +241,18 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 		return
 	}
 
+	// Only seed lastValues from the initial history fetch — values from the
+	// webhook payload use Grafana ref-ID keys that differ from the poller's
+	// metric-derived keys. Letting a re-fire overwrite would drop accumulated
+	// history on resolve.
+	if len(history) > 0 {
+		h.mu.Lock()
+		if state, ok := h.active[alertname]; ok {
+			state.lastValues = values
+		}
+		h.mu.Unlock()
+	}
+
 	if isNew && expr != "" {
 		h.poller.Start(slug, expr, seriesLabel)
 		logger.Info("poller started")
@@ -248,16 +286,23 @@ func (h *Handler) handleResolved(ctx context.Context, a alert) {
 	// All instances resolved — capture state and clean up.
 	refID := state.refID
 	seriesLabel := state.seriesLabel
+	expr := state.expr
+	lastValues := state.lastValues
 	delete(h.active, alertname)
 	h.mu.Unlock()
 
 	h.poller.Stop(slug)
 
 	severity := h.resolveSeverity(a)
-	values := h.resolveValues(a, refID, seriesLabel)
+
+	// Reuse the same series keys the poller was sending so the server's
+	// AccumulateHistory keeps the accumulated history instead of pruning
+	// it as an orphan series on the final update.
+	values := h.finalValues(ctx, expr, seriesLabel, lastValues)
 	if len(values) == 0 {
-		values = map[string]float64{"value": 0}
+		values = h.resolveValues(a, refID, seriesLabel)
 	}
+
 	content := h.buildContent(a, severity, values)
 	content.Icon = resolvedIcon
 	content.AccentColor = pushward.ColorGreen
@@ -272,6 +317,25 @@ func (h *Handler) handleResolved(ctx context.Context, a alert) {
 	}
 
 	logger.Info("activity ended")
+}
+
+// finalValues returns the values to send on the terminal ENDED update,
+// keyed by the same series keys the poller was using so the server
+// preserves history. Prefers a fresh instant query; falls back to the
+// last values recorded from the poller / firing update.
+func (h *Handler) finalValues(ctx context.Context, expr, seriesLabel string, lastValues map[string]float64) map[string]float64 {
+	if expr != "" && h.metricsClient != nil {
+		points, err := h.metricsClient.QueryInstantAll(ctx, expr, time.Now())
+		if err == nil && len(points) > 0 {
+			values := make(map[string]float64, len(points))
+			for _, lp := range points {
+				key := metrics.SeriesKey(lp.Labels, seriesLabel)
+				values[key] = lp.Point.V
+			}
+			return values
+		}
+	}
+	return lastValues
 }
 
 func (h *Handler) resolveQuery(ctx context.Context, a alert) (expr, refID string) {
@@ -521,25 +585,10 @@ func (h *Handler) checkAlertStates(ctx context.Context) {
 func (h *Handler) endAlertActivity(ctx context.Context, alertname string, state *alertState) {
 	logger := slog.With("alertname", alertname, "slug", state.slug)
 
-	// Fetch current metric values for the end update.
-	var values map[string]float64
-	if state.expr != "" {
-		points, err := h.metricsClient.QueryInstantAll(ctx, state.expr, time.Now())
-		if err == nil {
-			values = make(map[string]float64, len(points))
-			for _, lp := range points {
-				key := metrics.SeriesKey(lp.Labels, state.seriesLabel)
-				values[key] = lp.Point.V
-			}
-		}
-	}
-	if len(values) == 0 {
-		values = map[string]float64{"value": 0}
-	}
+	values := h.finalValues(ctx, state.expr, state.seriesLabel, state.lastValues)
 
 	content := pushward.Content{
 		Template:    templateTimeline,
-		Value:       any(values),
 		Subtitle:    "Grafana",
 		Icon:        resolvedIcon,
 		AccentColor: pushward.ColorGreen,
@@ -547,6 +596,9 @@ func (h *Handler) endAlertActivity(ctx context.Context, alertname string, state 
 		Scale:       h.cfg.Scale,
 		Smoothing:   h.cfg.Smoothing,
 		Decimals:    h.cfg.Decimals,
+	}
+	if len(values) > 0 {
+		content.Value = any(values)
 	}
 
 	err := h.pwClient.UpdateActivity(ctx, state.slug, pushward.UpdateRequest{

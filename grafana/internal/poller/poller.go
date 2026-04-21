@@ -10,6 +10,12 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
+// UpdateCallback is invoked after each successful poll with the values sent.
+// Used by the handler to track the last series keys and values per slug so
+// they can be reused on alert resolve (keeping keys stable prevents the
+// server's AccumulateHistory from pruning prior series).
+type UpdateCallback func(slug string, values map[string]float64)
+
 // Poller manages per-alert polling goroutines that query Prometheus/VM
 // and push timeline updates to PushWard.
 type Poller struct {
@@ -17,9 +23,10 @@ type Poller struct {
 	pwClient      *pushward.Client
 	interval      time.Duration
 
-	mu     sync.Mutex
-	active map[string]context.CancelFunc
-	wg     sync.WaitGroup
+	mu       sync.Mutex
+	active   map[string]context.CancelFunc
+	callback UpdateCallback
+	wg       sync.WaitGroup
 }
 
 // New creates a new Poller.
@@ -85,6 +92,15 @@ func (p *Poller) ActiveCount() int {
 	return len(p.active)
 }
 
+// SetUpdateCallback registers a callback invoked after each successful poll.
+// Safe to call concurrently with active polls; the callback is read under
+// p.mu on each tick.
+func (p *Poller) SetUpdateCallback(cb UpdateCallback) {
+	p.mu.Lock()
+	p.callback = cb
+	p.mu.Unlock()
+}
+
 func (p *Poller) run(ctx context.Context, slug, expr, seriesLabel string) {
 	defer p.wg.Done()
 
@@ -135,5 +151,13 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seri
 			return
 		}
 		logger.Warn("poll update failed", "error", err)
+		return
+	}
+
+	p.mu.Lock()
+	cb := p.callback
+	p.mu.Unlock()
+	if cb != nil {
+		cb(slug, values)
 	}
 }
