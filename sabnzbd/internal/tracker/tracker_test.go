@@ -812,7 +812,7 @@ func TestSendDownloadProgress_Generic_NoValueOrUnit(t *testing.T) {
 	}
 }
 
-func TestTimeline_NonDownloadPhase_SkipsValue(t *testing.T) {
+func TestTimeline_NonDownloadPhase_SendsZeroValue(t *testing.T) {
 	pwSrv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.SABnzbd.Template = "timeline"
@@ -820,7 +820,10 @@ func TestTimeline_NonDownloadPhase_SkipsValue(t *testing.T) {
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
 
-	// Non-download sends (e.g. "Starting...", PP) pass nil for value → timeline fields skipped
+	// Non-download sends (e.g. "Starting...", PP) pass nil for value. The
+	// server rejects timeline payloads without a labeled value map, so the
+	// integration substitutes 0 to keep updates accepted while the sparkline
+	// tapers cleanly to zero.
 	tr.send(ctx, 0.0, "Starting...", "arrow.down.circle", "blue", nil, "", pushward.StateOngoing, nil)
 
 	got := testutil.GetCalls(calls, mu)
@@ -833,11 +836,16 @@ func TestTimeline_NonDownloadPhase_SkipsValue(t *testing.T) {
 	if req.Content.Template != "timeline" {
 		t.Errorf("expected timeline template, got %s", req.Content.Template)
 	}
-	if req.Content.Value != nil {
-		t.Errorf("expected nil value for non-download phase, got %v", req.Content.Value)
+	if values := testutil.RequireValueMap(t, req.Content.Value); values == nil {
+		// already failed
+	} else if v, ok := values[seriesKey]; !ok || v != 0 {
+		t.Errorf("expected value[%q]=0 for non-download phase, got %v (ok=%v)", seriesKey, v, ok)
 	}
-	if req.Content.Units != nil {
-		t.Errorf("expected nil units for non-download phase, got %v", req.Content.Units)
+	if u := req.Content.Units[seriesKey]; u != "MB/s" {
+		t.Errorf("expected units[%q]=MB/s, got %q", seriesKey, u)
+	}
+	if req.Content.History != nil {
+		t.Errorf("expected no history seeded for zero sample, got %v", req.Content.History)
 	}
 }
 

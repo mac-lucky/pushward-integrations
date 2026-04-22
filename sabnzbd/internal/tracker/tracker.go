@@ -189,6 +189,12 @@ func (t *Tracker) launchTracker(ctx context.Context, resumed bool) {
 	}()
 }
 
+func (t *Tracker) applyTimelineSpeed(content *pushward.Content, sample float64) {
+	content.Value = map[string]float64{seriesKey: sample}
+	content.Units = map[string]string{seriesKey: "MB/s"}
+	t.cfg.SABnzbd.Timeline.Apply(content)
+}
+
 func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string, value *float64) {
 	template := t.cfg.SABnzbd.Template
 	content := pushward.Content{
@@ -197,18 +203,21 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 		State:       state,
 		AccentColor: accentColor,
 	}
-	if template == "timeline" && value != nil {
-		content.Value = map[string]float64{seriesKey: *value}
-		content.Units = map[string]string{seriesKey: "MB/s"}
-		t.cfg.SABnzbd.Timeline.Apply(&content)
+	if template == pushward.TemplateTimeline {
+		// Server rejects timeline payloads without a labeled value map (HTTP 400),
+		// so non-download callers (PP, "Starting...") substitute 0.
+		sample := 0.0
+		if value != nil {
+			sample = *value
+		}
+		t.applyTimelineSpeed(&content, sample)
 
-		// Seed sparkline history on first download update
-		if !t.historySent && *value > 0 {
+		if !t.historySent && sample > 0 {
 			now := time.Now().Unix()
 			content.History = map[string][]pushward.HistoryPoint{
 				seriesKey: {
-					{T: now - 10, V: *value},
-					{T: now - 5, V: *value},
+					{T: now - 10, V: sample},
+					{T: now - 5, V: sample},
 				},
 			}
 			t.historySent = true
@@ -318,10 +327,8 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		AccentColor: "green",
 		Subtitle:    subtitle,
 	}
-	if t.cfg.SABnzbd.Template == "timeline" {
-		finalContent.Value = map[string]float64{seriesKey: 0}
-		finalContent.Units = map[string]string{seriesKey: "MB/s"}
-		t.cfg.SABnzbd.Timeline.Apply(&finalContent)
+	if t.cfg.SABnzbd.Template == pushward.TemplateTimeline {
+		t.applyTimelineSpeed(&finalContent, 0)
 	}
 
 	// Two-phase end: ONGOING with final content → short display → ENDED
