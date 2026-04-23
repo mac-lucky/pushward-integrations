@@ -207,10 +207,19 @@ func (c *Client) runSubscription(ctx context.Context, query string, handler func
 		switch msg.Type {
 		case "next":
 			var payload struct {
-				Data json.RawMessage `json:"data"`
+				Data   json.RawMessage   `json:"data"`
+				Errors []json.RawMessage `json:"errors"`
 			}
 			if err := json.Unmarshal(msg.Payload, &payload); err != nil {
-				slog.Error("failed to decode payload", "error", err)
+				slog.Error("failed to decode payload", "error", err, "raw", string(msg.Payload))
+				continue
+			}
+			if len(payload.Errors) > 0 {
+				slog.Error("subscription payload errors", "errors", payload.Errors, "raw", string(msg.Payload))
+				continue
+			}
+			if len(payload.Data) == 0 || string(payload.Data) == "null" {
+				slog.Warn("subscription payload had no data", "raw", string(msg.Payload))
 				continue
 			}
 			handler(payload.Data)
