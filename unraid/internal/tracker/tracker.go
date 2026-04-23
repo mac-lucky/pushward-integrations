@@ -342,4 +342,3 @@ func (t *Tracker) scheduleEnd(slug string, content pushward.Content) {
 	t.timers[slug] = tp
 	t.mu.Unlock()
 }
-

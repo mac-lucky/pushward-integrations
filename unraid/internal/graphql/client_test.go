@@ -185,7 +185,7 @@ func TestQueryArray_HTTPError(t *testing.T) {
 func TestQueryArray_SendsAPIKeyAndQuery(t *testing.T) {
 	var (
 		method, path, contentType, apiKey string
-		body                               []byte
+		body                              []byte
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		method = r.Method
