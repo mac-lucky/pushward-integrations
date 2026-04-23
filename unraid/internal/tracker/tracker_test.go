@@ -16,7 +16,7 @@ func testConfig() *config.Config {
 	return &config.Config{
 		Unraid: config.UnraidConfig{
 			Host:       "tower.local",
-			Port:       3001,
+			Port:       80,
 			APIKey:     "test-key",
 			ServerName: "Tower",
 		},
@@ -61,7 +61,7 @@ func TestParityCheck_StartProgressComplete(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 3001, "test-key", false)
+	gql := graphql.NewClient("tower.local", 80, "test-key", false)
 	pw := pushward.NewClient(srv.URL, "hlk_test")
 	tr := New(cfg, gql, pw)
 
@@ -70,7 +70,7 @@ func TestParityCheck_StartProgressComplete(t *testing.T) {
 	// Step 1: Parity check starts
 	tr.handleArrayStatus(ctx, graphql.ArrayStatus{
 		State:       "STARTED",
-		ParityCheck: graphql.ParityCheck{Status: "running", Progress: 5.0},
+		ParityCheck: graphql.ParityCheck{Status: graphql.ParityStatusRunning, Progress: 5.0},
 	})
 
 	recorded := testutil.GetCalls(calls, mu)
@@ -110,7 +110,7 @@ func TestParityCheck_StartProgressComplete(t *testing.T) {
 	// Step 2: Parity check completes (status flips to a non-running value)
 	tr.handleArrayStatus(ctx, graphql.ArrayStatus{
 		State:       "STARTED",
-		ParityCheck: graphql.ParityCheck{Status: "completed"},
+		ParityCheck: graphql.ParityCheck{Status: graphql.ParityStatusCompleted},
 	})
 
 	// Wait for two-phase end
@@ -145,7 +145,7 @@ func TestParityCheck_Debounce(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 3001, "test-key", false)
+	gql := graphql.NewClient("tower.local", 80, "test-key", false)
 	pw := pushward.NewClient(srv.URL, "hlk_test")
 	tr := New(cfg, gql, pw)
 
@@ -154,7 +154,7 @@ func TestParityCheck_Debounce(t *testing.T) {
 	// Start parity
 	tr.handleArrayStatus(ctx, graphql.ArrayStatus{
 		State:       "STARTED",
-		ParityCheck: graphql.ParityCheck{Status: "running", Progress: 5.0},
+		ParityCheck: graphql.ParityCheck{Status: graphql.ParityStatusRunning, Progress: 5.0},
 	})
 
 	callsAfterStart := len(testutil.GetCalls(calls, mu))
@@ -162,7 +162,7 @@ func TestParityCheck_Debounce(t *testing.T) {
 	// Immediate update should be debounced (< 30s)
 	tr.handleArrayStatus(ctx, graphql.ArrayStatus{
 		State:       "STARTED",
-		ParityCheck: graphql.ParityCheck{Status: "running", Progress: 6.0},
+		ParityCheck: graphql.ParityCheck{Status: graphql.ParityStatusRunning, Progress: 6.0},
 	})
 
 	callsAfterDebounce := len(testutil.GetCalls(calls, mu))
@@ -177,7 +177,7 @@ func TestArrayState_StartingToStarted(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 3001, "test-key", false)
+	gql := graphql.NewClient("tower.local", 80, "test-key", false)
 	pw := pushward.NewClient(srv.URL, "hlk_test")
 	tr := New(cfg, gql, pw)
 
@@ -251,7 +251,7 @@ func TestArrayState_StoppingToStopped(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 3001, "test-key", false)
+	gql := graphql.NewClient("tower.local", 80, "test-key", false)
 	pw := pushward.NewClient(srv.URL, "hlk_test")
 	tr := New(cfg, gql, pw)
 
@@ -304,7 +304,7 @@ func TestArrayState_NoTransitionIgnored(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 3001, "test-key", false)
+	gql := graphql.NewClient("tower.local", 80, "test-key", false)
 	pw := pushward.NewClient(srv.URL, "hlk_test")
 	tr := New(cfg, gql, pw)
 
@@ -326,7 +326,7 @@ func TestNotification_DiskAlert(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 3001, "test-key", false)
+	gql := graphql.NewClient("tower.local", 80, "test-key", false)
 	pw := pushward.NewClient(srv.URL, "hlk_test")
 	tr := New(cfg, gql, pw)
 
@@ -371,7 +371,7 @@ func TestNotification_UPSWarning(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 3001, "test-key", false)
+	gql := graphql.NewClient("tower.local", 80, "test-key", false)
 	pw := pushward.NewClient(srv.URL, "hlk_test")
 	tr := New(cfg, gql, pw)
 
@@ -404,7 +404,7 @@ func TestNotification_UPSAlert(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 3001, "test-key", false)
+	gql := graphql.NewClient("tower.local", 80, "test-key", false)
 	pw := pushward.NewClient(srv.URL, "hlk_test")
 	tr := New(cfg, gql, pw)
 
@@ -434,7 +434,7 @@ func TestNotification_IgnoredEvent(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 3001, "test-key", false)
+	gql := graphql.NewClient("tower.local", 80, "test-key", false)
 	pw := pushward.NewClient(srv.URL, "hlk_test")
 	tr := New(cfg, gql, pw)
 

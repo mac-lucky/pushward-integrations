@@ -164,10 +164,14 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 
 	t.mu.Lock()
 	prevState := t.arrayState
+	if prevState == status.State {
+		t.mu.Unlock()
+		return
+	}
 	t.arrayState = status.State
 	t.mu.Unlock()
 
-	if prevState == status.State || prevState == "" {
+	if prevState == "" {
 		return
 	}
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"time"
 
@@ -22,41 +23,37 @@ const dialTimeout = 30 * time.Second
 // most one per N drops so a slow consumer can't spam the logs.
 const dropLogEvery = 100
 
-// ArrayStatus represents the current state of the Unraid array.
 type ArrayStatus struct {
 	State       string      `json:"state"`
 	ParityCheck ParityCheck `json:"parityCheckStatus"`
-	Disks       []Disk      `json:"disks"`
 }
 
-// ParityCheck represents parity check status. Status enum values:
-// never_run, running, paused, completed, cancelled, failed.
+type ParityStatus string
+
+const (
+	ParityStatusNeverRun  ParityStatus = "never_run"
+	ParityStatusRunning   ParityStatus = "running"
+	ParityStatusPaused    ParityStatus = "paused"
+	ParityStatusCompleted ParityStatus = "completed"
+	ParityStatusCancelled ParityStatus = "cancelled"
+	ParityStatusFailed    ParityStatus = "failed"
+)
+
 type ParityCheck struct {
-	Status   string  `json:"status"`
-	Progress float64 `json:"progress"`
+	Status   ParityStatus `json:"status"`
+	Progress float64      `json:"progress"`
 }
 
-// IsActive reports whether a parity check is currently in progress.
 func (p ParityCheck) IsActive() bool {
-	return p.Status == "running" || p.Status == "paused"
+	return p.Status == ParityStatusRunning || p.Status == ParityStatusPaused
 }
 
-// Disk represents a single disk in the array.
-type Disk struct {
-	Idx    int    `json:"idx"`
-	Name   string `json:"name"`
-	Status string `json:"status"`
-	Temp   *int   `json:"temp"`
-}
-
-// Notification represents an Unraid notification event.
 type Notification struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
 	Subject     string `json:"subject"`
 	Description string `json:"description"`
 	Importance  string `json:"importance"`
-	Timestamp   string `json:"timestamp"`
 }
 
 // Client connects to Unraid's GraphQL API via WebSocket.
@@ -85,7 +82,7 @@ func NewClient(host string, port int, apiKey string, useTLS bool) *Client {
 // SubscribeArray subscribes to array status changes.
 // Sends updates on the returned channel. Blocks until ctx is cancelled.
 func (c *Client) SubscribeArray(ctx context.Context, ch chan<- ArrayStatus) error {
-	query := `subscription { arraySubscription { state parityCheckStatus { status progress } disks { idx name status temp } } }`
+	query := `subscription { arraySubscription { state parityCheckStatus { status progress } } }`
 	return c.subscribe(ctx, query, func(data json.RawMessage) {
 		var wrapper struct {
 			ArraySubscription ArrayStatus `json:"arraySubscription"`
@@ -106,7 +103,7 @@ func (c *Client) SubscribeArray(ctx context.Context, ch chan<- ArrayStatus) erro
 
 // SubscribeNotifications subscribes to new notifications.
 func (c *Client) SubscribeNotifications(ctx context.Context, ch chan<- Notification) error {
-	query := `subscription { notificationAdded { id title subject description importance timestamp } }`
+	query := `subscription { notificationAdded { id title subject description importance } }`
 	return c.subscribe(ctx, query, func(data json.RawMessage) {
 		var wrapper struct {
 			NotificationAdded Notification `json:"notificationAdded"`
@@ -125,20 +122,25 @@ func (c *Client) SubscribeNotifications(ctx context.Context, ch chan<- Notificat
 	})
 }
 
-// subscribe connects to the GraphQL WebSocket and runs a subscription.
 func (c *Client) subscribe(ctx context.Context, query string, handler func(json.RawMessage)) error {
+	attempt := 0
 	for {
 		if err := c.runSubscription(ctx, query, handler); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			slog.Error("subscription error, reconnecting", "error", err)
+			attempt++
+			base := min(time.Second<<(attempt-1), 60*time.Second)
+			backoff := base/2 + rand.N(base/2) // #nosec G404 -- jitter for retry backoff, not security-sensitive
+			slog.Error("subscription error, reconnecting", "error", err, "attempt", attempt, "backoff", backoff)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(5 * time.Second):
+			case <-time.After(backoff):
 			}
+			continue
 		}
+		attempt = 0
 	}
 }
 
@@ -162,8 +164,11 @@ func (c *Client) runSubscription(ctx context.Context, query string, handler func
 	}
 	defer func() { _ = conn.CloseNow() }()
 
-	// Connection init
-	if err := wsjson.Write(ctx, conn, map[string]any{"type": "connection_init"}); err != nil {
+	init := map[string]any{
+		"type":    "connection_init",
+		"payload": map[string]any{"x-api-key": c.apiKey},
+	}
+	if err := wsjson.Write(ctx, conn, init); err != nil {
 		return fmt.Errorf("connection_init: %w", err)
 	}
 
