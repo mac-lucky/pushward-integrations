@@ -87,7 +87,7 @@ func (t *Tracker) handleParityCheck(ctx context.Context, status graphql.ArraySta
 	t.mu.Lock()
 	wasActive := t.parityActive
 
-	isActive := status.ParityCheck != nil
+	isActive := status.ParityCheck.IsActive()
 
 	if isActive && !wasActive {
 		// Parity check started
@@ -132,7 +132,7 @@ func (t *Tracker) handleParityCheck(ctx context.Context, status graphql.ArraySta
 	t.mu.Unlock()
 }
 
-func (t *Tracker) sendParityUpdate(ctx context.Context, slug string, pc *graphql.ParityCheck, serverName string) {
+func (t *Tracker) sendParityUpdate(ctx context.Context, slug string, pc graphql.ParityCheck, serverName string) {
 	progress := pc.Progress / 100.0
 	state := fmt.Sprintf("Checking · %.0f%%", pc.Progress)
 
@@ -297,7 +297,7 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 		t.scheduleEnd(slug, content)
 
 	default:
-		slog.Debug("unraid notification ignored", "subject", notif.Subject, "event", notif.Event)
+		slog.Debug("unraid notification ignored", "subject", notif.Subject, "title", notif.Title)
 	}
 }
 

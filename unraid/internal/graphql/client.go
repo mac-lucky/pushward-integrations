@@ -24,15 +24,21 @@ const dropLogEvery = 100
 
 // ArrayStatus represents the current state of the Unraid array.
 type ArrayStatus struct {
-	State       string       `json:"state"`
-	ParityCheck *ParityCheck `json:"parityCheck"`
-	Disks       []Disk       `json:"disks"`
+	State       string      `json:"state"`
+	ParityCheck ParityCheck `json:"parityCheckStatus"`
+	Disks       []Disk      `json:"disks"`
 }
 
-// ParityCheck represents an active parity check operation.
+// ParityCheck represents parity check status. Status enum values:
+// never_run, running, paused, completed, cancelled, failed.
 type ParityCheck struct {
+	Status   string  `json:"status"`
 	Progress float64 `json:"progress"`
-	ETA      string  `json:"eta"`
+}
+
+// IsActive reports whether a parity check is currently in progress.
+func (p ParityCheck) IsActive() bool {
+	return p.Status == "running" || p.Status == "paused"
 }
 
 // Disk represents a single disk in the array.
@@ -46,11 +52,11 @@ type Disk struct {
 // Notification represents an Unraid notification event.
 type Notification struct {
 	ID          string `json:"id"`
+	Title       string `json:"title"`
 	Subject     string `json:"subject"`
 	Description string `json:"description"`
 	Importance  string `json:"importance"`
-	Timestamp   int64  `json:"timestamp"`
-	Event       string `json:"event"`
+	Timestamp   string `json:"timestamp"`
 }
 
 // Client connects to Unraid's GraphQL API via WebSocket.
@@ -79,7 +85,7 @@ func NewClient(host string, port int, apiKey string, useTLS bool) *Client {
 // SubscribeArray subscribes to array status changes.
 // Sends updates on the returned channel. Blocks until ctx is cancelled.
 func (c *Client) SubscribeArray(ctx context.Context, ch chan<- ArrayStatus) error {
-	query := `subscription { arraySubscription { state parityCheck { progress eta } disks { idx name status temp } } }`
+	query := `subscription { arraySubscription { state parityCheckStatus { status progress } disks { idx name status temp } } }`
 	return c.subscribe(ctx, query, func(data json.RawMessage) {
 		var wrapper struct {
 			ArraySubscription ArrayStatus `json:"arraySubscription"`
@@ -100,7 +106,7 @@ func (c *Client) SubscribeArray(ctx context.Context, ch chan<- ArrayStatus) erro
 
 // SubscribeNotifications subscribes to new notifications.
 func (c *Client) SubscribeNotifications(ctx context.Context, ch chan<- Notification) error {
-	query := `subscription { notificationAdded { id subject description importance timestamp event } }`
+	query := `subscription { notificationAdded { id title subject description importance timestamp } }`
 	return c.subscribe(ctx, query, func(data json.RawMessage) {
 		var wrapper struct {
 			NotificationAdded Notification `json:"notificationAdded"`

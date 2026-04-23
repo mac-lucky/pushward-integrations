@@ -70,7 +70,7 @@ func TestParityCheck_StartProgressComplete(t *testing.T) {
 	// Step 1: Parity check starts
 	tr.handleArrayStatus(ctx, graphql.ArrayStatus{
 		State:       "STARTED",
-		ParityCheck: &graphql.ParityCheck{Progress: 5.0, ETA: "10h"},
+		ParityCheck: graphql.ParityCheck{Status: "running", Progress: 5.0},
 	})
 
 	recorded := testutil.GetCalls(calls, mu)
@@ -107,10 +107,10 @@ func TestParityCheck_StartProgressComplete(t *testing.T) {
 		t.Errorf("subtitle = %q, want Unraid · Tower", update.Content.Subtitle)
 	}
 
-	// Step 2: Parity check completes (ParityCheck becomes nil)
+	// Step 2: Parity check completes (status flips to a non-running value)
 	tr.handleArrayStatus(ctx, graphql.ArrayStatus{
 		State:       "STARTED",
-		ParityCheck: nil,
+		ParityCheck: graphql.ParityCheck{Status: "completed"},
 	})
 
 	// Wait for two-phase end
@@ -154,7 +154,7 @@ func TestParityCheck_Debounce(t *testing.T) {
 	// Start parity
 	tr.handleArrayStatus(ctx, graphql.ArrayStatus{
 		State:       "STARTED",
-		ParityCheck: &graphql.ParityCheck{Progress: 5.0},
+		ParityCheck: graphql.ParityCheck{Status: "running", Progress: 5.0},
 	})
 
 	callsAfterStart := len(testutil.GetCalls(calls, mu))
@@ -162,7 +162,7 @@ func TestParityCheck_Debounce(t *testing.T) {
 	// Immediate update should be debounced (< 30s)
 	tr.handleArrayStatus(ctx, graphql.ArrayStatus{
 		State:       "STARTED",
-		ParityCheck: &graphql.ParityCheck{Progress: 6.0},
+		ParityCheck: graphql.ParityCheck{Status: "running", Progress: 6.0},
 	})
 
 	callsAfterDebounce := len(testutil.GetCalls(calls, mu))
