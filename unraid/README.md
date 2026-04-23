@@ -1,14 +1,13 @@
 # pushward-unraid
 
-Unraid Live Activity bridge for [PushWard](https://pushward.app). Connects to Unraid's GraphQL WebSocket API and creates iOS Live Activities for parity checks, array state changes, and critical notifications (disk errors, UPS events).
+Unraid bridge for [PushWard](https://pushward.app). Connects to Unraid's GraphQL WebSocket API, creates iOS Live Activities for parity checks and array state changes, and forwards every Unraid notification to the PushWard notification API.
 
 ## Features
 
 - **Parity check tracking** — creates a Live Activity when a parity check starts, updates progress every 30s, and ends with a "Parity Valid" confirmation
 - **Array state monitoring** — tracks Starting/Started/Stopping/Stopped transitions with color-coded status
-- **Disk alerts** — SMART errors and disk-related notifications surface as error-severity activities
-- **UPS events** — battery and UPS notifications with warning/error severity based on importance
-- **Two-phase end** — activities show final content on Dynamic Island before dismissing
+- **All Unraid notifications forwarded** — every `notificationAdded` event is forwarded to the PushWard notification API with interruption level mapped from Unraid importance (`alert`/`warning` → active, `info`/`notice` → passive)
+- **Two-phase activity end** — activities show final content on Dynamic Island before dismissing
 - **Auto-reconnect** — WebSocket subscriptions reconnect with 5s backoff on connection loss
 
 ## Prerequisites
@@ -29,7 +28,7 @@ The bridge is read-only — it only opens GraphQL subscriptions, never mutations
 |---|---|
 | `array` | Array state transitions (Starting/Started/Stopping/Stopped) and parity check progress/ETA |
 | `disks` | Disk list, status, and temperature (part of the `arraySubscription` payload) |
-| `notifications` | Disk/SMART errors and UPS battery events surface here via `notificationAdded` |
+| `notifications` | All Unraid notifications (SMART, UPS, Docker, user scripts, etc.) surface here via `notificationAdded` |
 
 Any built-in role that covers these resources (e.g. `viewer`) works too. Avoid granting write/admin scopes — the bridge doesn't need them.
 
@@ -105,6 +104,8 @@ docker run \
 
 ## Activities
 
+Live Activities are used for stateful, user-visible progress:
+
 | Event | Slug | Template | Icon | Color |
 |---|---|---|---|---|
 | Parity check running | `unraid-parity` | `generic` | `arrow.triangle.2.circlepath` | blue |
@@ -113,9 +114,18 @@ docker run \
 | Array started | `unraid-array` | `generic` | `checkmark.circle.fill` | green |
 | Array stopping | `unraid-array` | `generic` | `arrow.triangle.2.circlepath` | orange |
 | Array stopped | `unraid-array` | `generic` | `checkmark.circle.fill` | green |
-| Disk/SMART error | `unraid-disk-<subject>` | `alert` | `exclamationmark.octagon.fill` | red |
-| UPS warning | `unraid-ups` | `alert` | `bolt.slash.fill` | orange |
-| UPS alert | `unraid-ups` | `alert` | `bolt.slash.fill` | red |
+
+## Notifications
+
+Every Unraid `notificationAdded` event is forwarded to the PushWard notification API (`POST /notifications`) with `source: unraid`, `thread_id: unraid`, and a stable `collapse_id` derived from the subject. Interruption level is mapped from Unraid `importance`:
+
+| Importance | Level | Category |
+|---|---|---|
+| `alert` | active | critical |
+| `warning` | active | warning |
+| `info` / `notice` / other | passive | info |
+
+All notifications set `push: true` — iOS's interruption level handles quiet delivery for the passive tier.
 
 ## Tests
 

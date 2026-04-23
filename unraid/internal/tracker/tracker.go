@@ -20,9 +20,9 @@ type timerPair struct {
 	phase2 *time.Timer
 }
 
-// Tracker monitors Unraid array status and notifications, creating
-// PushWard Live Activities for parity checks, array state changes,
-// and critical notifications (disk errors, UPS events).
+// Tracker monitors Unraid array status and notifications. Parity checks and
+// array state transitions are rendered as PushWard Live Activities; every
+// Unraid notification is forwarded to the PushWard notification API.
 type Tracker struct {
 	cfg *config.Config
 	gql *graphql.Client
@@ -241,67 +241,71 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 }
 
 func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notification) {
+	title := notif.Subject
+	if title == "" {
+		title = notif.Title
+	}
+	if strings.TrimSpace(title) == "" {
+		return
+	}
+
+	level, category, push := mapImportance(notif.Importance)
+
 	serverName := t.cfg.Unraid.ServerName
-	endedTTL := int(t.cfg.PushWard.CleanupDelay.Seconds())
-	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
+	subtitle := "Unraid"
+	if serverName != "" {
+		subtitle = "Unraid · " + serverName
+	}
 
-	switch {
-	case strings.Contains(notif.Subject, "SMART") ||
-		strings.Contains(notif.Subject, "disk") ||
-		strings.Contains(notif.Subject, "Disk"):
-		slug := fmt.Sprintf("unraid-disk-%s", sanitize(notif.Subject))
-		if err := t.pw.CreateActivity(ctx, slug, text.TruncateHard(notif.Subject, 100), t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create disk activity", "slug", slug, "error", err)
-		}
-		content := pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       text.TruncateHard(notif.Description, 100),
-			Icon:        "exclamationmark.octagon.fill",
-			Subtitle:    text.TruncateHard("Unraid · "+serverName, 50),
-			AccentColor: pushward.ColorRed,
-			Severity:    "error",
-		}
-		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
-		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
-			slog.Error("failed to update disk activity", "slug", slug, "error", err)
-		}
-		t.scheduleEnd(slug, content)
+	metadata := map[string]string{}
+	if notif.Importance != "" {
+		metadata["importance"] = notif.Importance
+	}
+	if notif.Title != "" && notif.Title != notif.Subject {
+		metadata["unraid_title"] = notif.Title
+	}
+	if notif.ID != "" {
+		metadata["unraid_id"] = notif.ID
+	}
+	if serverName != "" {
+		metadata["server"] = serverName
+	}
 
-	case strings.Contains(notif.Subject, "UPS") ||
-		strings.Contains(notif.Subject, "ups") ||
-		strings.Contains(notif.Subject, "battery") ||
-		strings.Contains(notif.Subject, "Battery"):
-		slug := "unraid-ups"
-		if err := t.pw.CreateActivity(ctx, slug, "UPS Event", t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create UPS activity", "error", err)
-		}
+	// PushWard requires a non-empty body. Fall back to the subject when the
+	// Unraid notification omits a description (some event types do).
+	body := notif.Description
+	if strings.TrimSpace(body) == "" {
+		body = title
+	}
 
-		accentColor := pushward.ColorOrange
-		icon := "bolt.slash.fill"
-		severity := "warning"
-		if notif.Importance == "alert" {
-			accentColor = pushward.ColorRed
-			severity = "error"
-		}
+	req := pushward.SendNotificationRequest{
+		Title:      text.Truncate(title, 120),
+		Subtitle:   text.Truncate(subtitle, 50),
+		Body:       text.Truncate(body, 500),
+		ThreadID:   "unraid",
+		CollapseID: text.SlugHash("unraid-", title+"|"+notif.Title, 6),
+		Level:      level,
+		Category:   category,
+		Source:     "unraid",
+		Push:       push,
+		Metadata:   metadata,
+	}
+	if err := t.pw.SendNotification(ctx, req); err != nil {
+		slog.Error("failed to send unraid notification", "subject", notif.Subject, "error", err)
+	}
+}
 
-		content := pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       text.TruncateHard(notif.Subject, 100),
-			Icon:        icon,
-			Subtitle:    text.TruncateHard("Unraid · "+serverName, 50),
-			AccentColor: accentColor,
-			Severity:    severity,
-		}
-		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
-		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
-			slog.Error("failed to update UPS activity", "error", err)
-		}
-		t.scheduleEnd(slug, content)
-
+// mapImportance maps Unraid's notification importance to PushWard's
+// interruption level and severity category. `alert` and `warning` are
+// active (visible alert); anything else (info, notice, empty) is passive.
+func mapImportance(importance string) (level, category string, push bool) {
+	switch importance {
+	case "alert":
+		return pushward.LevelActive, pushward.SeverityCritical, true
+	case "warning":
+		return pushward.LevelActive, pushward.SeverityWarning, true
 	default:
-		slog.Debug("unraid notification ignored", "subject", notif.Subject, "title", notif.Title)
+		return pushward.LevelPassive, pushward.SeverityInfo, true
 	}
 }
 
@@ -351,25 +355,3 @@ func (t *Tracker) scheduleEnd(slug string, content pushward.Content) {
 	t.mu.Unlock()
 }
 
-func sanitize(s string) string {
-	var result []byte
-	for _, c := range []byte(s) {
-		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
-			result = append(result, c)
-		} else if c >= 'A' && c <= 'Z' {
-			result = append(result, c+32) // toLower
-		} else {
-			if len(result) > 0 && result[len(result)-1] != '-' {
-				result = append(result, '-')
-			}
-		}
-	}
-	if len(result) > 20 {
-		result = result[:20]
-	}
-	// Strip trailing dashes
-	for len(result) > 0 && result[len(result)-1] == '-' {
-		result = result[:len(result)-1]
-	}
-	return string(result)
-}
