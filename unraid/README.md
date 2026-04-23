@@ -17,7 +17,23 @@ Unraid Live Activity bridge for [PushWard](https://pushward.app). Connects to Un
 - The PushWard iOS app
 - A PushWard integration key (`hlk_` prefix) with `activity:manage` scope
 - An Unraid server with the GraphQL API enabled (port 3001 by default)
-- An Unraid API key
+- An Unraid API key (see below)
+
+### Creating the Unraid API key
+
+In the Unraid web UI, go to **Settings → Management Access → API Keys** tab and click **Create API Key**.
+
+The bridge is read-only — it only opens GraphQL subscriptions, never mutations. Grant the key **read** permission on:
+
+| Resource | Why |
+|---|---|
+| `array` | Array state transitions (Starting/Started/Stopping/Stopped) and parity check progress/ETA |
+| `disks` | Disk list, status, and temperature (part of the `arraySubscription` payload) |
+| `notifications` | Disk/SMART errors and UPS battery events surface here via `notificationAdded` |
+
+Any built-in role that covers these resources (e.g. `viewer`) works too. Avoid granting write/admin scopes — the bridge doesn't need them.
+
+Copy the key when it's shown (it's only displayed once) and set it as `PUSHWARD_UNRAID_API_KEY`.
 
 ## Configuration
 
