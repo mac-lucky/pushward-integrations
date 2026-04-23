@@ -1,3 +1,6 @@
+[![Website](https://img.shields.io/badge/pushward.app-5B4FE5?style=for-the-badge&logo=safari&logoColor=white)](https://pushward.app)
+[![TestFlight](https://img.shields.io/badge/TestFlight-Join_Beta-0D96F6?style=for-the-badge&logo=apple&logoColor=white)](https://testflight.apple.com/join/T4aT6s3W)
+
 # pushward-integrations
 
 [![CI/CD GitHub](https://github.com/mac-lucky/pushward-integrations/actions/workflows/github-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/github-ci-cd.yml)
@@ -8,6 +11,8 @@
 [![CI/CD Grafana](https://github.com/mac-lucky/pushward-integrations/actions/workflows/grafana-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/grafana-ci-cd.yml)
 
 Collection of PushWard integration bridges packaged as Docker containers. Each bridge monitors an external service and sends real-time Live Activity updates to [pushward-server](https://pushward.app) for display on iOS (Dynamic Island and Lock Screen).
+
+> **New to PushWard?** Learn more at **[pushward.app](https://pushward.app)** and join the iOS beta on **[TestFlight](https://testflight.apple.com/join/T4aT6s3W)**.
 
 ## Integrations
 
