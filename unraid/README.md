@@ -1,14 +1,15 @@
 # pushward-unraid
 
-Unraid bridge for [PushWard](https://pushward.app). Connects to Unraid's GraphQL WebSocket API, creates iOS Live Activities for parity checks and array state changes, and forwards every Unraid notification to the PushWard notification API.
+Unraid bridge for [PushWard](https://pushward.app). Polls Unraid's GraphQL API for array state, subscribes to the notifications WebSocket, creates iOS Live Activities for parity checks and array transitions, and forwards every Unraid notification to the PushWard notification API.
 
 ## Features
 
 - **Parity check tracking** — creates a Live Activity when a parity check starts, updates progress every 30s, and ends with a "Parity Valid" confirmation
-- **Array state monitoring** — tracks Starting/Started/Stopping/Stopped transitions with color-coded status
-- **All Unraid notifications forwarded** — every `notificationAdded` event is forwarded to the PushWard notification API with interruption level mapped from Unraid importance (`alert`/`warning` → active, `info`/`notice` → passive)
+- **Array state monitoring** — renders a two-phase end activity on `STOPPED → STARTED` and `STARTED → STOPPED` transitions (Unraid's SDL has no `STARTING`/`STOPPING` intermediate states)
+- **All Unraid notifications forwarded** — every `notificationAdded` event is forwarded to the PushWard notification API with interruption level mapped from Unraid importance (`ALERT`/`WARNING` → active, `INFO`/other → passive). SDL values are uppercase.
 - **Two-phase activity end** — activities show final content on Dynamic Island before dismissing
-- **Auto-reconnect** — WebSocket subscriptions reconnect with 5s backoff on connection loss
+- **Auto-reconnect** — notification WebSocket reconnects with exponential backoff + jitter (capped at 60s)
+- **Array state polled, not subscribed** — `subscription arraySubscription` returns `Cannot return null for non-nullable field` on Unraid v4.x (server-side bug), so the bridge polls `query { array { ... } }` every 10s instead
 
 ## Prerequisites
 
@@ -22,13 +23,12 @@ Unraid bridge for [PushWard](https://pushward.app). Connects to Unraid's GraphQL
 
 In the Unraid web UI, go to **Settings → Management Access → API Keys** tab and click **Create API Key**.
 
-The bridge is read-only — it only opens GraphQL subscriptions, never mutations. Grant the key **read** permission on:
+The bridge is read-only — it runs one GraphQL query and one subscription, never mutations. Grant the key **read** permission on:
 
 | Resource | Why |
 |---|---|
-| `array` | Array state transitions (Starting/Started/Stopping/Stopped) and parity check progress/ETA |
-| `disks` | Disk list, status, and temperature (part of the `arraySubscription` payload) |
-| `notifications` | All Unraid notifications (SMART, UPS, Docker, user scripts, etc.) surface here via `notificationAdded` |
+| `array` | `query { array { state parityCheckStatus { status progress } } }` polled every 10s |
+| `notifications` | All Unraid notifications (SMART, UPS, Docker, user scripts, etc.) surface here via the `notificationAdded` subscription |
 
 Any built-in role that covers these resources (e.g. `viewer`) works too. Avoid granting write/admin scopes — the bridge doesn't need them.
 
@@ -110,10 +110,8 @@ Live Activities are used for stateful, user-visible progress:
 |---|---|---|---|---|
 | Parity check running | `unraid-parity` | `generic` | `arrow.triangle.2.circlepath` | blue |
 | Parity check complete | `unraid-parity` | `generic` | `checkmark.circle.fill` | green |
-| Array starting | `unraid-array` | `generic` | `arrow.triangle.2.circlepath` | blue |
-| Array started | `unraid-array` | `generic` | `checkmark.circle.fill` | green |
-| Array stopping | `unraid-array` | `generic` | `arrow.triangle.2.circlepath` | orange |
-| Array stopped | `unraid-array` | `generic` | `checkmark.circle.fill` | green |
+| Array started (from STOPPED) | `unraid-array` | `generic` | `checkmark.circle.fill` | green |
+| Array stopped (from STARTED) | `unraid-array` | `generic` | `checkmark.circle.fill` | green |
 
 ## Notifications
 
@@ -121,9 +119,9 @@ Every Unraid `notificationAdded` event is forwarded to the PushWard notification
 
 | Importance | Level | Category |
 |---|---|---|
-| `alert` | active | critical |
-| `warning` | active | warning |
-| `info` / `notice` / other | passive | info |
+| `ALERT` | active | critical |
+| `WARNING` | active | warning |
+| `INFO` / other | passive | info |
 
 All notifications set `push: true` — iOS's interruption level handles quiet delivery for the passive tier.
 

@@ -33,22 +33,29 @@ func testConfig() *config.Config {
 	}
 }
 
-// --- Parity check lifecycle tests ---
-
-func TestParityCheck_StartProgressComplete(t *testing.T) {
+// newTracker spins up a mock PushWard server and returns a Tracker wired
+// to it. All tests in this file use it to avoid re-stating the same
+// boilerplate six times.
+func newTracker(t *testing.T) (*Tracker, *[]testutil.APICall, *sync.Mutex) {
+	t.Helper()
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	cfg.PushWard.URL = srv.URL
 	gql := graphql.NewClient("tower.local", 80, "test-key", false)
 	pw := pushward.NewClient(srv.URL, "hlk_test")
-	tr := New(cfg, gql, pw)
+	return New(cfg, gql, pw), calls, mu
+}
 
+// --- Parity check lifecycle tests ---
+
+func TestParityCheck_StartProgressComplete(t *testing.T) {
+	tr, calls, mu := newTracker(t)
 	ctx := context.Background()
 
 	// Step 1: Parity check starts
 	tr.handleArrayStatus(ctx, graphql.ArrayStatus{
-		State:       "STARTED",
-		ParityCheck: graphql.ParityCheck{Status: graphql.ParityStatusRunning, Progress: 5.0},
+		State:       graphql.ArrayStateStarted,
+		ParityCheck: &graphql.ParityCheck{Status: graphql.ParityStatusRunning, Progress: 5.0},
 	})
 
 	recorded := testutil.GetCalls(calls, mu)
@@ -87,8 +94,8 @@ func TestParityCheck_StartProgressComplete(t *testing.T) {
 
 	// Step 2: Parity check completes (status flips to a non-running value)
 	tr.handleArrayStatus(ctx, graphql.ArrayStatus{
-		State:       "STARTED",
-		ParityCheck: graphql.ParityCheck{Status: graphql.ParityStatusCompleted},
+		State:       graphql.ArrayStateStarted,
+		ParityCheck: &graphql.ParityCheck{Status: graphql.ParityStatusCompleted},
 	})
 
 	// Wait for two-phase end
@@ -120,27 +127,21 @@ func TestParityCheck_StartProgressComplete(t *testing.T) {
 }
 
 func TestParityCheck_Debounce(t *testing.T) {
-	srv, calls, mu := testutil.MockPushWardServer(t)
-	cfg := testConfig()
-	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 80, "test-key", false)
-	pw := pushward.NewClient(srv.URL, "hlk_test")
-	tr := New(cfg, gql, pw)
-
+	tr, calls, mu := newTracker(t)
 	ctx := context.Background()
 
 	// Start parity
 	tr.handleArrayStatus(ctx, graphql.ArrayStatus{
-		State:       "STARTED",
-		ParityCheck: graphql.ParityCheck{Status: graphql.ParityStatusRunning, Progress: 5.0},
+		State:       graphql.ArrayStateStarted,
+		ParityCheck: &graphql.ParityCheck{Status: graphql.ParityStatusRunning, Progress: 5.0},
 	})
 
 	callsAfterStart := len(testutil.GetCalls(calls, mu))
 
 	// Immediate update should be debounced (< 30s)
 	tr.handleArrayStatus(ctx, graphql.ArrayStatus{
-		State:       "STARTED",
-		ParityCheck: graphql.ParityCheck{Status: graphql.ParityStatusRunning, Progress: 6.0},
+		State:       graphql.ArrayStateStarted,
+		ParityCheck: &graphql.ParityCheck{Status: graphql.ParityStatusRunning, Progress: 6.0},
 	})
 
 	callsAfterDebounce := len(testutil.GetCalls(calls, mu))
@@ -151,71 +152,49 @@ func TestParityCheck_Debounce(t *testing.T) {
 
 // --- Array state transition tests ---
 
-func TestArrayState_StartingToStarted(t *testing.T) {
-	srv, calls, mu := testutil.MockPushWardServer(t)
-	cfg := testConfig()
-	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 80, "test-key", false)
-	pw := pushward.NewClient(srv.URL, "hlk_test")
-	tr := New(cfg, gql, pw)
-
+func TestArrayState_StoppedToStarted(t *testing.T) {
+	tr, calls, mu := newTracker(t)
 	ctx := context.Background()
 
-	// First update sets initial state (no transition)
-	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: "STOPPED"})
-	initialCalls := len(testutil.GetCalls(calls, mu))
-	if initialCalls != 0 {
-		t.Errorf("first update should not generate calls, got %d", initialCalls)
+	// First update seeds state — no activity fires.
+	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: graphql.ArrayStateStopped})
+	if n := len(testutil.GetCalls(calls, mu)); n != 0 {
+		t.Errorf("first observation should not generate calls, got %d", n)
 	}
 
-	// STOPPED -> STARTING
-	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: "STARTING"})
-
-	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) < 2 {
-		t.Fatalf("STARTING: expected >= 2 calls, got %d", len(recorded))
-	}
-
-	var createReq pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
-	if createReq.Slug != "unraid-array" {
-		t.Errorf("slug = %q, want unraid-array", createReq.Slug)
-	}
-
-	var startingUpdate pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &startingUpdate)
-	if startingUpdate.Content.State != "Starting..." {
-		t.Errorf("state = %q, want Starting...", startingUpdate.Content.State)
-	}
-	if startingUpdate.Content.AccentColor != pushward.ColorBlue {
-		t.Errorf("accent = %q, want #007AFF", startingUpdate.Content.AccentColor)
-	}
-
-	// STARTING -> STARTED
-	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: "STARTED"})
-
-	// Wait for two-phase end
+	// STOPPED -> STARTED triggers create + two-phase end.
+	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: graphql.ArrayStateStarted})
 	time.Sleep(80 * time.Millisecond)
 
-	recorded = testutil.GetCalls(calls, mu)
-	var foundOngoing, foundEnded bool
+	recorded := testutil.GetCalls(calls, mu)
+	var createSeen, foundOngoing, foundEnded bool
 	for _, c := range recorded {
-		if c.Method != "PATCH" {
-			continue
-		}
-		var req pushward.UpdateRequest
-		testutil.UnmarshalBody(t, c.Body, &req)
-		if req.Content.State == "Array Started" {
+		switch c.Method {
+		case "POST":
+			var req pushward.CreateActivityRequest
+			testutil.UnmarshalBody(t, c.Body, &req)
+			if req.Slug == "unraid-array" {
+				createSeen = true
+			}
+		case "PATCH":
+			var req pushward.UpdateRequest
+			testutil.UnmarshalBody(t, c.Body, &req)
+			if req.Content.State != "Array Started" {
+				continue
+			}
+			if req.Content.AccentColor != pushward.ColorGreen {
+				t.Errorf("started accent = %q, want %q", req.Content.AccentColor, pushward.ColorGreen)
+			}
 			if req.State == pushward.StateOngoing {
 				foundOngoing = true
-				if req.Content.AccentColor != pushward.ColorGreen {
-					t.Errorf("started accent = %q, want #34C759", req.Content.AccentColor)
-				}
 			}
 			if req.State == pushward.StateEnded {
 				foundEnded = true
 			}
 		}
+	}
+	if !createSeen {
+		t.Error("expected CreateActivity POST for unraid-array")
 	}
 	if !foundOngoing {
 		t.Error("Array Started: missing ONGOING phase")
@@ -225,43 +204,14 @@ func TestArrayState_StartingToStarted(t *testing.T) {
 	}
 }
 
-func TestArrayState_StoppingToStopped(t *testing.T) {
-	srv, calls, mu := testutil.MockPushWardServer(t)
-	cfg := testConfig()
-	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 80, "test-key", false)
-	pw := pushward.NewClient(srv.URL, "hlk_test")
-	tr := New(cfg, gql, pw)
-
+func TestArrayState_StartedToStopped(t *testing.T) {
+	tr, calls, mu := newTracker(t)
 	ctx := context.Background()
-
-	// Set initial state
-	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: "STARTED"})
-
-	// STARTED -> STOPPING
-	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: "STOPPING"})
-
-	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) < 2 {
-		t.Fatalf("STOPPING: expected >= 2 calls, got %d", len(recorded))
-	}
-
-	var stoppingUpdate pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[len(recorded)-1].Body, &stoppingUpdate)
-	if stoppingUpdate.Content.State != "Stopping..." {
-		t.Errorf("state = %q, want Stopping...", stoppingUpdate.Content.State)
-	}
-	if stoppingUpdate.Content.AccentColor != pushward.ColorOrange {
-		t.Errorf("accent = %q, want #FF9500", stoppingUpdate.Content.AccentColor)
-	}
-
-	// STOPPING -> STOPPED
-	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: "STOPPED"})
-
-	// Wait for two-phase end
+	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: graphql.ArrayStateStarted})
+	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: graphql.ArrayStateStopped})
 	time.Sleep(80 * time.Millisecond)
 
-	recorded = testutil.GetCalls(calls, mu)
+	recorded := testutil.GetCalls(calls, mu)
 	var foundEnded bool
 	for _, c := range recorded {
 		if c.Method != "PATCH" {
@@ -279,38 +229,43 @@ func TestArrayState_StoppingToStopped(t *testing.T) {
 }
 
 func TestArrayState_NoTransitionIgnored(t *testing.T) {
-	srv, calls, mu := testutil.MockPushWardServer(t)
-	cfg := testConfig()
-	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 80, "test-key", false)
-	pw := pushward.NewClient(srv.URL, "hlk_test")
-	tr := New(cfg, gql, pw)
+	tr, calls, mu := newTracker(t)
+	ctx := context.Background()
 
-	// Set initial state
-	tr.handleArrayStatus(context.Background(), graphql.ArrayStatus{State: "STARTED"})
+	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: graphql.ArrayStateStarted})
+	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: graphql.ArrayStateStarted})
 
-	// Same state again — should not generate calls
-	tr.handleArrayStatus(context.Background(), graphql.ArrayStatus{State: "STARTED"})
-
-	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 0 {
-		t.Errorf("same state should generate 0 calls, got %d", len(recorded))
+	if n := len(testutil.GetCalls(calls, mu)); n != 0 {
+		t.Errorf("same state should generate 0 calls, got %d", n)
 	}
 }
 
-// --- Notification tests ---
+// Transitions to/from error states (e.g. TOO_MANY_MISSING_DISKS) are
+// degraded states, not success transitions — they must not fire an
+// "Array Started" activity.
+func TestArrayState_ErrorStatesIgnored(t *testing.T) {
+	tr, calls, mu := newTracker(t)
+	ctx := context.Background()
 
-// newTrackerForNotif is a convenience wrapper to reduce setup noise in the
-// notification tests. Returns the tracker and handles to inspect recorded calls.
-func newTrackerForNotif(t *testing.T) (*Tracker, *[]testutil.APICall, *sync.Mutex) {
-	t.Helper()
-	srv, calls, mu := testutil.MockPushWardServer(t)
-	cfg := testConfig()
-	cfg.PushWard.URL = srv.URL
-	gql := graphql.NewClient("tower.local", 80, "test-key", false)
-	pw := pushward.NewClient(srv.URL, "hlk_test")
-	return New(cfg, gql, pw), calls, mu
+	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: graphql.ArrayStateStarted})
+	tr.handleArrayStatus(ctx, graphql.ArrayStatus{State: graphql.ArrayStateTooManyMissingDisks})
+	time.Sleep(40 * time.Millisecond)
+
+	if n := len(testutil.GetCalls(calls, mu)); n != 0 {
+		t.Errorf("transition to error state should not fire activity, got %d calls", n)
+	}
 }
+
+// parityCheckStatus is nullable in the SDL; a nil pointer must not crash.
+func TestArrayStatus_NullParityCheckDoesNotPanic(t *testing.T) {
+	tr, _, _ := newTracker(t)
+	tr.handleArrayStatus(context.Background(), graphql.ArrayStatus{
+		State:       graphql.ArrayStateStarted,
+		ParityCheck: nil,
+	})
+}
+
+// --- Notification tests ---
 
 func requireSingleNotification(t *testing.T, calls *[]testutil.APICall, mu *sync.Mutex) pushward.SendNotificationRequest {
 	t.Helper()
@@ -327,13 +282,13 @@ func requireSingleNotification(t *testing.T, calls *[]testutil.APICall, mu *sync
 }
 
 func TestNotification_DiskAlert(t *testing.T) {
-	tr, calls, mu := newTrackerForNotif(t)
+	tr, calls, mu := newTracker(t)
 
 	tr.handleNotification(context.Background(), graphql.Notification{
 		ID:          "1",
 		Subject:     "SMART error on disk1",
 		Description: "Reallocated sector count exceeded threshold",
-		Importance:  "alert",
+		Importance:  graphql.ImportanceAlert,
 	})
 
 	req := requireSingleNotification(t, calls, mu)
@@ -364,8 +319,8 @@ func TestNotification_DiskAlert(t *testing.T) {
 	if req.Subtitle != "Unraid · Tower" {
 		t.Errorf("subtitle = %q, want Unraid · Tower", req.Subtitle)
 	}
-	if req.Metadata["importance"] != "alert" {
-		t.Errorf("metadata[importance] = %q, want alert", req.Metadata["importance"])
+	if req.Metadata["importance"] != "ALERT" {
+		t.Errorf("metadata[importance] = %q, want ALERT", req.Metadata["importance"])
 	}
 	if req.Metadata["unraid_id"] != "1" {
 		t.Errorf("metadata[unraid_id] = %q, want 1", req.Metadata["unraid_id"])
@@ -373,13 +328,13 @@ func TestNotification_DiskAlert(t *testing.T) {
 }
 
 func TestNotification_UPSWarning(t *testing.T) {
-	tr, calls, mu := newTrackerForNotif(t)
+	tr, calls, mu := newTracker(t)
 
 	tr.handleNotification(context.Background(), graphql.Notification{
 		ID:          "2",
 		Subject:     "UPS on battery power",
 		Description: "Running on battery — shutdown imminent",
-		Importance:  "warning",
+		Importance:  graphql.ImportanceWarning,
 	})
 
 	req := requireSingleNotification(t, calls, mu)
@@ -395,13 +350,13 @@ func TestNotification_UPSWarning(t *testing.T) {
 }
 
 func TestNotification_UPSAlert(t *testing.T) {
-	tr, calls, mu := newTrackerForNotif(t)
+	tr, calls, mu := newTracker(t)
 
 	tr.handleNotification(context.Background(), graphql.Notification{
 		ID:          "3",
 		Subject:     "UPS battery critically low",
 		Description: "Battery at 5% — shutting down",
-		Importance:  "alert",
+		Importance:  graphql.ImportanceAlert,
 	})
 
 	req := requireSingleNotification(t, calls, mu)
@@ -414,13 +369,13 @@ func TestNotification_UPSAlert(t *testing.T) {
 }
 
 func TestNotification_GenericForwarded(t *testing.T) {
-	tr, calls, mu := newTrackerForNotif(t)
+	tr, calls, mu := newTracker(t)
 
 	tr.handleNotification(context.Background(), graphql.Notification{
 		ID:          "4",
 		Subject:     "Docker container started",
 		Description: "nginx started successfully",
-		Importance:  "info",
+		Importance:  graphql.ImportanceInfo,
 	})
 
 	req := requireSingleNotification(t, calls, mu)
@@ -436,7 +391,7 @@ func TestNotification_GenericForwarded(t *testing.T) {
 }
 
 func TestNotification_UnknownImportanceDefaultsToPassive(t *testing.T) {
-	tr, calls, mu := newTrackerForNotif(t)
+	tr, calls, mu := newTracker(t)
 
 	tr.handleNotification(context.Background(), graphql.Notification{
 		ID:          "5",
@@ -458,14 +413,14 @@ func TestNotification_UnknownImportanceDefaultsToPassive(t *testing.T) {
 }
 
 func TestNotification_EmptySubjectSkipped(t *testing.T) {
-	tr, calls, mu := newTrackerForNotif(t)
+	tr, calls, mu := newTracker(t)
 
 	tr.handleNotification(context.Background(), graphql.Notification{
 		ID:          "6",
 		Subject:     "",
 		Title:       "",
 		Description: "some description",
-		Importance:  "info",
+		Importance:  graphql.ImportanceInfo,
 	})
 
 	recorded := testutil.GetCalls(calls, mu)
@@ -475,16 +430,16 @@ func TestNotification_EmptySubjectSkipped(t *testing.T) {
 }
 
 func TestNotification_CollapseIDStable(t *testing.T) {
-	tr, calls, mu := newTrackerForNotif(t)
+	tr, calls, mu := newTracker(t)
 
 	tr.handleNotification(context.Background(), graphql.Notification{
-		ID: "a", Subject: "SMART error on disk1", Title: "alert", Importance: "alert",
+		ID: "a", Subject: "SMART error on disk1", Title: "alert", Importance: graphql.ImportanceAlert,
 	})
 	tr.handleNotification(context.Background(), graphql.Notification{
-		ID: "b", Subject: "SMART error on disk1", Title: "alert", Importance: "alert",
+		ID: "b", Subject: "SMART error on disk1", Title: "alert", Importance: graphql.ImportanceAlert,
 	})
 	tr.handleNotification(context.Background(), graphql.Notification{
-		ID: "c", Subject: "SMART error on disk2", Title: "alert", Importance: "alert",
+		ID: "c", Subject: "SMART error on disk2", Title: "alert", Importance: graphql.ImportanceAlert,
 	})
 
 	recorded := testutil.GetCalls(calls, mu)
@@ -503,15 +458,37 @@ func TestNotification_CollapseIDStable(t *testing.T) {
 	}
 }
 
+// Unraid's SDL ships importance values UPPERCASE (ALERT/WARNING/INFO).
+// If a lowercase value ever maps to Active/Critical, every disk/UPS alert
+// gets silently downgraded to a passive info notification.
+func TestNotification_LowercaseImportanceNotRecognised(t *testing.T) {
+	tr, calls, mu := newTracker(t)
+
+	tr.handleNotification(context.Background(), graphql.Notification{
+		ID:          "lc",
+		Subject:     "Would be an alert if schema were lowercase",
+		Description: "but it isn't",
+		Importance:  "alert",
+	})
+
+	req := requireSingleNotification(t, calls, mu)
+	if req.Level != pushward.LevelPassive {
+		t.Errorf("lowercase 'alert' must not map to Active, got %q", req.Level)
+	}
+	if req.Category != pushward.SeverityInfo {
+		t.Errorf("lowercase 'alert' must not map to Critical, got %q", req.Category)
+	}
+}
+
 func TestNotification_SubjectFallsBackToTitle(t *testing.T) {
-	tr, calls, mu := newTrackerForNotif(t)
+	tr, calls, mu := newTracker(t)
 
 	tr.handleNotification(context.Background(), graphql.Notification{
 		ID:          "7",
 		Subject:     "",
 		Title:       "Array started",
 		Description: "array is started",
-		Importance:  "info",
+		Importance:  graphql.ImportanceInfo,
 	})
 
 	req := requireSingleNotification(t, calls, mu)

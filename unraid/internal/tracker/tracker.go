@@ -20,6 +20,10 @@ type timerPair struct {
 	phase2 *time.Timer
 }
 
+// arrayPollInterval is how often the tracker polls `query { array }`
+// because `arraySubscription` is broken on Unraid's side.
+const arrayPollInterval = 10 * time.Second
+
 // Tracker monitors Unraid array status and notifications. Parity checks and
 // array state transitions are rendered as PushWard Live Activities; every
 // Unraid notification is forwarded to the PushWard notification API.
@@ -31,7 +35,7 @@ type Tracker struct {
 	mu             sync.Mutex
 	parityActive   bool
 	parityLastSent time.Time
-	arrayState     string
+	arrayState     graphql.ArrayState
 	timers         map[string]*timerPair
 }
 
@@ -45,32 +49,46 @@ func New(cfg *config.Config, gql *graphql.Client, pw *pushward.Client) *Tracker 
 	}
 }
 
-// Run starts subscriptions and processes events until ctx is cancelled.
+// Run polls array state and subscribes to notifications until ctx is
+// cancelled. Array uses polling because Unraid's arraySubscription is
+// broken server-side.
 func (t *Tracker) Run(ctx context.Context) error {
-	arrayCh := make(chan graphql.ArrayStatus, 10)
 	notifCh := make(chan graphql.Notification, 10)
 
-	go func() {
-		if err := t.gql.SubscribeArray(ctx, arrayCh); err != nil && ctx.Err() == nil {
-			slog.Error("array subscription failed", "error", err)
-		}
-	}()
 	go func() {
 		if err := t.gql.SubscribeNotifications(ctx, notifCh); err != nil && ctx.Err() == nil {
 			slog.Error("notification subscription failed", "error", err)
 		}
 	}()
 
+	ticker := time.NewTicker(arrayPollInterval)
+	defer ticker.Stop()
+
+	// First poll runs async so a slow/unreachable Unraid host at startup
+	// doesn't delay notification delivery or ctx-cancellation handling.
+	go t.pollArray(ctx)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case status := <-arrayCh:
-			t.handleArrayStatus(ctx, status)
+		case <-ticker.C:
+			t.pollArray(ctx)
 		case notif := <-notifCh:
 			t.handleNotification(ctx, notif)
 		}
 	}
+}
+
+func (t *Tracker) pollArray(ctx context.Context) {
+	status, err := t.gql.QueryArray(ctx)
+	if err != nil {
+		if ctx.Err() == nil {
+			slog.Error("array query failed", "error", err)
+		}
+		return
+	}
+	t.handleArrayStatus(ctx, *status)
 }
 
 func (t *Tracker) handleArrayStatus(ctx context.Context, status graphql.ArrayStatus) {
@@ -87,7 +105,7 @@ func (t *Tracker) handleParityCheck(ctx context.Context, status graphql.ArraySta
 	t.mu.Lock()
 	wasActive := t.parityActive
 
-	isActive := status.ParityCheck.IsActive()
+	isActive := status.ParityCheck != nil && status.ParityCheck.IsActive()
 
 	if isActive && !wasActive {
 		// Parity check started
@@ -99,7 +117,7 @@ func (t *Tracker) handleParityCheck(ctx context.Context, status graphql.ArraySta
 			slog.Error("failed to create parity activity", "error", err)
 			return
 		}
-		t.sendParityUpdate(ctx, slug, status.ParityCheck, serverName)
+		t.sendParityUpdate(ctx, slug, *status.ParityCheck, serverName)
 		return
 	}
 
@@ -110,7 +128,7 @@ func (t *Tracker) handleParityCheck(ctx context.Context, status graphql.ArraySta
 			return
 		}
 		t.mu.Unlock()
-		t.sendParityUpdate(ctx, slug, status.ParityCheck, serverName)
+		t.sendParityUpdate(ctx, slug, *status.ParityCheck, serverName)
 		return
 	}
 
@@ -156,6 +174,10 @@ func (t *Tracker) sendParityUpdate(ctx context.Context, slug string, pc graphql.
 	t.mu.Unlock()
 }
 
+// handleArrayState fires Live Activities on STARTED<->STOPPED transitions.
+// Unraid's ArrayState enum has no STARTING/STOPPING — the schema exposes
+// only terminal states — so we render the two-phase end directly on the
+// transition.
 func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStatus) {
 	slug := "unraid-array"
 	endedTTL := int(t.cfg.PushWard.CleanupDelay.Seconds())
@@ -172,72 +194,37 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 	t.mu.Unlock()
 
 	if prevState == "" {
-		return
+		return // first observation seeds state without firing an activity
 	}
 
-	switch status.State {
-	case "STARTING":
-		if err := t.pw.CreateActivity(ctx, slug, "Array", t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create array activity", "error", err)
+	var content pushward.Content
+	switch {
+	case prevState == graphql.ArrayStateStopped && status.State == graphql.ArrayStateStarted:
+		content = pushward.Content{
+			Template:    "generic",
+			Progress:    1.0,
+			State:       "Array Started",
+			Icon:        "checkmark.circle.fill",
+			Subtitle:    "Unraid · " + serverName,
+			AccentColor: pushward.ColorGreen,
 		}
-		req := pushward.UpdateRequest{
-			State: pushward.StateOngoing,
-			Content: pushward.Content{
-				Template:    "generic",
-				Progress:    0.5,
-				State:       "Starting...",
-				Icon:        "arrow.triangle.2.circlepath",
-				Subtitle:    "Unraid · " + serverName,
-				AccentColor: pushward.ColorBlue,
-			},
+	case prevState == graphql.ArrayStateStarted && status.State == graphql.ArrayStateStopped:
+		content = pushward.Content{
+			Template:    "generic",
+			Progress:    1.0,
+			State:       "Array Stopped",
+			Icon:        "checkmark.circle.fill",
+			Subtitle:    "Unraid · " + serverName,
+			AccentColor: pushward.ColorGreen,
 		}
-		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
-			slog.Error("failed to update array activity", "error", err)
-		}
-
-	case "STARTED":
-		if prevState == "STARTING" {
-			t.scheduleEnd(slug, pushward.Content{
-				Template:    "generic",
-				Progress:    1.0,
-				State:       "Array Started",
-				Icon:        "checkmark.circle.fill",
-				Subtitle:    "Unraid · " + serverName,
-				AccentColor: pushward.ColorGreen,
-			})
-		}
-
-	case "STOPPING":
-		if err := t.pw.CreateActivity(ctx, slug, "Array", t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
-			slog.Error("failed to create array activity", "error", err)
-		}
-		req := pushward.UpdateRequest{
-			State: pushward.StateOngoing,
-			Content: pushward.Content{
-				Template:    "generic",
-				Progress:    0.5,
-				State:       "Stopping...",
-				Icon:        "arrow.triangle.2.circlepath",
-				Subtitle:    "Unraid · " + serverName,
-				AccentColor: pushward.ColorOrange,
-			},
-		}
-		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
-			slog.Error("failed to update array activity", "error", err)
-		}
-
-	case "STOPPED":
-		if prevState == "STOPPING" {
-			t.scheduleEnd(slug, pushward.Content{
-				Template:    "generic",
-				Progress:    1.0,
-				State:       "Array Stopped",
-				Icon:        "checkmark.circle.fill",
-				Subtitle:    "Unraid · " + serverName,
-				AccentColor: pushward.ColorGreen,
-			})
-		}
+	default:
+		return // ignore transitions to/from error states (RECON_DISK, etc.)
 	}
+
+	if err := t.pw.CreateActivity(ctx, slug, "Array", t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
+		slog.Error("failed to create array activity", "error", err)
+	}
+	t.scheduleEnd(slug, content)
 }
 
 func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notification) {
@@ -259,7 +246,7 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 
 	metadata := map[string]string{}
 	if notif.Importance != "" {
-		metadata["importance"] = notif.Importance
+		metadata["importance"] = string(notif.Importance)
 	}
 	if notif.Title != "" && notif.Title != notif.Subject {
 		metadata["unraid_title"] = notif.Title
@@ -296,13 +283,14 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 }
 
 // mapImportance maps Unraid's notification importance to PushWard's
-// interruption level and severity category. `alert` and `warning` are
-// active (visible alert); anything else (info, notice, empty) is passive.
-func mapImportance(importance string) (level, category string, push bool) {
+// interruption level and severity category. ALERT and WARNING are
+// active (visible alert); anything else (INFO, empty, unknown) is passive.
+// Values come from the Unraid SDL verbatim — uppercase, no aliases.
+func mapImportance(importance graphql.Importance) (level, category string, push bool) {
 	switch importance {
-	case "alert":
+	case graphql.ImportanceAlert:
 		return pushward.LevelActive, pushward.SeverityCritical, true
-	case "warning":
+	case graphql.ImportanceWarning:
 		return pushward.LevelActive, pushward.SeverityWarning, true
 	default:
 		return pushward.LevelPassive, pushward.SeverityInfo, true
