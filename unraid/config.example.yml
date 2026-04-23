@@ -1,6 +1,6 @@
 unraid:
   host: "unraid.example.com"  # Unraid WebSocket host (set PUSHWARD_UNRAID_HOST)
-  port: 3001                  # GraphQL WebSocket port (set PUSHWARD_UNRAID_PORT)
+  port: 80                    # nginx proxies /graphql on 80 (HTTP) or 443 (HTTPS); set PUSHWARD_UNRAID_PORT
   api_key: ""                 # Unraid API key (set PUSHWARD_UNRAID_API_KEY)
   server_name: "Unraid"       # Display name for subtitles
   use_tls: false              # Use wss:// instead of ws://

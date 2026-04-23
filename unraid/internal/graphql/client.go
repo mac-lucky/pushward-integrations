@@ -146,7 +146,7 @@ func (c *Client) runSubscription(ctx context.Context, query string, handler func
 	dialCtx, dialCancel := context.WithTimeout(ctx, dialTimeout)
 	conn, _, err := websocket.Dial(dialCtx, url, &websocket.DialOptions{
 		HTTPHeader: http.Header{
-			"Authorization": []string{"Bearer " + c.apiKey},
+			"X-Api-Key": []string{c.apiKey},
 		},
 		Subprotocols: []string{"graphql-transport-ws"},
 	})

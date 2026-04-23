@@ -24,7 +24,7 @@ type UnraidConfig struct {
 func Load(path string) (*Config, error) {
 	cfg := &Config{
 		Unraid: UnraidConfig{
-			Port:       3001,
+			Port:       80,
 			ServerName: "Unraid",
 		},
 		PushWard: sharedconfig.PushWardConfig{

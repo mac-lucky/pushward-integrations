@@ -16,7 +16,7 @@ Unraid Live Activity bridge for [PushWard](https://pushward.app). Connects to Un
 - A running PushWard server
 - The PushWard iOS app
 - A PushWard integration key (`hlk_` prefix) with `activity:manage` scope
-- An Unraid server with the GraphQL API enabled (port 3001 by default)
+- An Unraid server with the GraphQL API reachable (served by nginx on port 80 / 443 at path `/graphql` — there is no dedicated listener on 3001)
 - An Unraid API key (see below)
 
 ### Creating the Unraid API key
@@ -42,7 +42,7 @@ Create a `config.yml` (see [`config.example.yml`](config.example.yml)):
 ```yaml
 unraid:
   host: "unraid.example.com"  # Unraid WebSocket host
-  port: 3001                  # GraphQL WebSocket port
+  port: 80                    # nginx serves /graphql on 80 (or 443 with use_tls)
   api_key: ""                 # Unraid API key
   server_name: "Unraid"       # Display name in activity subtitles
   use_tls: false              # Use wss:// instead of ws://
