@@ -7,7 +7,14 @@ const (
 )
 
 // Template name constants.
-const TemplateTimeline = "timeline"
+const (
+	TemplateGeneric   = "generic"
+	TemplateAlert     = "alert"
+	TemplateSteps     = "steps"
+	TemplateCountdown = "countdown"
+	TemplateGauge     = "gauge"
+	TemplateTimeline  = "timeline"
+)
 
 // Notification interruption level constants.
 const (
@@ -33,6 +40,9 @@ func Int64Ptr(v int64) *int64 { return &v }
 
 // Float64Ptr returns a pointer to the given float64 value.
 func Float64Ptr(v float64) *float64 { return &v }
+
+// StringPtr returns a pointer to the given string value.
+func StringPtr(v string) *string { return &v }
 
 // HistoryPoint is a single timestamped value in a timeline series.
 type HistoryPoint struct {
@@ -79,6 +89,10 @@ type Content struct {
 	StartDate         *int64  `json:"start_date,omitempty"`
 	WarningThreshold  *int    `json:"warning_threshold,omitempty"`
 	CompletionMessage string  `json:"completion_message,omitempty"`
+	// Alarm opts in to iOS 26 AlarmKit scheduling at end_date. Persists across
+	// partial updates until cleared via Client.ClearActivityAlarm or a
+	// transition to ENDED. iOS 26+ only.
+	Alarm *bool `json:"alarm,omitempty"`
 
 	// Gauge template: Value is float64
 	// Timeline template: Value is map[string]float64
@@ -105,13 +119,79 @@ type CreateActivityRequest struct {
 	StaleTTL int    `json:"stale_ttl,omitempty"`
 }
 
-// UpdateRequest is the body for PATCH /activity/{slug}.
-// Sound is an optional Live Activity alert sound — request-scoped, not persisted.
-// Only applies to ONGOING transitions; iOS silently drops alerts on end events.
+// UpdateRequest is the body for the full-content PATCH /activity/{slug} used
+// to seed a session or close it out with a final ENDED frame. For partial
+// updates mid-session, prefer Client.PatchActivity with a ContentPatch.
 type UpdateRequest struct {
-	State   string        `json:"state"`
-	Content Content       `json:"content"`
-	Sound   ActivitySound `json:"sound,omitempty"`
+	State    string        `json:"state,omitempty"`
+	Content  Content       `json:"content"`
+	Sound    ActivitySound `json:"sound,omitempty"`
+	Priority *int          `json:"priority,omitempty"`
+}
+
+// ContentPatch is the typed body for partial content updates. Unset pointer
+// fields are omitted and preserved server-side under RFC 7396 merge-patch
+// semantics. Use with Client.PatchActivity.
+//
+// Every pointer field MUST carry `json:",omitempty"` — without it a nil
+// pointer marshals as JSON null, which per RFC 7396 §2 instructs the server
+// to delete the field. Adding a new pointer field without omitempty is a
+// silent correctness bug.
+type ContentPatch struct {
+	Template        *string  `json:"template,omitempty"`
+	Progress        *float64 `json:"progress,omitempty"`
+	State           *string  `json:"state,omitempty"`
+	Icon            *string  `json:"icon,omitempty"`
+	Subtitle        *string  `json:"subtitle,omitempty"`
+	AccentColor     *string  `json:"accent_color,omitempty"`
+	BackgroundColor *string  `json:"background_color,omitempty"`
+	TextColor       *string  `json:"text_color,omitempty"`
+	RemainingTime   *int     `json:"remaining_time,omitempty"`
+	URL             *string  `json:"url,omitempty"`
+	SecondaryURL    *string  `json:"secondary_url,omitempty"`
+
+	// Alert template
+	Severity *string `json:"severity,omitempty"`
+	FiredAt  *int64  `json:"fired_at,omitempty"`
+
+	// Steps template
+	CurrentStep *int     `json:"current_step,omitempty"`
+	TotalSteps  *int     `json:"total_steps,omitempty"`
+	StepRows    []int    `json:"step_rows,omitempty"`
+	StepLabels  []string `json:"step_labels,omitempty"`
+
+	// Countdown template
+	Duration          *string `json:"duration,omitempty"`
+	EndDate           *int64  `json:"end_date,omitempty"`
+	StartDate         *int64  `json:"start_date,omitempty"`
+	WarningThreshold  *int    `json:"warning_threshold,omitempty"`
+	CompletionMessage *string `json:"completion_message,omitempty"`
+	Alarm             *bool   `json:"alarm,omitempty"`
+
+	// Gauge template: Value is float64
+	// Timeline template: Value is map[string]float64
+	Value    any      `json:"value,omitempty"`
+	MinValue *float64 `json:"min_value,omitempty"`
+	MaxValue *float64 `json:"max_value,omitempty"`
+	Unit     *string  `json:"unit,omitempty"`
+
+	// Timeline template
+	Scale      *string                   `json:"scale,omitempty"`
+	Decimals   *int                      `json:"decimals,omitempty"`
+	Smoothing  *bool                     `json:"smoothing,omitempty"`
+	Thresholds []Threshold               `json:"thresholds,omitempty"`
+	Units      map[string]string         `json:"units,omitempty"`
+	History    map[string][]HistoryPoint `json:"history,omitempty"`
+}
+
+// PatchRequest is the typed body for PATCH /activity/{slug}. State is a plain
+// string with omitempty so that tick updates can leave it unset and rely on
+// the server preserving the stored state.
+type PatchRequest struct {
+	State    string        `json:"state,omitempty"`
+	Content  *ContentPatch `json:"content,omitempty"`
+	Sound    ActivitySound `json:"sound,omitempty"`
+	Priority *int          `json:"priority,omitempty"`
 }
 
 // SendNotificationRequest is the body for POST /notifications.

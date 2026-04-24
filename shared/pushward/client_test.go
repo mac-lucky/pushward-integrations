@@ -1,9 +1,11 @@
 package pushward
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"sync/atomic"
@@ -405,6 +407,149 @@ func TestUpdateActivity_Success(t *testing.T) {
 	}
 	if *gotBody.Content.CurrentStep != 2 {
 		t.Errorf("expected current_step 2, got %d", *gotBody.Content.CurrentStep)
+	}
+}
+
+// --- PatchActivity ---
+
+func TestPatchActivity_Success(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotCT string
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotCT = r.Header.Get("Content-Type")
+		_ = json.NewDecoder(r.Body).Decode(&gotBody)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	req := PatchRequest{
+		Content: &ContentPatch{
+			Progress:      Float64Ptr(0.42),
+			State:         StringPtr("Downloading"),
+			RemainingTime: IntPtr(90),
+		},
+	}
+	if err := c.PatchActivity(context.Background(), "gh-repo", req); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if gotMethod != http.MethodPatch {
+		t.Errorf("expected PATCH, got %s", gotMethod)
+	}
+	if gotPath != "/activity/gh-repo" {
+		t.Errorf("expected /activity/gh-repo, got %s", gotPath)
+	}
+	if gotCT != "application/json" {
+		t.Errorf("expected application/json content-type, got %q", gotCT)
+	}
+	content, ok := gotBody["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected content object in body, got %#v", gotBody)
+	}
+	if content["progress"].(float64) != 0.42 {
+		t.Errorf("expected progress 0.42, got %v", content["progress"])
+	}
+	// Absent template/icon/accent_color must not appear in the merge-patch body.
+	if _, present := content["template"]; present {
+		t.Error("merge-patch body must not include unset template field")
+	}
+	if _, present := content["icon"]; present {
+		t.Error("merge-patch body must not include unset icon field")
+	}
+	if _, present := content["accent_color"]; present {
+		t.Error("merge-patch body must not include unset accent_color field")
+	}
+	// State was not set on the PatchRequest, so it must also be absent.
+	if _, present := gotBody["state"]; present {
+		t.Error("merge-patch body must not include unset top-level state")
+	}
+}
+
+func TestPatchActivity_OmitsEmptyContent(t *testing.T) {
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	// State-only patch — no Content block at all.
+	if err := c.PatchActivity(context.Background(), "x", PatchRequest{State: StateEnded}); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if !bytes.Contains(gotBody, []byte(`"state":"ENDED"`)) {
+		t.Errorf("expected state:ENDED in body, got %s", string(gotBody))
+	}
+	if bytes.Contains(gotBody, []byte(`"content"`)) {
+		t.Errorf("expected content field to be omitted when nil, got %s", string(gotBody))
+	}
+}
+
+// --- SetActivityAlarm / ClearActivityAlarm ---
+
+func TestSetActivityAlarm_Success(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	if err := c.SetActivityAlarm(context.Background(), "timer-1"); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if gotMethod != http.MethodPut {
+		t.Errorf("expected PUT, got %s", gotMethod)
+	}
+	if gotPath != "/activity/timer-1/alarm" {
+		t.Errorf("expected /activity/timer-1/alarm, got %s", gotPath)
+	}
+}
+
+func TestClearActivityAlarm_Success(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	if err := c.ClearActivityAlarm(context.Background(), "timer-1"); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if gotMethod != http.MethodDelete {
+		t.Errorf("expected DELETE, got %s", gotMethod)
+	}
+	if gotPath != "/activity/timer-1/alarm" {
+		t.Errorf("expected /activity/timer-1/alarm, got %s", gotPath)
+	}
+}
+
+// --- UpdateRequest serialisation ---
+
+// State has json:"state,omitempty" so a content-only update (zero State value)
+// must not emit "state":"" — the new server enum rejects empty strings under
+// additionalProperties:false validation.
+func TestUpdateRequest_OmitsEmptyState(t *testing.T) {
+	body, err := json.Marshal(UpdateRequest{
+		Content: Content{Progress: 0.5},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(body, []byte(`"state"`)) {
+		t.Errorf("expected no state key in body, got %s", string(body))
 	}
 }
 

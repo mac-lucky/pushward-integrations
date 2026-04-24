@@ -24,4 +24,8 @@ type trackedRun struct {
 	maxTotalSteps int
 	maxStepRows   []int
 	maxStepLabels []string
+	// shapeSent is the maxTotalSteps value at the time we last included
+	// step_rows/step_labels in a merge-patch. When unchanged across polls
+	// we skip those slices to keep the tick payload minimal.
+	shapeSent int
 }

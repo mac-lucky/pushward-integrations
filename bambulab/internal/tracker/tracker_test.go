@@ -208,8 +208,8 @@ func TestProcess_PrepareToRunningToFinish(t *testing.T) {
 	if runUpdate.Content.Icon != "printer.fill" {
 		t.Errorf("icon = %q, want printer.fill", runUpdate.Content.Icon)
 	}
-	if runUpdate.Content.AccentColor != "blue" {
-		t.Errorf("accent = %q, want blue", runUpdate.Content.AccentColor)
+	if runUpdate.Content.AccentColor != pushward.ColorBlue {
+		t.Errorf("accent = %q, want %q", runUpdate.Content.AccentColor, pushward.ColorBlue)
 	}
 	if runUpdate.Content.Progress != 0.25 {
 		t.Errorf("progress = %f, want 0.25", runUpdate.Content.Progress)
@@ -305,8 +305,8 @@ func TestProcess_PauseAndResume(t *testing.T) {
 	if pauseUpdate.Content.Icon != "pause.circle.fill" {
 		t.Errorf("pause icon = %q, want pause.circle.fill", pauseUpdate.Content.Icon)
 	}
-	if pauseUpdate.Content.AccentColor != "orange" {
-		t.Errorf("pause accent = %q, want orange", pauseUpdate.Content.AccentColor)
+	if pauseUpdate.Content.AccentColor != pushward.ColorOrange {
+		t.Errorf("pause accent = %q, want %q", pauseUpdate.Content.AccentColor, pushward.ColorOrange)
 	}
 
 	// Resume to RUNNING
@@ -380,8 +380,8 @@ func TestProcess_Failed(t *testing.T) {
 		var req pushward.UpdateRequest
 		testutil.UnmarshalBody(t, c.Body, &req)
 		if req.Content.State == "Failed" && req.Content.Icon == "xmark.circle.fill" {
-			if req.Content.AccentColor != "red" {
-				t.Errorf("failure accent = %q, want red", req.Content.AccentColor)
+			if req.Content.AccentColor != pushward.ColorRed {
+				t.Errorf("failure accent = %q, want %q", req.Content.AccentColor, pushward.ColorRed)
 			}
 			if req.State == pushward.StateOngoing {
 				foundOngoing = true
@@ -438,8 +438,8 @@ func TestProcess_IdleCancellation(t *testing.T) {
 	if endReq.Content.State != "Cancelled" {
 		t.Errorf("idle content state = %q, want Cancelled", endReq.Content.State)
 	}
-	if endReq.Content.AccentColor != "orange" {
-		t.Errorf("idle accent = %q, want orange", endReq.Content.AccentColor)
+	if endReq.Content.AccentColor != pushward.ColorOrange {
+		t.Errorf("idle accent = %q, want %q", endReq.Content.AccentColor, pushward.ColorOrange)
 	}
 }
 
@@ -658,8 +658,8 @@ func TestFinishActivity_TwoPhaseEnd(t *testing.T) {
 	if phase1.Content.State != "Complete" {
 		t.Errorf("phase 1 content state = %q, want Complete", phase1.Content.State)
 	}
-	if phase1.Content.AccentColor != "green" {
-		t.Errorf("phase 1 accent = %q, want green", phase1.Content.AccentColor)
+	if phase1.Content.AccentColor != pushward.ColorGreen {
+		t.Errorf("phase 1 accent = %q, want %q", phase1.Content.AccentColor, pushward.ColorGreen)
 	}
 	if phase1.Content.Progress != 1.0 {
 		t.Errorf("phase 1 progress = %f, want 1.0", phase1.Content.Progress)
@@ -713,8 +713,8 @@ func TestFailActivity_TwoPhaseEnd(t *testing.T) {
 	if phase1.Content.State != "Failed" {
 		t.Errorf("phase 1 content state = %q, want Failed", phase1.Content.State)
 	}
-	if phase1.Content.AccentColor != "red" {
-		t.Errorf("phase 1 accent = %q, want red", phase1.Content.AccentColor)
+	if phase1.Content.AccentColor != pushward.ColorRed {
+		t.Errorf("phase 1 accent = %q, want %q", phase1.Content.AccentColor, pushward.ColorRed)
 	}
 	if phase1.Content.Progress != 0.42 {
 		t.Errorf("phase 1 progress = %f, want 0.42", phase1.Content.Progress)
@@ -736,7 +736,7 @@ func TestEndActivity_Immediate(t *testing.T) {
 	tr := newTestTracker(printer, client, cfg)
 	tr.tracking = true
 
-	tr.endActivity(context.Background(), "Cancelled", "xmark.circle.fill", "orange")
+	tr.endActivity(context.Background(), "Cancelled", "xmark.circle.fill", pushward.ColorOrange)
 
 	if tr.tracking {
 		t.Error("endActivity should reset tracking")

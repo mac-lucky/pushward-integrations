@@ -140,7 +140,7 @@ func TestScheduleEnd_TwoPhaseSuccess(t *testing.T) {
 		State:        "Success",
 		Icon:         "arrow.triangle.branch",
 		Subtitle:     "repo / CI",
-		AccentColor:  "green",
+		AccentColor:  pushward.ColorGreen,
 		CurrentStep:  pushward.IntPtr(2),
 		TotalSteps:   pushward.IntPtr(2),
 		URL:          "https://github.com/owner/repo/actions/runs/100",
@@ -218,7 +218,7 @@ func TestScheduleEnd_TwoPhaseFailed(t *testing.T) {
 		State:        "Failed",
 		Icon:         "arrow.triangle.branch",
 		Subtitle:     "repo / CI",
-		AccentColor:  "red",
+		AccentColor:  pushward.ColorRed,
 		CurrentStep:  pushward.IntPtr(1),
 		TotalSteps:   pushward.IntPtr(3),
 		URL:          "https://github.com/owner/repo/actions/runs/200",
@@ -238,8 +238,8 @@ func TestScheduleEnd_TwoPhaseFailed(t *testing.T) {
 	if req1.State != pushward.StateOngoing {
 		t.Errorf("phase 1: expected ONGOING, got %s", req1.State)
 	}
-	if req1.Content.AccentColor != "red" {
-		t.Errorf("phase 1: expected accent_color red, got %s", req1.Content.AccentColor)
+	if req1.Content.AccentColor != pushward.ColorRed {
+		t.Errorf("phase 1: expected accent_color %q, got %s", pushward.ColorRed, req1.Content.AccentColor)
 	}
 
 	var req2 pushward.UpdateRequest
@@ -439,7 +439,7 @@ func TestScheduleEnd_ContentPreserved(t *testing.T) {
 		State:        "Success",
 		Icon:         "arrow.triangle.branch",
 		Subtitle:     "repo / Deploy",
-		AccentColor:  "green",
+		AccentColor:  pushward.ColorGreen,
 		CurrentStep:  pushward.IntPtr(4),
 		TotalSteps:   pushward.IntPtr(4),
 		URL:          "https://github.com/owner/repo/actions/runs/400",
@@ -848,8 +848,21 @@ func TestPollActive_UpdatesOngoingWorkflow(t *testing.T) {
 	if req.Content.State != "Build" {
 		t.Errorf("expected state Build, got %s", req.Content.State)
 	}
-	if req.Content.AccentColor != "green" {
-		t.Errorf("expected green accent, got %s", req.Content.AccentColor)
+	// Tick PATCH must omit seed-only fields so they're preserved server-side.
+	if req.Content.AccentColor != "" {
+		t.Errorf("expected tick to omit accent_color, got %q", req.Content.AccentColor)
+	}
+	if req.Content.Icon != "" {
+		t.Errorf("expected tick to omit icon, got %q", req.Content.Icon)
+	}
+	if req.Content.Template != "" {
+		t.Errorf("expected tick to omit template, got %q", req.Content.Template)
+	}
+	if req.Content.Subtitle != "" {
+		t.Errorf("expected tick to omit subtitle, got %q", req.Content.Subtitle)
+	}
+	if req.Content.URL != "" {
+		t.Errorf("expected tick to omit url, got %q", req.Content.URL)
 	}
 }
 
@@ -906,8 +919,8 @@ func TestPollActive_CompletesSuccessfulWorkflow(t *testing.T) {
 	if req1.Content.State != "Success" {
 		t.Errorf("phase 1: expected Success, got %s", req1.Content.State)
 	}
-	if req1.Content.AccentColor != "green" {
-		t.Errorf("phase 1: expected green, got %s", req1.Content.AccentColor)
+	if req1.Content.AccentColor != pushward.ColorGreen {
+		t.Errorf("phase 1: expected %q, got %s", pushward.ColorGreen, req1.Content.AccentColor)
 	}
 
 	var req2 pushward.UpdateRequest
@@ -966,8 +979,8 @@ func TestPollActive_CompletesFailedWorkflow(t *testing.T) {
 	if req1.Content.State != "Failed" {
 		t.Errorf("expected Failed, got %s", req1.Content.State)
 	}
-	if req1.Content.AccentColor != "red" {
-		t.Errorf("expected red, got %s", req1.Content.AccentColor)
+	if req1.Content.AccentColor != pushward.ColorRed {
+		t.Errorf("expected %q, got %s", pushward.ColorRed, req1.Content.AccentColor)
 	}
 }
 

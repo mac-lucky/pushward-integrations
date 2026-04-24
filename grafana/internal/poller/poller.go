@@ -139,12 +139,11 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seri
 		values[key] = lp.Point.V
 	}
 
-	err = p.pwClient.UpdateActivity(ctx, slug, pushward.UpdateRequest{
-		State: pushward.StateOngoing,
-		Content: pushward.Content{
-			Template: pushward.TemplateTimeline,
-			Value:    values,
-		},
+	// Merge-patch with just the new sample. Template/units/accent/display config
+	// were seeded by the firing webhook and are preserved server-side.
+	err = p.pwClient.PatchActivity(ctx, slug, pushward.PatchRequest{
+		State:   pushward.StateOngoing,
+		Content: &pushward.ContentPatch{Value: values},
 	})
 	if err != nil {
 		if ctx.Err() != nil {

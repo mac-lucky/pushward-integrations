@@ -21,13 +21,8 @@ type APICall struct {
 }
 
 var (
-	slugPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
-	hexColor    = regexp.MustCompile(`^#?[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$`)
-	namedColors = map[string]bool{
-		"red": true, "orange": true, "yellow": true, "green": true,
-		"blue": true, "purple": true, "pink": true, "indigo": true,
-		"teal": true, "cyan": true, "mint": true, "brown": true,
-	}
+	slugPattern     = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
+	hexColor        = regexp.MustCompile(`^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$`)
 	validTemplates  = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true, "timeline": true}
 	validStates     = map[string]bool{"ONGOING": true, "ENDED": true}
 	validSeverities = map[string]bool{"critical": true, "warning": true, "info": true}
@@ -247,7 +242,10 @@ func validateCreateRequest(req *createRequest) error {
 }
 
 func validateUpdateRequest(req *updateRequest) error {
-	if !validStates[req.State] {
+	// state and content.template are optional under RFC 7396 merge-patch —
+	// an absent field means "preserve server-side value". Only validate when
+	// present (non-empty).
+	if req.State != "" && !validStates[req.State] {
 		return fmt.Errorf("state must be ONGOING or ENDED")
 	}
 	if req.Priority != nil && (*req.Priority < 0 || *req.Priority > 10) {
@@ -257,7 +255,9 @@ func validateUpdateRequest(req *updateRequest) error {
 }
 
 func validateContent(c *apiContent) error {
-	if !validTemplates[c.Template] {
+	// Under merge-patch, template may be absent on ticks; only per-template
+	// required-field validation is gated on it.
+	if c.Template != "" && !validTemplates[c.Template] {
 		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, gauge, timeline")
 	}
 	if c.Progress < 0 || c.Progress > 1 {
@@ -482,13 +482,10 @@ func validateColor(c, field string) error {
 	if c == "" {
 		return nil
 	}
-	if namedColors[c] {
-		return nil
-	}
 	if hexColor.MatchString(c) {
 		return nil
 	}
-	return fmt.Errorf("%s must be a named color or hex (#RRGGBB or #RRGGBBAA)", field)
+	return fmt.Errorf("%s must be hex (#RRGGBB or #RRGGBBAA)", field)
 }
 
 func toFloat64(v any) (float64, bool) {

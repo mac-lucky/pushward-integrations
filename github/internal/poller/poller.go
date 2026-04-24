@@ -207,7 +207,6 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 				"steps", info.TotalSteps, "step_rows", info.StepRows)
 		}
 
-		// Store max totals on the tracked run.
 		p.mu.Lock()
 		if t, ok := p.tracked[repo]; ok {
 			t.maxTotalSteps = initialTotalSteps
@@ -216,16 +215,18 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		}
 		p.mu.Unlock()
 
-		// Send initial ONGOING (triggers push-to-start)
+		// Seed PATCH carries full Content (template/step_rows/step_labels).
+		// shapeSent is promoted below only after the seed lands, so a failed
+		// seed doesn't leave pollActive ticks permanently skipping step_rows.
 		if err := p.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 			State: pushward.StateOngoing,
 			Content: pushward.Content{
-				Template:     "steps",
+				Template:     pushward.TemplateSteps,
 				Progress:     0.0,
 				State:        "Starting...",
 				Icon:         "arrow.triangle.branch",
 				Subtitle:     fmt.Sprintf("%s / %s", repoShort, run.Name),
-				AccentColor:  "green",
+				AccentColor:  pushward.ColorGreen,
 				CurrentStep:  pushward.IntPtr(0),
 				TotalSteps:   pushward.IntPtr(initialTotalSteps),
 				StepRows:     initialStepRows,
@@ -235,7 +236,14 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			},
 		}); err != nil {
 			slog.Error("failed to send initial update", "slug", slug, "error", err)
+			continue
 		}
+
+		p.mu.Lock()
+		if t, ok := p.tracked[repo]; ok {
+			t.shapeSent = initialTotalSteps
+		}
+		p.mu.Unlock()
 	}
 	return nil
 }
@@ -400,10 +408,10 @@ func (p *Poller) pollActive(ctx context.Context) error {
 
 		if info.AllCompleted {
 			conclusion := "Success"
-			color := "green"
+			color := pushward.ColorGreen
 			if info.AnyFailed {
 				conclusion = "Failed"
-				color = "red"
+				color = pushward.ColorRed
 			}
 			slog.Info("workflow completed", "run_id", tRunID, "slug", tSlug, "conclusion", conclusion)
 			p.scheduleEnd(repo, pushward.Content{
@@ -423,22 +431,29 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			continue
 		}
 
-		if err := p.pw.UpdateActivity(ctx, tSlug, pushward.UpdateRequest{
-			State: pushward.StateOngoing,
-			Content: pushward.Content{
-				Template:     "steps",
-				Progress:     info.Progress,
-				State:        info.CurrentStepName,
-				Icon:         "arrow.triangle.branch",
-				Subtitle:     fmt.Sprintf("%s / %s", repoShort, tName),
-				AccentColor:  "green",
-				CurrentStep:  pushward.IntPtr(info.CurrentStep),
-				TotalSteps:   pushward.IntPtr(info.TotalSteps),
-				StepRows:     info.StepRows,
-				StepLabels:   info.StepLabels,
-				URL:          tHTMLURL,
-				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
-			},
+		// step_rows/step_labels are re-sent only when GitHub lazily revealed
+		// new jobs (totalSteps grew) — unchanged slices are preserved by the
+		// server under merge-patch and re-sending them wastes payload bytes.
+		contentPatch := &pushward.ContentPatch{
+			Progress:    pushward.Float64Ptr(info.Progress),
+			State:       pushward.StringPtr(info.CurrentStepName),
+			CurrentStep: pushward.IntPtr(info.CurrentStep),
+			TotalSteps:  pushward.IntPtr(info.TotalSteps),
+		}
+		p.mu.Lock()
+		shapeChanged := false
+		if tt, ok := p.tracked[repo]; ok && tt.shapeSent < tt.maxTotalSteps {
+			shapeChanged = true
+			tt.shapeSent = tt.maxTotalSteps
+		}
+		p.mu.Unlock()
+		if shapeChanged {
+			contentPatch.StepRows = info.StepRows
+			contentPatch.StepLabels = info.StepLabels
+		}
+		if err := p.pw.PatchActivity(ctx, tSlug, pushward.PatchRequest{
+			State:   pushward.StateOngoing,
+			Content: contentPatch,
 		}); err != nil {
 			slog.Error("failed to update activity", "slug", tSlug, "error", err)
 		}

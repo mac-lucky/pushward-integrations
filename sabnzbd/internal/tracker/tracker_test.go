@@ -606,8 +606,8 @@ func TestSendDownloadProgress_Paused(t *testing.T) {
 	if req.Content.State != "Paused" {
 		t.Errorf("expected state Paused, got %s", req.Content.State)
 	}
-	if req.Content.AccentColor != "blue" {
-		t.Errorf("expected blue accent, got %s", req.Content.AccentColor)
+	if req.Content.AccentColor != pushward.ColorBlue {
+		t.Errorf("expected %q accent, got %s", pushward.ColorBlue, req.Content.AccentColor)
 	}
 }
 
@@ -752,20 +752,14 @@ func TestSendDownloadProgress_Timeline_SendsValueAndUnit(t *testing.T) {
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req)
 
-	if req.Content.Template != "timeline" {
-		t.Errorf("expected template timeline, got %s", req.Content.Template)
-	}
+	// Template/Units are seed-only under merge-patch (preserved server-side
+	// across ticks), so tick bodies carry Value + State only.
 	if values := testutil.RequireValueMap(t, req.Content.Value); values == nil {
 		// already failed
 	} else if v, ok := values[seriesKey]; !ok {
-		t.Fatal("expected value map with 'Download' key")
+		t.Fatal("expected value map with 'Speed' key")
 	} else if v != 50.0 {
-		t.Errorf("expected Download value 50.0, got %.1f", v)
-	}
-	if u, ok := req.Content.Units[seriesKey]; !ok {
-		t.Fatal("expected units map with 'Download' key")
-	} else if u != "MB/s" {
-		t.Errorf("expected Download unit MB/s, got %s", u)
+		t.Errorf("expected Speed value 50.0, got %.1f", v)
 	}
 	if req.Content.State != "50.0 MB/s" {
 		t.Errorf("expected state to be speed for timeline (same as generic), got %s", req.Content.State)
@@ -798,9 +792,7 @@ func TestSendDownloadProgress_Generic_NoValueOrUnit(t *testing.T) {
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req)
 
-	if req.Content.Template != "generic" {
-		t.Errorf("expected template generic, got %s", req.Content.Template)
-	}
+	// Tick bodies omit Template (preserved server-side under merge-patch).
 	if req.Content.Value != nil {
 		t.Errorf("expected no value for generic template, got %v", req.Content.Value)
 	}
@@ -820,11 +812,9 @@ func TestTimeline_NonDownloadPhase_SendsZeroValue(t *testing.T) {
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
 
-	// Non-download sends (e.g. "Starting...", PP) pass nil for value. The
-	// server rejects timeline payloads without a labeled value map, so the
-	// integration substitutes 0 to keep updates accepted while the sparkline
-	// tapers cleanly to zero.
-	tr.send(ctx, 0.0, "Starting...", "arrow.down.circle", "blue", nil, "", pushward.StateOngoing, nil)
+	// Non-download sends (e.g. "Starting...", PP) pass nil for value. Send as
+	// a tick since Units/Template are seed-only under merge-patch.
+	tr.send(ctx, 0.0, "Starting...", "arrow.down.circle", pushward.ColorBlue, nil, "", pushward.StateOngoing, nil)
 
 	got := testutil.GetCalls(calls, mu)
 	if len(got) != 1 {
@@ -833,16 +823,10 @@ func TestTimeline_NonDownloadPhase_SendsZeroValue(t *testing.T) {
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req)
 
-	if req.Content.Template != "timeline" {
-		t.Errorf("expected timeline template, got %s", req.Content.Template)
-	}
 	if values := testutil.RequireValueMap(t, req.Content.Value); values == nil {
 		// already failed
 	} else if v, ok := values[seriesKey]; !ok || v != 0 {
 		t.Errorf("expected value[%q]=0 for non-download phase, got %v (ok=%v)", seriesKey, v, ok)
-	}
-	if u := req.Content.Units[seriesKey]; u != "MB/s" {
-		t.Errorf("expected units[%q]=MB/s, got %q", seriesKey, u)
 	}
 	if req.Content.History != nil {
 		t.Errorf("expected no history seeded for zero sample, got %v", req.Content.History)
@@ -878,20 +862,13 @@ func TestSendDownloadProgress_Timeline_Paused_SendsZeroValue(t *testing.T) {
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req)
 
-	if req.Content.Template != "timeline" {
-		t.Errorf("expected timeline template for paused download, got %s", req.Content.Template)
-	}
+	// Template/Units are seed-only (server preserves). Tick asserts Value/State.
 	if values := testutil.RequireValueMap(t, req.Content.Value); values == nil {
 		// already failed
 	} else if v, ok := values[seriesKey]; !ok {
 		t.Fatal("expected value map with 'Speed' key for paused")
 	} else if v != 0 {
 		t.Errorf("expected Speed value 0 for paused, got %f", v)
-	}
-	if u, ok := req.Content.Units[seriesKey]; !ok {
-		t.Fatal("expected units map with 'Speed' key for paused")
-	} else if u != "MB/s" {
-		t.Errorf("expected Speed unit MB/s, got %s", u)
 	}
 	if req.Content.State != "Paused" {
 		t.Errorf("expected state Paused for timeline paused, got %s", req.Content.State)
@@ -939,25 +916,33 @@ func TestTimeline_FullLifecycle(t *testing.T) {
 
 	got := testutil.GetCalls(calls, mu)
 
-	// Download-phase updates must have values[seriesKey] with units
+	// First PATCH (the seed) must include the timeline template; subsequent
+	// merge-patch ticks omit it because the server preserves it across updates.
+	// Download-phase tick payloads must still carry a value sample so the
+	// server's timeline series accumulates new points.
 	var hasPositiveValue bool
+	firstPatchSeen := false
 	for _, c := range got {
-		if c.Method == "PATCH" {
-			var r pushward.UpdateRequest
-			testutil.UnmarshalBody(t, c.Body, &r)
+		if c.Method != "PATCH" {
+			continue
+		}
+		var r pushward.UpdateRequest
+		testutil.UnmarshalBody(t, c.Body, &r)
+		if !firstPatchSeen {
 			if r.Content.Template != "timeline" {
-				t.Errorf("expected timeline template, got %s", r.Content.Template)
+				t.Errorf("first PATCH (seed): expected timeline template, got %q", r.Content.Template)
 			}
-			if r.Content.Value == nil {
-				continue // PP and non-download phases skip value
-			}
-			values := testutil.RequireValueMap(t, r.Content.Value)
-			if values == nil {
-				continue
-			}
-			if v, ok := values[seriesKey]; ok && v > 0 {
-				hasPositiveValue = true
-			}
+			firstPatchSeen = true
+		}
+		if r.Content.Value == nil {
+			continue
+		}
+		values := testutil.RequireValueMap(t, r.Content.Value)
+		if values == nil {
+			continue
+		}
+		if v, ok := values[seriesKey]; ok && v > 0 {
+			hasPositiveValue = true
 		}
 	}
 	if !hasPositiveValue {
@@ -1008,10 +993,10 @@ func TestTimeline_HistorySeeding(t *testing.T) {
 	speed := pushward.Float64Ptr(50.0)
 
 	// First send with positive value should seed history
-	tr.send(ctx, 0.5, "50.0 MB/s", "arrow.down.circle.fill", "blue", nil, "test.nzb", pushward.StateOngoing, speed)
+	tr.send(ctx, 0.5, "50.0 MB/s", "arrow.down.circle.fill", pushward.ColorBlue, nil, "test.nzb", pushward.StateOngoing, speed)
 
 	// Second send should NOT include history
-	tr.send(ctx, 0.6, "50.0 MB/s", "arrow.down.circle.fill", "blue", nil, "test.nzb", pushward.StateOngoing, speed)
+	tr.send(ctx, 0.6, "50.0 MB/s", "arrow.down.circle.fill", pushward.ColorBlue, nil, "test.nzb", pushward.StateOngoing, speed)
 
 	got := testutil.GetCalls(calls, mu)
 	patchCalls := 0
@@ -1059,14 +1044,32 @@ func TestTimeline_DisplaySettings(t *testing.T) {
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
 
-	tr.send(ctx, 0.5, "50.0 MB/s", "arrow.down.circle.fill", "blue", nil, "test.nzb", pushward.StateOngoing, pushward.Float64Ptr(50.0))
+	// Activity must exist before PATCH — real tracker flow calls CreateActivity
+	// before the first seed.
+	if err := pw.CreateActivity(ctx, "sabnzbd", "SABnzbd", cfg.PushWard.Priority, 0, int(cfg.PushWard.StaleTimeout.Seconds())); err != nil {
+		t.Fatalf("unexpected create error: %v", err)
+	}
+
+	// Display settings (smoothing/scale/decimals) are established on the seed.
+	// Tick merge-patches rely on the server preserving them.
+	if err := tr.sendSeed(ctx, 0.5, "50.0 MB/s", "arrow.down.circle.fill", pushward.ColorBlue, nil, "test.nzb", pushward.StateOngoing, pushward.Float64Ptr(50.0)); err != nil {
+		t.Fatalf("unexpected seed error: %v", err)
+	}
 
 	got := testutil.GetCalls(calls, mu)
-	if len(got) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(got))
-	}
+	// First call is CreateActivity, second is the seed PATCH.
 	var req pushward.UpdateRequest
-	testutil.UnmarshalBody(t, got[0].Body, &req)
+	var patchCall *testutil.APICall
+	for i := range got {
+		if got[i].Method == http.MethodPatch {
+			patchCall = &got[i]
+			break
+		}
+	}
+	if patchCall == nil {
+		t.Fatalf("no PATCH call recorded, got %d calls", len(got))
+	}
+	testutil.UnmarshalBody(t, patchCall.Body, &req)
 
 	if req.Content.Smoothing == nil || !*req.Content.Smoothing {
 		t.Error("expected smoothing=true from config")

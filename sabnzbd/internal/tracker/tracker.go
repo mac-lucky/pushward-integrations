@@ -195,49 +195,89 @@ func (t *Tracker) applyTimelineSpeed(content *pushward.Content, sample float64) 
 	t.cfg.SABnzbd.Timeline.Apply(content)
 }
 
-func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string, value *float64) {
+// timelineSample returns the sample value to emit for timeline ticks. Non-
+// download callers pass value=nil; the server requires a labeled value map
+// on every timeline update, so we substitute 0.
+func timelineSample(value *float64) float64 {
+	if value != nil {
+		return *value
+	}
+	return 0
+}
+
+// seedHistory returns a bootstrap history for the first non-zero sample, or
+// nil when history has already been seeded or sample is 0. Flips t.historySent
+// on first emission.
+func (t *Tracker) seedHistory(sample float64) map[string][]pushward.HistoryPoint {
+	if t.historySent || sample <= 0 {
+		return nil
+	}
+	t.historySent = true
+	now := time.Now().Unix()
+	return map[string][]pushward.HistoryPoint{
+		seriesKey: {
+			{T: now - 10, V: sample},
+			{T: now - 5, V: sample},
+		},
+	}
+}
+
+// positiveRemaining passes a pointer through only when it points to a positive
+// value, so zero/negative remaining times don't land in the payload.
+func positiveRemaining(p *int) *int {
+	if p == nil || *p <= 0 {
+		return nil
+	}
+	return p
+}
+
+func (t *Tracker) sendSeed(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string, value *float64) error {
 	template := t.cfg.SABnzbd.Template
 	content := pushward.Content{
-		Template:    template,
-		Progress:    progress,
-		State:       state,
-		AccentColor: accentColor,
+		Template:      template,
+		Progress:      progress,
+		State:         state,
+		Icon:          icon,
+		Subtitle:      subtitle,
+		AccentColor:   accentColor,
+		RemainingTime: positiveRemaining(remainingSeconds),
 	}
 	if template == pushward.TemplateTimeline {
-		// Server rejects timeline payloads without a labeled value map (HTTP 400),
-		// so non-download callers (PP, "Starting...") substitute 0.
-		sample := 0.0
-		if value != nil {
-			sample = *value
-		}
+		sample := timelineSample(value)
 		t.applyTimelineSpeed(&content, sample)
-
-		if !t.historySent && sample > 0 {
-			now := time.Now().Unix()
-			content.History = map[string][]pushward.HistoryPoint{
-				seriesKey: {
-					{T: now - 10, V: sample},
-					{T: now - 5, V: sample},
-				},
-			}
-			t.historySent = true
-		}
-	}
-	if icon != "" {
-		content.Icon = icon
-	}
-	if remainingSeconds != nil && *remainingSeconds > 0 {
-		content.RemainingTime = remainingSeconds
-	}
-	if subtitle != "" {
-		content.Subtitle = subtitle
+		content.History = t.seedHistory(sample)
 	}
 
-	req := pushward.UpdateRequest{
+	return t.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 		State:   activityState,
 		Content: content,
+	})
+}
+
+func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string, value *float64) {
+	template := t.cfg.SABnzbd.Template
+	contentPatch := &pushward.ContentPatch{
+		Progress:      pushward.Float64Ptr(progress),
+		State:         pushward.StringPtr(state),
+		AccentColor:   pushward.StringPtr(accentColor),
+		RemainingTime: positiveRemaining(remainingSeconds),
 	}
-	if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
+	if icon != "" {
+		contentPatch.Icon = pushward.StringPtr(icon)
+	}
+	if subtitle != "" {
+		contentPatch.Subtitle = pushward.StringPtr(subtitle)
+	}
+	if template == pushward.TemplateTimeline {
+		sample := timelineSample(value)
+		contentPatch.Value = map[string]float64{seriesKey: sample}
+		contentPatch.History = t.seedHistory(sample)
+	}
+
+	if err := t.pw.PatchActivity(ctx, slug, pushward.PatchRequest{
+		State:   activityState,
+		Content: contentPatch,
+	}); err != nil {
 		slog.Error("failed to send update", "error", err)
 	}
 }
@@ -258,13 +298,17 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		return
 	}
 
-	// Phase 1: Wait for SABnzbd to start downloading
+	// Phase 1: Wait for SABnzbd to start downloading. The "Starting..." frame
+	// is the session seed — subsequent ticks merge-patch against it.
 	slog.Info("waiting for download to start")
-	t.send(ctx, 0.0, "Starting...", "arrow.down.circle", "blue", nil, "", pushward.StateOngoing, nil)
+	if err := t.sendSeed(ctx, 0.0, "Starting...", "arrow.down.circle", pushward.ColorBlue, nil, "", pushward.StateOngoing, nil); err != nil {
+		slog.Error("failed to seed activity", "error", err)
+		return
+	}
 
 	if !t.waitForQueueActive(ctx, 60) {
 		slog.Warn("SABnzbd never started downloading, giving up")
-		t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", "green", nil, "", pushward.StateEnded, nil)
+		t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", pushward.ColorGreen, nil, "", pushward.StateEnded, nil)
 		return
 	}
 
@@ -324,7 +368,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		Progress:    1.0,
 		State:       stateStr,
 		Icon:        "checkmark.circle.fill",
-		AccentColor: "green",
+		AccentColor: pushward.ColorGreen,
 		Subtitle:    subtitle,
 	}
 	if t.cfg.SABnzbd.Template == pushward.TemplateTimeline {
@@ -428,7 +472,7 @@ func (t *Tracker) trackDownloads(ctx context.Context) {
 // Returns total post-processing duration.
 func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 	slog.Info("tracking post-processing")
-	t.send(ctx, 1.0, "Unpacking...", "archivebox", "orange", nil, "", pushward.StateOngoing, nil)
+	t.send(ctx, 1.0, "Unpacking...", "archivebox", pushward.ColorOrange, nil, "", pushward.StateOngoing, nil)
 	ppStart := time.Now()
 
 	for {
@@ -443,7 +487,7 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 		subtitle := text.Truncate(ppName, 30)
 		stateStr := ppStatus + "..."
 		if t.shouldSend(1.0, 0, ppStatus, subtitle) {
-			t.send(ctx, 1.0, stateStr, icon, "orange", nil, subtitle, pushward.StateOngoing, nil)
+			t.send(ctx, 1.0, stateStr, icon, pushward.ColorOrange, nil, subtitle, pushward.StateOngoing, nil)
 			t.recordSent(1.0, 0, ppStatus, subtitle)
 		}
 		select {
@@ -497,7 +541,7 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 		if !t.shouldSend(progress, 0, modePaused, subtitle) {
 			return true
 		}
-		t.send(ctx, progress, "Paused", "pause.circle.fill", "blue", nil, subtitle, pushward.StateOngoing, pushward.Float64Ptr(0))
+		t.send(ctx, progress, "Paused", "pause.circle.fill", pushward.ColorBlue, nil, subtitle, pushward.StateOngoing, pushward.Float64Ptr(0))
 		t.recordSent(progress, 0, modePaused, subtitle)
 		return true
 	}
@@ -512,7 +556,7 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 		return true
 	}
 
-	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", "blue", remainingSeconds, subtitle, pushward.StateOngoing, pushward.Float64Ptr(speedMB))
+	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", pushward.ColorBlue, remainingSeconds, subtitle, pushward.StateOngoing, pushward.Float64Ptr(speedMB))
 	t.recordSent(progress, speedMB, modeDownloading, subtitle)
 	return true
 }

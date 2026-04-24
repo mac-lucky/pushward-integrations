@@ -32,7 +32,9 @@ type Tracker struct {
 	gql *graphql.Client
 	pw  *pushward.Client
 
-	mu             sync.Mutex
+	mu sync.Mutex
+	// parityActive flips true only after the seed PATCH has landed, so the
+	// debounced tick path can assume a server-side Content baseline exists.
 	parityActive   bool
 	parityLastSent time.Time
 	arrayState     graphql.ArrayState
@@ -108,16 +110,24 @@ func (t *Tracker) handleParityCheck(ctx context.Context, status graphql.ArraySta
 	isActive := status.ParityCheck != nil && status.ParityCheck.IsActive()
 
 	if isActive && !wasActive {
-		// Parity check started
-		t.parityActive = true
-		t.parityLastSent = time.Time{}
+		// Parity check started — create activity + seed. parityActive flips to
+		// true only after the seed PATCH lands so a failure here means the next
+		// poll retries both create and seed.
 		t.mu.Unlock()
 
 		if err := t.pw.CreateActivity(ctx, slug, "Parity Check", t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
 			slog.Error("failed to create parity activity", "error", err)
 			return
 		}
-		t.sendParityUpdate(ctx, slug, *status.ParityCheck, serverName)
+		if err := t.seedParityUpdate(ctx, slug, *status.ParityCheck, serverName); err != nil {
+			slog.Error("failed to seed parity activity", "error", err)
+			return
+		}
+
+		t.mu.Lock()
+		t.parityActive = true
+		t.parityLastSent = time.Now()
+		t.mu.Unlock()
 		return
 	}
 
@@ -128,7 +138,7 @@ func (t *Tracker) handleParityCheck(ctx context.Context, status graphql.ArraySta
 			return
 		}
 		t.mu.Unlock()
-		t.sendParityUpdate(ctx, slug, *status.ParityCheck, serverName)
+		t.tickParityUpdate(ctx, slug, *status.ParityCheck)
 		return
 	}
 
@@ -137,7 +147,7 @@ func (t *Tracker) handleParityCheck(ctx context.Context, status graphql.ArraySta
 		t.parityActive = false
 		t.mu.Unlock()
 		t.scheduleEnd(slug, pushward.Content{
-			Template:    "generic",
+			Template:    pushward.TemplateGeneric,
 			Progress:    1.0,
 			State:       "Parity Valid",
 			Icon:        "checkmark.circle.fill",
@@ -150,21 +160,34 @@ func (t *Tracker) handleParityCheck(ctx context.Context, status graphql.ArraySta
 	t.mu.Unlock()
 }
 
-func (t *Tracker) sendParityUpdate(ctx context.Context, slug string, pc graphql.ParityCheck, serverName string) {
-	progress := pc.Progress / 100.0
-	state := fmt.Sprintf("Checking · %.0f%%", pc.Progress)
+func deriveParityFrame(pc graphql.ParityCheck) (progress float64, state string) {
+	return pc.Progress / 100.0, fmt.Sprintf("Checking · %.0f%%", pc.Progress)
+}
 
-	content := pushward.Content{
-		Template:    "generic",
-		Progress:    progress,
-		State:       state,
-		Icon:        "arrow.triangle.2.circlepath",
-		Subtitle:    "Unraid · " + serverName,
-		AccentColor: pushward.ColorBlue,
-	}
+func (t *Tracker) seedParityUpdate(ctx context.Context, slug string, pc graphql.ParityCheck, serverName string) error {
+	progress, state := deriveParityFrame(pc)
+	return t.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
+		State: pushward.StateOngoing,
+		Content: pushward.Content{
+			Template:    pushward.TemplateGeneric,
+			Progress:    progress,
+			State:       state,
+			Icon:        "arrow.triangle.2.circlepath",
+			Subtitle:    "Unraid · " + serverName,
+			AccentColor: pushward.ColorBlue,
+		},
+	})
+}
 
-	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
-	if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
+func (t *Tracker) tickParityUpdate(ctx context.Context, slug string, pc graphql.ParityCheck) {
+	progress, state := deriveParityFrame(pc)
+	if err := t.pw.PatchActivity(ctx, slug, pushward.PatchRequest{
+		State: pushward.StateOngoing,
+		Content: &pushward.ContentPatch{
+			Progress: pushward.Float64Ptr(progress),
+			State:    pushward.StringPtr(state),
+		},
+	}); err != nil {
 		slog.Error("failed to update parity activity", "error", err)
 		return
 	}
@@ -201,7 +224,7 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 	switch {
 	case prevState == graphql.ArrayStateStopped && status.State == graphql.ArrayStateStarted:
 		content = pushward.Content{
-			Template:    "generic",
+			Template:    pushward.TemplateGeneric,
 			Progress:    1.0,
 			State:       "Array Started",
 			Icon:        "checkmark.circle.fill",
@@ -210,7 +233,7 @@ func (t *Tracker) handleArrayState(ctx context.Context, status graphql.ArrayStat
 		}
 	case prevState == graphql.ArrayStateStarted && status.State == graphql.ArrayStateStopped:
 		content = pushward.Content{
-			Template:    "generic",
+			Template:    pushward.TemplateGeneric,
 			Progress:    1.0,
 			State:       "Array Stopped",
 			Icon:        "checkmark.circle.fill",

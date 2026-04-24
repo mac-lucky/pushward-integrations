@@ -142,7 +142,7 @@ func TestValidateTimeline(t *testing.T) {
 		},
 		{
 			name:       "multiple series with thresholds",
-			body:       `{"state":"ONGOING","content":{"template":"timeline","progress":0.5,"value":{"CPU":50,"MEM":30},"scale":"linear","unit":"%","decimals":1,"thresholds":[{"value":80,"color":"red","label":"high"}]}}`,
+			body:       `{"state":"ONGOING","content":{"template":"timeline","progress":0.5,"value":{"CPU":50,"MEM":30},"scale":"linear","unit":"%","decimals":1,"thresholds":[{"value":80,"color":"#FF3B30","label":"high"}]}}`,
 			wantStatus: 200,
 		},
 		{

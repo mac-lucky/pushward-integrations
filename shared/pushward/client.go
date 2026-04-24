@@ -242,9 +242,31 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 	)
 }
 
-// UpdateActivity updates an activity via PATCH /activity/{slug}.
+// UpdateActivity sends a typed UpdateRequest via PATCH /activity/{slug}. Use it
+// for the seed (establishes template/icon/accent) and the final ENDED frame;
+// use PatchActivity for mid-sequence ticks.
 func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequest) error {
 	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activity/%s", c.baseURL, slug), req, nil)
+}
+
+// PatchActivity sends a typed RFC 7396 merge-patch body to PATCH /activity/{slug}.
+// Unset ContentPatch pointer fields are omitted and preserved server-side;
+// present fields overwrite.
+func (c *Client) PatchActivity(ctx context.Context, slug string, req PatchRequest) error {
+	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activity/%s", c.baseURL, slug), req, nil)
+}
+
+// SetActivityAlarm arms the iOS 26 AlarmKit alarm via PUT /activity/{slug}/alarm.
+// Dedicated endpoint because the alarm rings through silent mode and DND, so
+// accidental clears via a merge-patch field would be disruptive.
+func (c *Client) SetActivityAlarm(ctx context.Context, slug string) error {
+	return c.doWithRetry(ctx, "alarm-set", http.MethodPut, fmt.Sprintf("%s/activity/%s/alarm", c.baseURL, slug), nil, nil)
+}
+
+// ClearActivityAlarm clears the alarm via DELETE /activity/{slug}/alarm without
+// disturbing other content fields.
+func (c *Client) ClearActivityAlarm(ctx context.Context, slug string) error {
+	return c.doWithRetry(ctx, "alarm-clear", http.MethodDelete, fmt.Sprintf("%s/activity/%s/alarm", c.baseURL, slug), nil, nil)
 }
 
 // SendNotification creates a notification record and optionally pushes an APNs alert.
