@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -191,8 +192,9 @@ func TestDoWithRetry_429_RetriesWithRetryAfter(t *testing.T) {
 
 func TestDoWithRetry_Conflict_HandleConflictDone(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(http.StatusConflict)
-		_, _ = w.Write([]byte(`{"error":"already exists"}`))
+		_, _ = w.Write([]byte(`{"type":"about:blank","title":"Conflict","status":409,"detail":"activity already exists","code":"activity.exists"}`))
 	}))
 	defer srv.Close()
 
@@ -208,8 +210,9 @@ func TestDoWithRetry_Conflict_HandleConflictDone(t *testing.T) {
 
 func TestDoWithRetry_Conflict_HandleConflictError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(http.StatusConflict)
-		_, _ = w.Write([]byte(`{"error":"limit reached"}`))
+		_, _ = w.Write([]byte(`{"type":"about:blank","title":"Conflict","status":409,"detail":"activity limit reached","code":"activity.limit_exceeded"}`))
 	}))
 	defer srv.Close()
 
@@ -228,8 +231,9 @@ func TestDoWithRetry_Conflict_NotDone_Retries(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		n := count.Add(1)
 		if n < 3 {
+			w.Header().Set("Content-Type", "application/problem+json")
 			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(`{"error":"transient"}`))
+			_, _ = w.Write([]byte(`{"type":"about:blank","title":"Conflict","status":409,"detail":"transient"}`))
 			return
 		}
 		w.WriteHeader(http.StatusOK)
@@ -333,24 +337,11 @@ func TestCreateActivity_Success(t *testing.T) {
 	}
 }
 
-func TestCreateActivity_AlreadyExists(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusConflict)
-		_, _ = w.Write([]byte(`{"error":"activity already exists"}`))
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL, "hlk_test")
-	err := c.CreateActivity(context.Background(), "gh-repo", "CI", 1, 0, 0)
-	if err != nil {
-		t.Fatalf("expected nil for 'already exists' conflict, got %v", err)
-	}
-}
-
 func TestCreateActivity_LimitReached(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
 		w.WriteHeader(http.StatusConflict)
-		_, _ = w.Write([]byte(`{"error":"activity limit reached"}`))
+		_, _ = w.Write([]byte(`{"type":"about:blank","title":"Conflict","status":409,"detail":"activity limit reached","code":"activity.limit_exceeded"}`))
 	}))
 	defer srv.Close()
 
@@ -364,6 +355,28 @@ func TestCreateActivity_LimitReached(t *testing.T) {
 	}
 }
 
+func TestCreateActivity_UnknownConflictSurfacesError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"type":"about:blank","title":"Conflict","status":409,"detail":"unexpected","code":"activity.unexpected"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	err := c.CreateActivity(context.Background(), "gh-repo", "CI", 1, 0, 0)
+	if err == nil {
+		t.Fatal("expected error for unrecognised conflict")
+	}
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("expected *HTTPError, got %T: %v", err, err)
+	}
+	if httpErr.Code != "activity.unexpected" {
+		t.Errorf("expected code 'activity.unexpected', got %q", httpErr.Code)
+	}
+}
+
 // --- UpdateActivity ---
 
 func TestUpdateActivity_Success(t *testing.T) {
@@ -372,8 +385,8 @@ func TestUpdateActivity_Success(t *testing.T) {
 		if r.Method != http.MethodPatch {
 			t.Errorf("expected PATCH, got %s", r.Method)
 		}
-		if r.URL.Path != "/activity/gh-repo" {
-			t.Errorf("expected /activity/gh-repo, got %s", r.URL.Path)
+		if r.URL.Path != "/activities/gh-repo" {
+			t.Errorf("expected /activities/gh-repo, got %s", r.URL.Path)
 		}
 		_ = json.NewDecoder(r.Body).Decode(&gotBody)
 		w.WriteHeader(http.StatusOK)
@@ -440,8 +453,8 @@ func TestPatchActivity_Success(t *testing.T) {
 	if gotMethod != http.MethodPatch {
 		t.Errorf("expected PATCH, got %s", gotMethod)
 	}
-	if gotPath != "/activity/gh-repo" {
-		t.Errorf("expected /activity/gh-repo, got %s", gotPath)
+	if gotPath != "/activities/gh-repo" {
+		t.Errorf("expected /activities/gh-repo, got %s", gotPath)
 	}
 	if gotCT != "application/json" {
 		t.Errorf("expected application/json content-type, got %q", gotCT)
@@ -490,49 +503,58 @@ func TestPatchActivity_OmitsEmptyContent(t *testing.T) {
 	}
 }
 
-// --- SetActivityAlarm / ClearActivityAlarm ---
+// --- HTTPError Problem parsing ---
 
-func TestSetActivityAlarm_Success(t *testing.T) {
-	var gotMethod string
-	var gotPath string
+func TestHTTPError_ParsesProblemBody(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		gotPath = r.URL.Path
-		w.WriteHeader(http.StatusNoContent)
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"type":"about:blank","title":"Unprocessable Entity","status":422,"detail":"alarm requires end_date","code":"activity.alarm_requires_end_date"}`))
 	}))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "hlk_test")
-	if err := c.SetActivityAlarm(context.Background(), "timer-1"); err != nil {
-		t.Fatalf("expected nil, got %v", err)
+	err := c.doWithRetry(context.Background(), "test", http.MethodPost, srv.URL+"/x", nil, nil)
+	if err == nil {
+		t.Fatal("expected error")
 	}
-	if gotMethod != http.MethodPut {
-		t.Errorf("expected PUT, got %s", gotMethod)
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("expected *HTTPError, got %T", err)
 	}
-	if gotPath != "/activity/timer-1/alarm" {
-		t.Errorf("expected /activity/timer-1/alarm, got %s", gotPath)
+	if httpErr.StatusCode != 422 {
+		t.Errorf("status: got %d, want 422", httpErr.StatusCode)
+	}
+	if httpErr.Code != "activity.alarm_requires_end_date" {
+		t.Errorf("code: got %q", httpErr.Code)
+	}
+	if httpErr.Detail != "alarm requires end_date" {
+		t.Errorf("detail: got %q", httpErr.Detail)
+	}
+	if httpErr.Title != "Unprocessable Entity" {
+		t.Errorf("title: got %q", httpErr.Title)
+	}
+	if !bytes.Contains([]byte(err.Error()), []byte("alarm requires end_date")) {
+		t.Errorf("Error() should surface detail, got %q", err.Error())
 	}
 }
 
-func TestClearActivityAlarm_Success(t *testing.T) {
-	var gotMethod string
-	var gotPath string
+func TestHTTPError_LegacyErrorBodyFallback(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		gotPath = r.URL.Path
-		w.WriteHeader(http.StatusNoContent)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":"legacy shape"}`))
 	}))
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "hlk_test")
-	if err := c.ClearActivityAlarm(context.Background(), "timer-1"); err != nil {
-		t.Fatalf("expected nil, got %v", err)
+	err := c.doWithRetry(context.Background(), "test", http.MethodPost, srv.URL+"/x", nil, nil)
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("expected *HTTPError, got %T", err)
 	}
-	if gotMethod != http.MethodDelete {
-		t.Errorf("expected DELETE, got %s", gotMethod)
-	}
-	if gotPath != "/activity/timer-1/alarm" {
-		t.Errorf("expected /activity/timer-1/alarm, got %s", gotPath)
+	if httpErr.Detail != "legacy shape" {
+		t.Errorf("expected legacy error string promoted to Detail, got %q", httpErr.Detail)
 	}
 }
 

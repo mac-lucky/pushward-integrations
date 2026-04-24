@@ -125,7 +125,7 @@ func mockPWServer(t *testing.T) (*httptest.Server, *[]apiCall, *sync.Mutex) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/activities":
 			w.WriteHeader(http.StatusCreated)
-		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/activity/"):
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/activities/"):
 			w.WriteHeader(http.StatusOK)
 		default:
 			w.WriteHeader(http.StatusNotFound)
@@ -339,7 +339,7 @@ func waitForCalls(t *testing.T, calls *[]apiCall, mu *sync.Mutex, minCalls int, 
 // findUpdate searches PW API calls for an UpdateActivity with the given state.
 func findUpdate(calls []apiCall, state string) *pushward.UpdateRequest {
 	for _, c := range calls {
-		if c.Method == http.MethodPatch && strings.HasPrefix(c.Path, "/activity/") {
+		if c.Method == http.MethodPatch && strings.HasPrefix(c.Path, "/activities/") {
 			var req pushward.UpdateRequest
 			json.Unmarshal(c.Body, &req)
 			if req.State == state {

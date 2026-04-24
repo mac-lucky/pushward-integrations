@@ -105,20 +105,23 @@ func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex
 			return
 		}
 
+		// POST /activities is an upsert — always 201, never 409 for duplicate
+		// slug. X-Resource-Action distinguishes the two cases.
 		mu.Lock()
-		defer mu.Unlock()
+		action := "created"
 		if slugs[req.Slug] {
-			respondError(w, http.StatusConflict, "activity already exists")
-			return
+			action = "updated"
 		}
 		slugs[req.Slug] = true
+		mu.Unlock()
+		w.Header().Set("X-Resource-Action", action)
 		w.WriteHeader(http.StatusCreated)
 	})
 
-	mux.HandleFunc("PATCH /activity/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("PATCH /activities/", func(w http.ResponseWriter, r *http.Request) {
 		body := recordCall(&calls, &mu, r)
 
-		slug := strings.TrimPrefix(r.URL.Path, "/activity/")
+		slug := strings.TrimPrefix(r.URL.Path, "/activities/")
 		if slug == "" {
 			respondError(w, http.StatusBadRequest, "missing slug")
 			return
@@ -211,9 +214,14 @@ func recordCall(calls *[]APICall, mu *sync.Mutex, r *http.Request) json.RawMessa
 }
 
 func respondError(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{"error": msg})
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"type":   "about:blank",
+		"title":  http.StatusText(code),
+		"status": code,
+		"detail": msg,
+	})
 }
 
 func validateCreateRequest(req *createRequest) error {

@@ -91,7 +91,9 @@ func TestCreateActivity(t *testing.T) {
 	}
 }
 
-func TestCreateActivity_DuplicateSlug(t *testing.T) {
+// POST /activities is an upsert — the server returns 201 on duplicate slug
+// with X-Resource-Action: updated, rather than 409.
+func TestCreateActivity_DuplicateSlug_Upserts(t *testing.T) {
 	srv, _, _ := testutil.MockPushWardServer(t)
 	createActivity(t, srv.URL, "dup-slug", "First")
 
@@ -101,8 +103,11 @@ func TestCreateActivity_DuplicateSlug(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = resp.Body.Close()
-	if resp.StatusCode != 409 {
-		t.Errorf("got status %d, want 409", resp.StatusCode)
+	if resp.StatusCode != 201 {
+		t.Errorf("got status %d, want 201", resp.StatusCode)
+	}
+	if action := resp.Header.Get("X-Resource-Action"); action != "updated" {
+		t.Errorf("got X-Resource-Action %q, want %q", action, "updated")
 	}
 }
 
@@ -189,7 +194,7 @@ func TestUpdateActivity(t *testing.T) {
 			srv, _, _ := testutil.MockPushWardServer(t)
 			createActivity(t, srv.URL, "test-app", "Test App")
 
-			req, err := http.NewRequest(http.MethodPatch, srv.URL+"/activity/test-app", strings.NewReader(tt.body))
+			req, err := http.NewRequest(http.MethodPatch, srv.URL+"/activities/test-app", strings.NewReader(tt.body))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -210,7 +215,7 @@ func TestUpdateActivity_NonExistentSlug(t *testing.T) {
 	srv, _, _ := testutil.MockPushWardServer(t)
 
 	body := `{"state":"ONGOING","content":{"template":"generic","progress":0.5}}`
-	req, err := http.NewRequest(http.MethodPatch, srv.URL+"/activity/no-such-app", strings.NewReader(body))
+	req, err := http.NewRequest(http.MethodPatch, srv.URL+"/activities/no-such-app", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +249,7 @@ func TestAPICallRecording(t *testing.T) {
 	createActivity(t, srv.URL, "rec-app", "Recorded App")
 
 	body := `{"state":"ONGOING","content":{"template":"generic","progress":0.5}}`
-	req, err := http.NewRequest(http.MethodPatch, srv.URL+"/activity/rec-app", strings.NewReader(body))
+	req, err := http.NewRequest(http.MethodPatch, srv.URL+"/activities/rec-app", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +277,7 @@ func TestAPICallRecording(t *testing.T) {
 		t.Errorf("call[0] slug: got %v, want rec-app", createBody["slug"])
 	}
 
-	if recorded[1].Method != "PATCH" || recorded[1].Path != "/activity/rec-app" {
-		t.Errorf("call[1]: got %s %s, want PATCH /activity/rec-app", recorded[1].Method, recorded[1].Path)
+	if recorded[1].Method != "PATCH" || recorded[1].Path != "/activities/rec-app" {
+		t.Errorf("call[1]: got %s %s, want PATCH /activities/rec-app", recorded[1].Method, recorded[1].Path)
 	}
 }

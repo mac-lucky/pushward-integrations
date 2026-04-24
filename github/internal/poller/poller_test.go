@@ -161,8 +161,8 @@ func TestScheduleEnd_TwoPhaseSuccess(t *testing.T) {
 	if got[0].Method != "PATCH" {
 		t.Errorf("phase 1: expected PATCH, got %s", got[0].Method)
 	}
-	if got[0].Path != "/activity/gh-repo" {
-		t.Errorf("phase 1: expected /activity/gh-repo, got %s", got[0].Path)
+	if got[0].Path != "/activities/gh-repo" {
+		t.Errorf("phase 1: expected /activities/gh-repo, got %s", got[0].Path)
 	}
 	var req1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req1)
@@ -652,8 +652,8 @@ func TestPollIdle_DiscoversAndTracksWorkflow(t *testing.T) {
 	if got[1].Method != "PATCH" {
 		t.Errorf("expected PATCH for update, got %s", got[1].Method)
 	}
-	if got[1].Path != "/activity/gh-repo" {
-		t.Errorf("expected /activity/gh-repo, got %s", got[1].Path)
+	if got[1].Path != "/activities/gh-repo" {
+		t.Errorf("expected /activities/gh-repo, got %s", got[1].Path)
 	}
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[1].Body, &req)

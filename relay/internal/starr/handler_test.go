@@ -440,8 +440,8 @@ func TestSonarrGrab(t *testing.T) {
 	}
 
 	// Call 3: ONGOING update
-	if got[2].Method != "PATCH" || got[2].Path != "/activity/sonarr-series-id-1" {
-		t.Errorf("call 2: expected PATCH /activity/sonarr-series-id-1, got %s %s", got[2].Method, got[2].Path)
+	if got[2].Method != "PATCH" || got[2].Path != "/activities/sonarr-series-id-1" {
+		t.Errorf("call 2: expected PATCH /activities/sonarr-series-id-1, got %s %s", got[2].Method, got[2].Path)
 	}
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[2].Body, &update)

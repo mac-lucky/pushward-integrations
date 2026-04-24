@@ -164,19 +164,31 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url string,
 			return nil
 		}
 
-		// Read body for error diagnostics (capped at 512 bytes).
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		// Read body for error diagnostics. Problem bodies routinely exceed
+		// a few hundred bytes (type URL + detail + errors array), so cap at
+		// 64 KiB — enough for any realistic Problem, still bounded.
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		_ = resp.Body.Close()
+
+		problem := parseProblem(respBody)
 
 		if resp.StatusCode == http.StatusTooManyRequests {
 			retryAfterOverride = parseRetryAfter(resp.Header.Get("Retry-After"))
-			slog.Warn("rate limited by PushWard", "url", url, "retry_after", retryAfterOverride)
+			if retryAfterOverride == 0 && problem.RetryAfterMs > 0 {
+				retryAfterOverride = time.Duration(problem.RetryAfterMs) * time.Millisecond
+			}
+			slog.Warn("rate limited by PushWard", "url", url, "retry_after", retryAfterOverride, "code", problem.Code)
 			lastErr = fmt.Errorf("rate limited (429)")
 			continue
 		}
-		lastErr = &HTTPError{StatusCode: resp.StatusCode}
+		lastErr = newHTTPError(resp.StatusCode, problem)
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			slog.Warn("PushWard client error", "status", resp.StatusCode, "url", url, "body", string(respBody))
+			slog.Warn("PushWard client error",
+				"status", resp.StatusCode,
+				"url", url,
+				"code", problem.Code,
+				"detail", problem.Detail,
+			)
 			// 4xx client errors are not retryable and don't trip the breaker.
 			c.recordResult(ctx, operation, attempts, start, lastErr, false)
 			return lastErr
@@ -187,16 +199,84 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url string,
 	return err
 }
 
+// Stable programmatic error codes emitted by pushward-server on the Problem
+// body. Callers branch on HTTPError.Code instead of the human-readable Detail.
+const (
+	ErrCodeActivityLimitExceeded = "activity.limit_exceeded"
+)
+
+// problem is the parsed RFC 9457 error body. It is an internal parsing
+// helper; callers inspect errors via *HTTPError, which carries the same
+// fields.
+type problem struct {
+	Type         string `json:"type,omitempty"`
+	Title        string `json:"title,omitempty"`
+	Status       int    `json:"status,omitempty"`
+	Detail       string `json:"detail,omitempty"`
+	Code         string `json:"code,omitempty"`
+	RetryAfterMs int64  `json:"retry_after_ms,omitempty"`
+}
+
+// parseProblem decodes an RFC 9457 Problem Details body, tolerating legacy
+// {"error":"..."} shapes by promoting `error` into Detail. Returns a zero
+// problem if the body is empty or not JSON. The legacy fallback is a
+// rollout-safety net; remove it once all deployed servers emit Problem
+// bodies.
+func parseProblem(body []byte) problem {
+	var p problem
+	if len(body) == 0 {
+		return p
+	}
+	_ = json.Unmarshal(body, &p)
+	if p.Detail == "" && p.Title == "" && p.Code == "" {
+		var legacy struct {
+			Error        string `json:"error"`
+			RetryAfterMs int64  `json:"retry_after_ms"`
+		}
+		if err := json.Unmarshal(body, &legacy); err == nil && legacy.Error != "" {
+			p.Detail = legacy.Error
+			if p.RetryAfterMs == 0 {
+				p.RetryAfterMs = legacy.RetryAfterMs
+			}
+		}
+	}
+	return p
+}
+
 // HTTPError is returned when PushWard responds with a non-2xx, non-retryable
 // status that is not handled by handleConflict. Callers can use errors.As to
-// inspect the status code (e.g. to surface 401/403 upstream instead of masking
-// as a 502).
+// inspect the status code and Problem Details fields (e.g. to surface 401/403
+// upstream instead of masking as a 502, or to branch on the stable `Code`
+// identifier).
 type HTTPError struct {
-	StatusCode int
+	StatusCode   int
+	Type         string // Problem.type (typically "about:blank")
+	Title        string // Problem.title
+	Detail       string // Problem.detail
+	Code         string // Problem.code — stable programmatic identifier
+	RetryAfterMs int64  // Problem.retry_after_ms (populated on 409/429)
+}
+
+func newHTTPError(status int, p problem) *HTTPError {
+	return &HTTPError{
+		StatusCode:   status,
+		Type:         p.Type,
+		Title:        p.Title,
+		Detail:       p.Detail,
+		Code:         p.Code,
+		RetryAfterMs: p.RetryAfterMs,
+	}
 }
 
 func (e *HTTPError) Error() string {
-	return fmt.Sprintf("unexpected status %d", e.StatusCode)
+	switch {
+	case e.Detail != "":
+		return fmt.Sprintf("status %d: %s", e.StatusCode, e.Detail)
+	case e.Title != "":
+		return fmt.Sprintf("status %d: %s", e.StatusCode, e.Title)
+	default:
+		return fmt.Sprintf("unexpected status %d", e.StatusCode)
+	}
 }
 
 var _ error = (*HTTPError)(nil)
@@ -222,8 +302,10 @@ func (c *Client) recordResult(ctx context.Context, operation string, attempts in
 	}
 }
 
-// CreateActivity creates a new activity via POST /activities.
-// Returns nil on 2xx or 409 "already exists". Returns error on 409 "limit".
+// CreateActivity creates (or refreshes) an activity via POST /activities.
+// The server upserts and always returns 201 with an X-Resource-Action header
+// distinguishing created vs. updated, so duplicate slugs are no longer a 409.
+// A 409 now signals only activity.limit_exceeded — surfaced as a typed error.
 func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority, endedTTL, staleTTL int) error {
 	return c.doWithRetry(ctx, "create", http.MethodPost, fmt.Sprintf("%s/activities", c.baseURL),
 		CreateActivityRequest{
@@ -234,39 +316,32 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 			StaleTTL: staleTTL,
 		},
 		func(body []byte) (bool, error) {
-			if bytes.Contains(body, []byte("limit")) {
+			p := parseProblem(body)
+			// bytes.Contains is a rollout-safety net for servers that have
+			// not yet migrated to RFC 9457 Problem bodies; remove once the
+			// Code path is universally available.
+			if p.Code == ErrCodeActivityLimitExceeded || bytes.Contains(body, []byte("limit")) {
 				return true, fmt.Errorf("activity limit reached")
 			}
-			return true, nil // Already exists, OK
+			return true, newHTTPError(http.StatusConflict, p)
 		},
 	)
 }
 
-// UpdateActivity sends a typed UpdateRequest via PATCH /activity/{slug}. Use it
-// for the seed (establishes template/icon/accent) and the final ENDED frame;
-// use PatchActivity for mid-sequence ticks.
+// UpdateActivity sends a typed UpdateRequest via PATCH /activities/{slug}. Use
+// it for the seed (establishes template/icon/accent) and the final ENDED
+// frame; use PatchActivity for mid-sequence ticks.
 func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequest) error {
-	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activity/%s", c.baseURL, slug), req, nil)
+	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activities/%s", c.baseURL, slug), req, nil)
 }
 
-// PatchActivity sends a typed RFC 7396 merge-patch body to PATCH /activity/{slug}.
-// Unset ContentPatch pointer fields are omitted and preserved server-side;
-// present fields overwrite.
+// PatchActivity sends a typed RFC 7396 merge-patch body to
+// PATCH /activities/{slug}. Unset ContentPatch pointer fields are omitted and
+// preserved server-side; present fields overwrite. To arm the AlarmKit alarm,
+// set ContentPatch.Alarm to BoolPtr(true); the server clears alarm on any
+// transition to ENDED.
 func (c *Client) PatchActivity(ctx context.Context, slug string, req PatchRequest) error {
-	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activity/%s", c.baseURL, slug), req, nil)
-}
-
-// SetActivityAlarm arms the iOS 26 AlarmKit alarm via PUT /activity/{slug}/alarm.
-// Dedicated endpoint because the alarm rings through silent mode and DND, so
-// accidental clears via a merge-patch field would be disruptive.
-func (c *Client) SetActivityAlarm(ctx context.Context, slug string) error {
-	return c.doWithRetry(ctx, "alarm-set", http.MethodPut, fmt.Sprintf("%s/activity/%s/alarm", c.baseURL, slug), nil, nil)
-}
-
-// ClearActivityAlarm clears the alarm via DELETE /activity/{slug}/alarm without
-// disturbing other content fields.
-func (c *Client) ClearActivityAlarm(ctx context.Context, slug string) error {
-	return c.doWithRetry(ctx, "alarm-clear", http.MethodDelete, fmt.Sprintf("%s/activity/%s/alarm", c.baseURL, slug), nil, nil)
+	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activities/%s", c.baseURL, slug), req, nil)
 }
 
 // SendNotification creates a notification record and optionally pushes an APNs alert.

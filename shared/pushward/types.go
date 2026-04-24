@@ -90,8 +90,8 @@ type Content struct {
 	WarningThreshold  *int    `json:"warning_threshold,omitempty"`
 	CompletionMessage string  `json:"completion_message,omitempty"`
 	// Alarm opts in to iOS 26 AlarmKit scheduling at end_date. Persists across
-	// partial updates until cleared via Client.ClearActivityAlarm or a
-	// transition to ENDED. iOS 26+ only.
+	// partial merge-patch updates until cleared by a transition to ENDED or by
+	// patching content.alarm to explicit null. iOS 26+ only.
 	Alarm *bool `json:"alarm,omitempty"`
 
 	// Gauge template: Value is float64
@@ -119,9 +119,10 @@ type CreateActivityRequest struct {
 	StaleTTL int    `json:"stale_ttl,omitempty"`
 }
 
-// UpdateRequest is the body for the full-content PATCH /activity/{slug} used
-// to seed a session or close it out with a final ENDED frame. For partial
-// updates mid-session, prefer Client.PatchActivity with a ContentPatch.
+// UpdateRequest is the body for the full-content PATCH /activities/{slug}
+// used to seed a session or close it out with a final ENDED frame. For
+// partial updates mid-session, prefer Client.PatchActivity with a
+// ContentPatch.
 type UpdateRequest struct {
 	State    string        `json:"state,omitempty"`
 	Content  Content       `json:"content"`
@@ -184,9 +185,9 @@ type ContentPatch struct {
 	History    map[string][]HistoryPoint `json:"history,omitempty"`
 }
 
-// PatchRequest is the typed body for PATCH /activity/{slug}. State is a plain
-// string with omitempty so that tick updates can leave it unset and rely on
-// the server preserving the stored state.
+// PatchRequest is the typed body for PATCH /activities/{slug}. State is a
+// plain string with omitempty so that tick updates can leave it unset and
+// rely on the server preserving the stored state.
 type PatchRequest struct {
 	State    string        `json:"state,omitempty"`
 	Content  *ContentPatch `json:"content,omitempty"`

@@ -17,8 +17,8 @@ HTTP client for the PushWard server API with built-in retry logic.
 | Function | Description |
 |----------|-------------|
 | `NewClient(baseURL, apiKey string) *Client` | Create a client (10s HTTP timeout, Bearer auth) |
-| `CreateActivity(ctx, slug, name string, priority, endedTTL, staleTTL int) error` | `POST /activities` — idempotent (409 "already exists" is OK, 409 "limit" returns error) |
-| `UpdateActivity(ctx, slug string, req UpdateRequest) error` | `PATCH /activity/{slug}` |
+| `CreateActivity(ctx, slug, name string, priority, endedTTL, staleTTL int) error` | `POST /activities` — server upserts and always returns 201; 409 is surfaced only for `activity.limit_exceeded` |
+| `UpdateActivity(ctx, slug string, req UpdateRequest) error` | `PATCH /activities/{slug}` |
 
 Retry behavior (up to 5 attempts):
 - **5xx / network errors** — exponential backoff with jitter (capped at 30s)
@@ -31,7 +31,7 @@ Retry behavior (up to 5 attempts):
 |------|-------------|
 | `Content` | Superset of all content fields across integrations (template, progress, state, icon, steps, URLs, severity, etc.) |
 | `CreateActivityRequest` | Body for `POST /activities` (slug, name, priority, ended_ttl, stale_ttl) |
-| `UpdateRequest` | Body for `PATCH /activity/{slug}` (state + content) |
+| `UpdateRequest` | Body for `PATCH /activities/{slug}` (state + content) |
 | `StateOngoing` / `StateEnded` | Activity state constants (`"ONGOING"`, `"ENDED"`) |
 | `IntPtr(v int) *int` | Helper for optional int fields |
 | `Int64Ptr(v int64) *int64` | Helper for optional int64 fields |

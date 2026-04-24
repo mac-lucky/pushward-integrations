@@ -10,7 +10,7 @@ import (
 
 func patchActivity(t *testing.T, url, slug, body string) int {
 	t.Helper()
-	req, err := http.NewRequest(http.MethodPatch, url+"/activity/"+slug, strings.NewReader(body))
+	req, err := http.NewRequest(http.MethodPatch, url+"/activities/"+slug, strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -341,8 +341,8 @@ func TestCleanup_SendsEndedUpdate(t *testing.T) {
 	if got[0].Method != "PATCH" {
 		t.Errorf("expected PATCH, got %s", got[0].Method)
 	}
-	if got[0].Path != "/activity/sabnzbd" {
-		t.Errorf("expected /activity/sabnzbd, got %s", got[0].Path)
+	if got[0].Path != "/activities/sabnzbd" {
+		t.Errorf("expected /activities/sabnzbd, got %s", got[0].Path)
 	}
 
 	var req pushward.UpdateRequest
@@ -465,8 +465,8 @@ func TestTrackingLifecycle_Download_PP_Complete(t *testing.T) {
 
 	// Last call should be PATCH with ENDED
 	last := got[len(got)-1]
-	if last.Method != "PATCH" || last.Path != "/activity/sabnzbd" {
-		t.Errorf("last call: expected PATCH /activity/sabnzbd, got %s %s", last.Method, last.Path)
+	if last.Method != "PATCH" || last.Path != "/activities/sabnzbd" {
+		t.Errorf("last call: expected PATCH /activities/sabnzbd, got %s %s", last.Method, last.Path)
 	}
 	var lastReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, last.Body, &lastReq)

@@ -35,7 +35,7 @@ func newMockPWServer() *mockPWServer {
 			m.mu.Unlock()
 			w.WriteHeader(http.StatusCreated)
 
-		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/activity/"):
+		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/activities/"):
 			var req pushward.UpdateRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
 			m.mu.Lock()
