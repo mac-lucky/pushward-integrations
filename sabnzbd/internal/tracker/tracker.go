@@ -696,7 +696,7 @@ func backoffDuration(n int, base, maxBackoff time.Duration) time.Duration {
 	if d > maxBackoff || d <= 0 {
 		d = maxBackoff
 	}
-	jitter := time.Duration(rand.Float64()*0.2*float64(d)) - d/10
+	jitter := time.Duration(rand.Float64()*0.2*float64(d)) - d/10 // #nosec G404 -- backoff jitter doesn't need cryptographic randomness
 	d += jitter
 	if d < base {
 		d = base
