@@ -98,8 +98,9 @@ func main() {
 	}
 
 	slog.Info("shutting down")
-	h.WaitIdle()
 	p.StopAll()
+	h.WaitIdle()
 	p.Wait()
+	h.WaitBackground()
 	slog.Info("shutdown complete")
 }

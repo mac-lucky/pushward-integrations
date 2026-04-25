@@ -117,10 +117,12 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url string,
 			}
 			retryAfterOverride = 0
 			slog.Warn("retrying PushWard request", "method", method, "url", url, "attempt", attempt+1, "backoff", backoff)
+			retryTimer := time.NewTimer(backoff)
 			select {
 			case <-ctx.Done():
+				retryTimer.Stop()
 				return ctx.Err()
-			case <-time.After(backoff):
+			case <-retryTimer.C:
 			}
 		}
 

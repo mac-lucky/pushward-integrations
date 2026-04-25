@@ -14,9 +14,9 @@
       },
       "startsAt": "2026-03-15T06:50:40Z",
       "endsAt": "0001-01-01T00:00:00Z",
-      "generatorURL": "http://localhost:3000/alerting/grafana/test-cpu-alert/view?orgId=1",
+      "generatorURL": "https://grafana.example.com/alerting/grafana/test-cpu-alert/view?orgId=1",
       "fingerprint": "8ac1e3c26c70c30f",
-      "silenceURL": "http://localhost:3000/alerting/silence/new?alertmanager=grafana&matcher=__alert_rule_uid__%3Dtest-cpu-alert&matcher=severity%3Dcritical&orgId=1",
+      "silenceURL": "https://grafana.example.com/alerting/silence/new?alertmanager=grafana&matcher=__alert_rule_uid__%3Dtest-cpu-alert&matcher=severity%3Dcritical&orgId=1",
       "dashboardURL": "",
       "panelURL": "",
       "values": {
@@ -34,7 +34,7 @@
   "commonAnnotations": {
     "summary": "Test CPU alert"
   },
-  "externalURL": "http://localhost:3000/",
+  "externalURL": "https://grafana.example.com/",
   "version": "1",
   "groupKey": "{}:{}",
   "truncatedAlerts": 0,

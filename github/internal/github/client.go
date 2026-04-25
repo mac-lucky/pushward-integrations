@@ -59,10 +59,12 @@ func (c *Client) waitForRateLimit(ctx context.Context) error {
 	if remaining >= 0 && remaining <= rateLimitBuffer && time.Now().Before(resetAt) {
 		wait := time.Until(resetAt)
 		slog.Warn("rate limit low, waiting for reset", "remaining", remaining, "wait", wait.Round(time.Second))
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return ctx.Err()
-		case <-time.After(wait):
+		case <-timer.C:
 		}
 	}
 	return nil
@@ -80,10 +82,12 @@ func (c *Client) doWithRetry(ctx context.Context, url, operation string) ([]byte
 		if attempt > 0 {
 			backoff := min(time.Second<<(attempt-1), 30*time.Second)
 			slog.Warn("retrying GitHub API call", "operation", operation, "attempt", attempt+1, "backoff", backoff)
+			timer := time.NewTimer(backoff)
 			select {
 			case <-ctx.Done():
+				timer.Stop()
 				return nil, ctx.Err()
-			case <-time.After(backoff):
+			case <-timer.C:
 			}
 		}
 
@@ -101,10 +105,12 @@ func (c *Client) doWithRetry(ctx context.Context, url, operation string) ([]byte
 					return nil, fmt.Errorf("%s: rate limit retries exceeded: %w", operation, err)
 				}
 				slog.Warn("rate limited by GitHub, waiting", "operation", operation, "retry_after", rle.retryAfter)
+				rateLimitTimer := time.NewTimer(rle.retryAfter)
 				select {
 				case <-ctx.Done():
+					rateLimitTimer.Stop()
 					return nil, ctx.Err()
-				case <-time.After(rle.retryAfter):
+				case <-rateLimitTimer.C:
 				}
 				attempt-- // don't consume a normal retry slot
 				continue
@@ -191,7 +197,9 @@ func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]Workflow
 		return nil, fmt.Errorf("invalid repo format %q, expected owner/repo", repo)
 	}
 
-	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?status=in_progress&per_page=5", c.baseURL, parts[0], parts[1])
+	// per_page=50 caps memory while covering concurrent workflows on busy repos.
+	// The poller selects only the most recent run, so ordering is stable.
+	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?status=in_progress&per_page=50", c.baseURL, parts[0], parts[1])
 
 	body, err := c.doWithRetry(ctx, url, "requesting workflow runs")
 	if err != nil {

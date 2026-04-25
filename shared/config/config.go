@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -31,10 +32,12 @@ func LoadYAML(path string, target any) error {
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("reading config: %w", err)
 	}
-	if err == nil {
-		if err := yaml.Unmarshal(data, target); err != nil {
-			return fmt.Errorf("parsing config: %w", err)
-		}
+	if os.IsNotExist(err) {
+		slog.Info("config file not found, using defaults and env vars", "path", path)
+		return nil
+	}
+	if err := yaml.Unmarshal(data, target); err != nil {
+		return fmt.Errorf("parsing config: %w", err)
 	}
 	return nil
 }

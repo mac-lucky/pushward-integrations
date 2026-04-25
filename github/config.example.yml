@@ -1,6 +1,6 @@
 github:
   token: ""           # or set PUSHWARD_GITHUB_TOKEN
-  owner: "mac-lucky"  # or set PUSHWARD_GITHUB_OWNER — auto-discovers all repos
+  owner: "your-github-username"  # or set PUSHWARD_GITHUB_OWNER — auto-discovers all repos
   repos:              # or set PUSHWARD_GITHUB_REPOS — optional when owner is set
     # - "other-org/some-repo"  # add repos outside owner if needed
 

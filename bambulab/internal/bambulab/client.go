@@ -63,7 +63,8 @@ func (c *Client) Connect() error {
 
 	opts := mqtt.NewClientOptions().
 		AddBroker(broker).
-		SetClientID(fmt.Sprintf("pushward-bambulab-%d", time.Now().UnixMilli())).
+		SetClientID(fmt.Sprintf("pushward-bambulab-%s", c.serial)).
+		SetCleanSession(false).
 		SetUsername("bblp").
 		SetPassword(c.accessCode).
 		SetKeepAlive(60 * time.Second).
@@ -75,9 +76,14 @@ func (c *Client) Connect() error {
 		}).
 		SetOnConnectHandler(func(client mqtt.Client) {
 			slog.Info("MQTT connected, subscribing", "topic", topic)
-			if token := client.Subscribe(topic, 0, c.onMessage); token.Wait() && token.Error() != nil {
-				slog.Error("failed to subscribe", "topic", topic, "error", token.Error())
+			if token := client.Subscribe(topic, 1, c.onMessage); token.Wait() && token.Error() != nil {
+				slog.Error("failed to subscribe, disconnecting", "topic", topic, "error", token.Error())
+				go client.Disconnect(0)
+				return
 			}
+			// Re-request full state on every connect (including reconnects) so
+			// delta-only printers (P1/A1) don't hold stale MergedState.
+			c.RequestStatus()
 		})
 
 	c.mqttClient = mqtt.NewClient(opts)
@@ -89,8 +95,6 @@ func (c *Client) Connect() error {
 		return fmt.Errorf("MQTT connect: %w", token.Error())
 	}
 
-	// Request full status to populate initial state
-	c.RequestStatus()
 	return nil
 }
 
@@ -138,9 +142,12 @@ func (c *Client) UpdateCh() <-chan struct{} {
 // RequestStatus sends a push_status request to get a full state refresh.
 // Useful when joining mid-print (especially for P1/A1 delta-only printers).
 func (c *Client) RequestStatus() {
+	if c.mqttClient == nil {
+		return
+	}
 	topic := fmt.Sprintf("device/%s/request", c.serial)
 	payload := `{"pushing":{"command":"pushall","sequence_id":"0"}}`
-	if token := c.mqttClient.Publish(topic, 0, false, payload); token.Wait() && token.Error() != nil {
+	if token := c.mqttClient.Publish(topic, 1, false, payload); token.Wait() && token.Error() != nil {
 		slog.Warn("failed to request status", "error", token.Error())
 	}
 }

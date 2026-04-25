@@ -200,8 +200,8 @@ func (t *Tracker) finishActivity(ctx context.Context, state *bambulab.MergedStat
 	t.endTimers.Reset(endDelay, func() {
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(parent, 30*time.Second)
+		defer cancel1()
 		t.send(ctx1, 1.0, "Complete", "checkmark.circle.fill", pushward.ColorGreen, nil, subtitle, pushward.StateOngoing)
-		cancel1()
 		slog.Info("two-phase end: sent ONGOING with final content", "display_time", displayTime)
 
 		// Phase 2: ENDED
@@ -232,8 +232,8 @@ func (t *Tracker) failActivity(ctx context.Context, state *bambulab.MergedState)
 	t.endTimers.Reset(endDelay, func() {
 		// Phase 1: ONGOING with failure content
 		ctx1, cancel1 := context.WithTimeout(parent, 30*time.Second)
+		defer cancel1()
 		t.send(ctx1, progress, "Failed", "xmark.circle.fill", pushward.ColorRed, nil, subtitle, pushward.StateOngoing)
-		cancel1()
 		slog.Info("two-phase end: sent ONGOING with failure content", "display_time", displayTime)
 
 		// Phase 2: ENDED

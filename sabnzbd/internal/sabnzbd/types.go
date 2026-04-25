@@ -15,6 +15,7 @@ type Queue struct {
 
 type QueueSlot struct {
 	Filename string `json:"filename"`
+	NzoID    string `json:"nzo_id"`
 }
 
 type HistoryResponse struct {
@@ -30,4 +31,5 @@ type HistorySlot struct {
 	Name         string `json:"name"`
 	Bytes        int64  `json:"bytes"`
 	DownloadTime int    `json:"download_time"`
+	Completed    int64  `json:"completed"` // Unix timestamp when download completed
 }

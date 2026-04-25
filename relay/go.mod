@@ -90,3 +90,4 @@ require (
 )
 
 replace github.com/mac-lucky/pushward-integrations/shared => ../shared
+

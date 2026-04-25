@@ -17,7 +17,14 @@ import (
 )
 
 func init() {
-	enderRetryDelay = 10 * time.Millisecond
+	SetRetryDelay(10 * time.Millisecond)
+}
+
+func newTestEnder(pool *client.Pool, store state.Store) *Ender {
+	return NewEnder(pool, store, "test", EndConfig{
+		EndDelay:       1 * time.Hour,
+		EndDisplayTime: 1 * time.Hour,
+	})
 }
 
 func TestUpdateWithRetry_SucceedsFirstAttempt(t *testing.T) {
@@ -28,10 +35,12 @@ func TestUpdateWithRetry_SucceedsFirstAttempt(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	pool := client.NewPool(srv.URL, nil)
+	e := newTestEnder(pool, nil)
 	cl := pushward.NewClient(srv.URL, "test-key")
 	req := pushward.UpdateRequest{State: pushward.StateOngoing}
 
-	err := updateWithRetry(cl, "slug-1", req, 5*time.Second)
+	err := e.updateWithRetry(cl, "slug-1", req, 5*time.Second)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)
 	}
@@ -52,10 +61,12 @@ func TestUpdateWithRetry_RetriesOnFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	pool := client.NewPool(srv.URL, nil)
+	e := newTestEnder(pool, nil)
 	cl := pushward.NewClient(srv.URL, "test-key")
 	req := pushward.UpdateRequest{State: pushward.StateEnded}
 
-	err := updateWithRetry(cl, "slug-2", req, 5*time.Second)
+	err := e.updateWithRetry(cl, "slug-2", req, 5*time.Second)
 	if err != nil {
 		t.Fatalf("expected success on retry, got %v", err)
 	}
@@ -72,10 +83,12 @@ func TestUpdateWithRetry_FailsBothAttempts(t *testing.T) {
 	}))
 	defer srv.Close()
 
+	pool := client.NewPool(srv.URL, nil)
+	e := newTestEnder(pool, nil)
 	cl := pushward.NewClient(srv.URL, "test-key")
 	req := pushward.UpdateRequest{State: pushward.StateOngoing}
 
-	err := updateWithRetry(cl, "slug-3", req, 5*time.Second)
+	err := e.updateWithRetry(cl, "slug-3", req, 5*time.Second)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}

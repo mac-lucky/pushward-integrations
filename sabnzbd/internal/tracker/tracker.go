@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"math/rand/v2"
 	"net/http"
 	"strconv"
 	"strings"
@@ -291,6 +292,8 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	t.lastSubtitle = ""
 	t.lastSendTime = time.Time{}
 
+	sessionStart := time.Now()
+
 	// Ensure activity exists (no ended_ttl so the slug persists)
 	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
 	if err := t.pw.CreateActivity(ctx, slug, "SABnzbd", t.cfg.PushWard.Priority, 0, staleTTL); err != nil {
@@ -306,7 +309,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		return
 	}
 
-	if !t.waitForQueueActive(ctx, 60) {
+	if !t.waitForQueueActive(ctx, 12) {
 		slog.Warn("SABnzbd never started downloading, giving up")
 		t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", pushward.ColorGreen, nil, "", pushward.StateEnded, nil)
 		return
@@ -332,8 +335,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 
 	ppSecs := int(totalPPElapsed.Seconds())
 
-	// Read stats from SABnzbd history API instead of calculating locally
-	totalBytes, totalDownloadTime := t.getCompletedStats(ctx)
+	totalBytes, totalDownloadTime, latestName := t.getCompletedSummary(ctx, sessionStart)
 	totalMB := float64(totalBytes) / (1024 * 1024)
 
 	avgSpeed := float64(0)
@@ -355,7 +357,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	}
 	stateStr := strings.Join(stateParts, " · ")
 
-	subtitle := text.Truncate(t.getCompletedName(ctx), 30)
+	subtitle := text.Truncate(latestName, 30)
 
 	slog.Info("complete", "total_mb", totalMB, "pp_secs", ppSecs, "avg_speed_mb", avgSpeed, "state", stateStr, "subtitle", subtitle)
 
@@ -415,26 +417,35 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 // waitForQueueActive polls the queue for up to maxPolls iterations waiting for
 // an active download. Returns true if the queue became active.
 func (t *Tracker) waitForQueueActive(ctx context.Context, maxPolls int) bool {
+	interval := t.cfg.Polling.Interval
+	maxBackoff := 5 * interval
+	consecutiveErrs := 0
+
+	timer := time.NewTimer(0) // fire immediately on first iteration
+	defer timer.Stop()
+
 	for i := 0; i < maxPolls; i++ {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-timer.C:
+		}
+
 		queue, err := t.sab.GetQueue(ctx)
 		if err != nil {
-			slog.Warn("failed to fetch queue", "error", err)
-			select {
-			case <-ctx.Done():
-				return false
-			case <-time.After(t.cfg.Polling.Interval):
-			}
+			consecutiveErrs++
+			backoff := backoffDuration(consecutiveErrs, interval, maxBackoff)
+			slog.Warn("failed to fetch queue", "error", err, "backoff", backoff)
+			timer.Reset(backoff)
 			continue
 		}
+		consecutiveErrs = 0
+
 		mb, _ := strconv.ParseFloat(queue.MB, 64)
 		if queue.Status != "Idle" && mb > 0 {
 			return true
 		}
-		select {
-		case <-ctx.Done():
-			return false
-		case <-time.After(t.cfg.Polling.Interval):
-		}
+		timer.Reset(interval)
 	}
 	return false
 }
@@ -443,26 +454,34 @@ func (t *Tracker) waitForQueueActive(ctx context.Context, maxPolls int) bool {
 func (t *Tracker) trackDownloads(ctx context.Context) {
 	slog.Info("tracking downloads")
 
+	interval := t.cfg.Polling.Interval
+	maxBackoff := 5 * interval
+	consecutiveErrs := 0
+
+	timer := time.NewTimer(0) // fire immediately on first iteration
+	defer timer.Stop()
+
 	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+
 		queue, err := t.sab.GetQueue(ctx)
 		if err != nil {
-			slog.Warn("failed to fetch queue", "error", err)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(t.cfg.Polling.Interval):
-			}
+			consecutiveErrs++
+			backoff := backoffDuration(consecutiveErrs, interval, maxBackoff)
+			slog.Warn("failed to fetch queue", "error", err, "backoff", backoff)
+			timer.Reset(backoff)
 			continue
 		}
+		consecutiveErrs = 0
 
 		if !t.sendDownloadProgress(ctx, queue) {
 			break
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(t.cfg.Polling.Interval):
-		}
+		timer.Reset(interval)
 	}
 
 	slog.Info("downloads finished")
@@ -475,7 +494,16 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 	t.send(ctx, 1.0, "Unpacking...", "archivebox", pushward.ColorOrange, nil, "", pushward.StateOngoing, nil)
 	ppStart := time.Now()
 
+	timer := time.NewTimer(t.cfg.Polling.Interval)
+	defer timer.Stop()
+
 	for {
+		select {
+		case <-ctx.Done():
+			return time.Since(ppStart)
+		case <-timer.C:
+		}
+
 		ppStatus, ppName := t.getPPStatus(ctx)
 		if ppStatus == "" {
 			break
@@ -490,11 +518,7 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 			t.send(ctx, 1.0, stateStr, icon, pushward.ColorOrange, nil, subtitle, pushward.StateOngoing, nil)
 			t.recordSent(1.0, 0, ppStatus, subtitle)
 		}
-		select {
-		case <-ctx.Done():
-			return time.Since(ppStart)
-		case <-time.After(t.cfg.Polling.Interval):
-		}
+		timer.Reset(t.cfg.Polling.Interval)
 	}
 
 	elapsed := time.Since(ppStart)
@@ -604,35 +628,27 @@ func (t *Tracker) getPPStatus(ctx context.Context) (string, string) {
 	return "", ""
 }
 
-// getCompletedStats reads the SABnzbd history API and returns aggregate bytes
-// and download time (seconds) for recently completed slots.
-func (t *Tracker) getCompletedStats(ctx context.Context) (totalBytes int64, totalDownloadTime int) {
+// getCompletedSummary reads the SABnzbd history API once and returns aggregate
+// bytes, download time (seconds), and the most recently completed item's name
+// for slots completed in the current session.
+func (t *Tracker) getCompletedSummary(ctx context.Context, sessionStart time.Time) (totalBytes int64, totalDownloadTime int, latestName string) {
 	history, err := t.sab.GetHistory(ctx, 10)
 	if err != nil {
 		slog.Warn("failed to fetch history for stats", "error", err)
-		return 0, 0
+		return 0, 0, ""
 	}
+	cutoff := sessionStart.Unix()
 	for _, slot := range history.Slots {
-		if slot.Status == "Completed" {
-			totalBytes += slot.Bytes
-			totalDownloadTime += slot.DownloadTime
+		if slot.Status != "Completed" || slot.Completed < cutoff {
+			continue
+		}
+		totalBytes += slot.Bytes
+		totalDownloadTime += slot.DownloadTime
+		if latestName == "" {
+			latestName = slot.Name
 		}
 	}
 	return
-}
-
-// getCompletedName returns the name of the most recently completed history item.
-func (t *Tracker) getCompletedName(ctx context.Context) string {
-	history, err := t.sab.GetHistory(ctx, 5)
-	if err != nil {
-		return ""
-	}
-	for _, slot := range history.Slots {
-		if slot.Status == "Completed" {
-			return slot.Name
-		}
-	}
-	return ""
 }
 
 func parseTimeLeft(timeleft string) *int {
@@ -667,4 +683,23 @@ func formatSize(mb float64) string {
 		return fmt.Sprintf("%.1f GB", mb/1024)
 	}
 	return fmt.Sprintf("%.0f MB", mb)
+}
+
+// backoffDuration returns an exponentially increasing duration with ±10% jitter,
+// capped at maxBackoff. n is the number of consecutive errors (1-indexed).
+func backoffDuration(n int, base, maxBackoff time.Duration) time.Duration {
+	shift := n - 1
+	if shift > 10 {
+		shift = 10
+	}
+	d := base * (1 << shift)
+	if d > maxBackoff || d <= 0 {
+		d = maxBackoff
+	}
+	jitter := time.Duration(rand.Float64()*0.2*float64(d)) - d/10
+	d += jitter
+	if d < base {
+		d = base
+	}
+	return d
 }

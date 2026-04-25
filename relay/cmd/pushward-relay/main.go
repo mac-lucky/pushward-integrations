@@ -301,21 +301,19 @@ func main() {
 				slog.Error("metrics server failed", "error", err)
 			}
 		}()
+		defer func() {
+			metricsCtx, metricsCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer metricsCancel()
+			if err := metricsSrv.Shutdown(metricsCtx); err != nil {
+				slog.Error("metrics server shutdown error", "error", err)
+			}
+		}()
 	}
 
 	slog.Info("starting pushward-relay", "address", cfg.Server.Address)
 	if err := server.ListenAndServe(ctx, cfg.Server.Address, handler); err != nil {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
-	}
-
-	// Main server drained — shut down metrics server.
-	if metricsSrv != nil {
-		metricsCtx, metricsCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer metricsCancel()
-		if err := metricsSrv.Shutdown(metricsCtx); err != nil {
-			slog.Error("metrics server shutdown error", "error", err)
-		}
 	}
 
 	// Flush all pending ender timers (send ENDED immediately), then wait for in-flight callbacks.

@@ -95,6 +95,9 @@ func Load(path string) (*Config, error) {
 	if cfg.BambuLab.Serial == "" {
 		return nil, fmt.Errorf("bambulab.serial is required (set PUSHWARD_BAMBULAB_SERIAL)")
 	}
+	if cfg.Polling.UpdateInterval < 2*time.Second {
+		return nil, fmt.Errorf("polling.update_interval must be >= 2s (got %s)", cfg.Polling.UpdateInterval)
+	}
 	if err := cfg.PushWard.Validate(); err != nil {
 		return nil, err
 	}

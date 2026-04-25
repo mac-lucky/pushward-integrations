@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -507,7 +508,7 @@ func (h *Handler) buildAlertMetadata(a alert) map[string]string {
 	for _, k := range slices.Sorted(maps.Keys(a.Annotations)) {
 		meta.add("annotation_"+k, a.Annotations[k])
 	}
-	meta.add("starts_at", a.StartsAt)
+	meta.add("starts_at", normalizeTimestamp(a.StartsAt))
 	meta.add("silence_url", text.SanitizeURL(a.SilenceURL))
 	meta.add("generator_url", text.SanitizeURL(a.GeneratorURL))
 	meta.add("values", formatValues(a))
@@ -525,7 +526,7 @@ func (h *Handler) buildGroupedMetadata(g *alertGroup, representative alert) map[
 	meta.add("firing_count", strconv.Itoa(len(g.firing)))
 	meta.add("resolved_count", strconv.Itoa(len(g.resolved)))
 	meta.add("alertname", representative.Labels["alertname"])
-	meta.add("starts_at", representative.StartsAt)
+	meta.add("starts_at", normalizeTimestamp(representative.StartsAt))
 	meta.add("silence_url", text.SanitizeURL(representative.SilenceURL))
 	meta.add("generator_url", text.SanitizeURL(representative.GeneratorURL))
 
@@ -612,6 +613,22 @@ func formatAny(v any) string {
 		return strconv.FormatFloat(f, 'f', -1, 64)
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+// normalizeTimestamp parses an RFC3339 timestamp and returns it normalised to
+// UTC. Returns the original string if it cannot be parsed, so callers always
+// get something displayable. Uses RFC3339Nano because Grafana emits
+// fractional-second timestamps that time.RFC3339 rejects.
+func normalizeTimestamp(s string) string {
+	if s == "" {
+		return ""
+	}
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		slog.Warn("unparseable startsAt timestamp", "value", s)
+		return s
+	}
+	return t.UTC().Format(time.RFC3339Nano)
 }
 
 // commonLabelValue returns the label value if it is identical across all alerts, else "".

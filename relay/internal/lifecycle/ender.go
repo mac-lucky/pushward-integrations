@@ -12,13 +12,21 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
-// enderRetryDelay is the pause between the two outer attempts in updateWithRetry.
-// Tests override this via SetRetryDelay to keep execution fast.
-var enderRetryDelay = 5 * time.Second
+const defaultRetryDelay = 5 * time.Second
 
-// SetRetryDelay overrides the pause between outer retry attempts in
-// updateWithRetry. Intended for use in tests only.
-func SetRetryDelay(d time.Duration) { enderRetryDelay = d }
+var (
+	retryDelayMu      sync.RWMutex
+	packageRetryDelay = defaultRetryDelay
+)
+
+// SetRetryDelay overrides the default pause between outer retry attempts for
+// all subsequently created Enders. Intended for use in tests only to keep
+// execution fast. Safe to call concurrently.
+func SetRetryDelay(d time.Duration) {
+	retryDelayMu.Lock()
+	packageRetryDelay = d
+	retryDelayMu.Unlock()
+}
 
 // EnderProvider is implemented by handlers that own a lifecycle.Ender.
 type EnderProvider interface {
@@ -29,6 +37,15 @@ type EnderProvider interface {
 type EndConfig struct {
 	EndDelay       time.Duration
 	EndDisplayTime time.Duration
+}
+
+// EnderOption configures an Ender at construction time.
+type EnderOption func(*Ender)
+
+// WithRetryDelay sets the pause between the two outer attempts in updateWithRetry.
+// Primarily used in tests to keep execution fast.
+func WithRetryDelay(d time.Duration) EnderOption {
+	return func(e *Ender) { e.retryDelay = d }
 }
 
 // timerPair holds both phase-1 and phase-2 timers so StopTimer can cancel both.
@@ -48,25 +65,40 @@ type timerPair struct {
 // Phase 1 sends an ONGOING update with final content (visible on Dynamic Island).
 // Phase 2 sends an ENDED update after a display delay (dismisses the Live Activity).
 type Ender struct {
-	clients  *client.Pool
-	store    state.Store // nil when no state cleanup is needed
-	provider string
-	config   EndConfig
-	mu       sync.Mutex
-	timers   map[string]*timerPair
-	nextGen  uint64
-	wg       sync.WaitGroup
+	clients        *client.Pool
+	store          state.Store
+	provider       string
+	config         EndConfig
+	retryDelay     time.Duration
+	shutdownCtx    context.Context
+	shutdownCancel context.CancelFunc
+	mu             sync.Mutex
+	timers         map[string]*timerPair
+	nextGen        uint64
+	wg             sync.WaitGroup
 }
 
 // NewEnder creates a new Ender. Pass nil for store if no state cleanup is needed.
-func NewEnder(clients *client.Pool, store state.Store, provider string, cfg EndConfig) *Ender {
-	return &Ender{
-		clients:  clients,
-		store:    store,
-		provider: provider,
-		config:   cfg,
-		timers:   make(map[string]*timerPair),
+func NewEnder(clients *client.Pool, store state.Store, provider string, cfg EndConfig, opts ...EnderOption) *Ender {
+	retryDelayMu.RLock()
+	rd := packageRetryDelay
+	retryDelayMu.RUnlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	e := &Ender{
+		clients:        clients,
+		store:          store,
+		provider:       provider,
+		config:         cfg,
+		retryDelay:     rd,
+		shutdownCtx:    ctx,
+		shutdownCancel: cancel,
+		timers:         make(map[string]*timerPair),
 	}
+	for _, opt := range opts {
+		opt(e)
+	}
+	return e
 }
 
 // ScheduleEnd schedules a two-phase end for an activity:
@@ -105,7 +137,7 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 			State:   pushward.StateOngoing,
 			Content: content,
 		}
-		if err := updateWithRetry(cl, slug, ongoingReq, 30*time.Second); err != nil {
+		if err := e.updateWithRetry(cl, slug, ongoingReq, 30*time.Second); err != nil {
 			slog.Error("failed to update activity (end phase 1)", "slug", slug, "error", err)
 		} else {
 			slog.Info("updated activity (end phase 1)", "slug", slug, "state", pushward.StateOngoing)
@@ -125,7 +157,7 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 				State:   pushward.StateEnded,
 				Content: content,
 			}
-			if err := updateWithRetry(cl, slug, endedReq, 30*time.Second); err != nil {
+			if err := e.updateWithRetry(cl, slug, endedReq, 30*time.Second); err != nil {
 				slog.Error("failed to end activity (end phase 2)", "slug", slug, "error", err)
 			} else {
 				slog.Info("ended activity", "slug", slug, "state", content.State)
@@ -196,6 +228,8 @@ func (e *Ender) StopAll() {
 // update for each. Use this during graceful shutdown instead of StopAll to
 // ensure activities are properly ended before the process exits.
 func (e *Ender) FlushAll() {
+	e.shutdownCancel() // signal in-flight retry sleeps to bail early
+
 	e.mu.Lock()
 	pending := make([]*timerPair, 0, len(e.timers))
 	for key, tp := range e.timers {
@@ -251,19 +285,26 @@ func (e *Ender) Wait() {
 }
 
 // updateWithRetry attempts an UpdateActivity call and retries once after
-// enderRetryDelay on failure. Each UpdateActivity call already does up to 5
+// e.retryDelay on failure. Each UpdateActivity call already does up to 5
 // internal retries, so worst case is:
-// attempt (5 retries) → enderRetryDelay wait → attempt (5 retries).
-func updateWithRetry(cl *pushward.Client, slug string, req pushward.UpdateRequest, perAttemptTimeout time.Duration) error {
+// attempt (5 retries) → retryDelay wait → attempt (5 retries).
+// The retry sleep is interruptible via the ender's shutdown context.
+func (e *Ender) updateWithRetry(cl *pushward.Client, slug string, req pushward.UpdateRequest, perAttemptTimeout time.Duration) error {
 	ctx1, cancel1 := context.WithTimeout(context.Background(), perAttemptTimeout)
 	err := cl.UpdateActivity(ctx1, slug, req)
 	cancel1()
 	if err == nil {
 		return nil
 	}
-	slog.Warn("ender update failed, retrying", "slug", slug, "delay", enderRetryDelay, "error", err)
+	slog.Warn("ender update failed, retrying", "slug", slug, "delay", e.retryDelay, "error", err)
 
-	time.Sleep(enderRetryDelay)
+	timer := time.NewTimer(e.retryDelay)
+	select {
+	case <-timer.C:
+	case <-e.shutdownCtx.Done():
+		timer.Stop()
+		return err
+	}
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), perAttemptTimeout)
 	defer cancel2()

@@ -14,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/poller"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
@@ -24,6 +25,8 @@ const (
 	templateTimeline   = pushward.TemplateTimeline
 	defaultWarningIcon = "exclamationmark.triangle.fill"
 	resolvedIcon       = "checkmark.circle.fill"
+
+	activeAlertCap = 500 // max concurrent tracked alerts; new entries are dropped when full
 )
 
 // Config holds timeline display and lifecycle settings for the handler.
@@ -48,9 +51,11 @@ type Handler struct {
 	poller        *poller.Poller
 	cfg           Config
 
-	mu     sync.Mutex
-	active map[string]*alertState
-	wg     sync.WaitGroup // tracks in-flight async webhook processing
+	mu       sync.Mutex
+	active   map[string]*alertState
+	wg       sync.WaitGroup // tracks in-flight async webhook processing
+	bgWg     sync.WaitGroup // tracks sweeper/checker background goroutines
+	capDrops *syncx.DropCounter
 }
 
 type alertState struct {
@@ -87,6 +92,7 @@ func NewHandler(
 		poller:        p,
 		cfg:           cfg,
 		active:        make(map[string]*alertState),
+		capDrops:      syncx.NewDropCounter(100),
 	}
 	if p != nil {
 		p.SetUpdateCallback(h.recordPollerValues)
@@ -134,7 +140,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var payload webhookPayload
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&payload); err != nil {
-		slog.Warn("failed to decode webhook payload", "error", err)
+		slog.Warn("invalid webhook payload")
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -145,7 +151,10 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
-		ctx := context.WithoutCancel(r.Context())
+		// Use a bounded background context so slow Prometheus/PushWard calls
+		// can still be interrupted on shutdown rather than blocking indefinitely.
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
 		for _, a := range payload.Alerts {
 			switch a.Status {
 			case alertStatusFiring:
@@ -158,11 +167,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleFiring(ctx context.Context, a alert) {
+	if a.Fingerprint == "" {
+		slog.Warn("alert has empty fingerprint, skipping")
+		return
+	}
+
 	alertname := a.Labels["alertname"]
-	if alertname == "" {
+	// When alertname is empty, use the fingerprint as the map key to avoid
+	// collapsing unrelated anonymous alerts into a single activity.
+	mapKey := alertname
+	if mapKey == "" {
+		mapKey = a.Fingerprint
 		alertname = "Grafana Alert"
 	}
-	slug := makeSlug(alertname)
+	slug := makeSlug(mapKey)
 	logger := slog.With("alertname", alertname, "slug", slug, "fingerprint", a.Fingerprint)
 
 	seriesLabel := a.Annotations["pushward_series_label"]
@@ -170,10 +188,18 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	// Check-and-mark: reserve the slot before releasing the lock to prevent
 	// duplicate creates from concurrent webhooks.
 	h.mu.Lock()
-	existing := h.active[alertname]
+	existing := h.active[mapKey]
 	isNew := existing == nil
 	if isNew {
-		h.active[alertname] = &alertState{
+		if len(h.active) >= activeAlertCap {
+			h.mu.Unlock()
+			if n, shouldLog := h.capDrops.Drop(); shouldLog {
+				logger.Warn("active alert cap reached, dropping firing alert",
+					"cap", activeAlertCap, "total_dropped", n)
+			}
+			return
+		}
+		h.active[mapKey] = &alertState{
 			slug: slug, seriesLabel: seriesLabel, lastSeen: time.Now(),
 			fingerprints: map[string]struct{}{a.Fingerprint: {}},
 		}
@@ -190,16 +216,20 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 			int(h.cfg.CleanupDelay.Seconds()), int(h.cfg.StaleTimeout.Seconds()))
 		if err != nil {
 			h.mu.Lock()
-			delete(h.active, alertname)
+			delete(h.active, mapKey)
 			h.mu.Unlock()
 			logger.Error("failed to create activity", "error", err)
 			return
 		}
 		logger.Info("activity created")
 
+		// Re-check entry exists before writing — a concurrent resolved webhook
+		// could have deleted the entry between the unlock above and this lock.
 		h.mu.Lock()
-		h.active[alertname].expr = expr
-		h.active[alertname].refID = refID
+		if state, ok := h.active[mapKey]; ok {
+			state.expr = expr
+			state.refID = refID
+		}
 		h.mu.Unlock()
 	}
 
@@ -247,7 +277,7 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	// history on resolve.
 	if len(history) > 0 {
 		h.mu.Lock()
-		if state, ok := h.active[alertname]; ok {
+		if state, ok := h.active[mapKey]; ok {
 			state.lastValues = values
 		}
 		h.mu.Unlock()
@@ -260,15 +290,22 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 }
 
 func (h *Handler) handleResolved(ctx context.Context, a alert) {
+	if a.Fingerprint == "" {
+		slog.Warn("alert has empty fingerprint, skipping")
+		return
+	}
+
 	alertname := a.Labels["alertname"]
-	if alertname == "" {
+	mapKey := alertname
+	if mapKey == "" {
+		mapKey = a.Fingerprint
 		alertname = "Grafana Alert"
 	}
-	slug := makeSlug(alertname)
+	slug := makeSlug(mapKey)
 	logger := slog.With("alertname", alertname, "slug", slug, "fingerprint", a.Fingerprint)
 
 	h.mu.Lock()
-	state, exists := h.active[alertname]
+	state, exists := h.active[mapKey]
 	if !exists {
 		h.mu.Unlock()
 		return
@@ -288,7 +325,7 @@ func (h *Handler) handleResolved(ctx context.Context, a alert) {
 	seriesLabel := state.seriesLabel
 	expr := state.expr
 	lastValues := state.lastValues
-	delete(h.active, alertname)
+	delete(h.active, mapKey)
 	h.mu.Unlock()
 
 	h.poller.Stop(slug)
@@ -493,7 +530,9 @@ func (h *Handler) StartSweeper(ctx context.Context, maxAge time.Duration) {
 	if maxAge <= 0 {
 		return
 	}
+	h.bgWg.Add(1)
 	go func() {
+		defer h.bgWg.Done()
 		ticker := time.NewTicker(maxAge / 2)
 		defer ticker.Stop()
 		for {
@@ -528,7 +567,9 @@ func (h *Handler) StartAlertChecker(ctx context.Context, interval time.Duration)
 		return
 	}
 	slog.Info("alert state checker enabled", "interval", interval)
+	h.bgWg.Add(1)
 	go func() {
+		defer h.bgWg.Done()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -614,6 +655,10 @@ func (h *Handler) endAlertActivity(ctx context.Context, alertname string, state 
 
 // WaitIdle blocks until all in-flight async webhook goroutines complete.
 func (h *Handler) WaitIdle() { h.wg.Wait() }
+
+// WaitBackground blocks until the sweeper and alert-checker goroutines exit.
+// Call after the shutdown context is cancelled.
+func (h *Handler) WaitBackground() { h.bgWg.Wait() }
 
 func (h *Handler) activeAlerts() []string {
 	h.mu.Lock()

@@ -14,7 +14,7 @@ bambulab:
     #
     # 2. Skip verification entirely (accepts any cert). Used only when
     #    cert_fingerprint_sha256 is empty. Logs a warning at startup.
-    insecure_skip_verify: true
+    # insecure_skip_verify: true
 
 pushward:
   url: ""            # PushWard server URL (set PUSHWARD_URL)

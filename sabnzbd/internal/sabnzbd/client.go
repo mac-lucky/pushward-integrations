@@ -58,12 +58,12 @@ func (c *Client) GetQueue(ctx context.Context) (*Queue, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
 	var qr QueueResponse
-	if err := json.NewDecoder(resp.Body).Decode(&qr); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&qr); err != nil {
 		return nil, fmt.Errorf("decoding queue: %w", err)
 	}
 	return &qr.Queue, nil
@@ -89,12 +89,12 @@ func (c *Client) GetHistory(ctx context.Context, limit int) (*History, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		_, _ = io.Copy(io.Discard, resp.Body)
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
 		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
 	}
 
 	var hr HistoryResponse
-	if err := json.NewDecoder(resp.Body).Decode(&hr); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&hr); err != nil {
 		return nil, fmt.Errorf("decoding history: %w", err)
 	}
 	return &hr.History, nil

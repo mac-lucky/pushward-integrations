@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/config"
 	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/sabnzbd"
@@ -32,7 +33,8 @@ func main() {
 	defer cancel()
 
 	sab := sabnzbd.NewClient(cfg.SABnzbd.URL, cfg.SABnzbd.APIKey)
-	pw := pushward.NewClient(cfg.PushWard.URL, cfg.PushWard.APIKey)
+	pw := pushward.NewClient(cfg.PushWard.URL, cfg.PushWard.APIKey,
+		pushward.WithCircuitBreaker(pushward.NewCircuitBreaker(5, 30*time.Second)))
 	t := tracker.New(cfg, sab, pw)
 
 	mux := server.NewMux()

@@ -90,6 +90,9 @@ func Load(path string) (*Config, error) {
 	}
 
 	// Integration-specific validation
+	if cfg.Polling.Interval < time.Second {
+		return nil, fmt.Errorf("polling.interval must be at least 1s (got %v)", cfg.Polling.Interval)
+	}
 	if cfg.SABnzbd.URL == "" {
 		return nil, fmt.Errorf("sabnzbd.url is required (set PUSHWARD_SABNZBD_URL)")
 	}

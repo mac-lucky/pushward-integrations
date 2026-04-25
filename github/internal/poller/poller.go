@@ -11,6 +11,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/github/internal/config"
 	ghclient "github.com/mac-lucky/pushward-integrations/github/internal/github"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 type Poller struct {
@@ -25,6 +26,26 @@ type Poller struct {
 }
 
 const repoRefreshInterval = 5 * time.Minute
+
+// GitHub Actions job statuses and conclusions.
+const (
+	jobStatusCompleted  = "completed"
+	jobStatusInProgress = "in_progress"
+
+	conclusionFailure        = "failure"
+	conclusionCancelled      = "cancelled"
+	conclusionTimedOut       = "timed_out"
+	conclusionStartupFailure = "startup_failure"
+)
+
+// jobFailed reports whether a completed job's conclusion indicates failure.
+func jobFailed(conclusion string) bool {
+	switch conclusion {
+	case conclusionFailure, conclusionCancelled, conclusionTimedOut, conclusionStartupFailure:
+		return true
+	}
+	return false
+}
 
 func New(cfg *config.Config, gh *ghclient.Client, pw *pushward.Client) *Poller {
 	return &Poller{
@@ -167,7 +188,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		}
 
 		repoShort := repoName(repo)
-		slug := fmt.Sprintf("gh-%s", repoShort)
+		slug := text.SlugHash("gh", repo, 4)
 
 		slog.Info("workflow found", "repo", repo, "run_id", run.ID, "name", run.Name, "branch", run.HeadBranch, "slug", slug)
 
@@ -180,6 +201,12 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		}
 
 		p.mu.Lock()
+		// Guard against a concurrent phase-2 callback that may have inserted a
+		// newer entry while we were doing network I/O without the lock.
+		if cur, ok := p.tracked[repo]; ok && cur.endTimers == nil {
+			p.mu.Unlock()
+			continue
+		}
 		p.tracked[repo] = &trackedRun{
 			Repo:       repo,
 			RunID:      run.ID,
@@ -287,14 +314,14 @@ func computeSteps(jobs []ghclient.Job) stepInfo {
 		steps[si].count++
 
 		switch job.Status {
-		case "completed":
+		case jobStatusCompleted:
 			completedJobs++
 			steps[si].completed++
-			if job.Conclusion == "failure" || job.Conclusion == "cancelled" {
+			if jobFailed(job.Conclusion) {
 				steps[si].failed = true
 				anyFailed = true
 			}
-		case "in_progress":
+		case jobStatusInProgress:
 			steps[si].active = true
 			allCompleted = false
 		default: // queued
@@ -360,6 +387,16 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			p.mu.Unlock()
 			continue
 		}
+		// Evict runs that have been in_progress longer than the server's stale
+		// TTL plus a grace period — the server will have ended the activity but
+		// GitHub kept the run alive (e.g. a hung self-hosted runner). Without
+		// eviction the entry blocks new activity creation for this repo forever.
+		if !t.LastUpdate.IsZero() && time.Since(t.LastUpdate) > p.cfg.PushWard.StaleTimeout+30*time.Second {
+			delete(p.tracked, repo)
+			slog.Warn("evicted stale tracked run", "repo", repo, "run_id", t.RunID)
+			p.mu.Unlock()
+			continue
+		}
 		// Copy values needed for network calls
 		tRepo := t.Repo
 		tRunID := t.RunID
@@ -414,7 +451,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				color = pushward.ColorRed
 			}
 			slog.Info("workflow completed", "run_id", tRunID, "slug", tSlug, "conclusion", conclusion)
-			p.scheduleEnd(repo, pushward.Content{
+			p.scheduleEnd(ctx, repo, pushward.Content{
 				Template:     "steps",
 				Progress:     1.0,
 				State:        conclusion,
@@ -467,7 +504,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 //
 // This gives iOS time to register the push-update token after push-to-start,
 // and ensures the Dynamic Island shows the final state before dismissal.
-func (p *Poller) scheduleEnd(repo string, content pushward.Content) {
+func (p *Poller) scheduleEnd(ctx context.Context, repo string, content pushward.Content) {
 	p.mu.Lock()
 	t, ok := p.tracked[repo]
 	if !ok {
@@ -478,11 +515,15 @@ func (p *Poller) scheduleEnd(repo string, content pushward.Content) {
 	runID := t.RunID
 	endDelay := p.cfg.PushWard.EndDelay
 	displayTime := p.cfg.PushWard.EndDisplayTime
+	// Detach from the caller's context so delivery completes even after shutdown
+	// signals, while still inheriting any non-cancellation values (e.g. trace IDs).
+	detached := context.WithoutCancel(ctx)
 
 	tp := &timerPair{}
 	tp.phase1 = time.AfterFunc(endDelay, func() {
 		// Phase 1: ONGOING with final content
-		ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx1, cancel1 := context.WithTimeout(detached, 30*time.Second)
+		defer cancel1()
 		ongoingReq := pushward.UpdateRequest{
 			State:   pushward.StateOngoing,
 			Content: content,
@@ -492,7 +533,6 @@ func (p *Poller) scheduleEnd(repo string, content pushward.Content) {
 		} else {
 			slog.Info("updated activity", "slug", slug, "state", content.State)
 		}
-		cancel1()
 
 		// Phase 2: schedule ENDED after display time
 		p.mu.Lock()
@@ -501,7 +541,7 @@ func (p *Poller) scheduleEnd(repo string, content pushward.Content) {
 			return // cancelled between phases
 		}
 		tp.phase2 = time.AfterFunc(displayTime, func() {
-			ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
+			ctx2, cancel2 := context.WithTimeout(detached, 30*time.Second)
 			defer cancel2()
 			endedReq := pushward.UpdateRequest{
 				State:   pushward.StateEnded,

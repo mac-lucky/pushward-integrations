@@ -147,7 +147,7 @@ func TestScheduleEnd_TwoPhaseSuccess(t *testing.T) {
 		SecondaryURL: "https://github.com/owner/repo",
 	}
 
-	p.scheduleEnd("owner/repo", content)
+	p.scheduleEnd(context.Background(), "owner/repo", content)
 
 	// Wait for both phases to complete
 	time.Sleep(100 * time.Millisecond)
@@ -225,7 +225,7 @@ func TestScheduleEnd_TwoPhaseFailed(t *testing.T) {
 		SecondaryURL: "https://github.com/owner/repo",
 	}
 
-	p.scheduleEnd("owner/repo", content)
+	p.scheduleEnd(context.Background(), "owner/repo", content)
 	time.Sleep(100 * time.Millisecond)
 
 	got := testutil.GetCalls(calls, mu)
@@ -278,7 +278,7 @@ func TestScheduleEnd_CancelledByNewRun(t *testing.T) {
 		State:    "Success",
 	}
 
-	p.scheduleEnd("owner/repo", content)
+	p.scheduleEnd(context.Background(), "owner/repo", content)
 
 	// Simulate new run taking over: cancel the timer and replace the entry
 	time.Sleep(10 * time.Millisecond)
@@ -446,7 +446,7 @@ func TestScheduleEnd_ContentPreserved(t *testing.T) {
 		SecondaryURL: "https://github.com/owner/repo",
 	}
 
-	p.scheduleEnd("owner/repo", content)
+	p.scheduleEnd(context.Background(), "owner/repo", content)
 	time.Sleep(100 * time.Millisecond)
 
 	got := testutil.GetCalls(calls, mu)
@@ -652,8 +652,8 @@ func TestPollIdle_DiscoversAndTracksWorkflow(t *testing.T) {
 	if got[1].Method != "PATCH" {
 		t.Errorf("expected PATCH for update, got %s", got[1].Method)
 	}
-	if got[1].Path != "/activities/gh-repo" {
-		t.Errorf("expected /activities/gh-repo, got %s", got[1].Path)
+	if got[1].Path != "/activities/gh-65e817ee" {
+		t.Errorf("expected /activities/gh-65e817ee, got %s", got[1].Path)
 	}
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[1].Body, &req)
@@ -680,8 +680,8 @@ func TestPollIdle_DiscoversAndTracksWorkflow(t *testing.T) {
 	if tracked.RunID != 42 {
 		t.Errorf("expected RunID 42, got %d", tracked.RunID)
 	}
-	if tracked.Slug != "gh-repo" {
-		t.Errorf("expected slug gh-repo, got %s", tracked.Slug)
+	if tracked.Slug != "gh-65e817ee" {
+		t.Errorf("expected slug gh-65e817ee, got %s", tracked.Slug)
 	}
 	if tracked.maxTotalSteps != 2 {
 		t.Errorf("expected maxTotalSteps 2, got %d", tracked.maxTotalSteps)
@@ -1250,7 +1250,7 @@ func TestScheduleEnd_UnknownRepo(t *testing.T) {
 	}
 
 	// Should not panic when repo isn't tracked
-	p.scheduleEnd("nonexistent", pushward.Content{})
+	p.scheduleEnd(context.Background(), "nonexistent", pushward.Content{})
 }
 
 // --- Run tests ---

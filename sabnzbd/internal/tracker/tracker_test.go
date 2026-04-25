@@ -448,7 +448,7 @@ func TestTrackingLifecycle_Download_PP_Complete(t *testing.T) {
 
 	// Transition: PP done → completed
 	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "ubuntu-24.04", Bytes: 524288000, DownloadTime: 10}},
+		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "ubuntu-24.04", Bytes: 524288000, DownloadTime: 10, Completed: time.Now().Unix()}},
 	})
 
 	tr.Wait()
@@ -517,7 +517,7 @@ func TestResumeIfActive_ActiveDownload(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
 	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 104857600, DownloadTime: 5}},
+		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 104857600, DownloadTime: 5, Completed: time.Now().Unix()}},
 	})
 
 	tr.Wait()
@@ -548,7 +548,7 @@ func TestResumeIfActive_ActivePostProcessing(t *testing.T) {
 	// Transition: PP done
 	time.Sleep(50 * time.Millisecond)
 	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 104857600, DownloadTime: 5}},
+		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 104857600, DownloadTime: 5, Completed: time.Now().Unix()}},
 	})
 
 	tr.Wait()
@@ -677,7 +677,7 @@ func TestResumedTracking_SkipsTwoPhaseEnd(t *testing.T) {
 	// Queue idle from start so tracking ends immediately
 	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
 	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 104857600, DownloadTime: 5}},
+		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 104857600, DownloadTime: 5, Completed: time.Now().Unix()}},
 	})
 
 	cfg := testConfig()
@@ -909,7 +909,7 @@ func TestTimeline_FullLifecycle(t *testing.T) {
 	// Transition: download done → completed
 	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
 	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 524288000, DownloadTime: 10}},
+		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 524288000, DownloadTime: 10, Completed: time.Now().Unix()}},
 	})
 
 	tr.Wait()

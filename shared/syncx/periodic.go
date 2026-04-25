@@ -10,6 +10,7 @@ import (
 // Stop the goroutine with Stop() or by cancelling the context passed to
 // Start. The zero value is ready to use.
 type Periodic struct {
+	mu       sync.Mutex
 	cancel   context.CancelFunc
 	done     chan struct{}
 	stopOnce sync.Once
@@ -20,10 +21,13 @@ type Periodic struct {
 // context (derived from ctx) and should return promptly. Calling Start
 // more than once panics.
 func (p *Periodic) Start(ctx context.Context, interval time.Duration, fn func(context.Context)) {
+	p.mu.Lock()
 	if p.started {
+		p.mu.Unlock()
 		panic("syncx: Periodic.Start called twice")
 	}
 	p.started = true
+	p.mu.Unlock()
 	runCtx, cancel := context.WithCancel(ctx)
 	p.cancel = cancel
 	p.done = make(chan struct{})

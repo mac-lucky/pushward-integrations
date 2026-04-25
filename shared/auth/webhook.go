@@ -7,10 +7,15 @@ import (
 
 // RequireHeader returns middleware that rejects requests where the given
 // header does not match the expected value (constant-time comparison).
+// If expected is empty, all requests are rejected (fail-closed).
 func RequireHeader(header, expected string) func(http.Handler) http.Handler {
 	expectedBytes := []byte(expected)
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if len(expectedBytes) == 0 {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
 			got := []byte(r.Header.Get(header))
 			if subtle.ConstantTimeCompare(got, expectedBytes) != 1 {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
