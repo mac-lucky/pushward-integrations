@@ -340,7 +340,7 @@ func (h *Handler) buildSingleNotification(g *alertGroup) pushward.SendNotificati
 
 	h.setURL(&req, a)
 	if a.ImageURL != "" {
-		req.ImageURL = text.SanitizeURL(a.ImageURL)
+		req.ImageURL = text.SanitizeHTTPSURL(a.ImageURL)
 	}
 	req.Metadata = h.buildAlertMetadata(a)
 	return req
@@ -388,7 +388,7 @@ func (h *Handler) buildGroupedNotification(g *alertGroup) pushward.SendNotificat
 
 	h.setURL(&req, representative)
 	if representative.ImageURL != "" {
-		req.ImageURL = text.SanitizeURL(representative.ImageURL)
+		req.ImageURL = text.SanitizeHTTPSURL(representative.ImageURL)
 	}
 	req.Metadata = h.buildGroupedMetadata(g, representative)
 	return req
@@ -486,15 +486,16 @@ func allSummariesEqual(alerts []alert) bool {
 	return true
 }
 
-// setURL picks the first non-empty dashboard/panel/generator URL.
+// setURL picks the first https dashboard/panel/generator URL. The PushWard
+// server rejects notification URLs that are not https, so http-only Grafana
+// links (common in self-hosted setups behind a private reverse proxy) are
+// dropped here rather than triggering a 400 from the server.
 func (h *Handler) setURL(req *pushward.SendNotificationRequest, a alert) {
-	switch {
-	case a.DashboardURL != "":
-		req.URL = text.SanitizeURL(a.DashboardURL)
-	case a.PanelURL != "":
-		req.URL = text.SanitizeURL(a.PanelURL)
-	case a.GeneratorURL != "":
-		req.URL = text.SanitizeURL(a.GeneratorURL)
+	for _, candidate := range []string{a.DashboardURL, a.PanelURL, a.GeneratorURL} {
+		if u := text.SanitizeHTTPSURL(candidate); u != "" {
+			req.URL = u
+			return
+		}
 	}
 }
 

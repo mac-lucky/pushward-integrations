@@ -1141,6 +1141,79 @@ func TestStateDedup_GroupedSameWebhookTwice(t *testing.T) {
 	}
 }
 
+// TestNotificationURL_HTTPSOnly verifies that URLs and ImageURL on notifications
+// must be https. Self-hosted Grafana instances often emit http:// dashboardURL,
+// panelURL, generatorURL, and imageURL pointing at private hosts. The PushWard
+// server rejects non-https values, so the relay must drop them before sending.
+func TestNotificationURL_HTTPSOnly(t *testing.T) {
+	tests := []struct {
+		name         string
+		dashboardURL string
+		panelURL     string
+		generatorURL string
+		imageURL     string
+		wantURL      string
+		wantImageURL string
+	}{
+		{
+			name:         "all http, all dropped",
+			dashboardURL: "http://grafana.internal/d/abc",
+			panelURL:     "http://grafana.internal/d/abc?viewPanel=1",
+			generatorURL: "http://grafana.internal/alerting/abc/edit",
+			imageURL:     "http://grafana.internal/render/abc.png",
+			wantURL:      "",
+			wantImageURL: "",
+		},
+		{
+			name:         "https dashboard kept",
+			dashboardURL: "https://grafana.example.com/d/abc",
+			imageURL:     "https://grafana.example.com/render/abc.png",
+			wantURL:      "https://grafana.example.com/d/abc",
+			wantImageURL: "https://grafana.example.com/render/abc.png",
+		},
+		{
+			name:         "http dashboard skipped, https generator picked",
+			dashboardURL: "http://grafana.internal/d/abc",
+			generatorURL: "https://grafana.example.com/alerting/abc/edit",
+			wantURL:      "https://grafana.example.com/alerting/abc/edit",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, calls, mu, _ := setup(t)
+
+			payload := `{
+				"alerts": [{
+					"status": "firing",
+					"labels": {"alertname": "URLTest_` + tt.name + `", "severity": "critical"},
+					"annotations": {"summary": "test"},
+					"fingerprint": "` + tt.name + `",
+					"dashboardURL": "` + tt.dashboardURL + `",
+					"panelURL": "` + tt.panelURL + `",
+					"generatorURL": "` + tt.generatorURL + `",
+					"imageURL": "` + tt.imageURL + `"
+				}]
+			}`
+
+			sendWebhook(t, handler, payload)
+			recorded := testutil.GetCalls(calls, mu)
+			if len(recorded) != 1 {
+				t.Fatalf("expected 1 call, got %d", len(recorded))
+			}
+
+			var req pushward.SendNotificationRequest
+			testutil.UnmarshalBody(t, recorded[0].Body, &req)
+			if req.URL != tt.wantURL {
+				t.Errorf("URL: got %q, want %q", req.URL, tt.wantURL)
+			}
+			if req.ImageURL != tt.wantImageURL {
+				t.Errorf("ImageURL: got %q, want %q", req.ImageURL, tt.wantImageURL)
+			}
+		})
+	}
+}
+
 func TestSingleAlertPreservesCollapseID(t *testing.T) {
 	handler, calls, mu, _ := setup(t)
 
