@@ -166,7 +166,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 		Source:     "radarr",
 		Push:       h.shouldNotify("Grab"),
 		URL:        radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID),
-		ImageURL:   posterURL(p.Movie.Images),
+		Media:      pushward.MediaImage(posterURL(p.Movie.Images)),
 	}
 	meta := map[string]string{"quality": p.Release.Quality}
 	if p.Release.Indexer != "" {
@@ -271,7 +271,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 		Source:     "radarr",
 		Push:       h.shouldNotify("Download"),
 		URL:        radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID),
-		ImageURL:   posterURL(p.Movie.Images),
+		Media:      pushward.MediaImage(posterURL(p.Movie.Images)),
 	}
 	dlMeta := map[string]string{"quality": p.MovieFile.Quality}
 	if p.MovieFile.Size > 0 {
@@ -375,7 +375,7 @@ func (h *Handler) handleRadarrRename(ctx context.Context, userKey string, log *s
 		Title: "Radarr", Subtitle: title, Body: "Renamed",
 		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-rename",
 		Level: pushward.LevelPassive, Category: "rename", Source: "radarr", Push: true,
-		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
+		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), Media: pushward.MediaImage(posterURL(p.Movie.Images)),
 		Metadata: radarrMovieMeta(p.Movie),
 	})
 }
@@ -386,7 +386,7 @@ func (h *Handler) handleRadarrMovieAdded(ctx context.Context, userKey string, lo
 		Title: "Radarr", Subtitle: title, Body: "Added",
 		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-movie-added",
 		Level: pushward.LevelActive, Category: "movie-added", Source: "radarr", Push: true,
-		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
+		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), Media: pushward.MediaImage(posterURL(p.Movie.Images)),
 		Metadata: radarrMovieMeta(p.Movie),
 	})
 }
@@ -401,7 +401,7 @@ func (h *Handler) handleRadarrMovieDelete(ctx context.Context, userKey string, l
 		Title: "Radarr", Subtitle: title, Body: body,
 		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-movie-delete",
 		Level: pushward.LevelActive, Category: "movie-delete", Source: "radarr", Push: true,
-		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
+		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), Media: pushward.MediaImage(posterURL(p.Movie.Images)),
 		Metadata: radarrMovieMeta(p.Movie),
 	})
 }
@@ -416,7 +416,7 @@ func (h *Handler) handleRadarrMovieFileDelete(ctx context.Context, userKey strin
 		Title: "Radarr", Subtitle: title, Body: body,
 		ThreadID: radarrMediaThreadID(p.Movie), CollapseID: "radarr-file-delete",
 		Level: pushward.LevelPassive, Category: "file-delete", Source: "radarr", Push: true,
-		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), ImageURL: posterURL(p.Movie.Images),
+		URL: radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID), Media: pushward.MediaImage(posterURL(p.Movie.Images)),
 		Metadata: radarrMovieMeta(p.Movie),
 	})
 }

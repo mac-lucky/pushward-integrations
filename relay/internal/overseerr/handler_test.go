@@ -111,8 +111,8 @@ func TestMediaPending(t *testing.T) {
 	if notif.Source != "overseerr" {
 		t.Errorf("expected source 'overseerr', got %s", notif.Source)
 	}
-	if notif.ImageURL != "https://image.tmdb.org/t/p/w600_and_h900_bestv2/inception.jpg" {
-		t.Errorf("expected image URL, got %s", notif.ImageURL)
+	if notif.Media == nil || notif.Media.URL != "https://image.tmdb.org/t/p/w600_and_h900_bestv2/inception.jpg" || notif.Media.Type != "image" {
+		t.Errorf("expected image media attachment, got %+v", notif.Media)
 	}
 	if notif.Metadata["media_type"] != "movie" {
 		t.Errorf("expected media_type 'movie', got %s", notif.Metadata["media_type"])

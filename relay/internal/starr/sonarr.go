@@ -142,7 +142,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 		Source:     "sonarr",
 		Push:       h.shouldNotify("Grab"),
 		URL:        sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug),
-		ImageURL:   posterURL(p.Series.Images),
+		Media:      pushward.MediaImage(posterURL(p.Series.Images)),
 	}
 	sgMeta := map[string]string{"quality": p.Release.Quality}
 	if p.Release.Indexer != "" {
@@ -249,7 +249,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 		Source:     "sonarr",
 		Push:       h.shouldNotify("Download"),
 		URL:        sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug),
-		ImageURL:   posterURL(p.Series.Images),
+		Media:      pushward.MediaImage(posterURL(p.Series.Images)),
 	}
 	sdMeta := map[string]string{"quality": quality}
 	if p.EpisodeFile.Size > 0 {
@@ -353,7 +353,7 @@ func (h *Handler) handleSonarrRename(ctx context.Context, userKey string, log *s
 		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Renamed",
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-rename",
 		Level: pushward.LevelPassive, Category: "rename", Source: "sonarr", Push: true,
-		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
+		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), Media: pushward.MediaImage(posterURL(p.Series.Images)),
 		Metadata: sonarrSeriesMeta(p.Series),
 	})
 }
@@ -363,7 +363,7 @@ func (h *Handler) handleSonarrSeriesAdd(ctx context.Context, userKey string, log
 		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Added",
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-series-add",
 		Level: pushward.LevelActive, Category: "series-add", Source: "sonarr", Push: true,
-		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
+		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), Media: pushward.MediaImage(posterURL(p.Series.Images)),
 		Metadata: sonarrSeriesMeta(p.Series),
 	})
 }
@@ -377,7 +377,7 @@ func (h *Handler) handleSonarrSeriesDelete(ctx context.Context, userKey string, 
 		Title: "Sonarr", Subtitle: p.Series.Title, Body: body,
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-series-delete",
 		Level: pushward.LevelActive, Category: "series-delete", Source: "sonarr", Push: true,
-		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
+		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), Media: pushward.MediaImage(posterURL(p.Series.Images)),
 		Metadata: sonarrSeriesMeta(p.Series),
 	})
 }
@@ -392,7 +392,7 @@ func (h *Handler) handleSonarrEpisodeFileDelete(ctx context.Context, userKey str
 		Title: "Sonarr", Subtitle: text.Truncate(subtitle, 100), Body: body,
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-file-delete" + episodeCollapseSuffix(p.Episodes),
 		Level: pushward.LevelPassive, Category: "file-delete", Source: "sonarr", Push: true,
-		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
+		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), Media: pushward.MediaImage(posterURL(p.Series.Images)),
 		Metadata: sonarrSeriesMeta(p.Series),
 	})
 }
@@ -466,7 +466,7 @@ func (h *Handler) handleSonarrImportComplete(ctx context.Context, userKey string
 		Title: "Sonarr", Subtitle: text.Truncate(subtitle, 100), Body: body,
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-import-complete" + episodeCollapseSuffix(p.Episodes),
 		Level: pushward.LevelActive, Category: "import-complete", Source: "sonarr", Push: true,
-		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), ImageURL: posterURL(p.Series.Images),
+		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), Media: pushward.MediaImage(posterURL(p.Series.Images)),
 		Metadata: sonarrSeriesMeta(p.Series),
 	})
 }

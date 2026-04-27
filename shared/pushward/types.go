@@ -195,22 +195,59 @@ type PatchRequest struct {
 	Priority *int          `json:"priority,omitempty"`
 }
 
+// MediaAttachment is a rich media attachment (image, video, or audio)
+// attached to a notification. The iOS client downloads the URL and
+// attaches it via UNNotificationAttachment subject to Apple's per-type
+// size caps (image 10 MB, audio 5 MB, video 50 MB). HTTPS only.
+type MediaAttachment struct {
+	URL  string `json:"url"`
+	Type string `json:"type"` // "image" | "video" | "audio"
+}
+
+// MediaImage returns a MediaAttachment for an image URL, or nil if the
+// URL is empty. Convenience for integrations that forward poster art,
+// monitoring screenshots, or other image media without typing the full
+// literal at every call site.
+func MediaImage(url string) *MediaAttachment {
+	if url == "" {
+		return nil
+	}
+	return &MediaAttachment{URL: url, Type: "image"}
+}
+
+// NotificationAction is one server-driven action button shown on a push
+// notification. Tapping the button surfaces the action's `id` to the iOS
+// app, which routes by ID and opens the action's `url` if set.
+//
+// Cannot be combined with an explicit Category on the same request — the
+// server computes a deterministic category id from the action set.
+type NotificationAction struct {
+	ID                     string `json:"id"`
+	Title                  string `json:"title"`
+	URL                    string `json:"url,omitempty"`
+	Foreground             bool   `json:"foreground,omitempty"`
+	Destructive            bool   `json:"destructive,omitempty"`
+	AuthenticationRequired bool   `json:"authentication_required,omitempty"`
+	Icon                   string `json:"icon,omitempty"` // SF Symbol name
+}
+
 // SendNotificationRequest is the body for POST /notifications.
 type SendNotificationRequest struct {
-	Title             string            `json:"title"`
-	Subtitle          string            `json:"subtitle,omitempty"`
-	Body              string            `json:"body"`
-	ThreadID          string            `json:"thread_id,omitempty"`
-	CollapseID        string            `json:"collapse_id,omitempty"`
-	Level             string            `json:"level,omitempty"`
-	Category          string            `json:"category,omitempty"`
-	Source            string            `json:"source,omitempty"`
-	SourceDisplayName string            `json:"source_display_name,omitempty"`
-	URL               string            `json:"url,omitempty"`
-	ImageURL          string            `json:"image_url,omitempty"`
-	IconURL           string            `json:"icon_url,omitempty"`
-	Metadata          map[string]string `json:"metadata,omitempty"`
-	Push              bool              `json:"push"`
+	Title             string               `json:"title"`
+	Subtitle          string               `json:"subtitle,omitempty"`
+	Body              string               `json:"body"`
+	ThreadID          string               `json:"thread_id,omitempty"`
+	CollapseID        string               `json:"collapse_id,omitempty"`
+	Level             string               `json:"level,omitempty"`
+	Category          string               `json:"category,omitempty"`
+	Source            string               `json:"source,omitempty"`
+	SourceDisplayName string               `json:"source_display_name,omitempty"`
+	URL               string               `json:"url,omitempty"`
+	Media             *MediaAttachment     `json:"media,omitempty"`
+	IconURL           string               `json:"icon_url,omitempty"`
+	Metadata          map[string]string    `json:"metadata,omitempty"`
+	Actions           []NotificationAction `json:"actions,omitempty"`
+	Push              bool                 `json:"push"`
 }
 
 // sourceDisplayNames maps source identifiers to their human-readable display names.
