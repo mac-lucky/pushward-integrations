@@ -339,9 +339,7 @@ func (h *Handler) buildSingleNotification(g *alertGroup) pushward.SendNotificati
 	}
 
 	h.setURL(&req, a)
-	if a.ImageURL != "" {
-		req.ImageURL = text.SanitizeURL(a.ImageURL)
-	}
+	req.ImageURL = text.SanitizeURL(a.ImageURL)
 	req.Metadata = h.buildAlertMetadata(a)
 	return req
 }
@@ -387,9 +385,7 @@ func (h *Handler) buildGroupedNotification(g *alertGroup) pushward.SendNotificat
 	}
 
 	h.setURL(&req, representative)
-	if representative.ImageURL != "" {
-		req.ImageURL = text.SanitizeURL(representative.ImageURL)
-	}
+	req.ImageURL = text.SanitizeURL(representative.ImageURL)
 	req.Metadata = h.buildGroupedMetadata(g, representative)
 	return req
 }
