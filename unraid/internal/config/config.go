@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
@@ -24,6 +25,7 @@ type UnraidConfig struct {
 func Load(path string) (*Config, error) {
 	cfg := &Config{
 		Unraid: UnraidConfig{
+			Host:       "localhost",
 			Port:       80,
 			ServerName: "Unraid",
 		},
@@ -40,13 +42,12 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// Integration-specific env overrides (PUSHWARD_ prefix preferred, bare fallback for compat)
 	if v := envOr("PUSHWARD_UNRAID_HOST", "UNRAID_HOST"); v != "" {
 		cfg.Unraid.Host = v
 	}
 	if v := envOr("PUSHWARD_UNRAID_PORT", "UNRAID_PORT"); v != "" {
-		var p int
-		if _, err := fmt.Sscanf(v, "%d", &p); err != nil {
+		p, err := strconv.Atoi(v)
+		if err != nil {
 			return nil, fmt.Errorf("parsing PUSHWARD_UNRAID_PORT: %w", err)
 		}
 		cfg.Unraid.Port = p
@@ -54,13 +55,21 @@ func Load(path string) (*Config, error) {
 	if v := envOr("PUSHWARD_UNRAID_API_KEY", "UNRAID_API_KEY"); v != "" {
 		cfg.Unraid.APIKey = v
 	}
+	if v := envOr("PUSHWARD_UNRAID_USE_TLS", "UNRAID_USE_TLS"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PUSHWARD_UNRAID_USE_TLS: %w", err)
+		}
+		cfg.Unraid.UseTLS = b
+	}
+	if v := envOr("PUSHWARD_UNRAID_SERVER_NAME", "UNRAID_SERVER_NAME"); v != "" {
+		cfg.Unraid.ServerName = v
+	}
 
-	// Shared PushWard env overrides
 	if err := cfg.PushWard.ApplyEnvOverrides(); err != nil {
 		return nil, err
 	}
 
-	// Validation
 	if cfg.Unraid.Host == "" {
 		return nil, fmt.Errorf("unraid.host is required (set PUSHWARD_UNRAID_HOST)")
 	}
@@ -74,7 +83,6 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
-// envOr returns the first non-empty value from the given environment variable names.
 func envOr(keys ...string) string {
 	for _, k := range keys {
 		if v := os.Getenv(k); v != "" {

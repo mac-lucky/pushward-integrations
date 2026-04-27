@@ -25,7 +25,7 @@ Each runs as its own container with a dedicated PushWard API key.
 | [pushward-github](./github/) | GitHub Actions CI/CD workflow progress | - | `ghcr.io/mac-lucky/pushward-github` |
 | [pushward-sabnzbd](./sabnzbd/) | SABnzbd download and post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
 | [pushward-bambulab](./bambulab/) | BambuLab 3D printer progress via MQTT | - | `ghcr.io/mac-lucky/pushward-bambulab` |
-| [pushward-unraid](./unraid/) | Unraid parity checks, array state, disk alerts, and UPS events via GraphQL WebSocket | - | `ghcr.io/mac-lucky/pushward-unraid` |
+| [pushward-unraid](./unraid/) | Unraid parity checks, array state, disk alerts, and UPS events via GraphQL WebSocket | - | Native Unraid plugin: [`pushward-unraid-plugin`](https://github.com/mac-lucky/pushward-unraid-plugin) |
 | [pushward-grafana](./grafana/) | Grafana alert timeline sparklines with Prometheus history backfill and multi-instance tracking | 8090 | `ghcr.io/mac-lucky/pushward-grafana` |
 
 ### Relay (Multi-Tenant Gateway)
@@ -74,7 +74,7 @@ pushward-integrations/
   github/                    # GitHub Actions poller
   sabnzbd/                   # SABnzbd webhook + download tracker
   bambulab/                  # BambuLab MQTT client
-  unraid/                    # Unraid GraphQL WebSocket client
+  unraid/                    # Unraid GraphQL WebSocket client (binary source for pushward-unraid-plugin)
   grafana/                   # Grafana alert timeline with Prometheus history
     cmd/pushward-grafana/    # Entry point
     internal/
@@ -154,7 +154,6 @@ Build Docker images:
 docker build -f github/Dockerfile -t pushward-github .
 docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd .
 docker build -f bambulab/Dockerfile -t pushward-bambulab .
-docker build -f unraid/Dockerfile -t pushward-unraid .
 docker build -f relay/Dockerfile -t pushward-relay .
 docker build -f grafana/Dockerfile -t pushward-grafana .
 ```
@@ -170,4 +169,6 @@ Each integration has its own GitHub Actions workflow with path filters so only t
 - `.github/workflows/relay-ci-cd.yml` — triggers on `relay/**` and `shared/**` changes
 - `.github/workflows/grafana-ci-cd.yml` — triggers on `grafana/**` and `shared/**` changes
 
-All use the shared `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml` workflow. Triggers: push to `main`, tags (`v*`), pull requests to `main`, and manual `workflow_dispatch`. Docker images are built and pushed to GHCR on push to main or tags.
+Most use the shared `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml` workflow. Triggers: push to `main`, tags (`v*`), pull requests to `main`, and manual `workflow_dispatch`. Docker images are built and pushed to GHCR on push to main or tags.
+
+`unraid-ci-cd.yml` is the exception: it ships as a native [Unraid plugin](https://github.com/mac-lucky/pushward-unraid-plugin) instead of a container. Tagging `unraid-vX.Y.Z` builds a static `linux/amd64` binary tarball and attaches it to a GitHub Release; the plugin's auto-bump workflow picks it up.

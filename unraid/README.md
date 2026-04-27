@@ -2,6 +2,18 @@
 
 Unraid bridge for [PushWard](https://pushward.app). Polls Unraid's GraphQL API for array state, subscribes to the notifications WebSocket, creates iOS Live Activities for parity checks and array transitions, and forwards every Unraid notification to the PushWard notification API.
 
+This directory is the **source** for the binary that ships in the [`pushward-unraid-plugin`](https://github.com/mac-lucky/pushward-unraid-plugin) Unraid plugin.
+
+## Install on Unraid
+
+In the Unraid web UI: **Plugins → Install Plugin** and paste:
+
+```
+https://github.com/mac-lucky/pushward-unraid-plugin/raw/main/pushward-unraid.plg
+```
+
+Configure via **Settings → PushWard** (the only required fields are the Unraid API key and the PushWard integration key — `host` defaults to `localhost`). The plugin auto-starts on boot.
+
 ## Features
 
 - **Parity check tracking** — creates a Live Activity when a parity check starts, updates progress every 30s, and ends with a "Parity Valid" confirmation
@@ -36,12 +48,12 @@ Copy the key when it's shown (it's only displayed once) and set it as `PUSHWARD_
 
 ## Configuration
 
-Create a `config.yml` (see [`config.example.yml`](config.example.yml)):
+When installed via the plugin, configuration is written to `/boot/config/plugins/pushward-unraid/pushward-unraid.cfg` from the Settings UI. To run the binary directly during development, create a `config.yml` (see [`config.example.yml`](config.example.yml)):
 
 ```yaml
 unraid:
-  host: "unraid.example.com"  # Unraid WebSocket host
-  port: 80                    # nginx serves /graphql on 80 (or 443 with use_tls)
+  host: "localhost"           # nginx serves /graphql locally on Unraid
+  port: 80                    # 80 (or 443 with use_tls)
   api_key: ""                 # Unraid API key
   server_name: "Unraid"       # Display name in activity subtitles
   use_tls: false              # Use wss:// instead of ws://
@@ -62,45 +74,25 @@ All config values can be overridden via environment variables. The `PUSHWARD_` p
 
 | Variable | Description |
 |---|---|
-| `PUSHWARD_UNRAID_HOST` | Unraid WebSocket host |
+| `PUSHWARD_UNRAID_HOST` | Unraid WebSocket host (defaults to `localhost`) |
 | `PUSHWARD_UNRAID_PORT` | GraphQL WebSocket port |
 | `PUSHWARD_UNRAID_API_KEY` | Unraid API key |
+| `PUSHWARD_UNRAID_USE_TLS` | `true` to use `wss://` |
+| `PUSHWARD_UNRAID_SERVER_NAME` | Display name in activity subtitles |
 | `PUSHWARD_URL` | PushWard server URL |
 | `PUSHWARD_API_KEY` | PushWard integration key |
 | `PUSHWARD_PRIORITY` | Activity priority (integer) |
 | `PUSHWARD_CLEANUP_DELAY` | Time before ended activities are cleaned up (e.g. `15m`) |
 | `PUSHWARD_STALE_TIMEOUT` | Time before idle activities are marked stale (e.g. `24h`) |
 
-## Build & Run
+## Build & Run (development)
 
 ```bash
-# Build
 go build ./unraid/cmd/pushward-unraid
-
-# Run
 ./pushward-unraid -config unraid/config.example.yml
 ```
 
-## Docker
-
-```bash
-# Build (context is repo root, not the unraid dir)
-docker build -f unraid/Dockerfile -t pushward-unraid .
-
-# Run
-docker run -v /path/to/config.yml:/config/config.yml pushward-unraid
-```
-
-Or with environment variables:
-
-```bash
-docker run \
-  -e PUSHWARD_UNRAID_HOST=unraid.local \
-  -e PUSHWARD_UNRAID_API_KEY=your-unraid-key \
-  -e PUSHWARD_URL=https://api.pushward.app \
-  -e PUSHWARD_API_KEY=hlk_your_key \
-  pushward-unraid
-```
+Releases for the plugin are produced by tagging `unraid-vX.Y.Z`, which triggers `.github/workflows/unraid-ci-cd.yml` to build a static `linux/amd64` binary and attach `pushward-unraid_<X.Y.Z>_linux_x86_64.tar.gz` (+ `.sha256`) to a GitHub Release.
 
 ## Activities
 
