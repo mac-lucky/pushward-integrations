@@ -208,6 +208,7 @@ type SendNotificationRequest struct {
 	SourceDisplayName string            `json:"source_display_name,omitempty"`
 	URL               string            `json:"url,omitempty"`
 	ImageURL          string            `json:"image_url,omitempty"`
+	IconURL           string            `json:"icon_url,omitempty"`
 	Metadata          map[string]string `json:"metadata,omitempty"`
 	Push              bool              `json:"push"`
 }

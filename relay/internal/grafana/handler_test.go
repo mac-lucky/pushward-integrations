@@ -1141,11 +1141,11 @@ func TestStateDedup_GroupedSameWebhookTwice(t *testing.T) {
 	}
 }
 
-// TestNotificationURL_HTTPSOnly verifies that URLs and ImageURL on notifications
-// must be https. Self-hosted Grafana instances often emit http:// dashboardURL,
-// panelURL, generatorURL, and imageURL pointing at private hosts. The PushWard
-// server rejects non-https values, so the relay must drop them before sending.
-func TestNotificationURL_HTTPSOnly(t *testing.T) {
+// TestNotificationURL_HTTPAndPrivateHostsKept verifies that http URLs and
+// private-host URLs (common in self-hosted Grafana behind a reverse proxy on
+// the user's LAN) are forwarded to the server unchanged — the iOS device
+// receiving the push is typically on the same VPN and can resolve them.
+func TestNotificationURL_HTTPAndPrivateHostsKept(t *testing.T) {
 	tests := []struct {
 		name         string
 		dashboardURL string
@@ -1156,26 +1156,24 @@ func TestNotificationURL_HTTPSOnly(t *testing.T) {
 		wantImageURL string
 	}{
 		{
-			name:         "all http, all dropped",
+			name:         "http internal kept",
 			dashboardURL: "http://grafana.internal/d/abc",
-			panelURL:     "http://grafana.internal/d/abc?viewPanel=1",
-			generatorURL: "http://grafana.internal/alerting/abc/edit",
 			imageURL:     "http://grafana.internal/render/abc.png",
-			wantURL:      "",
-			wantImageURL: "",
+			wantURL:      "http://grafana.internal/d/abc",
+			wantImageURL: "http://grafana.internal/render/abc.png",
 		},
 		{
-			name:         "https dashboard kept",
+			name:         "https public kept",
 			dashboardURL: "https://grafana.example.com/d/abc",
 			imageURL:     "https://grafana.example.com/render/abc.png",
 			wantURL:      "https://grafana.example.com/d/abc",
 			wantImageURL: "https://grafana.example.com/render/abc.png",
 		},
 		{
-			name:         "http dashboard skipped, https generator picked",
+			name:         "first candidate wins, generator falls through",
 			dashboardURL: "http://grafana.internal/d/abc",
 			generatorURL: "https://grafana.example.com/alerting/abc/edit",
-			wantURL:      "https://grafana.example.com/alerting/abc/edit",
+			wantURL:      "http://grafana.internal/d/abc",
 		},
 	}
 
