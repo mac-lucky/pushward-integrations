@@ -91,6 +91,8 @@ type Notification struct {
 	Subject     string     `json:"subject"`
 	Description string     `json:"description"`
 	Importance  Importance `json:"importance"`
+	Link        string     `json:"link"`
+	Timestamp   string     `json:"timestamp"`
 }
 
 // Client connects to Unraid's GraphQL API. Array state is fetched by
@@ -179,7 +181,7 @@ func (c *Client) QueryArray(ctx context.Context) (*ArrayStatus, error) {
 // SubscribeNotifications subscribes to new notifications. Blocks until
 // ctx is cancelled, reconnecting with exponential backoff on error.
 func (c *Client) SubscribeNotifications(ctx context.Context, ch chan<- Notification) error {
-	query := `subscription { notificationAdded { id title subject description importance } }`
+	query := `subscription { notificationAdded { id title subject description importance link timestamp } }`
 	return c.subscribe(ctx, query, func(data json.RawMessage) {
 		var wrapper struct {
 			NotificationAdded Notification `json:"notificationAdded"`

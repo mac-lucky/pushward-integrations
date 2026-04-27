@@ -429,17 +429,22 @@ func TestNotification_EmptySubjectSkipped(t *testing.T) {
 	}
 }
 
-func TestNotification_CollapseIDStable(t *testing.T) {
+func TestNotification_CollapseIDPerNotification(t *testing.T) {
 	tr, calls, mu := newTracker(t)
 
+	// Two scans with the same subject+title but different Unraid IDs (e.g.
+	// two Fix Common Problems scans on different days) must NOT collapse —
+	// otherwise APNs replaces the earlier one and the user loses history.
 	tr.handleNotification(context.Background(), graphql.Notification{
 		ID: "a", Subject: "SMART error on disk1", Title: "alert", Importance: graphql.ImportanceAlert,
 	})
 	tr.handleNotification(context.Background(), graphql.Notification{
 		ID: "b", Subject: "SMART error on disk1", Title: "alert", Importance: graphql.ImportanceAlert,
 	})
+	// Re-delivery of the same Unraid notification (same ID) should be
+	// idempotent: APNs collapses it onto the prior delivery.
 	tr.handleNotification(context.Background(), graphql.Notification{
-		ID: "c", Subject: "SMART error on disk2", Title: "alert", Importance: graphql.ImportanceAlert,
+		ID: "a", Subject: "SMART error on disk1", Title: "alert", Importance: graphql.ImportanceAlert,
 	})
 
 	recorded := testutil.GetCalls(calls, mu)
@@ -450,11 +455,33 @@ func TestNotification_CollapseIDStable(t *testing.T) {
 	for i, c := range recorded {
 		testutil.UnmarshalBody(t, c.Body, &reqs[i])
 	}
-	if reqs[0].CollapseID != reqs[1].CollapseID {
-		t.Errorf("same subject+title should yield same collapse_id, got %q and %q", reqs[0].CollapseID, reqs[1].CollapseID)
+	if reqs[0].CollapseID == reqs[1].CollapseID {
+		t.Errorf("different Unraid IDs should yield different collapse_id, got %q for both", reqs[0].CollapseID)
 	}
-	if reqs[0].CollapseID == reqs[2].CollapseID {
-		t.Errorf("different subject should yield different collapse_id, got %q for both", reqs[0].CollapseID)
+	if reqs[0].CollapseID != reqs[2].CollapseID {
+		t.Errorf("same Unraid ID should yield same collapse_id, got %q and %q", reqs[0].CollapseID, reqs[2].CollapseID)
+	}
+}
+
+func TestNotification_LinkAndTimestampSurfaced(t *testing.T) {
+	tr, calls, mu := newTracker(t)
+
+	tr.handleNotification(context.Background(), graphql.Notification{
+		ID:          "x",
+		Subject:     "Warnings have been found with your server.(HomeServer)",
+		Title:       "Fix Common Problems - HomeServer",
+		Description: "Investigate at Settings / User Utilities / Fix Common Problems",
+		Importance:  graphql.ImportanceWarning,
+		Link:        "/Settings/FixProblems",
+		Timestamp:   "2026-04-27T10:00:14Z",
+	})
+
+	req := requireSingleNotification(t, calls, mu)
+	if req.URL != "/Settings/FixProblems" {
+		t.Errorf("URL = %q, want /Settings/FixProblems", req.URL)
+	}
+	if req.Metadata["unraid_timestamp"] != "2026-04-27T10:00:14Z" {
+		t.Errorf("metadata[unraid_timestamp] = %q, want 2026-04-27T10:00:14Z", req.Metadata["unraid_timestamp"])
 	}
 }
 

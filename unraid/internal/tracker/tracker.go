@@ -277,6 +277,9 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 	if notif.ID != "" {
 		metadata["unraid_id"] = notif.ID
 	}
+	if notif.Timestamp != "" {
+		metadata["unraid_timestamp"] = notif.Timestamp
+	}
 	if serverName != "" {
 		metadata["server"] = serverName
 	}
@@ -288,15 +291,31 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 		body = title
 	}
 
+	// Unraid's GraphQL `notificationAdded` exposes only what's stored in the
+	// unread .notify file (title/subject/description/link/timestamp). The
+	// `-m message` payload that FCP and other plugins pass to the dynamix
+	// notify script is written only to the archived copy and to agent
+	// scripts (Pushover et al.) — it is not retrievable here. So FCP's
+	// detailed warning list cannot be surfaced; only its short description.
+
+	// Use notif.ID for collapse_id so each Unraid notification remains
+	// visible. Hashing title+notif.Title collapsed every FCP scan into a
+	// single APNs slot, and successive scans replaced earlier ones.
+	collapseSeed := notif.ID
+	if collapseSeed == "" {
+		collapseSeed = title + "|" + notif.Title
+	}
+
 	req := pushward.SendNotificationRequest{
 		Title:      text.Truncate(title, 120),
 		Subtitle:   text.Truncate(subtitle, 50),
 		Body:       text.Truncate(body, 500),
 		ThreadID:   "unraid",
-		CollapseID: text.SlugHash("unraid-", title+"|"+notif.Title, 6),
+		CollapseID: text.SlugHash("unraid-", collapseSeed, 8),
 		Level:      level,
 		Category:   category,
 		Source:     "unraid",
+		URL:        notif.Link,
 		Push:       push,
 		Metadata:   metadata,
 	}
