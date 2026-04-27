@@ -117,7 +117,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 		Level:    pushward.LevelActive,
 		Category: "media-" + strings.ToLower(stateText),
 		Source:   "overseerr",
-		ImageURL: p.Image,
+		Media:    pushward.MediaImage(p.Image),
 		Push:     true,
 	}
 	meta := map[string]string{"media_type": p.Media.MediaType, "tmdb_id": p.Media.TmdbID}

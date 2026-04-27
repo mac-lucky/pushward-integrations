@@ -1205,8 +1205,12 @@ func TestNotificationURL_HTTPAndPrivateHostsKept(t *testing.T) {
 			if req.URL != tt.wantURL {
 				t.Errorf("URL: got %q, want %q", req.URL, tt.wantURL)
 			}
-			if req.ImageURL != tt.wantImageURL {
-				t.Errorf("ImageURL: got %q, want %q", req.ImageURL, tt.wantImageURL)
+			gotMediaURL := ""
+			if req.Media != nil {
+				gotMediaURL = req.Media.URL
+			}
+			if gotMediaURL != tt.wantImageURL {
+				t.Errorf("Media.URL: got %q, want %q", gotMediaURL, tt.wantImageURL)
 			}
 		})
 	}
