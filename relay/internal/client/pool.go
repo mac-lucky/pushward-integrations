@@ -35,10 +35,10 @@ func NewPool(baseURL string, httpClient *http.Client, opts ...pushward.ClientOpt
 func (p *Pool) SendNotification(ctx context.Context, userKey string, log *slog.Logger, req pushward.SendNotificationRequest) error {
 	cl := p.Get(userKey)
 	if err := cl.SendNotification(ctx, req); err != nil {
-		log.Error("failed to send notification", "category", req.Category, "error", err)
+		log.Error("failed to send notification", "source", req.Source, "error", err)
 		return err
 	}
-	log.Info("notification sent", "category", req.Category)
+	log.Info("notification sent", "source", req.Source)
 	return nil
 }
 

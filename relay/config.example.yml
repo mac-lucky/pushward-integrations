@@ -21,9 +21,6 @@ trusted_proxy_cidrs: []                   # CIDRs of trusted reverse proxies (e.
 providers:
   grafana:
     enabled: true
-    severity_label: "severity"
-    default_severity: "warning"
-    default_icon: "exclamationmark.triangle.fill"
     priority: 5
     cleanup_delay: 15m                     # → ended_ttl
     stale_timeout: 24h                    # → stale_ttl

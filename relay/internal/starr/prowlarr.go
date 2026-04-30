@@ -113,7 +113,6 @@ func (h *Handler) handleProwlarrGrab(ctx context.Context, userKey string, log *s
 		ThreadID:   threadID,
 		CollapseID: text.SlugHash("prowlarr-grab", p.Release.ReleaseTitle, 6),
 		Level:      pushward.LevelActive,
-		Category:   "grab",
 		Source:     "prowlarr",
 		Push:       true,
 		Metadata:   meta,

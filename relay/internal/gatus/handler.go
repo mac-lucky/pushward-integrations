@@ -183,7 +183,6 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 		notifReq := h.buildNotification(p, slug, subtitle)
 		notifReq.Body = p.EndpointName + " · " + stateText
 		notifReq.Level = pushward.LevelActive
-		notifReq.Category = "critical"
 		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
 		}
@@ -221,7 +220,6 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 	notifReq := h.buildNotification(p, slug, subtitle)
 	notifReq.Body = "Resolved · " + p.EndpointName
 	notifReq.Level = pushward.LevelPassive
-	notifReq.Category = "resolved"
 	if err := pwClient.SendNotification(ctx, notifReq); err != nil {
 		log.Error("failed to send notification", "slug", slug, "error", err)
 	}

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
-	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -115,7 +114,6 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 		Body:     stateText,
 		ThreadID: mediathread.ThreadID(p.Media.MediaType, p.Media.TmdbID, p.Media.TvdbID),
 		Level:    pushward.LevelActive,
-		Category: "media-" + strings.ToLower(stateText),
 		Source:   "overseerr",
 		Media:    pushward.MediaImage(p.Image),
 		Push:     true,

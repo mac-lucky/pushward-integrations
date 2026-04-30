@@ -117,11 +117,11 @@ Live Activities are used for stateful, user-visible progress:
 
 Every Unraid `notificationAdded` event is forwarded to the PushWard notification API (`POST /notifications`) with `source: unraid`, `thread_id: unraid`, and a stable `collapse_id` derived from the subject. Interruption level is mapped from Unraid `importance`:
 
-| Importance | Level | Category |
-|---|---|---|
-| `ALERT` | active | critical |
-| `WARNING` | active | warning |
-| `INFO` / other | passive | info |
+| Importance | Level |
+|---|---|
+| `ALERT` | active |
+| `WARNING` | active |
+| `INFO` / other | passive |
 
 All notifications set `push: true` — iOS's interruption level handles quiet delivery for the passive tier.
 
