@@ -218,9 +218,6 @@ func MediaImage(url string) *MediaAttachment {
 // NotificationAction is one server-driven action button shown on a push
 // notification. Tapping the button surfaces the action's `id` to the iOS
 // app, which routes by ID and opens the action's `url` if set.
-//
-// Cannot be combined with an explicit Category on the same request — the
-// server computes a deterministic category id from the action set.
 type NotificationAction struct {
 	ID                     string `json:"id"`
 	Title                  string `json:"title"`
