@@ -748,9 +748,6 @@ func TestRadarrHealth(t *testing.T) {
 	if req.Body != "Warning · Indexer NZBgeek is unavailable due to failures" {
 		t.Errorf("expected body with health message, got %s", req.Body)
 	}
-	if req.Category != "health" {
-		t.Errorf("expected category 'health', got %s", req.Category)
-	}
 	if !req.Push {
 		t.Error("expected push=true")
 	}
@@ -824,9 +821,6 @@ func TestRadarrHealthAndRestored(t *testing.T) {
 	testutil.UnmarshalBody(t, recorded[1].Body, &restoredReq)
 	if restoredReq.Body != "Resolved · Indexer NZBgeek is available again" {
 		t.Errorf("expected body with restored message, got %s", restoredReq.Body)
-	}
-	if restoredReq.Category != "health-restored" {
-		t.Errorf("expected category 'health-restored', got %s", restoredReq.Category)
 	}
 }
 
@@ -904,9 +898,6 @@ func TestRadarrManualInteraction(t *testing.T) {
 	testutil.UnmarshalBody(t, recorded[3].Body, &req)
 	if req.Body != "No files found eligible for import" {
 		t.Errorf("expected body with status message, got %s", req.Body)
-	}
-	if req.Category != "manual-interaction" {
-		t.Errorf("expected category 'manual-interaction', got %s", req.Category)
 	}
 	if req.Subtitle != "Inception.2010.1080p.BluRay.x264-SPARKS" {
 		t.Errorf("expected subtitle with download title, got %s", req.Subtitle)

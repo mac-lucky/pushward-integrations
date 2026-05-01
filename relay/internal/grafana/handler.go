@@ -114,32 +114,6 @@ func (m metaMap) result() map[string]string {
 	return nil
 }
 
-var severityRank = map[string]int{
-	pushward.SeverityCritical: 3,
-	pushward.SeverityWarning:  2,
-	pushward.SeverityInfo:     1,
-}
-
-func isKnownSeverity(s string) bool {
-	return s == pushward.SeverityCritical || s == pushward.SeverityWarning || s == pushward.SeverityInfo
-}
-
-// highestSeverity returns the most critical severity from the list, falling back to defaultSev.
-func highestSeverity(severities []string, defaultSev string) string {
-	best := ""
-	bestRank := 0
-	for _, s := range severities {
-		if r, ok := severityRank[s]; ok && r > bestRank {
-			best = s
-			bestRank = r
-		}
-	}
-	if best == "" {
-		return defaultSev
-	}
-	return best
-}
-
 // formatGroupSubtitle builds subtitle like "Grafana · 3 firing, 1 resolved".
 func formatGroupSubtitle(firing, resolved int) string {
 	var parts []string
@@ -303,11 +277,6 @@ func (h *Handler) buildSingleNotification(g *alertGroup) pushward.SendNotificati
 		a = g.resolved[0]
 	}
 
-	severity := a.Labels[h.config.SeverityLabel]
-	if !isKnownSeverity(severity) {
-		severity = h.config.DefaultSeverity
-	}
-
 	summary := a.Annotations["summary"]
 
 	subtitle := "Grafana"
@@ -328,14 +297,12 @@ func (h *Handler) buildSingleNotification(g *alertGroup) pushward.SendNotificati
 	case "firing":
 		req.Body = text.Truncate(summary, 120)
 		req.Level = pushward.LevelActive
-		req.Category = severity
 	case "resolved":
 		req.Body = "Resolved · " + g.alertname
 		if summary != "" {
 			req.Body = "Resolved · " + g.alertname + " · " + text.Truncate(summary, 80)
 		}
 		req.Level = pushward.LevelPassive
-		req.Category = "resolved"
 	}
 
 	h.setURL(&req, a)
@@ -366,20 +333,9 @@ func (h *Handler) buildGroupedNotification(g *alertGroup) pushward.SendNotificat
 	}
 
 	if len(g.firing) > 0 {
-		// Find highest severity among firing alerts.
-		severities := make([]string, 0, len(g.firing))
-		for _, a := range g.firing {
-			sev := a.Labels[h.config.SeverityLabel]
-			if !isKnownSeverity(sev) {
-				sev = h.config.DefaultSeverity
-			}
-			severities = append(severities, sev)
-		}
-		req.Category = highestSeverity(severities, h.config.DefaultSeverity)
 		req.Level = pushward.LevelActive
 		req.Body = formatGroupedBody(g.firing, g.alertname+" · ", "firing", 120)
 	} else {
-		req.Category = "resolved"
 		req.Level = pushward.LevelPassive
 		req.Body = formatGroupedBody(g.resolved, "Resolved · "+g.alertname+" · ", "resolved", 100)
 	}

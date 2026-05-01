@@ -301,9 +301,6 @@ func TestNotification_DiskAlert(t *testing.T) {
 	if req.Level != pushward.LevelActive {
 		t.Errorf("level = %q, want active", req.Level)
 	}
-	if req.Category != pushward.SeverityCritical {
-		t.Errorf("category = %q, want critical", req.Category)
-	}
 	if !req.Push {
 		t.Errorf("push = false, want true")
 	}
@@ -341,9 +338,6 @@ func TestNotification_UPSWarning(t *testing.T) {
 	if req.Level != pushward.LevelActive {
 		t.Errorf("level = %q, want active", req.Level)
 	}
-	if req.Category != pushward.SeverityWarning {
-		t.Errorf("category = %q, want warning", req.Category)
-	}
 	if !req.Push {
 		t.Errorf("push = false, want true")
 	}
@@ -363,9 +357,6 @@ func TestNotification_UPSAlert(t *testing.T) {
 	if req.Level != pushward.LevelActive {
 		t.Errorf("level = %q, want active", req.Level)
 	}
-	if req.Category != pushward.SeverityCritical {
-		t.Errorf("category = %q, want critical", req.Category)
-	}
 }
 
 func TestNotification_GenericForwarded(t *testing.T) {
@@ -381,9 +372,6 @@ func TestNotification_GenericForwarded(t *testing.T) {
 	req := requireSingleNotification(t, calls, mu)
 	if req.Level != pushward.LevelPassive {
 		t.Errorf("level = %q, want passive", req.Level)
-	}
-	if req.Category != pushward.SeverityInfo {
-		t.Errorf("category = %q, want info", req.Category)
 	}
 	if !req.Push {
 		t.Errorf("push = false, want true (passive still pushes, iOS handles quiet delivery)")
@@ -403,9 +391,6 @@ func TestNotification_UnknownImportanceDefaultsToPassive(t *testing.T) {
 	req := requireSingleNotification(t, calls, mu)
 	if req.Level != pushward.LevelPassive {
 		t.Errorf("level = %q, want passive", req.Level)
-	}
-	if req.Category != pushward.SeverityInfo {
-		t.Errorf("category = %q, want info", req.Category)
 	}
 	if _, ok := req.Metadata["importance"]; ok {
 		t.Errorf("metadata[importance] should be absent when importance is empty, got %q", req.Metadata["importance"])
@@ -501,9 +486,6 @@ func TestNotification_LowercaseImportanceNotRecognised(t *testing.T) {
 	req := requireSingleNotification(t, calls, mu)
 	if req.Level != pushward.LevelPassive {
 		t.Errorf("lowercase 'alert' must not map to Active, got %q", req.Level)
-	}
-	if req.Category != pushward.SeverityInfo {
-		t.Errorf("lowercase 'alert' must not map to Critical, got %q", req.Category)
 	}
 }
 

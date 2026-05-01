@@ -121,9 +121,6 @@ func TestTriggered(t *testing.T) {
 	if notif.Title != "My API" {
 		t.Errorf("expected notification title 'My API', got %s", notif.Title)
 	}
-	if notif.Category != "critical" {
-		t.Errorf("expected category critical, got %s", notif.Category)
-	}
 	if notif.Source != "gatus" {
 		t.Errorf("expected source gatus, got %s", notif.Source)
 	}
@@ -176,9 +173,6 @@ func TestTriggeredThenResolved(t *testing.T) {
 	// Verify resolved notification
 	var resolvedNotif pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &resolvedNotif)
-	if resolvedNotif.Category != "resolved" {
-		t.Errorf("expected resolved notification category, got %s", resolvedNotif.Category)
-	}
 	if resolvedNotif.Level != pushward.LevelPassive {
 		t.Errorf("expected passive level for resolved, got %s", resolvedNotif.Level)
 	}

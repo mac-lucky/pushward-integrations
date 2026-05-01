@@ -72,9 +72,6 @@ type BaseProviderConfig struct {
 // EndDisplayTime from BaseProviderConfig are unused.
 type GrafanaConfig struct {
 	BaseProviderConfig `yaml:",inline"`
-	SeverityLabel      string `yaml:"severity_label"`
-	DefaultSeverity    string `yaml:"default_severity"`
-	DefaultIcon        string `yaml:"default_icon"`
 }
 
 // ArgoCDConfig holds ArgoCD-specific settings.
@@ -175,9 +172,6 @@ func Load(path string) (*Config, error) {
 					CleanupDelay: 15 * time.Minute,
 					StaleTimeout: 24 * time.Hour,
 				},
-				SeverityLabel:   "severity",
-				DefaultSeverity: "warning",
-				DefaultIcon:     "exclamationmark.triangle.fill",
 			},
 			ArgoCD: ArgoCDConfig{
 				BaseProviderConfig: BaseProviderConfig{
@@ -398,17 +392,6 @@ func (cfg *Config) applyEnvOverrides() error {
 	if v := os.Getenv("PUSHWARD_STARR_MODE"); v != "" {
 		cfg.Providers.Starr.Mode = NotificationMode(v)
 	}
-	// Grafana overrides
-	if v := os.Getenv("PUSHWARD_GRAFANA_SEVERITY_LABEL"); v != "" {
-		cfg.Providers.Grafana.SeverityLabel = v
-	}
-	if v := os.Getenv("PUSHWARD_GRAFANA_DEFAULT_SEVERITY"); v != "" {
-		cfg.Providers.Grafana.DefaultSeverity = v
-	}
-	if v := os.Getenv("PUSHWARD_GRAFANA_DEFAULT_ICON"); v != "" {
-		cfg.Providers.Grafana.DefaultIcon = v
-	}
-
 	// ArgoCD overrides
 	if v := os.Getenv("PUSHWARD_ARGOCD_URL"); v != "" {
 		cfg.Providers.ArgoCD.URL = v

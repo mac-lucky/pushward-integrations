@@ -91,7 +91,6 @@ func (h *Handler) handleSubtitle(ctx context.Context, userKey string, log *slog.
 		ThreadID:   text.Slug("bazarr-", ev.media),
 		CollapseID: text.SlugHash("bazarr", ev.media, 4),
 		Level:      pushward.LevelActive,
-		Category:   "subtitle-" + strings.ReplaceAll(ev.action, " ", "-"),
 		Source:     "bazarr",
 		Push:       true,
 	}

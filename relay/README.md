@@ -497,9 +497,6 @@ All settings can be provided via YAML config file (`-config` flag, default `conf
 | `PUSHWARD_GRAFANA_ENABLED` | Enable/disable Grafana provider | `true` |
 | `PUSHWARD_ARGOCD_ENABLED` | Enable/disable ArgoCD provider | `true` |
 | `PUSHWARD_STARR_ENABLED` | Enable/disable Radarr/Sonarr provider | `true` |
-| `PUSHWARD_GRAFANA_SEVERITY_LABEL` | Alert label for severity | `severity` |
-| `PUSHWARD_GRAFANA_DEFAULT_SEVERITY` | Fallback severity | `warning` |
-| `PUSHWARD_GRAFANA_DEFAULT_ICON` | Fallback icon | `exclamationmark.triangle.fill` |
 | `PUSHWARD_ARGOCD_URL` | ArgoCD UI URL for deep links | |
 | `PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD` | Skip no-op syncs within this window | `10s` |
 

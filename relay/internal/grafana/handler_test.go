@@ -26,9 +26,6 @@ func testConfig() *config.GrafanaConfig {
 			CleanupDelay: 1 * time.Hour,
 			StaleTimeout: 24 * time.Hour,
 		},
-		SeverityLabel:   "severity",
-		DefaultSeverity: "warning",
-		DefaultIcon:     "exclamationmark.triangle.fill",
 	}
 }
 
@@ -112,9 +109,6 @@ func TestFiringSingleAlert(t *testing.T) {
 	if req.Body != "CPU usage is above 90% on node-exporter:9100" {
 		t.Errorf("expected summary as body, got %s", req.Body)
 	}
-	if req.Category != "critical" {
-		t.Errorf("expected category critical, got %s", req.Category)
-	}
 	if req.Level != pushward.LevelActive {
 		t.Errorf("expected level active, got %s", req.Level)
 	}
@@ -176,9 +170,6 @@ func TestResolvedAlert(t *testing.T) {
 	if !strings.Contains(req.Body, "Disk space recovered") {
 		t.Errorf("expected body to contain summary, got %s", req.Body)
 	}
-	if req.Category != "resolved" {
-		t.Errorf("expected category resolved, got %s", req.Category)
-	}
 	if req.Level != pushward.LevelPassive {
 		t.Errorf("expected level passive, got %s", req.Level)
 	}
@@ -217,15 +208,15 @@ func TestFiringThenResolved(t *testing.T) {
 	// Firing notification
 	var firingReq pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &firingReq)
-	if firingReq.Category != "critical" {
-		t.Errorf("expected firing category critical, got %s", firingReq.Category)
+	if firingReq.Level != pushward.LevelActive {
+		t.Errorf("expected firing level active, got %s", firingReq.Level)
 	}
 
 	// Resolved notification
 	var resolvedReq pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &resolvedReq)
-	if resolvedReq.Category != "resolved" {
-		t.Errorf("expected resolved category, got %s", resolvedReq.Category)
+	if resolvedReq.Level != pushward.LevelPassive {
+		t.Errorf("expected resolved level passive, got %s", resolvedReq.Level)
 	}
 }
 
@@ -253,71 +244,6 @@ func TestRefiringAlert_SendsNotification(t *testing.T) {
 	recorded = testutil.GetCalls(calls, mu)
 	if len(recorded) != 1 {
 		t.Fatalf("expected still 1 notification (dedup), got %d", len(recorded))
-	}
-}
-
-func TestSeverityMapping(t *testing.T) {
-	handler, calls, mu, _ := setup(t)
-
-	tests := []struct {
-		severity string
-		wantCat  string
-	}{
-		{"critical", "critical"},
-		{"warning", "warning"},
-		{"info", "info"},
-	}
-
-	for _, tt := range tests {
-		mu.Lock()
-		*calls = (*calls)[:0]
-		mu.Unlock()
-
-		payload := `{
-			"alerts": [{
-				"status": "firing",
-				"labels": {"alertname": "Test` + tt.severity + `", "severity": "` + tt.severity + `"},
-				"annotations": {"summary": "test"},
-				"fingerprint": "sev-` + tt.severity + `"
-			}]
-		}`
-
-		sendWebhook(t, handler, payload)
-		recorded := testutil.GetCalls(calls, mu)
-		if len(recorded) != 1 {
-			t.Fatalf("severity %s: expected 1 call, got %d", tt.severity, len(recorded))
-		}
-
-		var req pushward.SendNotificationRequest
-		testutil.UnmarshalBody(t, recorded[0].Body, &req)
-		if req.Category != tt.wantCat {
-			t.Errorf("severity %s: expected category %s, got %s", tt.severity, tt.wantCat, req.Category)
-		}
-	}
-}
-
-func TestMissingSeverityLabel_UsesDefault(t *testing.T) {
-	handler, calls, mu, _ := setup(t)
-
-	payload := `{
-		"alerts": [{
-			"status": "firing",
-			"labels": {"alertname": "NoSeverity"},
-			"annotations": {"summary": "test"},
-			"fingerprint": "nosev1"
-		}]
-	}`
-
-	sendWebhook(t, handler, payload)
-	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(recorded))
-	}
-
-	var req pushward.SendNotificationRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.Category != "warning" {
-		t.Errorf("expected default severity warning as category, got %s", req.Category)
 	}
 }
 
@@ -368,33 +294,6 @@ func TestNoInstanceLabel_SubtitleIsPlainGrafana(t *testing.T) {
 	testutil.UnmarshalBody(t, recorded[0].Body, &req)
 	if req.Subtitle != "Grafana" {
 		t.Errorf("expected subtitle 'Grafana', got %s", req.Subtitle)
-	}
-}
-
-func TestCustomSeverityLabel(t *testing.T) {
-	cfg := testConfig()
-	cfg.SeverityLabel = "priority"
-	handler, calls, mu, _ := setupWithConfig(t, cfg)
-
-	payload := `{
-		"alerts": [{
-			"status": "firing",
-			"labels": {"alertname": "TestCustomSev", "priority": "critical"},
-			"annotations": {"summary": "test"},
-			"fingerprint": "custom1"
-		}]
-	}`
-
-	sendWebhook(t, handler, payload)
-	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(recorded))
-	}
-
-	var req pushward.SendNotificationRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.Category != "critical" {
-		t.Errorf("expected category critical from custom label, got %s", req.Category)
 	}
 }
 
@@ -623,9 +522,6 @@ func TestGroupedNotification_AllFiring(t *testing.T) {
 	if req.Subtitle != "Grafana · 3 firing" {
 		t.Errorf("expected subtitle 'Grafana · 3 firing', got %s", req.Subtitle)
 	}
-	if req.Category != "critical" {
-		t.Errorf("expected category critical (highest severity), got %s", req.Category)
-	}
 	if req.Level != pushward.LevelActive {
 		t.Errorf("expected level active, got %s", req.Level)
 	}
@@ -679,9 +575,6 @@ func TestGroupedNotification_AllResolved(t *testing.T) {
 
 	if req.Subtitle != "Grafana · 2 resolved" {
 		t.Errorf("expected subtitle 'Grafana · 2 resolved', got %s", req.Subtitle)
-	}
-	if req.Category != "resolved" {
-		t.Errorf("expected category resolved, got %s", req.Category)
 	}
 	if req.Level != pushward.LevelPassive {
 		t.Errorf("expected level passive, got %s", req.Level)
@@ -737,48 +630,6 @@ func TestGroupedNotification_MixedFiringAndResolved(t *testing.T) {
 	}
 	if req.Level != pushward.LevelActive {
 		t.Errorf("expected level active (some still firing), got %s", req.Level)
-	}
-	if req.Category != "critical" {
-		t.Errorf("expected category critical (highest severity), got %s", req.Category)
-	}
-}
-
-func TestGroupedNotification_MixedSeverities(t *testing.T) {
-	handler, calls, mu, _ := setup(t)
-
-	payload := `{
-		"alerts": [
-			{
-				"status": "firing",
-				"labels": {"alertname": "HighCPU6", "severity": "info", "instance": "node1"},
-				"annotations": {"summary": "low"},
-				"fingerprint": "fp1"
-			},
-			{
-				"status": "firing",
-				"labels": {"alertname": "HighCPU6", "severity": "critical", "instance": "node2"},
-				"annotations": {"summary": "high"},
-				"fingerprint": "fp2"
-			},
-			{
-				"status": "firing",
-				"labels": {"alertname": "HighCPU6", "severity": "warning", "instance": "node3"},
-				"annotations": {"summary": "medium"},
-				"fingerprint": "fp3"
-			}
-		]
-	}`
-
-	sendWebhook(t, handler, payload)
-	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(recorded))
-	}
-
-	var req pushward.SendNotificationRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &req)
-	if req.Category != "critical" {
-		t.Errorf("expected highest severity critical, got %s", req.Category)
 	}
 }
 

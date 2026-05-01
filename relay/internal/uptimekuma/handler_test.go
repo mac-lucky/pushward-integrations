@@ -124,9 +124,6 @@ func TestMonitorDown(t *testing.T) {
 	if notif.Title != "My Website" {
 		t.Errorf("expected notification title 'My Website', got %s", notif.Title)
 	}
-	if notif.Category != "critical" {
-		t.Errorf("expected category critical, got %s", notif.Category)
-	}
 	if notif.Source != "uptimekuma" {
 		t.Errorf("expected source uptimekuma, got %s", notif.Source)
 	}
@@ -170,19 +167,9 @@ func TestMonitorDownThenUp(t *testing.T) {
 		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
 
-	// Verify DOWN notification
-	var downNotif pushward.SendNotificationRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &downNotif)
-	if downNotif.Category != "critical" {
-		t.Errorf("expected DOWN notification category critical, got %s", downNotif.Category)
-	}
-
 	// Verify UP notification
 	var upNotif pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &upNotif)
-	if upNotif.Category != "resolved" {
-		t.Errorf("expected UP notification category resolved, got %s", upNotif.Category)
-	}
 	if upNotif.Level != pushward.LevelPassive {
 		t.Errorf("expected passive level for resolved, got %s", upNotif.Level)
 	}

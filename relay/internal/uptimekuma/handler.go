@@ -179,7 +179,6 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 		notifReq := h.buildNotification(p, subtitle, monitorIDStr)
 		notifReq.Body = p.Monitor.Name + " · " + stateText
 		notifReq.Level = pushward.LevelActive
-		notifReq.Category = "critical"
 		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
 		}
@@ -225,7 +224,6 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 	notifReq := h.buildNotification(p, subtitle, monitorIDStr)
 	notifReq.Body = notifBody
 	notifReq.Level = pushward.LevelPassive
-	notifReq.Category = "resolved"
 	if err := pwClient.SendNotification(ctx, notifReq); err != nil {
 		log.Error("failed to send notification", "slug", slug, "error", err)
 	}

@@ -266,7 +266,6 @@ func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Lo
 		ThreadID:   provider + "-health",
 		CollapseID: provider + "-health",
 		Level:      pushward.LevelActive,
-		Category:   "health",
 		Source:     provider,
 		Push:       true,
 		URL:        p.WikiURL,
@@ -288,7 +287,6 @@ func (h *Handler) handleHealthRestored(ctx context.Context, userKey string, log 
 		ThreadID:   provider + "-health",
 		CollapseID: provider + "-health-restored",
 		Level:      pushward.LevelPassive,
-		Category:   "health-restored",
 		Source:     provider,
 		Push:       true,
 	})
@@ -320,7 +318,6 @@ func (h *Handler) handleManualInteractionNotify(ctx context.Context, userKey str
 		ThreadID:   provider,
 		CollapseID: provider + "-manual-interaction",
 		Level:      pushward.LevelActive,
-		Category:   "manual-interaction",
 		Source:     provider,
 		Push:       true,
 	})
@@ -361,7 +358,6 @@ func (h *Handler) handleApplicationUpdate(ctx context.Context, userKey string, l
 		ThreadID:   provider,
 		CollapseID: provider + "-update",
 		Level:      pushward.LevelPassive,
-		Category:   "update",
 		Source:     provider,
 		Push:       true,
 		Metadata:   meta,

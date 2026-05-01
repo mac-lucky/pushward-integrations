@@ -259,7 +259,7 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 		return
 	}
 
-	level, category, push := mapImportance(notif.Importance)
+	level, push := mapImportance(notif.Importance)
 
 	serverName := t.cfg.Unraid.ServerName
 	subtitle := "Unraid"
@@ -313,7 +313,6 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 		ThreadID:   "unraid",
 		CollapseID: text.SlugHash("unraid-", collapseSeed, 8),
 		Level:      level,
-		Category:   category,
 		Source:     "unraid",
 		URL:        notif.Link,
 		Push:       push,
@@ -325,17 +324,15 @@ func (t *Tracker) handleNotification(ctx context.Context, notif graphql.Notifica
 }
 
 // mapImportance maps Unraid's notification importance to PushWard's
-// interruption level and severity category. ALERT and WARNING are
-// active (visible alert); anything else (INFO, empty, unknown) is passive.
-// Values come from the Unraid SDL verbatim — uppercase, no aliases.
-func mapImportance(importance graphql.Importance) (level, category string, push bool) {
+// interruption level. ALERT and WARNING are active (visible alert); anything
+// else (INFO, empty, unknown) is passive. Values come from the Unraid SDL
+// verbatim — uppercase, no aliases.
+func mapImportance(importance graphql.Importance) (level string, push bool) {
 	switch importance {
-	case graphql.ImportanceAlert:
-		return pushward.LevelActive, pushward.SeverityCritical, true
-	case graphql.ImportanceWarning:
-		return pushward.LevelActive, pushward.SeverityWarning, true
+	case graphql.ImportanceAlert, graphql.ImportanceWarning:
+		return pushward.LevelActive, true
 	default:
-		return pushward.LevelPassive, pushward.SeverityInfo, true
+		return pushward.LevelPassive, true
 	}
 }
 

@@ -420,7 +420,6 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog
 		ThreadID:   jellyfinMediaThreadID(p),
 		CollapseID: "jellyfin-item-" + p.ItemID,
 		Level:      pushward.LevelPassive,
-		Category:   "item-added",
 		Source:     "jellyfin",
 		Push:       true,
 		Metadata:   meta,
@@ -453,7 +452,6 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *sl
 		ThreadID:   "jellyfin-tasks",
 		CollapseID: "jellyfin-task-" + p.TaskName,
 		Level:      pushward.LevelPassive,
-		Category:   "task-started",
 		Source:     "jellyfin",
 		Push:       true,
 	})
@@ -474,7 +472,6 @@ func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, log *
 		ThreadID:   "jellyfin-tasks",
 		CollapseID: "jellyfin-task-" + p.TaskName,
 		Level:      level,
-		Category:   "task-completed",
 		Source:     "jellyfin",
 		Push:       true,
 	})
@@ -488,7 +485,6 @@ func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, log *sl
 		ThreadID:   "jellyfin-security",
 		CollapseID: "jellyfin-auth",
 		Level:      pushward.LevelActive,
-		Category:   "auth-failure",
 		Source:     "jellyfin",
 		Push:       true,
 		Metadata:   map[string]string{"user": p.UserName, "remote": p.RemoteEndPoint},
