@@ -46,11 +46,6 @@ func setup(t *testing.T) (http.Handler, *[]testutil.APICall, *sync.Mutex, *state
 	return newTestAPI(t, testConfig())
 }
 
-func setupWithConfig(t *testing.T, cfg *config.GrafanaConfig) (http.Handler, *[]testutil.APICall, *sync.Mutex, *state.MemoryStore) {
-	t.Helper()
-	return newTestAPI(t, cfg)
-}
-
 func sendWebhook(t *testing.T, handler http.Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(http.MethodPost, "/grafana", strings.NewReader(payload))
