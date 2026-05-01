@@ -9,8 +9,6 @@
 /mqtt/pushward-mqtt
 /pushward-relay
 /relay/pushward-relay
-/pushward-unraid
-/unraid/pushward-unraid
 /pushward-octoprint
 /octoprint/pushward-octoprint
 /pushward-grafana

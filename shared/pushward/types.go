@@ -267,7 +267,6 @@ var sourceDisplayNames = map[string]string{
 	"github":          "GitHub",
 	"bambulab":        "BambuLab",
 	"octoprint":       "OctoPrint",
-	"unraid":          "Unraid",
 	"mqtt":            "MQTT",
 }
 
