@@ -40,8 +40,8 @@ func TestTLSConfig_Pinning(t *testing.T) {
 	fakeCert := []byte("fake-printer-cert-bytes")
 	fp := sha256.Sum256(fakeCert)
 
-	c := &Client{certFingerprint: fp[:]}
-	cfg := c.tlsConfig()
+	c := &Client{}
+	cfg := c.tlsConfig(fp[:])
 	if cfg.VerifyConnection == nil {
 		t.Fatal("expected VerifyConnection callback when pinning")
 	}
@@ -68,9 +68,9 @@ func TestTLSConfig_Pinning(t *testing.T) {
 	}
 }
 
-func TestTLSConfig_NoPinning_FallsBackToInsecure(t *testing.T) {
+func TestTLSConfig_InsecureSkipVerify(t *testing.T) {
 	c := &Client{insecureSkipVerify: true}
-	cfg := c.tlsConfig()
+	cfg := c.tlsConfig(nil)
 	if cfg.VerifyConnection != nil {
 		t.Fatal("no fingerprint → no VerifyConnection callback expected")
 	}
