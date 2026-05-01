@@ -120,7 +120,7 @@ func (c *Client) autoPin() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("TLS dial: %w", err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	certs := conn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
