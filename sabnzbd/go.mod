@@ -1,6 +1,6 @@
 module github.com/mac-lucky/pushward-integrations/sabnzbd
 
-go 1.26.2
+go 1.26.3
 
 require github.com/mac-lucky/pushward-integrations/shared v0.0.0
 
