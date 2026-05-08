@@ -168,24 +168,18 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
           BRIDGE: ${{ needs.parse.outputs.bridge }}
           VERSION: ${{ needs.parse.outputs.version }}
         run: |
-          gh release create "$TAG" \
-            --title "$BRIDGE v$VERSION" \
-            --generate-notes \
-            --verify-tag
-
-          AUTO_BODY=$(gh release view "$TAG" --json body --jq .body)
-          PREFIX=$(cat <<EOF
+          AUTO_BODY=$(gh api "repos/$GH_REPO/releases/generate-notes" \
+            -f tag_name="$TAG" --jq .body)
+          {
+            cat <<EOF
           **Image:** \`ghcr.io/mac-lucky/pushward-${BRIDGE}:${VERSION}\`
 
           \`\`\`
@@ -193,6 +187,9 @@ jobs:
           \`\`\`
 
           EOF
-          )
-          printf '%s\n%s\n' "$PREFIX" "$AUTO_BODY" > /tmp/release-notes.md
-          gh release edit "$TAG" --notes-file /tmp/release-notes.md
+            printf '%s\n' "$AUTO_BODY"
+          } > /tmp/release-notes.md
+          gh release create "$TAG" \
+            --title "$BRIDGE v$VERSION" \
+            --verify-tag \
+            --notes-file /tmp/release-notes.md
