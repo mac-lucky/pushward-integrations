@@ -1,0 +1,198 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'bambulab/v*'
+      - 'github/v*'
+      - 'grafana/v*'
+      - 'relay/v*'
+      - 'sabnzbd/v*'
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  parse:
+    name: Parse tag
+    runs-on: ubuntu-latest
+    outputs:
+      bridge: ${{ steps.x.outputs.bridge }}
+      version: ${{ steps.x.outputs.version }}
+    steps:
+      - id: x
+        run: |
+          REF="${GITHUB_REF#refs/tags/}"
+          BRIDGE="${REF%%/*}"
+          VERSION="${REF##*/}"
+          VERSION="${VERSION#v}"
+          echo "bridge=$BRIDGE" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Parsed bridge=$BRIDGE version=$VERSION"
+
+  bambulab:
+    needs: parse
+    if: needs.parse.outputs.bridge == 'bambulab'
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      app_name: "pushward-bambulab"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-bambulab"
+      dockerhub_image: "maclucky/pushward-bambulab"
+      push_to_dockerhub: false
+      release_on_tag: true
+      enable_auto_version: false
+      main_branch: "main"
+      build_context: "."
+      dockerfile_path: "./bambulab/Dockerfile"
+      go_module_path: "./bambulab"
+      enable_go_tests: true
+      go_test_args: "-race -count=1 -v"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit
+
+  github:
+    needs: parse
+    if: needs.parse.outputs.bridge == 'github'
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      app_name: "pushward-github"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-github"
+      dockerhub_image: "maclucky/pushward-github"
+      push_to_dockerhub: false
+      release_on_tag: true
+      enable_auto_version: false
+      main_branch: "main"
+      build_context: "."
+      dockerfile_path: "./github/Dockerfile"
+      go_module_path: "./github"
+      enable_go_tests: true
+      go_test_args: "-race -count=1 -v"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit
+
+  grafana:
+    needs: parse
+    if: needs.parse.outputs.bridge == 'grafana'
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      app_name: "pushward-grafana"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-grafana"
+      dockerhub_image: "maclucky/pushward-grafana"
+      push_to_dockerhub: false
+      release_on_tag: true
+      enable_auto_version: false
+      main_branch: "main"
+      build_context: "."
+      dockerfile_path: "./grafana/Dockerfile"
+      go_module_path: "./grafana"
+      enable_go_tests: true
+      go_test_args: "-race -count=1 -v"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit
+
+  relay:
+    needs: parse
+    if: needs.parse.outputs.bridge == 'relay'
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      app_name: "pushward-relay"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-relay"
+      dockerhub_image: "maclucky/pushward-relay"
+      push_to_dockerhub: false
+      release_on_tag: true
+      enable_auto_version: false
+      main_branch: "main"
+      build_context: "."
+      dockerfile_path: "./relay/Dockerfile"
+      go_module_path: "./relay"
+      enable_go_tests: true
+      go_test_args: "-race -count=1 -v"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit
+
+  sabnzbd:
+    needs: parse
+    if: needs.parse.outputs.bridge == 'sabnzbd'
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+    with:
+      app_name: "pushward-sabnzbd"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-sabnzbd"
+      dockerhub_image: "maclucky/pushward-sabnzbd"
+      push_to_dockerhub: false
+      release_on_tag: true
+      enable_auto_version: false
+      main_branch: "main"
+      build_context: "."
+      dockerfile_path: "./sabnzbd/Dockerfile"
+      go_module_path: "./sabnzbd"
+      enable_go_tests: true
+      go_test_args: "-race -count=1 -v"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit
+
+  github-release:
+    name: Create GitHub Release
+    needs: [parse, bambulab, github, grafana, relay, sabnzbd]
+    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+          BRIDGE: ${{ needs.parse.outputs.bridge }}
+          VERSION: ${{ needs.parse.outputs.version }}
+        run: |
+          gh release create "$TAG" \
+            --title "$BRIDGE v$VERSION" \
+            --generate-notes \
+            --verify-tag
+
+          AUTO_BODY=$(gh release view "$TAG" --json body --jq .body)
+          PREFIX=$(cat <<EOF
+          **Image:** \`ghcr.io/mac-lucky/pushward-${BRIDGE}:${VERSION}\`
+
+          \`\`\`
+          docker pull ghcr.io/mac-lucky/pushward-${BRIDGE}:${VERSION}
+          \`\`\`
+
+          EOF
+          )
+          printf '%s\n%s\n' "$PREFIX" "$AUTO_BODY" > /tmp/release-notes.md
+          gh release edit "$TAG" --notes-file /tmp/release-notes.md

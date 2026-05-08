@@ -3,7 +3,6 @@ name: CI/CD SABnzbd
 on:
   push:
     branches: [main]
-    tags: ['v*']
     paths: ['sabnzbd/**', 'shared/**', '.github/workflows/sabnzbd-ci-cd.yml']
   pull_request:
     branches: [main]
@@ -23,6 +22,8 @@ jobs:
       dockerhub_image: "maclucky/pushward-sabnzbd"
       push_to_dockerhub: false
       push_on_main: true
+      enable_auto_version: false
+      enable_main_dev_tag: true
       main_branch: "main"
       build_context: "."
       dockerfile_path: "./sabnzbd/Dockerfile"

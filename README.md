@@ -155,12 +155,50 @@ docker build -f grafana/Dockerfile -t pushward-grafana .
 
 ## CI/CD
 
-Each integration has its own GitHub Actions workflow with path filters so only the changed integration gets built:
+Each bridge has its own per-bridge workflow plus a shared release orchestrator. All call the reusable `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml` under the hood.
 
-- `.github/workflows/github-ci-cd.yml` — triggers on `github/**` and `shared/**` changes
-- `.github/workflows/sabnzbd-ci-cd.yml` — triggers on `sabnzbd/**` and `shared/**` changes
-- `.github/workflows/bambulab-ci-cd.yml` — triggers on `bambulab/**` and `shared/**` changes
-- `.github/workflows/relay-ci-cd.yml` — triggers on `relay/**` and `shared/**` changes
-- `.github/workflows/grafana-ci-cd.yml` — triggers on `grafana/**` and `shared/**` changes
+### Per-bridge CI workflows (PR + main)
 
-All use the shared `mac-lucky/actions-shared-workflows/go-cicd-reusable.yml` workflow. Triggers: push to `main`, tags (`v*`), pull requests to `main`, and manual `workflow_dispatch`. Docker images are built and pushed to GHCR on push to main or tags.
+Path-filtered so only the changed bridge runs:
+
+- `.github/workflows/github-ci-cd.yml` — triggers on `github/**` and `shared/**`
+- `.github/workflows/sabnzbd-ci-cd.yml` — triggers on `sabnzbd/**` and `shared/**`
+- `.github/workflows/bambulab-ci-cd.yml` — triggers on `bambulab/**` and `shared/**`
+- `.github/workflows/relay-ci-cd.yml` — triggers on `relay/**` and `shared/**`
+- `.github/workflows/grafana-ci-cd.yml` — triggers on `grafana/**` and `shared/**`
+
+### Release orchestrator (tags)
+
+`.github/workflows/release.yml` listens for per-bridge git tags and runs the release pipeline for that one bridge.
+
+### Image tag channels
+
+| Trigger | GHCR tags published | Purpose |
+|---|---|---|
+| Pull request | _(none)_ | Tests + analysis only |
+| Push to `main` | `:main`, `:main-<short-sha>` | Rolling latest unstable + immutable per-commit pin |
+| Git tag `<bridge>/v<X.Y.Z>` | `:X.Y.Z`, `:X.Y`, `:latest` (and `:X` once `X >= 1`) | Stable release |
+
+`:latest` is updated only on tag releases — it never moves on a `main` push.
+
+### Cutting a release
+
+Bridges are versioned independently with per-bridge git tags. Tag format: `<bridge>/v<X.Y.Z>`.
+
+```bash
+# Single-bridge release (typical bug-fix path)
+git tag relay/v0.4.1
+git push origin relay/v0.4.1
+
+# Coordinated platform release (initial baseline / breaking API change)
+for b in bambulab github grafana relay sabnzbd; do
+  git tag "$b/v0.4.0"
+done
+git push origin bambulab/v0.4.0 github/v0.4.0 grafana/v0.4.0 relay/v0.4.0 sabnzbd/v0.4.0
+```
+
+Each tag triggers `release.yml` independently and produces a per-bridge GitHub Release with auto-generated changelog notes (categorized via `.github/release.yml`).
+
+### Server compatibility
+
+Bridges target the [pushward-server](https://pushward.app) API surface in their `MAJOR.MINOR`. Patch versions (`*.*.X`) are bridge-only fixes that do not require a coordinated server bump. When the server protocol changes, bump the affected bridges' minor.

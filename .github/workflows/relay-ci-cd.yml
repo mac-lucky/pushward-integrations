@@ -3,7 +3,6 @@ name: CI/CD Relay
 on:
   push:
     branches: [main]
-    tags: ['v*']
     paths: ['relay/**', 'shared/**', '.github/workflows/relay-ci-cd.yml']
   pull_request:
     branches: [main]
@@ -23,6 +22,8 @@ jobs:
       dockerhub_image: "maclucky/pushward-relay"
       push_to_dockerhub: false
       push_on_main: true
+      enable_auto_version: false
+      enable_main_dev_tag: true
       main_branch: "main"
       build_context: "."
       dockerfile_path: "./relay/Dockerfile"

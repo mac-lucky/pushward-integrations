@@ -3,7 +3,6 @@ name: CI/CD GitHub
 on:
   push:
     branches: [main]
-    tags: ['v*']
     paths: ['github/**', 'shared/**', '.github/workflows/github-ci-cd.yml']
   pull_request:
     branches: [main]
@@ -23,6 +22,8 @@ jobs:
       dockerhub_image: "maclucky/pushward-github"
       push_to_dockerhub: false
       push_on_main: true
+      enable_auto_version: false
+      enable_main_dev_tag: true
       main_branch: "main"
       build_context: "."
       dockerfile_path: "./github/Dockerfile"
