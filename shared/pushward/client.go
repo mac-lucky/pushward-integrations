@@ -84,7 +84,10 @@ func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 // The handleConflict callback, if non-nil, is invoked on 409 responses; it
 // receives the response body and returns (done bool, err error). If done is
 // true, doWithRetry returns err immediately.
-func (c *Client) doWithRetry(ctx context.Context, operation, method, url string, body interface{}, handleConflict func([]byte) (bool, error)) error {
+// If contentType is empty, "application/json" is used. Widget PATCH requests
+// must pass "application/merge-patch+json" to satisfy RFC 7396 content
+// negotiation enforced by pushward-server.
+func (c *Client) doWithRetry(ctx context.Context, operation, method, url, contentType string, body interface{}, handleConflict func([]byte) (bool, error)) error {
 	if c.breaker != nil && !c.breaker.Allow() {
 		err := ErrCircuitOpen
 		if c.onResult != nil {
@@ -138,7 +141,11 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url string,
 			return fmt.Errorf("creating request: %w", err)
 		}
 		if reqBody != nil {
-			httpReq.Header.Set("Content-Type", "application/json")
+			ct := contentType
+			if ct == "" {
+				ct = "application/json"
+			}
+			httpReq.Header.Set("Content-Type", ct)
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
 
@@ -205,6 +212,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url string,
 // body. Callers branch on HTTPError.Code instead of the human-readable Detail.
 const (
 	ErrCodeActivityLimitExceeded = "activity.limit_exceeded"
+	ErrCodeWidgetLimitExceeded   = "widget.limit_exceeded"
 )
 
 // problem is the parsed RFC 9457 error body. It is an internal parsing
@@ -309,7 +317,7 @@ func (c *Client) recordResult(ctx context.Context, operation string, attempts in
 // distinguishing created vs. updated, so duplicate slugs are no longer a 409.
 // A 409 now signals only activity.limit_exceeded — surfaced as a typed error.
 func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority, endedTTL, staleTTL int) error {
-	return c.doWithRetry(ctx, "create", http.MethodPost, fmt.Sprintf("%s/activities", c.baseURL),
+	return c.doWithRetry(ctx, "create", http.MethodPost, fmt.Sprintf("%s/activities", c.baseURL), "",
 		CreateActivityRequest{
 			Slug:     slug,
 			Name:     name,
@@ -334,7 +342,7 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 // it for the seed (establishes template/icon/accent) and the final ENDED
 // frame; use PatchActivity for mid-sequence ticks.
 func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequest) error {
-	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activities/%s", c.baseURL, slug), req, nil)
+	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activities/%s", c.baseURL, slug), "", req, nil)
 }
 
 // PatchActivity sends a typed RFC 7396 merge-patch body to
@@ -343,12 +351,40 @@ func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequ
 // set ContentPatch.Alarm to BoolPtr(true); the server clears alarm on any
 // transition to ENDED.
 func (c *Client) PatchActivity(ctx context.Context, slug string, req PatchRequest) error {
-	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activities/%s", c.baseURL, slug), req, nil)
+	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activities/%s", c.baseURL, slug), "", req, nil)
 }
 
 // SendNotification creates a notification record and optionally pushes an APNs alert.
 func (c *Client) SendNotification(ctx context.Context, req SendNotificationRequest) error {
 	req.FillSourceDisplayName()
 	return c.doWithRetry(ctx, "notify", http.MethodPost,
-		fmt.Sprintf("%s/notifications", c.baseURL), req, nil)
+		fmt.Sprintf("%s/notifications", c.baseURL), "", req, nil)
+}
+
+// CreateWidget creates (or upserts) a widget via POST /widgets. The server
+// upserts on (user, slug) so idempotent calls at startup are safe. A 409
+// signals widget.limit_exceeded — surfaced as a typed *HTTPError with that
+// stable Code.
+func (c *Client) CreateWidget(ctx context.Context, req CreateWidgetRequest) error {
+	return c.doWithRetry(ctx, "widget.create", http.MethodPost,
+		fmt.Sprintf("%s/widgets", c.baseURL), "", req,
+		func(body []byte) (bool, error) {
+			return true, newHTTPError(http.StatusConflict, parseProblem(body))
+		},
+	)
+}
+
+// UpdateWidget sends a merge-patch body to PATCH /widgets/{slug}. The widget
+// API requires Content-Type "application/merge-patch+json" (RFC 7396); absent
+// fields are preserved, present fields overwrite, null clears.
+func (c *Client) UpdateWidget(ctx context.Context, slug string, req UpdateWidgetRequest) error {
+	return c.doWithRetry(ctx, "widget.update", http.MethodPatch,
+		fmt.Sprintf("%s/widgets/%s", c.baseURL, slug),
+		"application/merge-patch+json", req, nil)
+}
+
+// DeleteWidget removes a widget via DELETE /widgets/{slug}.
+func (c *Client) DeleteWidget(ctx context.Context, slug string) error {
+	return c.doWithRetry(ctx, "widget.delete", http.MethodDelete,
+		fmt.Sprintf("%s/widgets/%s", c.baseURL, slug), "", nil, nil)
 }

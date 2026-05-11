@@ -58,3 +58,84 @@ timeline:
 #
 # If grafana.url + grafana.api_token are set, the query is
 # auto-extracted from the alert rule — no annotations needed.
+
+# --- Widgets ---
+#
+# Each entry below polls a PromQL/MetricsQL query and publishes the value
+# to the pushward-server widget API so users see it live on their iOS
+# Home Screen / Lock Screen widget. Widgets are auto-created on startup
+# (idempotent), and only PATCHed when the value changes (unless
+# update_mode: always is set).
+#
+# Requirements:
+#   - The PushWard API key above (pushward.api_key) must be an
+#     integration key (hlk_...) with the `widgets` scope enabled.
+#     Without it the server returns 403 on first widget create.
+#   - Per-user widget cap on the server is 50.
+#
+# widgets:
+#   # Scalar example: number of registered users.
+#   - slug: "registered-users"
+#     name: "Registered Users"
+#     template: "value"           # value|progress|status|gauge
+#     query: "pushward_users_total"
+#     interval: 60s               # default 60s; min 5s
+#     update_mode: "on_change"    # on_change (default) or always
+#     min_change: 0               # change tolerance; 0 = any change pushes
+#     label_template: "{{.Value}} users"
+#     content:
+#       icon: "person.3.fill"
+#       unit: "users"
+#       severity: "info"
+#
+#   # Gauge example: CPU utilisation 0-100.
+#   - slug: "node-cpu"
+#     name: "Node CPU"
+#     template: "gauge"
+#     query: 'avg(100 - rate(node_cpu_seconds_total{mode="idle"}[1m]) * 100)'
+#     interval: 30s
+#     min_change: 0.5             # only push when utilisation moves > 0.5%
+#     label_template: "{{printf \"%.1f\" .Value}}%"
+#     content:
+#       icon: "cpu"
+#       unit: "%"
+#       min_value: 0
+#       max_value: 100
+#       severity: "warning"
+#
+#   # Multi-series fan-out: one widget per instance label.
+#   - slug: "node-mem-base"
+#     query_all: 'node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes'
+#     slug_template: "node-mem-{{.instance}}"
+#     name_template: "Memory free on {{.instance}}"
+#     template: "progress"
+#     interval: 60s
+#     max_series: 20              # safety cap on series cardinality
+#     cleanup_missing: false      # set true to DELETE widgets when a series goes away
+#     content:
+#       icon: "memorychip"
+#       min_value: 0
+#       max_value: 1
+#       severity: "info"
+#
+#   # stat_list: 1–4 rows of pre-formatted values, polled independently.
+#   # Server caps: 4 rows, label ≤32 chars, value ≤32 chars, unit ≤16 chars.
+#   - slug: "homelab-stats"
+#     name: "Homelab"
+#     template: "stat_list"
+#     interval: 60s
+#     content:
+#       icon: "house.fill"
+#       severity: "info"
+#     stat_rows:
+#       - label: "Users"
+#         query: "pushward_users_total"
+#         value_template: "{{printf \"%.0f\" .Value}}"
+#       - label: "MRR"
+#         query: "billing_mrr_usd"
+#         value_template: "{{printf \"$%.0f\" .Value}}"
+#         unit: "USD"
+#       - label: "Online"
+#         query: "active_devices_5m"
+#         value_template: "{{printf \"%.0f\" .Value}}"
+#         missing_value: "?"

@@ -195,6 +195,78 @@ type PatchRequest struct {
 	Priority *int          `json:"priority,omitempty"`
 }
 
+// WidgetTemplate names a renderer on the iOS widget extension.
+type WidgetTemplate string
+
+const (
+	WidgetTemplateValue    WidgetTemplate = "value"
+	WidgetTemplateProgress WidgetTemplate = "progress"
+	WidgetTemplateStatus   WidgetTemplate = "status"
+	WidgetTemplateGauge    WidgetTemplate = "gauge"
+	WidgetTemplateStatList WidgetTemplate = "stat_list"
+)
+
+// StatRow is a single row of a stat_list widget. Value is pre-formatted by
+// the integration (server does not localize / round); Unit is optional and
+// rendered after the value.
+type StatRow struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+	Unit  string `json:"unit,omitempty"`
+}
+
+// WidgetContent mirrors the server's widget content model. All fields are
+// optional and respect RFC 7396 merge-patch semantics when sent via
+// Client.UpdateWidget: pointer fields omitted with nil + omitempty are
+// preserved, present pointer fields overwrite, and explicit JSON null on a
+// pointer (achieved only by removing omitempty) clears the field server-side.
+type WidgetContent struct {
+	Icon            string   `json:"icon,omitempty"`
+	Value           *float64 `json:"value,omitempty"`
+	MinValue        *float64 `json:"min_value,omitempty"`
+	MaxValue        *float64 `json:"max_value,omitempty"`
+	Unit            string   `json:"unit,omitempty"`
+	Label           string   `json:"label,omitempty"`
+	Subtitle        string   `json:"subtitle,omitempty"`
+	Severity        string   `json:"severity,omitempty"`
+	AccentColor     string   `json:"accent_color,omitempty"`
+	BackgroundColor string   `json:"background_color,omitempty"`
+	TextColor       string   `json:"text_color,omitempty"`
+	// Trend annotates value/gauge widgets with a directional arrow. One of
+	// "up" / "down" / "flat". Ignored for other templates.
+	Trend string `json:"trend,omitempty"`
+	// StatRows powers the stat_list template — a 1-4 row label/value list.
+	// Required when template == stat_list, ignored otherwise.
+	StatRows []StatRow `json:"stat_rows,omitempty"`
+}
+
+// CreateWidgetRequest is the body for POST /widgets. The server upserts on
+// (user, slug); a duplicate slug is not an error.
+type CreateWidgetRequest struct {
+	Slug         string         `json:"slug"`
+	Name         string         `json:"name"`
+	Template     WidgetTemplate `json:"template"`
+	Content      WidgetContent  `json:"content"`
+	PushThrottle *int           `json:"push_throttle,omitempty"`
+}
+
+// UpdateWidgetRequest is the body for PATCH /widgets/{slug}. The server
+// requires Content-Type "application/merge-patch+json" and applies RFC 7396
+// merge semantics: present top-level fields overwrite; absent fields are
+// preserved.
+//
+// Content is a pointer so that callers who only want to patch Name or
+// PushThrottle leave it nil and the field is omitted from the wire payload
+// entirely. Sending `"content":{}` would otherwise round-trip an empty
+// struct through the server's struct-typed handler and risk clearing
+// existing content fields.
+type UpdateWidgetRequest struct {
+	Name         string         `json:"name,omitempty"`
+	Template     WidgetTemplate `json:"template,omitempty"`
+	Content      *WidgetContent `json:"content,omitempty"`
+	PushThrottle *int           `json:"push_throttle,omitempty"`
+}
+
 // MediaAttachment is a rich media attachment (image, video, or audio)
 // attached to a notification. The iOS client downloads the URL and
 // attaches it via UNNotificationAttachment subject to Apple's per-type

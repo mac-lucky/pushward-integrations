@@ -14,9 +14,11 @@ import (
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/handler"
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/poller"
+	grafanawidgets "github.com/mac-lucky/pushward-integrations/grafana/internal/widgets"
 	sharedauth "github.com/mac-lucky/pushward-integrations/shared/auth"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/server"
+	sharedwidgets "github.com/mac-lucky/pushward-integrations/shared/widgets"
 )
 
 func main() {
@@ -73,6 +75,25 @@ func main() {
 	h.StartSweeper(ctx, cfg.PushWard.StaleTimeout)
 	h.StartAlertChecker(ctx, cfg.Grafana.AlertCheckInterval)
 
+	var widgetManager *sharedwidgets.Manager
+	if len(cfg.Widgets) > 0 {
+		specs, err := grafanawidgets.BuildSpecs(cfg.Widgets, mc)
+		if err != nil {
+			slog.Error("widget spec build failed", "error", err)
+			os.Exit(1)
+		}
+		widgetManager, err = sharedwidgets.New(pwClient, specs, slog.Default())
+		if err != nil {
+			slog.Error("widget manager build failed", "error", err)
+			os.Exit(1)
+		}
+		if err := widgetManager.Start(ctx); err != nil {
+			slog.Error("widget manager startup failed", "error", err)
+			os.Exit(1)
+		}
+		slog.Info("widget manager started", "widgets", len(cfg.Widgets))
+	}
+
 	mux := server.NewMux()
 	var webhookHandler http.Handler = h
 	if cfg.WebhookToken != "" {
@@ -102,5 +123,8 @@ func main() {
 	h.WaitIdle()
 	p.Wait()
 	h.WaitBackground()
+	if widgetManager != nil {
+		widgetManager.Wait()
+	}
 	slog.Info("shutdown complete")
 }
