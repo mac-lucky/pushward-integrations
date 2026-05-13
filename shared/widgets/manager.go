@@ -528,10 +528,10 @@ func (m *Manager) applyMulti(ctx context.Context, spec *Spec, logger *slog.Logge
 }
 
 func (m *Manager) createWidget(ctx context.Context, spec *Spec, slug, name string, content pushward.WidgetContent) error {
+	content.Template = spec.Template
 	req := pushward.CreateWidgetRequest{
 		Slug:         slug,
 		Name:         name,
-		Template:     spec.Template,
 		Content:      content,
 		PushThrottle: spec.PushThrottle,
 	}

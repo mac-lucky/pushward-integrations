@@ -25,10 +25,9 @@ func TestCreateWidget_Body(t *testing.T) {
 	c := NewClient(srv.URL, "hlk_test")
 	v := 42.0
 	err := c.CreateWidget(context.Background(), CreateWidgetRequest{
-		Slug:     "users",
-		Name:     "Users",
-		Template: WidgetTemplateValue,
-		Content:  WidgetContent{Value: &v, Unit: "users"},
+		Slug:    "users",
+		Name:    "Users",
+		Content: WidgetContent{Template: WidgetTemplateValue, Value: &v, Unit: "users"},
 	})
 	if err != nil {
 		t.Fatalf("CreateWidget: %v", err)
@@ -92,7 +91,7 @@ func TestCreateWidget_LimitExceeded(t *testing.T) {
 
 	c := NewClient(srv.URL, "hlk_test")
 	err := c.CreateWidget(context.Background(), CreateWidgetRequest{
-		Slug: "x", Name: "X", Template: WidgetTemplateValue,
+		Slug: "x", Name: "X", Content: WidgetContent{Template: WidgetTemplateValue},
 	})
 	if err == nil {
 		t.Fatal("expected error")

@@ -78,8 +78,8 @@ func TestManager_StatList_CreatesWidgetWithRows(t *testing.T) {
 	stub.mu.Lock()
 	defer stub.mu.Unlock()
 	got := stub.gotCreate[0]
-	if got.Template != pushward.WidgetTemplateStatList {
-		t.Errorf("Template = %q, want stat_list (defaulted)", got.Template)
+	if got.Content.Template != pushward.WidgetTemplateStatList {
+		t.Errorf("content.template = %q, want stat_list (defaulted)", got.Content.Template)
 	}
 	if len(got.Content.StatRows) != 2 || got.Content.StatRows[0].Label != "Users" {
 		t.Errorf("StatRows mismatch: %+v", got.Content.StatRows)

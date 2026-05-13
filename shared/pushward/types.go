@@ -221,17 +221,18 @@ type StatRow struct {
 // preserved, present pointer fields overwrite, and explicit JSON null on a
 // pointer (achieved only by removing omitempty) clears the field server-side.
 type WidgetContent struct {
-	Icon            string   `json:"icon,omitempty"`
-	Value           *float64 `json:"value,omitempty"`
-	MinValue        *float64 `json:"min_value,omitempty"`
-	MaxValue        *float64 `json:"max_value,omitempty"`
-	Unit            string   `json:"unit,omitempty"`
-	Label           string   `json:"label,omitempty"`
-	Subtitle        string   `json:"subtitle,omitempty"`
-	Severity        string   `json:"severity,omitempty"`
-	AccentColor     string   `json:"accent_color,omitempty"`
-	BackgroundColor string   `json:"background_color,omitempty"`
-	TextColor       string   `json:"text_color,omitempty"`
+	Template        WidgetTemplate `json:"template,omitempty"`
+	Icon            string         `json:"icon,omitempty"`
+	Value           *float64       `json:"value,omitempty"`
+	MinValue        *float64       `json:"min_value,omitempty"`
+	MaxValue        *float64       `json:"max_value,omitempty"`
+	Unit            string         `json:"unit,omitempty"`
+	Label           string         `json:"label,omitempty"`
+	Subtitle        string         `json:"subtitle,omitempty"`
+	Severity        string         `json:"severity,omitempty"`
+	AccentColor     string         `json:"accent_color,omitempty"`
+	BackgroundColor string         `json:"background_color,omitempty"`
+	TextColor       string         `json:"text_color,omitempty"`
 	// Trend annotates value/gauge widgets with a directional arrow. One of
 	// "up" / "down" / "flat". Ignored for other templates.
 	Trend string `json:"trend,omitempty"`
@@ -243,11 +244,10 @@ type WidgetContent struct {
 // CreateWidgetRequest is the body for POST /widgets. The server upserts on
 // (user, slug); a duplicate slug is not an error.
 type CreateWidgetRequest struct {
-	Slug         string         `json:"slug"`
-	Name         string         `json:"name"`
-	Template     WidgetTemplate `json:"template"`
-	Content      WidgetContent  `json:"content"`
-	PushThrottle *int           `json:"push_throttle,omitempty"`
+	Slug         string        `json:"slug"`
+	Name         string        `json:"name"`
+	Content      WidgetContent `json:"content"`
+	PushThrottle *int          `json:"push_throttle,omitempty"`
 }
 
 // UpdateWidgetRequest is the body for PATCH /widgets/{slug}. The server
@@ -262,7 +262,6 @@ type CreateWidgetRequest struct {
 // existing content fields.
 type UpdateWidgetRequest struct {
 	Name         string         `json:"name,omitempty"`
-	Template     WidgetTemplate `json:"template,omitempty"`
 	Content      *WidgetContent `json:"content,omitempty"`
 	PushThrottle *int           `json:"push_throttle,omitempty"`
 }
