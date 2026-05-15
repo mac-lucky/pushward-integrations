@@ -239,7 +239,8 @@ func TestManager_ScalarSkipsNaN(t *testing.T) {
 	cancel()
 	m.Wait()
 
-	// CreateWidget still happens (with no value), but no PATCHes for NaN.
+	// value-template scalar widget tolerates a nil initial Value, so the
+	// create still happens (without Value) and no PATCHes are issued.
 	if stub.updates.Load() != 0 {
 		t.Errorf("PATCH happened for NaN, count=%d", stub.updates.Load())
 	}
@@ -250,6 +251,59 @@ func TestManager_ScalarSkipsNaN(t *testing.T) {
 	}
 	if stub.gotCreate[0].Content.Value != nil {
 		t.Errorf("initial value should be nil for NaN, got %v", *stub.gotCreate[0].Content.Value)
+	}
+}
+
+func TestManager_GaugeDefersCreateUntilFirstValue(t *testing.T) {
+	stub, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	minV, maxV := 0.0, 100.0
+	var i atomic.Int64
+	src := ValueSourceFunc(func(_ context.Context) (float64, error) {
+		// First call returns ErrNoData (e.g. metric missing); subsequent
+		// calls return a real value so the deferred create can fire.
+		if i.Add(1) == 1 {
+			return 0, ErrNoData
+		}
+		return 42.0, nil
+	})
+
+	m, err := New(client, []Spec{{
+		Slug:     "gauge",
+		Name:     "Gauge",
+		Template: pushward.WidgetTemplateGauge,
+		Source:   src,
+		Interval: 15 * time.Millisecond,
+		Content:  pushward.WidgetContent{MinValue: &minV, MaxValue: &maxV},
+	}}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// No create yet — initial poll returned ErrNoData.
+	if got := stub.creates.Load(); got != 0 {
+		t.Fatalf("creates after Start = %d, want 0 (deferred)", got)
+	}
+
+	waitFor(t, 500*time.Millisecond, func() bool { return stub.creates.Load() >= 1 })
+	cancel()
+	m.Wait()
+
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if len(stub.gotCreate) != 1 {
+		t.Fatalf("creates=%d, want 1", len(stub.gotCreate))
+	}
+	if v := stub.gotCreate[0].Content.Value; v == nil || *v != 42.0 {
+		t.Errorf("deferred create value = %v, want 42", v)
+	}
+	if got := stub.gotCreate[0].Content.Template; got != pushward.WidgetTemplateGauge {
+		t.Errorf("template = %q, want gauge", got)
 	}
 }
 

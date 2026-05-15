@@ -270,6 +270,18 @@ func (m *Manager) startScalar(ctx context.Context, spec *Spec) error {
 	if err != nil {
 		return fmt.Errorf("widget %q initial poll failed fatally: %w", spec.Slug, err)
 	}
+	// Defer create until the first successful poll for gauge/progress
+	// templates — the server rejects them without a Value, and we don't
+	// want a missing metric at startup to crash-loop the bridge.
+	if !ok && requiresInitialValue(spec.Template) {
+		logger.Info("widget create deferred until first successful poll", "template", string(spec.Template))
+		m.wg.Add(1)
+		go func() {
+			defer m.wg.Done()
+			m.runScalar(ctx, spec, logger, math.NaN(), true)
+		}()
+		return nil
+	}
 	content := renderContent(spec.Content, spec.parsedLabelTpl, valueData{Value: initial, Unit: spec.Content.Unit})
 	if ok {
 		content.Value = pushward.Float64Ptr(initial)
@@ -286,12 +298,24 @@ func (m *Manager) startScalar(ctx context.Context, spec *Spec) error {
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		m.runScalar(ctx, spec, logger, lastValue)
+		m.runScalar(ctx, spec, logger, lastValue, false)
 	}()
 	return nil
 }
 
-func (m *Manager) runScalar(ctx context.Context, spec *Spec, logger *slog.Logger, lastValue float64) {
+// requiresInitialValue reports whether the server's widget-create validation
+// demands a non-nil Value for this template. Value/status accept nil; gauge
+// and progress require a number alongside the bounds.
+func requiresInitialValue(t pushward.WidgetTemplate) bool {
+	switch t {
+	case pushward.WidgetTemplateGauge, pushward.WidgetTemplateProgress:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *Manager) runScalar(ctx context.Context, spec *Spec, logger *slog.Logger, lastValue float64, needsCreate bool) {
 	waitJitter(ctx, spec.Interval)
 	if ctx.Err() != nil {
 		return
@@ -307,11 +331,22 @@ func (m *Manager) runScalar(ctx context.Context, spec *Spec, logger *slog.Logger
 			if !ok {
 				continue
 			}
+			content := renderContent(spec.Content, spec.parsedLabelTpl, valueData{Value: v, Unit: spec.Content.Unit})
+			content.Value = pushward.Float64Ptr(v)
+			if needsCreate {
+				if err := m.createWidget(ctx, spec, spec.Slug, spec.Name, content); err != nil {
+					if !errors.Is(err, context.Canceled) {
+						logger.Warn("deferred widget create failed", "error", err)
+					}
+					continue
+				}
+				needsCreate = false
+				lastValue = v
+				continue
+			}
 			if !math.IsNaN(lastValue) && spec.UpdateMode != UpdateAlways && !valueChanged(lastValue, v, spec.MinChange) {
 				continue
 			}
-			content := renderContent(spec.Content, spec.parsedLabelTpl, valueData{Value: v, Unit: spec.Content.Unit})
-			content.Value = pushward.Float64Ptr(v)
 			if err := m.pwClient.UpdateWidget(ctx, spec.Slug, pushward.UpdateWidgetRequest{Content: &content}); err != nil {
 				if !errors.Is(err, context.Canceled) {
 					logger.Warn("widget update failed", "error", err)
