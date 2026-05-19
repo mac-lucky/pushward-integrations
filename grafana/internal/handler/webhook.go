@@ -367,7 +367,7 @@ func (h *Handler) finalValues(ctx context.Context, expr, seriesLabel string, las
 			values := make(map[string]float64, len(points))
 			for _, lp := range points {
 				key := metrics.SeriesKey(lp.Labels, seriesLabel)
-				values[key] = lp.Point.V
+				values[key] = lp.Point.Value
 			}
 			return values
 		}
@@ -450,7 +450,7 @@ func latestValues(history map[string][]pushward.HistoryPoint) map[string]float64
 	values := make(map[string]float64, len(history))
 	for key, points := range history {
 		if len(points) > 0 {
-			values[key] = points[len(points)-1].V
+			values[key] = points[len(points)-1].Value
 		}
 	}
 	return values

@@ -119,22 +119,22 @@ func TestUpdateActivity(t *testing.T) {
 	}{
 		{
 			name:       "valid generic update",
-			body:       `{"state":"ONGOING","content":{"template":"generic","progress":0.5}}`,
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5}}`,
 			wantStatus: 200,
 		},
 		{
 			name:       "valid alert with severity critical",
-			body:       `{"state":"ONGOING","content":{"template":"alert","progress":0.0,"severity":"critical"}}`,
+			body:       `{"state":"ongoing","content":{"template":"alert","progress":0.0,"severity":"critical"}}`,
 			wantStatus: 200,
 		},
 		{
 			name:       "alert with invalid severity error",
-			body:       `{"state":"ONGOING","content":{"template":"alert","progress":0.0,"severity":"error"}}`,
+			body:       `{"state":"ongoing","content":{"template":"alert","progress":0.0,"severity":"error"}}`,
 			wantStatus: 400,
 		},
 		{
 			name:       "alert with missing severity",
-			body:       `{"state":"ONGOING","content":{"template":"alert","progress":0.0}}`,
+			body:       `{"state":"ongoing","content":{"template":"alert","progress":0.0}}`,
 			wantStatus: 400,
 		},
 		{
@@ -144,47 +144,47 @@ func TestUpdateActivity(t *testing.T) {
 		},
 		{
 			name:       "invalid template",
-			body:       `{"state":"ONGOING","content":{"template":"unknown","progress":0.0}}`,
+			body:       `{"state":"ongoing","content":{"template":"unknown","progress":0.0}}`,
 			wantStatus: 400,
 		},
 		{
 			name:       "progress out of range",
-			body:       `{"state":"ONGOING","content":{"template":"generic","progress":1.5}}`,
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":1.5}}`,
 			wantStatus: 400,
 		},
 		{
 			name:       "invalid color",
-			body:       `{"state":"ONGOING","content":{"template":"generic","progress":0.5,"accent_color":"neon"}}`,
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"accent_color":"neon"}}`,
 			wantStatus: 400,
 		},
 		{
 			name:       "url missing scheme",
-			body:       `{"state":"ONGOING","content":{"template":"generic","progress":0.5,"url":"example.com/page"}}`,
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"url":"example.com/page"}}`,
 			wantStatus: 400,
 		},
 		{
 			name:       "steps missing total_steps",
-			body:       `{"state":"ONGOING","content":{"template":"steps","progress":0.5,"current_step":1}}`,
+			body:       `{"state":"ongoing","content":{"template":"steps","progress":0.5,"current_step":1}}`,
 			wantStatus: 400,
 		},
 		{
 			name:       "steps current_step exceeds total_steps",
-			body:       `{"state":"ONGOING","content":{"template":"steps","progress":0.5,"current_step":5,"total_steps":3}}`,
+			body:       `{"state":"ongoing","content":{"template":"steps","progress":0.5,"current_step":5,"total_steps":3}}`,
 			wantStatus: 400,
 		},
 		{
 			name:       "countdown missing end_date",
-			body:       `{"state":"ONGOING","content":{"template":"countdown","progress":0.5}}`,
+			body:       `{"state":"ongoing","content":{"template":"countdown","progress":0.5}}`,
 			wantStatus: 400,
 		},
 		{
 			name:       "gauge missing value",
-			body:       `{"state":"ONGOING","content":{"template":"gauge","progress":0.5,"min_value":0,"max_value":100}}`,
+			body:       `{"state":"ongoing","content":{"template":"gauge","progress":0.5,"min_value":0,"max_value":100}}`,
 			wantStatus: 400,
 		},
 		{
 			name:       "gauge value out of range",
-			body:       `{"state":"ONGOING","content":{"template":"gauge","progress":0.5,"value":150,"min_value":0,"max_value":100}}`,
+			body:       `{"state":"ongoing","content":{"template":"gauge","progress":0.5,"value":150,"min_value":0,"max_value":100}}`,
 			wantStatus: 400,
 		},
 	}
@@ -214,7 +214,7 @@ func TestUpdateActivity(t *testing.T) {
 func TestUpdateActivity_NonExistentSlug(t *testing.T) {
 	srv, _, _ := testutil.MockPushWardServer(t)
 
-	body := `{"state":"ONGOING","content":{"template":"generic","progress":0.5}}`
+	body := `{"state":"ongoing","content":{"template":"generic","progress":0.5}}`
 	req, err := http.NewRequest(http.MethodPatch, srv.URL+"/activities/no-such-app", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -248,7 +248,7 @@ func TestAPICallRecording(t *testing.T) {
 
 	createActivity(t, srv.URL, "rec-app", "Recorded App")
 
-	body := `{"state":"ONGOING","content":{"template":"generic","progress":0.5}}`
+	body := `{"state":"ongoing","content":{"template":"generic","progress":0.5}}`
 	req, err := http.NewRequest(http.MethodPatch, srv.URL+"/activities/rec-app", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)

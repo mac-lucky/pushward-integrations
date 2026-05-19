@@ -217,8 +217,8 @@ func (t *Tracker) seedHistory(sample float64) map[string][]pushward.HistoryPoint
 	now := time.Now().Unix()
 	return map[string][]pushward.HistoryPoint{
 		seriesKey: {
-			{T: now - 10, V: sample},
-			{T: now - 5, V: sample},
+			{Timestamp: now - 10, Value: sample},
+			{Timestamp: now - 5, Value: sample},
 		},
 	}
 }

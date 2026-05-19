@@ -29,7 +29,7 @@ func (s *ScalarSource) Value(ctx context.Context) (float64, error) {
 	if point == nil {
 		return 0, sharedwidgets.ErrNoData
 	}
-	return point.V, nil
+	return point.Value, nil
 }
 
 // MultiSource wraps metrics.Client.QueryInstantAll to expose label-keyed
@@ -48,7 +48,7 @@ func (s *MultiSource) Values(ctx context.Context) ([]sharedwidgets.LabeledValue,
 	}
 	out := make([]sharedwidgets.LabeledValue, 0, len(points))
 	for _, p := range points {
-		out = append(out, sharedwidgets.LabeledValue{Labels: p.Labels, Value: p.Point.V})
+		out = append(out, sharedwidgets.LabeledValue{Labels: p.Labels, Value: p.Point.Value})
 	}
 	return out, nil
 }

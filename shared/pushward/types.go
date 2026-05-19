@@ -2,8 +2,8 @@ package pushward
 
 // Activity state constants.
 const (
-	StateOngoing = "ONGOING"
-	StateEnded   = "ENDED"
+	StateOngoing = "ongoing"
+	StateEnded   = "ended"
 )
 
 // Template name constants.
@@ -46,8 +46,8 @@ func StringPtr(v string) *string { return &v }
 
 // HistoryPoint is a single timestamped value in a timeline series.
 type HistoryPoint struct {
-	T int64   `json:"t"` // Unix timestamp (seconds)
-	V float64 `json:"v"` // Value
+	Timestamp int64   `json:"timestamp"` // Unix timestamp (seconds)
+	Value     float64 `json:"value"`     // Value
 }
 
 // Threshold defines a horizontal reference line on a timeline sparkline.

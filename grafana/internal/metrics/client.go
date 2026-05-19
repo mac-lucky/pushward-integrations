@@ -295,7 +295,7 @@ func parseInstantValue(pair []json.RawMessage) (*pushward.HistoryPoint, error) {
 		return nil, nil
 	}
 
-	return &pushward.HistoryPoint{T: int64(ts), V: v}, nil
+	return &pushward.HistoryPoint{Timestamp: int64(ts), Value: v}, nil
 }
 
 func (c *Client) setAuth(req *http.Request) {
@@ -349,8 +349,8 @@ func parseValues(values [][]json.RawMessage) []pushward.HistoryPoint {
 		}
 
 		points = append(points, pushward.HistoryPoint{
-			T: int64(ts),
-			V: v,
+			Timestamp: int64(ts),
+			Value:     v,
 		})
 	}
 	return points

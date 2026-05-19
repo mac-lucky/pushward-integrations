@@ -136,7 +136,7 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seri
 	values := make(map[string]float64, len(points))
 	for _, lp := range points {
 		key := metrics.SeriesKey(lp.Labels, seriesLabel)
-		values[key] = lp.Point.V
+		values[key] = lp.Point.Value
 	}
 
 	// Merge-patch with just the new sample. Template/units/accent/display config

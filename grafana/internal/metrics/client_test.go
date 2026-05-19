@@ -43,11 +43,11 @@ func TestQueryRange(t *testing.T) {
 	if len(points) != 3 {
 		t.Fatalf("got %d points, want 3", len(points))
 	}
-	if points[0].T != 1700000000 || points[0].V != 1.0 {
-		t.Errorf("points[0] = %+v, want {T:1700000000 V:1}", points[0])
+	if points[0].Timestamp != 1700000000 || points[0].Value != 1.0 {
+		t.Errorf("points[0] = %+v, want {Timestamp:1700000000 Value:1}", points[0])
 	}
-	if points[1].V != 0.5 {
-		t.Errorf("points[1].V = %v, want 0.5", points[1].V)
+	if points[1].Value != 0.5 {
+		t.Errorf("points[1].Value = %v, want 0.5", points[1].Value)
 	}
 }
 
@@ -169,8 +169,8 @@ func TestQueryInstant(t *testing.T) {
 	if point == nil {
 		t.Fatal("expected non-nil point")
 	}
-	if point.T != 1700000000 || point.V != 0.75 {
-		t.Errorf("point = %+v, want {T:1700000000 V:0.75}", point)
+	if point.Timestamp != 1700000000 || point.Value != 0.75 {
+		t.Errorf("point = %+v, want {Timestamp:1700000000 Value:0.75}", point)
 	}
 }
 
@@ -238,8 +238,8 @@ func TestQueryRangeAll_MultiSeries(t *testing.T) {
 	if len(series[0].Points) != 2 {
 		t.Errorf("series[0] has %d points, want 2", len(series[0].Points))
 	}
-	if series[1].Points[0].V != 3 {
-		t.Errorf("series[1].Points[0].V = %v, want 3", series[1].Points[0].V)
+	if series[1].Points[0].Value != 3 {
+		t.Errorf("series[1].Points[0].Value = %v, want 3", series[1].Points[0].Value)
 	}
 }
 
@@ -299,11 +299,11 @@ func TestQueryInstantAll_MultiSeries(t *testing.T) {
 	if points[0].Labels["instance"] != "10.0.0.1:9100" {
 		t.Errorf("points[0] labels = %v", points[0].Labels)
 	}
-	if points[0].Point.V != 0.5 {
-		t.Errorf("points[0].Point.V = %v, want 0.5", points[0].Point.V)
+	if points[0].Point.Value != 0.5 {
+		t.Errorf("points[0].Point.Value = %v, want 0.5", points[0].Point.Value)
 	}
-	if points[1].Point.V != 0.8 {
-		t.Errorf("points[1].Point.V = %v, want 0.8", points[1].Point.V)
+	if points[1].Point.Value != 0.8 {
+		t.Errorf("points[1].Point.Value = %v, want 0.8", points[1].Point.Value)
 	}
 }
 

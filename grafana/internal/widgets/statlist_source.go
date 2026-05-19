@@ -122,7 +122,7 @@ func queryPoint(ctx context.Context, client *metrics.Client, expr string, ts tim
 	if point == nil {
 		return 0, false, nil
 	}
-	return point.V, true, nil
+	return point.Value, true, nil
 }
 
 func renderStatValue(tpl *template.Template, value float64, unit string) string {

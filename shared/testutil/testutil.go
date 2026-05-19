@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 // APICall records a PushWard API call made by a handler/poller under test.
@@ -24,7 +26,7 @@ var (
 	slugPattern     = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 	hexColor        = regexp.MustCompile(`^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$`)
 	validTemplates  = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true, "timeline": true}
-	validStates     = map[string]bool{"ONGOING": true, "ENDED": true}
+	validStates     = map[string]bool{pushward.StateOngoing: true, pushward.StateEnded: true}
 	validSeverities = map[string]bool{"critical": true, "warning": true, "info": true}
 )
 
@@ -254,7 +256,7 @@ func validateUpdateRequest(req *updateRequest) error {
 	// an absent field means "preserve server-side value". Only validate when
 	// present (non-empty).
 	if req.State != "" && !validStates[req.State] {
-		return fmt.Errorf("state must be ONGOING or ENDED")
+		return fmt.Errorf("state must be ongoing or ended")
 	}
 	if req.Priority != nil && (*req.Priority < 0 || *req.Priority > 10) {
 		return fmt.Errorf("priority must be 0-10")

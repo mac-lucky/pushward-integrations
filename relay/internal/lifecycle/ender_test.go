@@ -101,7 +101,7 @@ func TestFlushAll_SendsEndedPush(t *testing.T) {
 	var endedCalls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
-		if strings.Contains(string(body), `"ENDED"`) {
+		if strings.Contains(string(body), `"`+pushward.StateEnded+`"`) {
 			endedCalls.Add(1)
 		}
 		w.WriteHeader(http.StatusOK)

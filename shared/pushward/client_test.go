@@ -495,8 +495,8 @@ func TestPatchActivity_OmitsEmptyContent(t *testing.T) {
 	if err := c.PatchActivity(context.Background(), "x", PatchRequest{State: StateEnded}); err != nil {
 		t.Fatalf("expected nil, got %v", err)
 	}
-	if !bytes.Contains(gotBody, []byte(`"state":"ENDED"`)) {
-		t.Errorf("expected state:ENDED in body, got %s", string(gotBody))
+	if !bytes.Contains(gotBody, []byte(`"state":"ended"`)) {
+		t.Errorf("expected state:ended in body, got %s", string(gotBody))
 	}
 	if bytes.Contains(gotBody, []byte(`"content"`)) {
 		t.Errorf("expected content field to be omitted when nil, got %s", string(gotBody))
