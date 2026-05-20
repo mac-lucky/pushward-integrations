@@ -93,6 +93,10 @@ type Content struct {
 	// partial merge-patch updates until cleared by a transition to ENDED or by
 	// patching content.alarm to explicit null. iOS 26+ only.
 	Alarm *bool `json:"alarm,omitempty"`
+	// SnoozeSeconds sets how far POST /activities/{slug}/snooze extends end_date
+	// (and the iOS AlarmKit snooze window). 60–3600; server defaults to 300 when
+	// omitted. Only meaningful with Alarm set.
+	SnoozeSeconds *int `json:"snooze_seconds,omitempty"`
 
 	// Gauge template: Value is float64
 	// Timeline template: Value is map[string]float64
@@ -168,6 +172,7 @@ type ContentPatch struct {
 	WarningThreshold  *int    `json:"warning_threshold,omitempty"`
 	CompletionMessage *string `json:"completion_message,omitempty"`
 	Alarm             *bool   `json:"alarm,omitempty"`
+	SnoozeSeconds     *int    `json:"snooze_seconds,omitempty"`
 
 	// Gauge template: Value is float64
 	// Timeline template: Value is map[string]float64
