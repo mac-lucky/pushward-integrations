@@ -66,7 +66,20 @@ type StatRowConfig struct {
 	ValueTemplate string `yaml:"value_template" json:"value_template"`
 	Unit          string `yaml:"unit" json:"unit"`
 	MissingValue  string `yaml:"missing_value" json:"missing_value"`
+	// Trigger controls whether a change in this row's value triggers a widget
+	// update; defaults to true (nil → true). Set it false to display the row
+	// without letting its value drive PATCHes — useful when one row (e.g. a
+	// user counter) should be the sole update trigger while volatile rows
+	// (activity counts, DB size) ride along and refresh only when the trigger
+	// row changes. With update_mode on_change, at least one row must remain a
+	// trigger or the widget would never update after creation.
+	Trigger *bool `yaml:"trigger" json:"trigger,omitempty"`
 }
+
+// Triggers reports whether a change in this row's value should drive a widget
+// PATCH. Trigger is nil-defaulted to true; only an explicit false makes the
+// row display-only (excluded from stat_list change detection).
+func (r StatRowConfig) Triggers() bool { return r.Trigger == nil || *r.Trigger }
 
 // WidgetContentConfig is the static portion of pushward.WidgetContent
 // supplied via YAML. The Value field is populated per-tick from the query.
@@ -130,6 +143,22 @@ func validateStatRows(slug string, idx int, rows []StatRowConfig) error {
 }
 
 func runeLen(s string) int { return len([]rune(s)) }
+
+// validateStatListTriggers rejects a stat_list under update_mode on_change
+// where every row is trigger:false — such a widget would never PATCH after
+// creation. update_mode always is exempt (it patches every tick regardless of
+// which rows changed).
+func validateStatListTriggers(idx int, w *WidgetConfig) error {
+	if w.Template != "stat_list" || w.UpdateMode != "on_change" {
+		return nil
+	}
+	for _, r := range w.StatRows {
+		if r.Triggers() {
+			return nil
+		}
+	}
+	return fmt.Errorf("widgets[%d] %q: all stat_rows have trigger:false with update_mode on_change; the widget would never update — keep a row as a trigger or set update_mode: always", idx, w.Slug)
+}
 
 // validWidgetTemplates lists the renderers supported by the server today.
 // Keep this in sync with pushward-server's internal/model/widget.go.
@@ -209,6 +238,9 @@ func validateWidgets(widgets []WidgetConfig) error {
 		}
 		if w.UpdateMode != "on_change" && w.UpdateMode != "always" {
 			return fmt.Errorf("widgets[%d] %q: unknown update_mode %q (allowed: on_change|always)", i, w.Slug, w.UpdateMode)
+		}
+		if err := validateStatListTriggers(i, w); err != nil {
+			return err
 		}
 		if (w.Template == "progress" || w.Template == "gauge") && (w.Content.MinValue == nil || w.Content.MaxValue == nil) {
 			return fmt.Errorf("widgets[%d] %q: template %q requires content.min_value and content.max_value", i, w.Slug, w.Template)

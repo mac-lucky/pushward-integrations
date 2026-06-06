@@ -140,6 +140,6 @@ Widgets are independent of alerts: each entry in the `widgets` list (or `PUSHWAR
 - Polls each widget on its own ticker
 - PATCHes the value when it moves (or every tick if `update_mode: always`)
 - For `query_all`, fans the result rows into one widget per series via `slug_template` / `name_template`
-- For `stat_list`, polls each row's query independently and renders the value through the row's `value_template`
+- For `stat_list`, polls each row's query independently and renders the value through the row's `value_template`. Each row's `trigger` (default `true`) controls whether its value change can PATCH the widget — set `trigger: false` to display a volatile row without letting it drive updates, so the card only refreshes when a trigger row changes (every row re-renders at that point). Under `update_mode: on_change` at least one row must remain a trigger.
 
 The integration key must have the `widgets` scope, otherwise the server returns 403 on first create.

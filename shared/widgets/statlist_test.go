@@ -27,6 +27,49 @@ func TestStatRowsEqual(t *testing.T) {
 	}
 }
 
+func TestStatRowsEqualMasked(t *testing.T) {
+	base := []pushward.StatRow{{Label: "u", Value: "1"}, {Label: "a", Value: "2"}}
+
+	// nil mask delegates to statRowsEqual (every row counts).
+	same := []pushward.StatRow{{Label: "u", Value: "1"}, {Label: "a", Value: "2"}}
+	if !statRowsEqualMasked(base, same, nil) {
+		t.Error("nil mask, identical rows should be equal")
+	}
+
+	// A change in the masked-out (display-only) row counts as no change.
+	changedDisplay := []pushward.StatRow{{Label: "u", Value: "1"}, {Label: "a", Value: "99"}}
+	if !statRowsEqualMasked(base, changedDisplay, []bool{true, false}) {
+		t.Error("change in display-only row should be treated as no-change")
+	}
+
+	// A change in the trigger row is detected.
+	changedTrigger := []pushward.StatRow{{Label: "u", Value: "5"}, {Label: "a", Value: "2"}}
+	if statRowsEqualMasked(base, changedTrigger, []bool{true, false}) {
+		t.Error("change in trigger row should be detected")
+	}
+
+	// Length mismatch is always "changed".
+	if statRowsEqualMasked(base, base[:1], []bool{true, false}) {
+		t.Error("length mismatch should not be equal")
+	}
+
+	// Rows beyond a short mask default to participating.
+	if statRowsEqualMasked(base, changedDisplay, []bool{true}) {
+		t.Error("rows past the mask length should participate in change detection")
+	}
+
+	// All-false mask: no row triggers, so any value change is "no change".
+	allFalse := []pushward.StatRow{{Label: "u", Value: "9"}, {Label: "a", Value: "9"}}
+	if !statRowsEqualMasked(base, allFalse, []bool{false, false}) {
+		t.Error("all-false mask: changes in every row should be treated as no-change")
+	}
+
+	// ...but a length change still counts even with an all-false mask.
+	if statRowsEqualMasked(base, base[:1], []bool{false, false}) {
+		t.Error("all-false mask: length mismatch must still count as changed")
+	}
+}
+
 func TestTrimStatRows(t *testing.T) {
 	in := []pushward.StatRow{{Label: "a"}, {Label: "b"}, {Label: "c"}, {Label: "d"}, {Label: "e"}}
 	got := trimStatRows(in, 3)
@@ -137,6 +180,94 @@ func TestManager_StatList_PatchesWhenRowChanges(t *testing.T) {
 	waitFor(t, 500*time.Millisecond, func() bool { return stub.updates.Load() >= 2 })
 	cancel()
 	m.Wait()
+}
+
+func TestManager_StatList_MaskSkipsDisplayOnlyRowChange(t *testing.T) {
+	stub, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	// Row 0 (trigger) is constant; row 1 (display-only) moves every tick.
+	var i atomic.Int64
+	src := StatListSourceFunc(func(_ context.Context) ([]pushward.StatRow, error) {
+		n := i.Add(1)
+		return []pushward.StatRow{
+			{Label: "Users", Value: "42"},
+			{Label: "Activities", Value: stringOf(n)},
+		}, nil
+	})
+
+	m, err := New(client, []Spec{{
+		Slug:           "masked",
+		StatListSource: src,
+		StatChangeMask: []bool{true, false},
+		Interval:       15 * time.Millisecond,
+	}}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = m.Start(ctx)
+	// Let several ticks elapse — the display-only row changes each time but
+	// must never trigger a PATCH.
+	waitFor(t, 500*time.Millisecond, func() bool { return i.Load() >= 4 })
+	cancel()
+	m.Wait()
+
+	if stub.updates.Load() != 0 {
+		t.Errorf("expected 0 PATCH when only the display-only row changes, got %d", stub.updates.Load())
+	}
+}
+
+func TestManager_StatList_MaskTriggerPatchRefreshesDisplayRow(t *testing.T) {
+	stub, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	// The display-only row advances every poll; the trigger row flips exactly
+	// once, after several display-only-only ticks. The PATCH that flip fires
+	// must carry the display row's CURRENT value, not the stale one captured
+	// at widget creation — a regression that patched lastRows would send "1".
+	var i atomic.Int64
+	src := StatListSourceFunc(func(_ context.Context) ([]pushward.StatRow, error) {
+		n := i.Add(1)
+		trigger := "1"
+		if n >= 4 {
+			trigger = "2"
+		}
+		return []pushward.StatRow{
+			{Label: "Users", Value: trigger},
+			{Label: "Activities", Value: stringOf(n)},
+		}, nil
+	})
+
+	m, err := New(client, []Spec{{
+		Slug:           "masked",
+		StatListSource: src,
+		StatChangeMask: []bool{true, false},
+		Interval:       15 * time.Millisecond,
+	}}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = m.Start(ctx)
+	waitFor(t, 500*time.Millisecond, func() bool { return stub.updates.Load() >= 1 })
+	cancel()
+	m.Wait()
+
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	first := stub.gotPatch[0]
+	if first.Content == nil || len(first.Content.StatRows) != 2 {
+		t.Fatalf("patch content malformed: %+v", first.Content)
+	}
+	// Earlier ticks leave the trigger row equal to the last push and are masked
+	// out, so the first PATCH can only be the trigger-flip poll (n>=4).
+	if first.Content.StatRows[0].Value != "2" {
+		t.Errorf("trigger row value = %q, want 2 (the change that fired the PATCH)", first.Content.StatRows[0].Value)
+	}
+	if first.Content.StatRows[1].Value == "1" {
+		t.Errorf("display-only row is stale (%q); a trigger PATCH must refresh it with the latest poll value", first.Content.StatRows[1].Value)
+	}
 }
 
 func TestManager_StatList_TrimsToCap(t *testing.T) {

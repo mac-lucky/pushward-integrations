@@ -120,6 +120,11 @@ timeline:
 #
 #   # stat_list: 1–4 rows of pre-formatted values, polled independently.
 #   # Server caps: 4 rows, label ≤32 chars, value ≤32 chars, unit ≤16 chars.
+#   # Per row, `trigger` (default true) controls whether that row's value
+#   # change can PATCH the widget. Set trigger:false to display a volatile row
+#   # without letting it drive updates — the card then only refreshes when a
+#   # trigger row changes, at which point every row re-renders with current
+#   # values. Under update_mode:on_change at least one row must stay a trigger.
 #   - slug: "homelab-stats"
 #     name: "Homelab"
 #     template: "stat_list"
@@ -139,3 +144,4 @@ timeline:
 #         query: "active_devices_5m"
 #         value_template: "{{printf \"%.0f\" .Value}}"
 #         missing_value: "?"
+#         trigger: false             # displays but never triggers a PATCH

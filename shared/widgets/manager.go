@@ -51,7 +51,19 @@ type Spec struct {
 	// MaxStatRows caps the rows accepted from StatListSource; the server
 	// rejects payloads over 4 rows, so the default is 4. Set to 0 for the
 	// default; tests can raise/lower this independently.
-	MaxStatRows  int
+	MaxStatRows int
+
+	// StatChangeMask, when non-nil, restricts stat_list change detection to
+	// the rows whose mask entry is true. A false entry marks a display-only
+	// row: it is still rendered and published, but a change in its value alone
+	// never triggers a PATCH — when a triggering row does change, the whole
+	// card (including these rows) re-renders with current values. A nil mask
+	// (the default) means every row participates, matching the historical
+	// "any row changed" behavior. Indexed by row position. Under
+	// UpdateOnChange at least one entry must be true, or the widget never
+	// PATCHes after creation.
+	StatChangeMask []bool
+
 	Interval     time.Duration
 	UpdateMode   UpdateMode
 	MinChange    float64
@@ -401,7 +413,7 @@ func (m *Manager) runStatList(ctx context.Context, spec *Spec, logger *slog.Logg
 				continue
 			}
 			rows = trimStatRows(rows, spec.MaxStatRows)
-			if spec.UpdateMode != UpdateAlways && statRowsEqual(lastRows, rows) {
+			if spec.UpdateMode != UpdateAlways && statRowsEqualMasked(lastRows, rows, spec.StatChangeMask) {
 				continue
 			}
 			content := spec.Content
@@ -448,6 +460,30 @@ func statRowsEqual(a, b []pushward.StatRow) bool {
 		return false
 	}
 	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// statRowsEqualMasked reports whether the change-detection-relevant rows of a
+// and b are identical. A nil mask delegates to statRowsEqual (every row
+// counts). Otherwise only rows whose mask entry is true are compared; rows
+// past the end of the mask default to participating, so a short mask never
+// silently freezes extra rows. A length mismatch between a and b always counts
+// as changed (a row appeared or disappeared), matching statRowsEqual.
+func statRowsEqualMasked(a, b []pushward.StatRow, mask []bool) bool {
+	if mask == nil {
+		return statRowsEqual(a, b)
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if i < len(mask) && !mask[i] {
+			continue // display-only row
+		}
 		if a[i] != b[i] {
 			return false
 		}

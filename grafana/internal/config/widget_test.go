@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 func TestValidateWidgets_RejectsEmpty(t *testing.T) {
@@ -230,5 +232,82 @@ func TestValidateWidgets_MultiAccepted(t *testing.T) {
 	}}
 	if err := validateWidgets(cfgs); err != nil {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidateWidgets_StatListTrigger(t *testing.T) {
+	base := func() WidgetConfig {
+		return WidgetConfig{
+			Slug:     "stats",
+			Template: "stat_list",
+			StatRows: []StatRowConfig{
+				{Label: "Users", Query: "users", ValueTemplate: "{{.Value}}"},
+				{Label: "Activities", Query: "act", ValueTemplate: "{{.Value}}", Trigger: pushward.BoolPtr(false)},
+			},
+		}
+	}
+
+	// One trigger row (Users defaults to true) + one display-only row is valid.
+	if err := validateWidgets([]WidgetConfig{base()}); err != nil {
+		t.Fatalf("mixed trigger config should be valid, got %v", err)
+	}
+
+	// All rows trigger:false under on_change is rejected.
+	allOff := base()
+	allOff.StatRows[0].Trigger = pushward.BoolPtr(false)
+	err := validateWidgets([]WidgetConfig{allOff})
+	if err == nil || !strings.Contains(err.Error(), "trigger:false") {
+		t.Fatalf("want trigger:false rejection, got %v", err)
+	}
+
+	// The minimal misconfig: a lone display-only row under on_change.
+	single := WidgetConfig{
+		Slug:     "solo",
+		Template: "stat_list",
+		StatRows: []StatRowConfig{
+			{Label: "Users", Query: "users", ValueTemplate: "{{.Value}}", Trigger: pushward.BoolPtr(false)},
+		},
+	}
+	if err := validateWidgets([]WidgetConfig{single}); err == nil || !strings.Contains(err.Error(), "trigger:false") {
+		t.Fatalf("single display-only row under on_change should be rejected, got %v", err)
+	}
+
+	// update_mode: always exempts the all-off card.
+	allOff.UpdateMode = "always"
+	if err := validateWidgets([]WidgetConfig{allOff}); err != nil {
+		t.Fatalf("update_mode always should bypass the trigger check, got %v", err)
+	}
+
+	// Explicit trigger:true on every row is fine.
+	allOn := base()
+	allOn.StatRows[0].Trigger = pushward.BoolPtr(true)
+	allOn.StatRows[1].Trigger = pushward.BoolPtr(true)
+	if err := validateWidgets([]WidgetConfig{allOn}); err != nil {
+		t.Fatalf("all-trigger config should be valid, got %v", err)
+	}
+}
+
+func TestParseWidgetsJSON_Trigger(t *testing.T) {
+	raw := `[
+		{
+			"slug": "pushward-stats",
+			"template": "stat_list",
+			"update_mode": "on_change",
+			"stat_rows": [
+				{"label": "Users", "query": "u", "value_template": "{{.Value}}"},
+				{"label": "Activities", "query": "a", "value_template": "{{.Value}}", "trigger": false}
+			]
+		}
+	]`
+	widgets, err := parseWidgetsJSON(raw)
+	if err != nil {
+		t.Fatalf("parseWidgetsJSON: %v", err)
+	}
+	rows := widgets[0].StatRows
+	if rows[0].Trigger != nil {
+		t.Errorf("row 0 trigger = %v, want nil (defaulted)", rows[0].Trigger)
+	}
+	if rows[1].Trigger == nil || *rows[1].Trigger {
+		t.Errorf("row 1 trigger = %v, want explicit false", rows[1].Trigger)
 	}
 }

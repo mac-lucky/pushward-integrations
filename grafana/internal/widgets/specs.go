@@ -2,6 +2,7 @@ package widgets
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/config"
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/metrics"
@@ -34,17 +35,24 @@ func BuildSpecs(cfgs []config.WidgetConfig, mc *metrics.Client) ([]sharedwidgets
 		switch {
 		case w.Template == string(pushward.WidgetTemplateStatList):
 			rows := make([]StatListRow, 0, len(w.StatRows))
-			for _, r := range w.StatRows {
+			mask := make([]bool, len(w.StatRows))
+			for i, r := range w.StatRows {
 				rows = append(rows, StatListRow{
 					Label: r.Label, Query: r.Query, ValueTemplate: r.ValueTemplate,
 					Unit: r.Unit, MissingValue: r.MissingValue,
 				})
+				mask[i] = r.Triggers()
 			}
 			src, err := NewStatListSource(mc, rows)
 			if err != nil {
 				return nil, fmt.Errorf("widget %q: %w", w.Slug, err)
 			}
 			spec.StatListSource = src
+			// Attach the mask only when a row opted out; an all-true mask is
+			// behaviorally identical to nil, which keeps the fast path.
+			if slices.Contains(mask, false) {
+				spec.StatChangeMask = mask
+			}
 		case w.Query != "":
 			spec.Source = &ScalarSource{Client: mc, Expr: w.Query}
 		case w.QueryAll != "":
