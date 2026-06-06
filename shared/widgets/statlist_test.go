@@ -276,9 +276,12 @@ func TestManager_StatList_TrimsToCap(t *testing.T) {
 
 	src := StatListSourceFunc(func(_ context.Context) ([]pushward.StatRow, error) {
 		return []pushward.StatRow{
-			{Label: "1", Value: "1"}, {Label: "2", Value: "2"},
-			{Label: "3", Value: "3"}, {Label: "4", Value: "4"},
-			{Label: "5", Value: "5"}, {Label: "6", Value: "6"},
+			{Label: "1", Value: "1"},
+			{Label: "2", Value: "2"},
+			{Label: "3", Value: "3"},
+			{Label: "4", Value: "4"},
+			{Label: "5", Value: "5"},
+			{Label: "6", Value: "6"},
 		}, nil
 	})
 

@@ -80,13 +80,13 @@ type Spec struct {
 	LabelTemplate string
 
 	// Multi-source-only fields.
-	SlugTemplate    string // e.g. "users-{{.instance}}"
-	NameTemplate    string // e.g. "Users on {{.instance}}"; falls back to Name
-	MaxSeries       int    // per-spec cap; 0 → DefaultMaxSeries
-	CleanupMissing  bool   // DELETE widgets for series that disappear
-	parsedSlugTpl   *template.Template
-	parsedNameTpl   *template.Template
-	parsedLabelTpl  *template.Template
+	SlugTemplate   string // e.g. "users-{{.instance}}"
+	NameTemplate   string // e.g. "Users on {{.instance}}"; falls back to Name
+	MaxSeries      int    // per-spec cap; 0 → DefaultMaxSeries
+	CleanupMissing bool   // DELETE widgets for series that disappear
+	parsedSlugTpl  *template.Template
+	parsedNameTpl  *template.Template
+	parsedLabelTpl *template.Template
 	// seriesState is per-series last-value state for multi-source specs.
 	// Owned by exactly one supervisor goroutine — no synchronization needed.
 	seriesState map[string]seriesState
@@ -111,7 +111,7 @@ type Manager struct {
 	pwClient *pushward.Client
 	specs    []*Spec
 	logger   *slog.Logger
-	wg sync.WaitGroup
+	wg       sync.WaitGroup
 	// cancel cleans up the internal context if Start fails after some
 	// specs have already spawned their polling goroutine. After a
 	// successful Start the cancel is implicit through the parent context;
@@ -499,7 +499,7 @@ func (m *Manager) startMulti(ctx context.Context, spec *Spec) error {
 		// Non-fatal — supervisor will retry next tick.
 		logger.Warn("multi-source initial poll failed", "error", err)
 	}
-	if err := m.applyMulti(ctx, spec, logger, values, /*firstTime=*/ true); err != nil {
+	if err := m.applyMulti(ctx, spec, logger, values /*firstTime=*/, true); err != nil {
 		return err
 	}
 	m.wg.Add(1)
