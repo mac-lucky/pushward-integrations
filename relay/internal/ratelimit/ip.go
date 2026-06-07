@@ -1,9 +1,7 @@
 package ratelimit
 
 import (
-	"log/slog"
 	"net"
-	"net/http"
 	"strings"
 )
 
@@ -49,7 +47,7 @@ func isTrustedProxy(ipStr string) bool {
 // are only trusted when the direct remote address falls within a configured trusted
 // proxy CIDR. Falls back to remote address otherwise.
 //
-// This function is used by both the stdlib IPMiddleware and Huma middleware.
+// This function is used by the Huma IP rate-limit middleware in humautil.
 func ClientIP(remoteAddr string, getHeader func(string) string) string {
 	remoteHost, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
@@ -64,10 +62,19 @@ func ClientIP(remoteAddr string, getHeader func(string) string) string {
 			return ip
 		}
 		if xff := getHeader("X-Forwarded-For"); xff != "" {
-			if first, _, _ := strings.Cut(xff, ","); first != "" {
-				first = strings.TrimSpace(first)
-				if net.ParseIP(first) != nil {
-					return first
+			// Proxies APPEND to X-Forwarded-For, so the leftmost entry is
+			// client-supplied and spoofable. Walk right-to-left and return the
+			// first address that is not itself a trusted proxy (the closest
+			// untrusted client). If all hops are trusted, fall through to the
+			// direct peer.
+			parts := strings.Split(xff, ",")
+			for i := len(parts) - 1; i >= 0; i-- {
+				candidate := strings.TrimSpace(parts[i])
+				if net.ParseIP(candidate) == nil {
+					continue
+				}
+				if !isTrustedProxy(candidate) {
+					return candidate
 				}
 			}
 		}
@@ -80,22 +87,4 @@ func ClientIP(remoteAddr string, getHeader func(string) string) string {
 // limiting. Returns true if allowed.
 func AllowIP(ip string) bool {
 	return ipLimiters.get(ip).Allow()
-}
-
-// IPMiddleware applies per-IP rate limiting. Should run before auth middleware.
-func IPMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := ClientIP(r.RemoteAddr, r.Header.Get)
-
-		if !AllowIP(ip) {
-			slog.Warn("ip rate limit exceeded", "ip", ip) // #nosec G706 -- ip is validated via net.ParseIP in ClientIP()
-			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("Retry-After", "1")
-			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write([]byte(`{"error":"rate limit exceeded"}`))
-			return
-		}
-
-		next.ServeHTTP(w, r)
-	})
 }

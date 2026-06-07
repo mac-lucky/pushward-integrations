@@ -19,7 +19,10 @@ func TestSlug(t *testing.T) {
 		{"special chars", "app-", "hello!@#world", "app-hello-world"},
 		{"leading/trailing non-alnum", "app-", "!!hello!!", "app-hello"},
 		{"runs of separators", "app-", "a___b---c", "app-a-b-c"},
-		{"all non-alnum", "app-", "!@#$%", "app-"},
+		// Non-empty input that collapses to empty falls back to a hash so
+		// distinct such inputs don't all share one slug (collision hazard). The
+		// prefix supplies the only separator, so there is no double hyphen.
+		{"all non-alnum", "app-", "!@#$%", "app-" + HashHex("!@#$%", 8)},
 		{"unicode letters", "app-", "café", "app-caf"},
 		{"digits preserved", "app-", "item 42", "app-item-42"},
 		{"no prefix", "", "hello world", "hello-world"},
@@ -31,6 +34,31 @@ func TestSlug(t *testing.T) {
 				t.Errorf("Slug(%q, %q) = %q, want %q", tt.prefix, tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// Distinct inputs that both normalize to an empty body (CJK-only, symbol-only)
+// must produce distinct slugs rather than colliding on the prefix.
+func TestSlug_NonEmptyCollapsingIsDistinct(t *testing.T) {
+	a := Slug("bazarr-", "日本語")
+	b := Slug("bazarr-", "!!!")
+	if a == b {
+		t.Fatalf("distinct collapsing inputs collided: both -> %q", a)
+	}
+	if !strings.HasPrefix(a, "bazarr-") || !strings.HasPrefix(b, "bazarr-") {
+		t.Errorf("slugs lost their prefix: %q, %q", a, b)
+	}
+	// The prefix carries the only separator: no double hyphen at the join, and
+	// (empty prefix) no leading hyphen that would violate the slug pattern.
+	if strings.Contains(a, "--") || strings.Contains(b, "--") {
+		t.Errorf("fallback emitted a double hyphen: %q, %q", a, b)
+	}
+	if got := Slug("", "日本語"); strings.HasPrefix(got, "-") {
+		t.Errorf("empty-prefix fallback emitted a leading hyphen: %q", got)
+	}
+	// Genuinely-empty input still returns just the prefix (nothing to hash).
+	if got := Slug("bazarr-", ""); got != "bazarr-" {
+		t.Errorf("empty input = %q, want %q", got, "bazarr-")
 	}
 }
 
@@ -63,6 +91,27 @@ func TestSlugHash(t *testing.T) {
 					tt.prefix, tt.input, tt.hashBytes, got, wantPrefix)
 			}
 		})
+	}
+}
+
+func TestHashHex(t *testing.T) {
+	// Distinguishing contract vs SlugHash: hex only, no separator, length 2*n.
+	got := HashHex("hello", 8)
+	if len(got) != 16 {
+		t.Errorf("HashHex(_, 8) length = %d, want 16 (got %q)", len(got), got)
+	}
+	if strings.ContainsAny(got, "-g") || strings.Trim(got, "0123456789abcdef") != "" {
+		t.Errorf("HashHex emitted non-hex/separator chars: %q", got)
+	}
+	if HashHex("hello", 8) != got {
+		t.Error("HashHex is not deterministic")
+	}
+	if HashHex("world", 8) == got {
+		t.Error("distinct inputs should hash differently")
+	}
+	// SlugHash is HashHex plus the "<prefix>-" join.
+	if want := "app-" + HashHex("hello", 8); SlugHash("app", "hello", 8) != want {
+		t.Errorf("SlugHash should equal prefix + \"-\" + HashHex: got %q want %q", SlugHash("app", "hello", 8), want)
 	}
 }
 

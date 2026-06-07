@@ -177,9 +177,15 @@ func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 				}
 			}
 
-			// Clean up timer
+			// Clean up timer, but only if it is still OURS. A superseding
+			// ScheduleEnd for the same key may have installed a newer timerPair
+			// while this phase-2 was running its ENDED update; deleting
+			// unconditionally would clobber that newer pair, leaving the newer
+			// sequence's phase-1 unable to arm phase-2 (Live Activity stuck).
 			e.mu.Lock()
-			delete(e.timers, timerKey)
+			if cur, ok := e.timers[timerKey]; ok && cur.gen == myGen {
+				delete(e.timers, timerKey)
+			}
 			e.mu.Unlock()
 
 			// Run optional post-cleanup callback
@@ -290,7 +296,13 @@ func (e *Ender) Wait() {
 // attempt (5 retries) → retryDelay wait → attempt (5 retries).
 // The retry sleep is interruptible via the ender's shutdown context.
 func (e *Ender) updateWithRetry(cl *pushward.Client, slug string, req pushward.UpdateRequest, perAttemptTimeout time.Duration) error {
-	ctx1, cancel1 := context.WithTimeout(context.Background(), perAttemptTimeout)
+	// Derive per-attempt contexts from shutdownCtx so FlushAll's shutdownCancel
+	// aborts any in-flight UpdateActivity immediately — otherwise an attempt
+	// against an unresponsive server could hold the WaitGroup for the full
+	// per-attempt timeout (up to ~65s across retry), overrunning the k8s
+	// termination grace period. In normal operation shutdownCtx is live, so
+	// behavior is unchanged.
+	ctx1, cancel1 := context.WithTimeout(e.shutdownCtx, perAttemptTimeout)
 	err := cl.UpdateActivity(ctx1, slug, req)
 	cancel1()
 	if err == nil {
@@ -306,7 +318,7 @@ func (e *Ender) updateWithRetry(cl *pushward.Client, slug string, req pushward.U
 		return err
 	}
 
-	ctx2, cancel2 := context.WithTimeout(context.Background(), perAttemptTimeout)
+	ctx2, cancel2 := context.WithTimeout(e.shutdownCtx, perAttemptTimeout)
 	defer cancel2()
 	return cl.UpdateActivity(ctx2, slug, req)
 }

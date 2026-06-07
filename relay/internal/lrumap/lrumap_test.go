@@ -1,6 +1,7 @@
 package lrumap
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -82,5 +83,41 @@ func TestGetOrCreate_EvictsLRU(t *testing.T) {
 	}
 	if m.Len() != 3 {
 		t.Fatalf("expected 3 entries after eviction, got %d", m.Len())
+	}
+}
+
+// TestGetOrCreate_EvictsViaSampling exercises the approximate-LRU sampling path:
+// the existing eviction test uses maxSize=3 (< evictionSampleSize=8) so it never
+// reaches the sample-and-break loop. Here maxSize > evictionSampleSize and more
+// than maxSize distinct keys are inserted, so every insertion past capacity must
+// trigger one eviction while Len() stays pinned at capacity. The victim is
+// pseudo-random (Go randomizes map iteration), so we assert observable counts,
+// not a specific victim.
+func TestGetOrCreate_EvictsViaSampling(t *testing.T) {
+	const (
+		maxSize = 10 // > evictionSampleSize (8) so the sampling break path runs.
+		inserts = 25
+	)
+	if maxSize <= evictionSampleSize {
+		t.Fatalf("test precondition: maxSize (%d) must exceed evictionSampleSize (%d)", maxSize, evictionSampleSize)
+	}
+
+	m := New[int](maxSize)
+	evictions := 0
+	m.SetOnEvict(func(string, int) { evictions++ })
+
+	for i := range inserts {
+		m.GetOrCreate("k"+strconv.Itoa(i), func() int { return i })
+	}
+
+	// Capacity must never be exceeded.
+	if got := m.Len(); got != maxSize {
+		t.Fatalf("expected Len() pinned at capacity %d, got %d", maxSize, got)
+	}
+
+	// Each of the inserts beyond capacity must have evicted exactly one entry.
+	if want := inserts - maxSize; evictions != want {
+		t.Fatalf("expected %d evictions for %d inserts at capacity %d, got %d",
+			want, inserts, maxSize, evictions)
 	}
 }

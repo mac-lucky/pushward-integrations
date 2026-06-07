@@ -11,6 +11,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/github/internal/config"
 	ghclient "github.com/mac-lucky/pushward-integrations/github/internal/github"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
@@ -26,6 +27,12 @@ type Poller struct {
 }
 
 const repoRefreshInterval = 5 * time.Minute
+
+// maxRunLifetime caps how long a single run is tracked. It reclaims runs stuck
+// in_progress (e.g. a hung self-hosted runner) that would otherwise block
+// new-run detection for the repo indefinitely. Set well above GitHub's job
+// timeout ceiling so legitimate long runs are never evicted prematurely.
+const maxRunLifetime = 12 * time.Hour
 
 // GitHub Actions job statuses and conclusions.
 const (
@@ -59,16 +66,24 @@ func New(cfg *config.Config, gh *ghclient.Client, pw *pushward.Client) *Poller {
 
 func (p *Poller) Run(ctx context.Context) error {
 	defer func() {
+		// Collect the pending end-timer groups under the lock, then Close +
+		// Wait OUTSIDE it: an in-flight phase callback re-acquires p.mu, so
+		// waiting under the lock would deadlock. Close (not Stop) prevents a
+		// phase-1 callback from re-arming phase 2 after we've stopped it.
 		p.mu.Lock()
+		groups := make([]*syncx.TimerGroup, 0, len(p.tracked))
 		for _, t := range p.tracked {
 			if t.endTimers != nil {
-				t.endTimers.phase1.Stop()
-				if t.endTimers.phase2 != nil {
-					t.endTimers.phase2.Stop()
-				}
+				groups = append(groups, t.endTimers)
 			}
 		}
 		p.mu.Unlock()
+		for _, g := range groups {
+			g.Close()
+		}
+		for _, g := range groups {
+			g.Wait()
+		}
 	}()
 
 	if err := p.refreshRepos(ctx); err != nil {
@@ -152,21 +167,20 @@ func (p *Poller) poll(ctx context.Context) error {
 
 func (p *Poller) pollIdle(ctx context.Context) error {
 	for _, repo := range p.repos {
-		// Skip repos that already have an active entry (no pending end)
+		// Skip repos that already have an active entry (no pending end).
 		p.mu.Lock()
 		existing, ok := p.tracked[repo]
 		if ok && existing.endTimers == nil {
 			p.mu.Unlock()
 			continue
 		}
-		// If existing entry has a pending end timer, cancel it and allow new run
+		// Snapshot the pending-end run id (if any). We do NOT cancel the pending
+		// end yet — only once a genuinely new run is confirmed below — so a
+		// pollIdle tick can't drop the completion frames when no replacement run
+		// exists (which happens when EndDelay+EndDisplayTime >= IdleInterval).
+		pendingRunID := int64(-1)
 		if ok && existing.endTimers != nil {
-			existing.endTimers.phase1.Stop()
-			if existing.endTimers.phase2 != nil {
-				existing.endTimers.phase2.Stop()
-			}
-			delete(p.tracked, repo)
-			slog.Info("cancelled pending end for new workflow", "repo", repo, "slug", existing.Slug)
+			pendingRunID = existing.RunID
 		}
 		p.mu.Unlock()
 
@@ -176,7 +190,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			continue
 		}
 		if len(runs) == 0 {
-			continue
+			continue // leave any pending end intact
 		}
 
 		// Pick the most recently created run
@@ -185,6 +199,26 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			if r.CreatedAt.After(run.CreatedAt) {
 				run = r
 			}
+		}
+
+		// A pending end belongs to an already-completed run; only supersede it
+		// once we've confirmed a different in-progress run exists.
+		if pendingRunID != -1 {
+			if run.ID == pendingRunID {
+				continue // same run, keep its pending completion frames
+			}
+			p.mu.Lock()
+			if cur, ok := p.tracked[repo]; ok && cur.endTimers != nil && cur.RunID == pendingRunID {
+				// Close (terminal), not Stop: the superseding run gets a fresh
+				// TimerGroup, and Stop is non-terminal — an in-flight phase-1
+				// callback could still re-arm phase-2 in the window between its
+				// own unlock and Reset, sending a stale ENDED to the new run's
+				// (repo-derived, shared) slug. Close makes re-arm a no-op.
+				cur.endTimers.Close()
+				delete(p.tracked, repo)
+				slog.Info("cancelled pending end for new workflow", "repo", repo, "slug", cur.Slug)
+			}
+			p.mu.Unlock()
 		}
 
 		repoShort := repoName(repo)
@@ -214,6 +248,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			Slug:       slug,
 			HTMLURL:    run.HTMLURL,
 			LastUpdate: time.Now(),
+			trackedAt:  time.Now(),
 		}
 		p.mu.Unlock()
 
@@ -387,13 +422,23 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			p.mu.Unlock()
 			continue
 		}
-		// Evict runs that have been in_progress longer than the server's stale
-		// TTL plus a grace period — the server will have ended the activity but
-		// GitHub kept the run alive (e.g. a hung self-hosted runner). Without
-		// eviction the entry blocks new activity creation for this repo forever.
+		// Eviction guard 1: the jobs endpoint stopped returning data for longer
+		// than the server's stale TTL plus a grace period (the run vanished).
+		// LastUpdate is refreshed on every successful poll, so this only fires
+		// for runs that disappeared, NOT for runs stuck in_progress.
 		if !t.LastUpdate.IsZero() && time.Since(t.LastUpdate) > p.cfg.PushWard.StaleTimeout+30*time.Second {
 			delete(p.tracked, repo)
 			slog.Warn("evicted stale tracked run", "repo", repo, "run_id", t.RunID)
+			p.mu.Unlock()
+			continue
+		}
+		// Eviction guard 2: absolute age. A run wedged in_progress (hung
+		// self-hosted runner) keeps returning jobs, so LastUpdate never expires
+		// and the bridge would track it — and block new-run detection for the
+		// repo — forever. Reclaim it past a generous lifetime ceiling.
+		if !t.trackedAt.IsZero() && time.Since(t.trackedAt) > maxRunLifetime {
+			delete(p.tracked, repo)
+			slog.Warn("evicted run exceeding max lifetime", "repo", repo, "run_id", t.RunID, "age", time.Since(t.trackedAt).Round(time.Minute))
 			p.mu.Unlock()
 			continue
 		}
@@ -444,15 +489,31 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		repoShort := repoName(tRepo)
 
 		if info.AllCompleted {
+			// All *visible* jobs are done, but GitHub creates jobs lazily
+			// (reusable workflows, if-gated jobs, dynamic matrices). Confirm the
+			// run itself completed before ending — otherwise a poll landing
+			// between job waves would prematurely dismiss the Live Activity.
+			run, err := p.gh.GetRun(ctx, tRepo, tRunID)
+			if err != nil {
+				slog.Warn("failed to confirm run completion, deferring end", "repo", repo, "run_id", tRunID, "error", err)
+				continue
+			}
+			if run.Status != jobStatusCompleted {
+				// More jobs are still pending; keep the activity ongoing and let
+				// the next wave surface on a subsequent poll.
+				slog.Debug("visible jobs complete but run still in progress, deferring end", "repo", repo, "run_id", tRunID, "status", run.Status)
+				continue
+			}
+			// Run.Conclusion is authoritative for the final outcome.
 			conclusion := "Success"
 			color := pushward.ColorGreen
-			if info.AnyFailed {
+			if jobFailed(run.Conclusion) || (run.Conclusion == "" && info.AnyFailed) {
 				conclusion = "Failed"
 				color = pushward.ColorRed
 			}
 			slog.Info("workflow completed", "run_id", tRunID, "slug", tSlug, "conclusion", conclusion)
 			p.scheduleEnd(ctx, repo, pushward.Content{
-				Template:     "steps",
+				Template:     pushward.TemplateSteps,
 				Progress:     1.0,
 				State:        conclusion,
 				Icon:         "arrow.triangle.branch",
@@ -468,6 +529,30 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			continue
 		}
 
+		// Skip redundant ticks: a run parked on one long step yields identical
+		// progress/state/steps across polls, and each PATCH pushes to every
+		// device. Send only when a scalar changed, GitHub revealed new jobs
+		// (shape grew), or a heartbeat is due to keep the activity off the
+		// server's stale-dismissal path.
+		heartbeat := p.cfg.PushWard.StaleTimeout / 2
+		p.mu.Lock()
+		tt, ok := p.tracked[repo]
+		if !ok {
+			p.mu.Unlock()
+			continue
+		}
+		shapeChanged := tt.shapeSent < tt.maxTotalSteps
+		scalarChanged := tt.lastPatchAt.IsZero() ||
+			info.Progress != tt.lastProgress ||
+			info.CurrentStepName != tt.lastState ||
+			info.CurrentStep != tt.lastCurrentStep ||
+			info.TotalSteps != tt.lastTotalSteps
+		heartbeatDue := !tt.lastPatchAt.IsZero() && time.Since(tt.lastPatchAt) >= heartbeat
+		p.mu.Unlock()
+		if !shapeChanged && !scalarChanged && !heartbeatDue {
+			continue
+		}
+
 		// step_rows/step_labels are re-sent only when GitHub lazily revealed
 		// new jobs (totalSteps grew) — unchanged slices are preserved by the
 		// server under merge-patch and re-sending them wastes payload bytes.
@@ -477,13 +562,6 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			CurrentStep: pushward.IntPtr(info.CurrentStep),
 			TotalSteps:  pushward.IntPtr(info.TotalSteps),
 		}
-		p.mu.Lock()
-		shapeChanged := false
-		if tt, ok := p.tracked[repo]; ok && tt.shapeSent < tt.maxTotalSteps {
-			shapeChanged = true
-			tt.shapeSent = tt.maxTotalSteps
-		}
-		p.mu.Unlock()
 		if shapeChanged {
 			contentPatch.StepRows = info.StepRows
 			contentPatch.StepLabels = info.StepLabels
@@ -493,7 +571,22 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			Content: contentPatch,
 		}); err != nil {
 			slog.Error("failed to update activity", "slug", tSlug, "error", err)
+			continue
 		}
+		// Promote shape + scalar state only after a successful patch so a
+		// failed send re-sends the shape and re-evaluates the scalars next tick.
+		p.mu.Lock()
+		if tt, ok := p.tracked[repo]; ok {
+			if shapeChanged {
+				tt.shapeSent = tt.maxTotalSteps
+			}
+			tt.lastProgress = info.Progress
+			tt.lastState = info.CurrentStepName
+			tt.lastCurrentStep = info.CurrentStep
+			tt.lastTotalSteps = info.TotalSteps
+			tt.lastPatchAt = time.Now()
+		}
+		p.mu.Unlock()
 	}
 	return nil
 }
@@ -515,12 +608,17 @@ func (p *Poller) scheduleEnd(ctx context.Context, repo string, content pushward.
 	runID := t.RunID
 	endDelay := p.cfg.PushWard.EndDelay
 	displayTime := p.cfg.PushWard.EndDisplayTime
-	// Detach from the caller's context so delivery completes even after shutdown
-	// signals, while still inheriting any non-cancellation values (e.g. trace IDs).
+	// Detach from the caller's context so delivery is not cut off mid-flight by
+	// shutdown, while still inheriting any non-cancellation values (e.g. trace
+	// IDs). Delivery is best-effort: on shutdown Run drains in-flight phases via
+	// TimerGroup.Close + Wait, but a phase not yet fired is cancelled.
 	detached := context.WithoutCancel(ctx)
 
-	tp := &timerPair{}
-	tp.phase1 = time.AfterFunc(endDelay, func() {
+	tg := &syncx.TimerGroup{}
+	t.endTimers = tg
+	p.mu.Unlock()
+
+	tg.Reset(endDelay, func() {
 		// Phase 1: ONGOING with final content
 		ctx1, cancel1 := context.WithTimeout(detached, 30*time.Second)
 		defer cancel1()
@@ -536,11 +634,12 @@ func (p *Poller) scheduleEnd(ctx context.Context, repo string, content pushward.
 
 		// Phase 2: schedule ENDED after display time
 		p.mu.Lock()
-		if current, ok := p.tracked[repo]; !ok || current.RunID != runID {
-			p.mu.Unlock()
+		current, ok := p.tracked[repo]
+		p.mu.Unlock()
+		if !ok || current.RunID != runID {
 			return // cancelled between phases
 		}
-		tp.phase2 = time.AfterFunc(displayTime, func() {
+		tg.Reset(displayTime, func() {
 			ctx2, cancel2 := context.WithTimeout(detached, 30*time.Second)
 			defer cancel2()
 			endedReq := pushward.UpdateRequest{
@@ -560,10 +659,7 @@ func (p *Poller) scheduleEnd(ctx context.Context, repo string, content pushward.
 			}
 			p.mu.Unlock()
 		})
-		p.mu.Unlock()
 	})
-	t.endTimers = tp
-	p.mu.Unlock()
 }
 
 func repoName(fullRepo string) string {

@@ -78,7 +78,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 			log.Error("test notification failed", "provider", "proxmox", "error", err)
 		}
 	default:
-		slog.Debug("unknown proxmox event type", "type", payload.Type)
+		log.Debug("unknown proxmox event type", "type", payload.Type)
 	}
 
 	if apiErr != nil {
@@ -93,7 +93,9 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 		vmid = m[1]
 	}
 
-	slug := text.SlugHash("proxmox-backup", p.Hostname+vmid, 4)
+	// Separate the hash inputs (matching the mapKey's ':' delimiter) so e.g.
+	// (node1,23) and (node12,3) don't both hash "node123" to one slug.
+	slug := text.SlugHash("proxmox-backup", p.Hostname+":"+vmid, 4)
 	mapKey := fmt.Sprintf("vzdump:%s:%s", p.Hostname, vmid)
 	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
 
@@ -105,6 +107,9 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 	titleLower := strings.ToLower(p.Title)
 
 	if strings.Contains(msgLower, "starting") || strings.Contains(titleLower, "starting") {
+		// Cancel any pending two-phase end from a prior cycle on this key so a
+		// new backup within the end window isn't clobbered and prematurely ended.
+		h.ender.StopTimer(userKey, mapKey)
 		// Backup starting — create activity + ONGOING
 		if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 			log.Error("failed to create proxmox backup activity", "slug", slug, "error", err)
@@ -139,8 +144,14 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 
 		log.Info("proxmox backup started", "slug", slug, "vmid", vmid, "hostname", p.Hostname)
 	} else if strings.Contains(msgLower, "finished successfully") {
-		// Only end if we have a tracked start event
-		existing, _ := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
+		// Only end if we have a tracked start event. Surface a store error as
+		// 502 so the completion event is retried — otherwise a transient DB blip
+		// is indistinguishable from "no start" and the activity lingers.
+		existing, err := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
+		if err != nil {
+			log.Error("failed to read proxmox backup state", "slug", slug, "error", err)
+			return err
+		}
 		if existing == nil {
 			slog.Debug("proxmox backup complete but no tracked start, skipping", "slug", slug)
 			return nil
@@ -161,7 +172,11 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 		log.Info("proxmox backup completed", "slug", slug, "vmid", vmid, "hostname", p.Hostname)
 	} else if strings.Contains(msgLower, "failed") || strings.Contains(msgLower, "error") {
-		existing, _ := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
+		existing, err := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
+		if err != nil {
+			log.Error("failed to read proxmox backup state", "slug", slug, "error", err)
+			return err
+		}
 		if existing == nil {
 			slog.Debug("proxmox backup failed but no tracked start, skipping", "slug", slug)
 			return nil
@@ -185,7 +200,10 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 	return nil
 }
 
-var replicationJobRe = regexp.MustCompile(`(?:job|Job)\s+([\d/]+)`)
+// Proxmox replication job IDs are <vmid>-<index> (e.g. 100-0) and may be
+// single-quoted in messages ("Replication job '100-0' ..."). Capture the full
+// id including the hyphen; tolerate quotes and the rarer slash form.
+var replicationJobRe = regexp.MustCompile(`(?:job|Job)\s+'?([\d/-]+)'?`)
 
 func (h *Handler) handleReplication(ctx context.Context, userKey string, log *slog.Logger, p *proxmoxPayload) error {
 	// Extract job ID from message — titles differ between start/finish phases.
@@ -196,7 +214,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, log *sl
 		jobID = m[1]
 	}
 
-	slug := text.SlugHash("proxmox-repl", p.Hostname+jobID, 4)
+	slug := text.SlugHash("proxmox-repl", p.Hostname+":"+jobID, 4)
 	mapKey := fmt.Sprintf("replication:%s:%s", p.Hostname, jobID)
 	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
 
@@ -208,6 +226,9 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, log *sl
 	titleLower := strings.ToLower(p.Title)
 
 	if strings.Contains(msgLower, "starting") || strings.Contains(titleLower, "starting") {
+		// Cancel any pending end from a prior cycle so a new replication within
+		// the end window isn't clobbered and prematurely ended.
+		h.ender.StopTimer(userKey, mapKey)
 		if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
 			log.Error("failed to create proxmox replication activity", "slug", slug, "error", err)
 			return err
@@ -239,8 +260,12 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, log *sl
 
 		log.Info("proxmox replication started", "slug", slug, "hostname", p.Hostname)
 	} else if strings.Contains(msgLower, "finished successfully") {
-		// Only end if we have a tracked start event
-		existing, _ := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
+		// Only end if we have a tracked start event; surface store errors as 502.
+		existing, err := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
+		if err != nil {
+			log.Error("failed to read proxmox replication state", "slug", slug, "error", err)
+			return err
+		}
 		if existing == nil {
 			slog.Debug("proxmox replication complete but no tracked start, skipping", "slug", slug)
 			return nil
@@ -261,7 +286,11 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, log *sl
 		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 		log.Info("proxmox replication completed", "slug", slug, "hostname", p.Hostname)
 	} else if strings.Contains(msgLower, "failed") || strings.Contains(msgLower, "error") {
-		existing, _ := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
+		existing, err := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
+		if err != nil {
+			log.Error("failed to read proxmox replication state", "slug", slug, "error", err)
+			return err
+		}
 		if existing == nil {
 			slog.Debug("proxmox replication failed but no tracked start, skipping", "slug", slug)
 			return nil

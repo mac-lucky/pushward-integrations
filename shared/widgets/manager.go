@@ -59,9 +59,12 @@ type Spec struct {
 	// never triggers a PATCH — when a triggering row does change, the whole
 	// card (including these rows) re-renders with current values. A nil mask
 	// (the default) means every row participates, matching the historical
-	// "any row changed" behavior. Indexed by row position. Under
-	// UpdateOnChange at least one entry must be true, or the widget never
-	// PATCHes after creation.
+	// "any row changed" behavior. Indexed by row position; rows at indices
+	// >= len(mask) always participate, so a mask shorter than the row count
+	// still triggers on its trailing rows. A full-length all-false mask is
+	// permitted (not rejected at construction) and yields a create-once
+	// widget that never PATCHes on a value change, though it still re-renders
+	// if the row count changes.
 	StatChangeMask []bool
 
 	Interval     time.Duration
@@ -84,6 +87,12 @@ type Spec struct {
 	NameTemplate   string // e.g. "Users on {{.instance}}"; falls back to Name
 	MaxSeries      int    // per-spec cap; 0 → DefaultMaxSeries
 	CleanupMissing bool   // DELETE widgets for series that disappear
+	// MissGrace is how many consecutive ticks a series may be absent before it
+	// is pruned (and DELETEd when CleanupMissing). It debounces transient
+	// scrape gaps and NaN/Inf readings — which surface as an absent series —
+	// so a single missed tick no longer churns the widget (DELETE+re-CREATE
+	// flicker, redundant pushes). 0 → DefaultMissGrace.
+	MissGrace      int
 	parsedSlugTpl  *template.Template
 	parsedNameTpl  *template.Template
 	parsedLabelTpl *template.Template
@@ -98,6 +107,9 @@ const (
 	DefaultMaxSeries   = 20
 	DefaultMaxStatRows = 4 // server cap; clients must not exceed
 	jitterFraction     = 4 // ticker jitter = interval / jitterFraction (25%)
+	// DefaultMissGrace tolerates one transient missing tick before pruning a
+	// multi-source series; the series is pruned on the second consecutive miss.
+	DefaultMissGrace = 2
 )
 
 // Manager runs one polling goroutine per scalar widget (and one supervisor
@@ -158,7 +170,11 @@ func prepare(s *Spec) error {
 	if s.Slug == "" {
 		return errors.New("slug is required")
 	}
-	if s.Name == "" {
+	// Multi-source specs derive a per-series name (NameTemplate, then the
+	// deterministic sorted-label fallback in renderSlugName); defaulting Name to
+	// the shared Slug here would make every series share one display name and
+	// render that fallback unreachable.
+	if s.Name == "" && s.MultiSource == nil {
 		s.Name = s.Slug
 	}
 	if !exactlyOneSource(s) {
@@ -186,8 +202,17 @@ func prepare(s *Spec) error {
 	if s.UpdateMode == "" {
 		s.UpdateMode = UpdateOnChange
 	}
+	// Note: an all-false StatChangeMask is intentionally NOT rejected here.
+	// statRowsEqualMasked treats rows past the end of the mask as triggers, so a
+	// short all-false mask (display-only head, triggering tail) still updates;
+	// and a full-length all-false mask is a legitimate "create once, never patch"
+	// static widget. Row count is unknown at construction, so the frozen case
+	// cannot be proven here — guarding it would false-reject both valid forms.
 	if s.MaxSeries == 0 {
 		s.MaxSeries = DefaultMaxSeries
+	}
+	if s.MissGrace == 0 {
+		s.MissGrace = DefaultMissGrace
 	}
 	if s.LabelTemplate != "" {
 		tpl, err := template.New("label").Option("missingkey=zero").Parse(s.LabelTemplate)
@@ -577,19 +602,36 @@ func (m *Manager) applyMulti(ctx context.Context, spec *Spec, logger *slog.Logge
 				continue
 			}
 			spec.seriesState[slug] = seriesState{lastValue: lv.Value, hasValue: true}
+		} else if state.missCount != 0 {
+			// Seen but unchanged: clear any accumulated miss streak so a prior
+			// transient gap doesn't later trigger a premature prune.
+			state.missCount = 0
+			spec.seriesState[slug] = state
 		}
 	}
 
 	// Prune missing series from the in-memory map so it can't accumulate
 	// dead entries indefinitely under cardinality churn; only DELETE the
-	// server-side widget when CleanupMissing is set.
-	for slug := range spec.seriesState {
+	// server-side widget when CleanupMissing is set. A grace window
+	// (spec.MissGrace) absorbs transient scrape gaps / NaN readings so a single
+	// missing tick doesn't churn the widget.
+	for slug, st := range spec.seriesState {
 		if _, present := seen[slug]; present {
+			continue
+		}
+		st.missCount++
+		if st.missCount < spec.MissGrace {
+			spec.seriesState[slug] = st // keep lastValue; record the miss
 			continue
 		}
 		if spec.CleanupMissing {
 			if err := m.pwClient.DeleteWidget(ctx, slug); err != nil {
-				logger.Warn("failed to delete missing widget", "slug", slug, "error", err)
+				// A cancelled ctx is the normal shutdown path, not a failure —
+				// don't log it as one (matches the sibling update paths).
+				if !errors.Is(err, context.Canceled) {
+					logger.Warn("failed to delete missing widget", "slug", slug, "error", err)
+				}
+				spec.seriesState[slug] = st // retain so the delete is retried next tick
 				continue
 			}
 		}
@@ -735,4 +777,5 @@ func renderSlugName(spec *Spec, labels map[string]string) (string, string, error
 type seriesState struct {
 	lastValue float64
 	hasValue  bool
+	missCount int // consecutive ticks this series has been absent; reset when seen
 }

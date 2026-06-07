@@ -49,7 +49,12 @@ func TestCheckHeader(t *testing.T) {
 	}{
 		{"match", "my-secret", "my-secret", true},
 		{"mismatch", "wrong", "my-secret", false},
-		{"empty", "", "my-secret", false},
+		{"empty header", "", "my-secret", false},
+		// Pins the fail-closed guard: without `if expected == ""`,
+		// ConstantTimeCompare("", "") returns 1 and this would flip to true,
+		// authenticating every request against an unconfigured secret.
+		{"empty expected, no header", "", "", false},
+		{"empty expected, header present", "anything", "", false},
 		{"partial", "my-secre", "my-secret", false},
 	}
 

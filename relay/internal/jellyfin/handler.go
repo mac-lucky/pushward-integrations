@@ -23,13 +23,24 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
+// pauseTimer is a pending pause auto-end timer plus the generation that armed
+// it. Folding the generation into the timer value (rather than a parallel map)
+// means the two cannot desync: a single map entry is created and deleted as a
+// unit, so a stale-generation guard can never outlive its timer (and vice
+// versa). endPaused compares gen by value, so the check is race-free.
+type pauseTimer struct {
+	timer *time.Timer
+	gen   uint64
+}
+
 type Handler struct {
 	store        state.Store
 	clients      *client.Pool
 	config       *config.JellyfinConfig
 	ender        *lifecycle.Ender
 	mu           sync.Mutex
-	pauseTimers  map[string]*time.Timer // debounceKey → pause auto-end timer
+	pauseTimers  map[string]*pauseTimer // debounceKey → pause auto-end timer + its generation
+	pauseSeq     uint64                 // monotonic generation source for pause timers
 	lastUpdate   map[string]time.Time   // "userKey:slug" → last progress update time
 	lastPaused   map[string]bool        // "userKey:slug" → last IsPaused state
 	lastProgress map[string]float64     // "userKey:slug" → last progress value
@@ -45,7 +56,7 @@ func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *
 			EndDelay:       cfg.EndDelay,
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
-		pauseTimers:  make(map[string]*time.Timer),
+		pauseTimers:  make(map[string]*pauseTimer),
 		lastUpdate:   make(map[string]time.Time),
 		lastPaused:   make(map[string]bool),
 		lastProgress: make(map[string]float64),
@@ -71,8 +82,8 @@ func (h *Handler) StartCleanup(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				h.mu.Lock()
-				for key, t := range h.pauseTimers {
-					t.Stop()
+				for key, pt := range h.pauseTimers {
+					pt.timer.Stop()
 					delete(h.pauseTimers, key)
 				}
 				h.mu.Unlock()
@@ -85,8 +96,8 @@ func (h *Handler) StartCleanup(ctx context.Context) {
 						delete(h.lastUpdate, key)
 						delete(h.lastPaused, key)
 						delete(h.lastProgress, key)
-						if t, ok := h.pauseTimers[key]; ok {
-							t.Stop()
+						if pt, ok := h.pauseTimers[key]; ok {
+							pt.timer.Stop()
 							delete(h.pauseTimers, key)
 						}
 					}
@@ -122,7 +133,10 @@ func playbackProgress(p *jellyfinPayload) float64 {
 	if p.RunTimeTicks <= 0 {
 		return 0
 	}
-	return float64(p.PlaybackPositionTicks) / float64(p.RunTimeTicks)
+	// Clamp to [0,1]: Jellyfin can report a position past the runtime
+	// (end-credits/post-roll or rounding), and the server rejects progress
+	// outside [0,1] — mirrors the max(...,0) clamp in remainingSeconds.
+	return min(max(float64(p.PlaybackPositionTicks)/float64(p.RunTimeTicks), 0), 1)
 }
 
 func remainingSeconds(p *jellyfinPayload) int {
@@ -191,6 +205,11 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *
 
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
+	// Cancel any pending two-phase end from a recent PlaybackStop for the same
+	// item: restarting within the end window must not let the stale ENDED timer
+	// dismiss the freshly-recreated activity.
+	h.ender.StopTimer(userKey, mapKey)
+
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
@@ -252,9 +271,9 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 
 	// Handle pause→play: cancel pause timer
 	if stateChanged && !p.IsPaused {
-		if t, ok := h.pauseTimers[debounceKey]; ok {
-			t.Stop()
-			delete(h.pauseTimers, debounceKey)
+		if pt, ok := h.pauseTimers[debounceKey]; ok {
+			pt.timer.Stop()
+			delete(h.pauseTimers, debounceKey) // also invalidates a fired-but-pending endPaused
 		}
 	}
 
@@ -264,14 +283,11 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 		if h.config.PauseTimeout > 0 {
 			if prev, ok := h.lastProgress[debounceKey]; ok && progress != prev {
 				h.lastProgress[debounceKey] = progress
-				if t, ok2 := h.pauseTimers[debounceKey]; ok2 {
-					t.Stop()
-				}
 				deviceName := p.DeviceName
 				userName := p.UserName
 				subtitle := playbackSubtitle(p)
-				h.pauseTimers[debounceKey] = time.AfterFunc(h.config.PauseTimeout, func() {
-					h.endPaused(userKey, mapKey, slug, deviceName, userName, subtitle, progress, debounceKey)
+				h.armPauseTimer(debounceKey, func(gen uint64) {
+					h.endPaused(userKey, mapKey, slug, deviceName, userName, subtitle, progress, debounceKey, gen)
 				})
 			}
 		}
@@ -291,17 +307,19 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 
 	// Start pause timer on play→pause or initial pause
 	if p.IsPaused && h.config.PauseTimeout > 0 && (stateChanged || !hasPrev) {
-		if t, ok := h.pauseTimers[debounceKey]; ok {
-			t.Stop()
-		}
 		deviceName := p.DeviceName
 		userName := p.UserName
 		subtitle := playbackSubtitle(p)
-		h.pauseTimers[debounceKey] = time.AfterFunc(h.config.PauseTimeout, func() {
-			h.endPaused(userKey, mapKey, slug, deviceName, userName, subtitle, progress, debounceKey)
+		h.armPauseTimer(debounceKey, func(gen uint64) {
+			h.endPaused(userKey, mapKey, slug, deviceName, userName, subtitle, progress, debounceKey, gen)
 		})
 	}
 	h.mu.Unlock()
+
+	// A progress event that reached here is an active (non-suppressed) playback
+	// frame; cancel any pending two-phase end from a stray PlaybackStop so the
+	// continuing activity isn't ended out from under the user.
+	h.ender.StopTimer(userKey, mapKey)
 
 	cl := h.clients.Get(userKey)
 
@@ -310,8 +328,8 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 		// Don't create activity for paused playback — wait for a real play event.
 		if p.IsPaused {
 			h.mu.Lock()
-			if t, ok := h.pauseTimers[debounceKey]; ok {
-				t.Stop()
+			if pt, ok := h.pauseTimers[debounceKey]; ok {
+				pt.timer.Stop()
 				delete(h.pauseTimers, debounceKey)
 			}
 			h.mu.Unlock()
@@ -367,8 +385,8 @@ func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *s
 	// Cancel pause timer if running
 	debounceKey := auth.MapKeyPrefix(userKey) + ":" + slug
 	h.mu.Lock()
-	if t, ok := h.pauseTimers[debounceKey]; ok {
-		t.Stop()
+	if pt, ok := h.pauseTimers[debounceKey]; ok {
+		pt.timer.Stop()
 		delete(h.pauseTimers, debounceKey)
 	}
 	h.mu.Unlock()
@@ -502,17 +520,41 @@ func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Con
 		delete(h.lastPaused, debounceKey)
 		delete(h.lastProgress, debounceKey)
 		if pt, ok := h.pauseTimers[debounceKey]; ok {
-			pt.Stop()
+			pt.timer.Stop()
 			delete(h.pauseTimers, debounceKey)
 		}
 		h.mu.Unlock()
 	})
 }
 
+// armPauseTimer stops any existing pause timer for debounceKey and arms a fresh
+// one carrying a new generation. fn receives that generation so it can forward
+// it to endPaused for the race-free staleness check. The caller must hold h.mu.
+func (h *Handler) armPauseTimer(debounceKey string, fn func(gen uint64)) {
+	if pt, ok := h.pauseTimers[debounceKey]; ok {
+		pt.timer.Stop()
+	}
+	h.pauseSeq++
+	gen := h.pauseSeq
+	h.pauseTimers[debounceKey] = &pauseTimer{
+		gen:   gen,
+		timer: time.AfterFunc(h.config.PauseTimeout, func() { fn(gen) }),
+	}
+}
+
 // endPaused is called when the pause timer fires — auto-ends the activity
-// because it has been paused with no progress change.
-func (h *Handler) endPaused(userKey, mapKey, slug, deviceName, userName, subtitle string, progress float64, debounceKey string) {
+// because it has been paused with no progress change. gen identifies the timer
+// generation that scheduled this call; if the current entry for the key is gone
+// or carries a different generation (a resume/seek/sweep replaced or stopped it,
+// but this AfterFunc had already started in its own goroutine and so Stop
+// returned false), bail out so a just-resumed activity is not ended. gen is a
+// value, so the check is race-free.
+func (h *Handler) endPaused(userKey, mapKey, slug, deviceName, userName, subtitle string, progress float64, debounceKey string, gen uint64) {
 	h.mu.Lock()
+	if pt, ok := h.pauseTimers[debounceKey]; !ok || pt.gen != gen {
+		h.mu.Unlock()
+		return // superseded or already cancelled
+	}
 	delete(h.pauseTimers, debounceKey)
 	h.mu.Unlock()
 

@@ -682,3 +682,175 @@ func TestDoWithRetry_CircuitOpenReturnsError(t *testing.T) {
 		t.Errorf("expected 0 attempts, got %d", got.Attempts)
 	}
 }
+
+// A half-open probe that resolves to a non-retryable 4xx proves the backend is
+// reachable, so it must close the breaker rather than leave it wedged in
+// half-open forever (regression for breaker-half-open-wedge).
+func TestDoWithRetry_HalfOpenProbe_ClientErrorClosesBreaker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	cb := NewCircuitBreaker(1, 5*time.Second)
+	cb.now = func() time.Time { return now }
+	cb.RecordFailure() // open
+	now = now.Add(6 * time.Second)
+
+	c := NewClient(srv.URL, "key", WithCircuitBreaker(cb))
+	err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", "", nil, nil)
+	if err == nil {
+		t.Fatal("expected 4xx error from probe")
+	}
+	if cb.IsOpen() {
+		t.Fatal("breaker wedged: a 4xx probe should close the breaker (backend reachable)")
+	}
+	if !cb.Allow() {
+		t.Error("expected closed breaker to allow subsequent requests")
+	}
+}
+
+// A half-open probe resolving to a handled 409 also proves reachability and
+// must close the breaker (regression for breaker-half-open-wedge).
+func TestDoWithRetry_HalfOpenProbe_ConflictClosesBreaker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+	}))
+	defer srv.Close()
+
+	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	cb := NewCircuitBreaker(1, 5*time.Second)
+	cb.now = func() time.Time { return now }
+	cb.RecordFailure() // open
+	now = now.Add(6 * time.Second)
+
+	c := NewClient(srv.URL, "key", WithCircuitBreaker(cb))
+	err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", "", nil,
+		func([]byte) (bool, error) { return true, errors.New("limit reached") })
+	if err == nil {
+		t.Fatal("expected handled-conflict error")
+	}
+	if cb.IsOpen() {
+		t.Fatal("breaker wedged: a handled 409 probe should close the breaker")
+	}
+}
+
+// Sustained 429 throttling is backpressure from a reachable backend, not a
+// health fault — exhausting retries on 429 must NOT open the breaker, and the
+// returned error must be a typed *HTTPError carrying status 429 (regressions
+// for breaker-429-counts-as-failure and client-429-untyped-error).
+func TestDoWithRetry_429Exhaustion_DoesNotTripBreaker_TypedError(t *testing.T) {
+	var count atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		// Tiny retry_after_ms keeps the 5-attempt retry loop fast.
+		_, _ = w.Write([]byte(`{"retry_after_ms":1}`))
+	}))
+	defer srv.Close()
+
+	cb := NewCircuitBreaker(1, time.Minute) // threshold 1: any RecordFailure opens it
+	c := NewClient(srv.URL, "key", WithCircuitBreaker(cb))
+	err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", "", nil, nil)
+	if err == nil {
+		t.Fatal("expected error after 429 exhaustion")
+	}
+	if cb.IsOpen() {
+		t.Error("429 throttling must not trip the circuit breaker")
+	}
+	var he *HTTPError
+	if !errors.As(err, &he) {
+		t.Fatalf("expected a typed *HTTPError from 429 exhaustion, got %T: %v", err, err)
+	}
+	if he.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("expected status 429 on the typed error, got %d", he.StatusCode)
+	}
+	if count.Load() != 5 {
+		t.Errorf("expected 5 attempts before exhaustion, got %d", count.Load())
+	}
+}
+
+// A half-open probe whose context is cancelled mid-backoff (before the request
+// reaches the backend) must NOT leave the breaker wedged in half-open. The
+// cancel path calls breaker.Abort(), re-arming it to open with a fresh cooldown:
+// Allow() is false immediately, then true once that cooldown elapses (regression
+// for breaker-half-open-wedge on ctx cancel during retry backoff).
+func TestDoWithRetry_ContextCancelDuringBackoff_DoesNotWedgeHalfOpen(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable) // 5xx → retryable, schedules a backoff
+	}))
+	defer srv.Close()
+
+	const cooldown = 5 * time.Second
+	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	cb := NewCircuitBreaker(1, cooldown)
+	cb.now = func() time.Time { return now }
+	cb.RecordFailure()                    // opens the breaker
+	now = now.Add(cooldown + time.Second) // past cooldown: next Allow half-opens
+
+	c := NewClient(srv.URL, "key", WithCircuitBreaker(cb))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	// Cancel during the first retry backoff (min backoff is ~500ms): the probe
+	// is admitted, the first 503 schedules a retry, and the cancel lands inside
+	// that backoff sleep before the request reaches the backend again.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	err := c.doWithRetry(ctx, "create", http.MethodPost, srv.URL+"/test", "", nil, nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got %v", err)
+	}
+
+	// Re-armed open: rejects immediately, admits a fresh probe after the cooldown.
+	if cb.Allow() {
+		t.Error("expected breaker to reject immediately after the aborted probe (re-armed open)")
+	}
+	now = now.Add(cooldown + time.Second)
+	if !cb.Allow() {
+		t.Error("breaker wedged half-open: a new probe must be admitted after the re-armed cooldown")
+	}
+}
+
+// An interleaved non-retryable 4xx must NOT reset the closed-state fault streak.
+// doWithRetry classifies a 4xx as breakerReachable (RecordReachable), not a
+// success (RecordSuccess), so a climbing streak of real faults survives the 4xx
+// and still opens the breaker (regression for the shared relay-wide breaker that
+// routine per-tenant 4xx would otherwise perpetually reset).
+func TestDoWithRetry_InterleavedClientError_DoesNotResetFaultStreak(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest) // non-retryable 4xx
+	}))
+	defer srv.Close()
+
+	cb := NewCircuitBreaker(2, time.Minute)
+	c := NewClient(srv.URL, "key", WithCircuitBreaker(cb))
+
+	cb.RecordFailure() // a real 5xx/network fault already on the streak (failures=1)
+	if cb.IsOpen() {
+		t.Fatal("breaker should still be closed after 1 fault (threshold 2)")
+	}
+
+	// The 4xx goes through doWithRetry — the path under test. It must be a typed
+	// HTTPError (proving it took the 4xx branch) and must not reset the streak.
+	err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", "", nil, nil)
+	var he *HTTPError
+	if !errors.As(err, &he) || he.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected a typed *HTTPError with status 400, got %T: %v", err, err)
+	}
+	if cb.IsOpen() {
+		t.Fatal("a single 4xx must not open the breaker")
+	}
+
+	// The second genuine fault hits the threshold — but only if the interleaved
+	// 4xx left the streak intact. Had the 4xx been recorded as a success, the
+	// streak would have reset to 0 and this would leave the breaker closed.
+	cb.RecordFailure()
+	if !cb.IsOpen() {
+		t.Error("breaker must open: the interleaved 4xx must not have reset the fault streak (RecordReachable, not RecordSuccess)")
+	}
+}

@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -39,7 +40,9 @@ func Init(ctx context.Context, cfg Config) (shutdown func(context.Context) error
 	if cfg.ServiceName == "" {
 		cfg.ServiceName = "pushward-relay"
 	}
-	if cfg.SampleRate <= 0 || cfg.SampleRate > 1.0 {
+	// Only an out-of-range rate falls back to 1.0; an explicit 0 is honored as
+	// "sample nothing" (the config layer defaults unset to 1.0).
+	if cfg.SampleRate < 0 || cfg.SampleRate > 1.0 {
 		cfg.SampleRate = 1.0
 	}
 
@@ -67,14 +70,30 @@ func Init(ctx context.Context, cfg Config) (shutdown func(context.Context) error
 		return noop, fmt.Errorf("creating OTLP exporter: %w", err)
 	}
 
+	// Include the default detectors (telemetry.sdk.*, host/process/runtime,
+	// OTEL_RESOURCE_ATTRIBUTES/OTEL_SERVICE_NAME) so traces carry standard
+	// metadata; WithAttributes is applied last so the explicit service/env win.
 	res, err := resource.New(ctx,
+		resource.WithTelemetrySDK(),
+		resource.WithFromEnv(),
+		resource.WithHost(),
+		resource.WithProcessRuntimeName(),
+		resource.WithProcessRuntimeVersion(),
 		resource.WithAttributes(
 			semconv.ServiceName(cfg.ServiceName),
 			semconv.DeploymentEnvironmentName(cfg.Environment),
 		),
 	)
+	// A single failing detector (e.g. host lookup unavailable in a restricted
+	// container) returns ErrPartialResource with a still-valid partial resource;
+	// degrade to it rather than disabling telemetry entirely. Only a nil resource
+	// is fatal.
 	if err != nil {
-		return noop, fmt.Errorf("creating OTel resource: %w", err)
+		if errors.Is(err, resource.ErrPartialResource) && res != nil {
+			slog.Warn("partial OTel resource; some detectors failed", "error", err)
+		} else {
+			return noop, fmt.Errorf("creating OTel resource: %w", err)
+		}
 	}
 
 	sampler := sdktrace.ParentBased(sdktrace.TraceIDRatioBased(cfg.SampleRate))
@@ -86,7 +105,12 @@ func Init(ctx context.Context, cfg Config) (shutdown func(context.Context) error
 	)
 
 	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
+	// Propagate both W3C TraceContext and Baggage so upstream baggage (e.g. a
+	// tenant or feature-flag attribute) is not silently dropped at the edge.
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
 
 	slog.Info("telemetry enabled",
 		"endpoint", cfg.Endpoint,

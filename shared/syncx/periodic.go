@@ -27,13 +27,17 @@ func (p *Periodic) Start(ctx context.Context, interval time.Duration, fn func(co
 		panic("syncx: Periodic.Start called twice")
 	}
 	p.started = true
-	p.mu.Unlock()
+	// Assign cancel/done under the lock so a concurrent Stop() either sees a
+	// fully-initialised Periodic (and cancels it) or sees the zero value (and
+	// no-ops cleanly) — never a torn half-assigned state.
 	runCtx, cancel := context.WithCancel(ctx)
 	p.cancel = cancel
 	p.done = make(chan struct{})
+	done := p.done
+	p.mu.Unlock()
 	go func() {
 		defer cancel()
-		defer close(p.done)
+		defer close(done)
 		t := time.NewTicker(interval)
 		defer t.Stop()
 		for {
@@ -52,10 +56,15 @@ func (p *Periodic) Start(ctx context.Context, interval time.Duration, fn func(co
 // Safe to call before Start (no-op).
 func (p *Periodic) Stop() {
 	p.stopOnce.Do(func() {
-		if p.cancel == nil {
+		// Snapshot under the lock to avoid racing Start's assignment of
+		// cancel/done.
+		p.mu.Lock()
+		cancel, done := p.cancel, p.done
+		p.mu.Unlock()
+		if cancel == nil {
 			return
 		}
-		p.cancel()
-		<-p.done
+		cancel()
+		<-done
 	})
 }

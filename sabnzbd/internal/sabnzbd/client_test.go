@@ -5,8 +5,27 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
+
+// A transport error must not leak the apikey query parameter into the error
+// string (regression for sabnzbd-apikey-log-leak).
+func TestGetQueue_TransportErrorRedactsAPIKey(t *testing.T) {
+	// Point at a closed port so http.Client.Do returns a *url.Error.
+	client := NewClient("http://127.0.0.1:1/sabnzbd/api", "supersecretkey")
+	_, err := client.GetQueue(context.Background())
+	if err == nil {
+		t.Fatal("expected a transport error")
+	}
+	if strings.Contains(err.Error(), "supersecretkey") {
+		t.Fatalf("apikey leaked into error: %q", err.Error())
+	}
+	// The redacted marker is URL-encoded by url.Values.Encode (%5BREDACTED%5D).
+	if !strings.Contains(err.Error(), "REDACTED") {
+		t.Errorf("expected redacted apikey marker in error, got %q", err.Error())
+	}
+}
 
 func TestGetQueue_Success(t *testing.T) {
 	expected := Queue{
@@ -119,7 +138,7 @@ func TestGetHistory_Success(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-key")
-	history, err := client.GetHistory(context.Background(), 5)
+	history, err := client.GetHistory(context.Background(), 0, 5)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -142,7 +161,7 @@ func TestGetHistory_ServerError(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-key")
-	_, err := client.GetHistory(context.Background(), 5)
+	_, err := client.GetHistory(context.Background(), 0, 5)
 	if err == nil {
 		t.Fatal("expected error for 500 response")
 	}
@@ -158,7 +177,7 @@ func TestGetHistory_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := client.GetHistory(ctx, 5)
+	_, err := client.GetHistory(ctx, 0, 5)
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
 	}

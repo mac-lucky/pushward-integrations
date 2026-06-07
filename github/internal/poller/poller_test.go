@@ -12,6 +12,7 @@ import (
 	ghclient "github.com/mac-lucky/pushward-integrations/github/internal/github"
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
 
@@ -284,10 +285,7 @@ func TestScheduleEnd_CancelledByNewRun(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	p.mu.Lock()
 	if t2, ok := p.tracked["owner/repo"]; ok && t2.endTimers != nil {
-		t2.endTimers.phase1.Stop()
-		if t2.endTimers.phase2 != nil {
-			t2.endTimers.phase2.Stop()
-		}
+		t2.endTimers.Stop()
 		delete(p.tracked, "owner/repo")
 	}
 	p.tracked["owner/repo"] = &trackedRun{
@@ -877,6 +875,9 @@ func TestPollActive_CompletesSuccessfulWorkflow(t *testing.T) {
 			},
 		})
 	})
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRun{ID: 42, Status: "completed", Conclusion: "success"})
+	})
 	gh := mockGitHubClient(t, ghMux)
 
 	pwSrv, calls, mu := testutil.MockPushWardServer(t)
@@ -930,6 +931,114 @@ func TestPollActive_CompletesSuccessfulWorkflow(t *testing.T) {
 	}
 }
 
+// All visible jobs are complete, but the run itself is still in_progress
+// (GitHub creating the next lazy job wave). pollActive must NOT end the
+// activity prematurely — regression for github-premature-end-jobs-only.
+func TestPollActive_DefersEndWhenRunNotCompleted(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 1,
+			Jobs:       []ghclient.Job{{ID: 1, Name: "Build", Status: "completed", Conclusion: "success"}},
+		})
+	})
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRun{ID: 42, Status: "in_progress"})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{cfg: cfg, gh: gh, pw: pw, tracked: make(map[string]*trackedRun)}
+	p.tracked["owner/repo"] = &trackedRun{
+		Repo: "owner/repo", RunID: 42, Slug: "gh-repo", Name: "CI",
+		maxTotalSteps: 1, maxStepRows: []int{1},
+	}
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	// No two-phase end should have been scheduled; the entry stays active.
+	p.mu.Lock()
+	tr, ok := p.tracked["owner/repo"]
+	hasPendingEnd := ok && tr.endTimers != nil
+	p.mu.Unlock()
+	if hasPendingEnd {
+		t.Error("scheduled an end while the run was still in_progress")
+	}
+	// The only call should be the ongoing tick, never an ENDED frame.
+	for _, c := range testutil.GetCalls(calls, mu) {
+		var req pushward.UpdateRequest
+		testutil.UnmarshalBody(t, c.Body, &req)
+		if req.State == pushward.StateEnded {
+			t.Error("sent an ENDED frame while the run was still in_progress")
+		}
+	}
+}
+
+// A run wedged in_progress past maxRunLifetime (12h) must be reclaimed by
+// eviction guard 2 (absolute age), even though guard 1 (stale LastUpdate) never
+// fires because the jobs endpoint still returns data. Eviction happens before
+// any job fetch, so no end is scheduled and no PushWard call is made.
+func TestPollActive_EvictsRunExceedingMaxLifetime(t *testing.T) {
+	ghMux := http.NewServeMux()
+	// If guard 2 were removed, the recent LastUpdate keeps guard 1 from firing,
+	// so the poll would proceed to fetch these in_progress jobs and PATCH a tick.
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 2,
+			Jobs: []ghclient.Job{
+				{ID: 1, Name: "Build", Status: "in_progress"},
+				{ID: 2, Name: "Test", Status: "queued"},
+			},
+		})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	cfg := testConfig()
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+	}
+	p.tracked["owner/repo"] = &trackedRun{
+		Repo:          "owner/repo",
+		RunID:         42,
+		Slug:          "gh-repo",
+		Name:          "CI",
+		LastUpdate:    time.Now(),                      // recent: guard 1 (stale TTL) must NOT fire
+		trackedAt:     time.Now().Add(-13 * time.Hour), // > maxRunLifetime (12h): guard 2 fires
+		maxTotalSteps: 2,
+		maxStepRows:   []int{1, 1},
+	}
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// Give any (erroneously) scheduled end a chance to fire before asserting.
+	time.Sleep(50 * time.Millisecond)
+
+	p.mu.Lock()
+	_, stillTracked := p.tracked["owner/repo"]
+	p.mu.Unlock()
+	if stillTracked {
+		t.Error("expected run exceeding max lifetime to be evicted from tracked")
+	}
+
+	// Eviction is silent: no ongoing tick, no two-phase end.
+	if got := testutil.GetCalls(calls, mu); len(got) != 0 {
+		t.Errorf("expected 0 PushWard calls on lifetime eviction, got %d", len(got))
+	}
+}
+
 func TestPollActive_CompletesFailedWorkflow(t *testing.T) {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
@@ -940,6 +1049,9 @@ func TestPollActive_CompletesFailedWorkflow(t *testing.T) {
 				{ID: 2, Name: "Test", Status: "completed", Conclusion: "success"},
 			},
 		})
+	})
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRun{ID: 42, Status: "completed", Conclusion: "failure"})
 	})
 	gh := mockGitHubClient(t, ghMux)
 
@@ -1001,13 +1113,15 @@ func TestPollActive_SkipsRepoWithPendingEnd(t *testing.T) {
 		pw:      pw,
 		tracked: make(map[string]*trackedRun),
 	}
-	timer := time.AfterFunc(time.Hour, func() {}) // won't fire
-	defer timer.Stop()
+	// A non-nil endTimers marks a pending end; pollActive must skip the repo.
+	tg := &syncx.TimerGroup{}
+	tg.Reset(time.Hour, func() {}) // won't fire
+	defer tg.Close()
 	p.tracked["owner/repo"] = &trackedRun{
 		Repo:      "owner/repo",
 		RunID:     42,
 		Slug:      "gh-repo",
-		endTimers: &timerPair{phase1: timer},
+		endTimers: tg,
 	}
 
 	if err := p.pollActive(context.Background()); err != nil {
@@ -1120,6 +1234,9 @@ func TestRefreshRepos_NoOwner(t *testing.T) {
 
 func TestRefreshRepos_MergesDiscoveredAndConfigured(t *testing.T) {
 	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.User{Login: "testowner"})
+	})
 	ghMux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]ghclient.Repository{
 			{FullName: "testowner/discovered1"},
@@ -1151,6 +1268,9 @@ func TestRefreshRepos_MergesDiscoveredAndConfigured(t *testing.T) {
 func TestRefreshRepos_SkipsCooldown(t *testing.T) {
 	callCount := 0
 	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.User{Login: "owner"})
+	})
 	ghMux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
 		callCount++
 		_ = json.NewEncoder(w).Encode([]ghclient.Repository{})
@@ -1185,6 +1305,9 @@ func TestRefreshRepos_SkipsCooldown(t *testing.T) {
 
 func TestRefreshRepos_DeduplicatesRepos(t *testing.T) {
 	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.User{Login: "owner"})
+	})
 	ghMux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode([]ghclient.Repository{
 			{FullName: "owner/repo1"},
@@ -1307,12 +1430,13 @@ func TestRun_CleansUpTimersOnShutdown(t *testing.T) {
 	p := New(cfg, gh, pw)
 
 	// Add a tracked entry with a pending end timer
-	timer := time.AfterFunc(time.Hour, func() {})
+	tg := &syncx.TimerGroup{}
+	tg.Reset(time.Hour, func() {})
 	p.tracked["owner/repo"] = &trackedRun{
 		Repo:      "owner/repo",
 		RunID:     42,
 		Slug:      "gh-repo",
-		endTimers: &timerPair{phase1: timer},
+		endTimers: tg,
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())

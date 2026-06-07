@@ -145,8 +145,10 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	for _, alertname := range groupOrder {
 		g := groups[alertname]
 
-		// Check state for dedup.
-		stateKey := text.Slug("", alertname)
+		// Check state for dedup. Use the collision-resistant hash (matching the
+		// CollapseID derivation) — text.Slug collapses distinct alertnames like
+		// "High CPU"/"high_cpu" to one key, cross-contaminating dedup.
+		stateKey := text.SlugHash("grafana", alertname, 6)
 		currentState := h.buildState(g)
 		if h.stateUnchanged(ctx, userKey, stateKey, currentState, log) {
 			continue
@@ -487,12 +489,21 @@ func (h *Handler) buildGroupedMetadata(g *alertGroup, representative alert) map[
 	}
 
 	// Per-instance detail: fill remaining slots with packed alert data.
+	// Disambiguate when the same instance appears in both firing and resolved
+	// (or twice with the same status) so one entry doesn't overwrite the other.
 	for _, a := range allAlerts {
 		inst := a.Labels["instance"]
 		if inst == "" {
 			inst = a.Fingerprint
 		}
-		meta.add(inst, formatAlertDetail(a))
+		key := inst
+		if _, exists := meta[key]; exists {
+			key = inst + " (" + a.Status + ")"
+			if _, exists := meta[key]; exists {
+				key = inst + " " + a.Fingerprint
+			}
+		}
+		meta.add(key, formatAlertDetail(a))
 	}
 
 	return meta.result()

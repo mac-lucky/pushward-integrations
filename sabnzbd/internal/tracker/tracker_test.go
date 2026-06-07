@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -63,7 +64,33 @@ func mockSABnzbd(t *testing.T) (*httptest.Server, *sabMock) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(m.historyResp)
+			h := m.historyResp.History
+			if m.historyFn != nil {
+				h = m.historyFn()
+			}
+			// Honor SABnzbd's start/limit pagination so getCompletedSummary's
+			// multi-page paging is actually exercised. Returning the same page
+			// for every offset (the old behavior) would either spin the paging
+			// loop or double-count stats across pages.
+			slots := h.Slots
+			start := queryInt(r, "start", 0)
+			limit := queryInt(r, "limit", len(slots))
+			if start < 0 {
+				start = 0
+			}
+			if start > len(slots) {
+				start = len(slots)
+			}
+			end := start + limit
+			if end < start {
+				end = start
+			}
+			if end > len(slots) {
+				end = len(slots)
+			}
+			_ = json.NewEncoder(w).Encode(sabnzbd.HistoryResponse{
+				History: sabnzbd.History{Slots: slots[start:end]},
+			})
 		default:
 			w.WriteHeader(http.StatusBadRequest)
 		}
@@ -76,8 +103,12 @@ type sabMock struct {
 	mu          sync.Mutex
 	queueResp   sabnzbd.QueueResponse
 	historyResp sabnzbd.HistoryResponse
-	queueErr    bool
-	historyErr  bool
+	// historyFn, when set, supersedes historyResp and is invoked (while m.mu is
+	// held) on every history request. Lets a test return different history per
+	// read without sleeps — e.g. keep a PP status active for the first N reads.
+	historyFn  func() sabnzbd.History
+	queueErr   bool
+	historyErr bool
 }
 
 func (m *sabMock) setQueue(q sabnzbd.Queue) {
@@ -90,6 +121,29 @@ func (m *sabMock) setHistory(h sabnzbd.History) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.historyResp = sabnzbd.HistoryResponse{History: h}
+}
+
+// setHistoryFn installs a per-read history provider. The provided fn is called
+// under m.mu (the mock's lock) on each history request, so it must not re-lock
+// m.mu; closing over a plain counter is safe.
+func (m *sabMock) setHistoryFn(fn func() sabnzbd.History) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.historyFn = fn
+}
+
+// queryInt parses an integer query parameter, returning def when absent or
+// malformed.
+func queryInt(r *http.Request, key string, def int) int {
+	v := r.URL.Query().Get(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return n
 }
 
 // --- HandleWebhook tests ---
@@ -814,7 +868,7 @@ func TestTimeline_NonDownloadPhase_SendsZeroValue(t *testing.T) {
 
 	// Non-download sends (e.g. "Starting...", PP) pass nil for value. Send as
 	// a tick since Units/Template are seed-only under merge-patch.
-	tr.send(ctx, 0.0, "Starting...", "arrow.down.circle", pushward.ColorBlue, nil, "", pushward.StateOngoing, nil)
+	_ = tr.send(ctx, 0.0, "Starting...", "arrow.down.circle", pushward.ColorBlue, nil, "", pushward.StateOngoing, nil)
 
 	got := testutil.GetCalls(calls, mu)
 	if len(got) != 1 {
@@ -990,13 +1044,24 @@ func TestTimeline_HistorySeeding(t *testing.T) {
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
 
+	// Activity must exist before PATCH — the seed is committed only on a
+	// successful send, so an unregistered slug (404) would re-seed on every
+	// tick instead of exercising the seed-once path under test.
+	if err := pw.CreateActivity(ctx, "sabnzbd", "SABnzbd", cfg.PushWard.Priority, 0, int(cfg.PushWard.StaleTimeout.Seconds())); err != nil {
+		t.Fatalf("unexpected create error: %v", err)
+	}
+
 	speed := pushward.Float64Ptr(50.0)
 
 	// First send with positive value should seed history
-	tr.send(ctx, 0.5, "50.0 MB/s", "arrow.down.circle.fill", pushward.ColorBlue, nil, "test.nzb", pushward.StateOngoing, speed)
+	if err := tr.send(ctx, 0.5, "50.0 MB/s", "arrow.down.circle.fill", pushward.ColorBlue, nil, "test.nzb", pushward.StateOngoing, speed); err != nil {
+		t.Fatalf("first send: %v", err)
+	}
 
 	// Second send should NOT include history
-	tr.send(ctx, 0.6, "50.0 MB/s", "arrow.down.circle.fill", pushward.ColorBlue, nil, "test.nzb", pushward.StateOngoing, speed)
+	if err := tr.send(ctx, 0.6, "50.0 MB/s", "arrow.down.circle.fill", pushward.ColorBlue, nil, "test.nzb", pushward.StateOngoing, speed); err != nil {
+		t.Fatalf("second send: %v", err)
+	}
 
 	got := testutil.GetCalls(calls, mu)
 	patchCalls := 0
@@ -1084,6 +1149,19 @@ func TestTimeline_DisplaySettings(t *testing.T) {
 
 // --- Change-detection guard tests ---
 
+// seedActivityAndReset registers the activity with the mock server (so PATCH
+// ticks return 200 and recordSent fires the dedup state) then clears the
+// recorded calls, leaving only the subsequent PATCHes for the assertions.
+func seedActivityAndReset(t *testing.T, pw *pushward.Client, calls *[]testutil.APICall, mu *sync.Mutex) {
+	t.Helper()
+	if err := pw.CreateActivity(context.Background(), slug, "test", 5, 60, 60); err != nil {
+		t.Fatalf("seed activity: %v", err)
+	}
+	mu.Lock()
+	*calls = nil
+	mu.Unlock()
+}
+
 func downloadingQueue(kbPerSec string, mbLeft string) *sabnzbd.Queue {
 	return &sabnzbd.Queue{
 		Status:   "Downloading",
@@ -1101,6 +1179,7 @@ func TestSendDownloadProgress_SkipsUnchangedPoll(t *testing.T) {
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
+	seedActivityAndReset(t, pw, calls, mu)
 
 	q := downloadingQueue("51200", "500") // 50 MB/s, progress 0.5
 	tr.sendDownloadProgress(ctx, q)
@@ -1118,6 +1197,7 @@ func TestSendDownloadProgress_HeartbeatAfterInterval(t *testing.T) {
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
+	seedActivityAndReset(t, pw, calls, mu)
 
 	q := downloadingQueue("51200", "500")
 	tr.sendDownloadProgress(ctx, q) // first poll, sends
@@ -1137,6 +1217,7 @@ func TestSendDownloadProgress_SpeedBoundary(t *testing.T) {
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
+	seedActivityAndReset(t, pw, calls, mu)
 
 	// 45.1 MB/s → rounds to 45
 	tr.sendDownloadProgress(ctx, downloadingQueue("46182", "500"))
@@ -1157,6 +1238,7 @@ func TestSendDownloadProgress_ProgressBucket(t *testing.T) {
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
+	seedActivityAndReset(t, pw, calls, mu)
 
 	// progress 0.500 (mbLeft=500/1000)
 	tr.sendDownloadProgress(ctx, downloadingQueue("51200", "500"))
@@ -1177,6 +1259,7 @@ func TestSendDownloadProgress_SubtitleChange(t *testing.T) {
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
+	seedActivityAndReset(t, pw, calls, mu)
 
 	q1 := downloadingQueue("51200", "500")
 	q1.Slots = []sabnzbd.QueueSlot{{Filename: "first.nzb"}}
@@ -1198,6 +1281,7 @@ func TestSendDownloadProgress_PausedDedupsRepeatedPolls(t *testing.T) {
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
+	seedActivityAndReset(t, pw, calls, mu)
 
 	pausedQ := &sabnzbd.Queue{
 		Status: "Paused", MB: "1000", MBLeft: "500", KBPerSec: "0",
@@ -1218,6 +1302,7 @@ func TestSendDownloadProgress_PauseResumeTransitionsSend(t *testing.T) {
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
+	seedActivityAndReset(t, pw, calls, mu)
 
 	// Downloading → Paused → Downloading. Each transition changes mode → send.
 	tr.sendDownloadProgress(ctx, downloadingQueue("51200", "500"))
@@ -1258,5 +1343,252 @@ func TestShouldSend_PPStageTransitions(t *testing.T) {
 	tr.lastSendTime = time.Now().Add(-heartbeatInterval - time.Second)
 	if !tr.shouldSend(1.0, 0, "Repairing", "ubuntu-24.04") {
 		t.Fatal("heartbeat should force send after interval")
+	}
+}
+
+// --- send() failure branch: recordSent must be skipped so the next poll retries ---
+
+func TestSendDownloadProgress_RetriesAfterSendFailure(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(cfg, nil, pw)
+
+	// No seedActivityAndReset → the slug is unregistered → PATCH 404 (a
+	// non-retryable 4xx) → send() returns an error → recordSent is skipped. The
+	// dedup state therefore never advances, so a second identical poll must
+	// re-attempt the PATCH rather than dedup it.
+	q := downloadingQueue("51200", "500")
+	tr.sendDownloadProgress(ctx, q)
+	tr.sendDownloadProgress(ctx, q) // identical, but the prior send failed → retry
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PATCH attempts (no dedup after a failed send), got %d", len(got))
+	}
+	for i, c := range got {
+		if c.Method != "PATCH" {
+			t.Errorf("call %d: expected PATCH, got %s", i, c.Method)
+		}
+	}
+}
+
+func TestSendDownloadProgress_DedupsAfterSuccessfulRetry(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(cfg, nil, pw)
+
+	q := downloadingQueue("51200", "500")
+
+	// 1) Unseeded slug → PATCH 404 → send() fails → recordSent skipped.
+	tr.sendDownloadProgress(ctx, q)
+
+	// 2) Register the activity so PATCH now succeeds, and clear recorded calls so
+	//    the assertion only sees the post-seed polls.
+	seedActivityAndReset(t, pw, calls, mu)
+
+	// 3) Identical poll now succeeds → recordSent fires, advancing dedup state.
+	tr.sendDownloadProgress(ctx, q)
+	// 4) Identical poll dedups because the prior send succeeded.
+	tr.sendDownloadProgress(ctx, q)
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH after a successful send dedups the next identical poll, got %d", len(got))
+	}
+}
+
+// --- getCompletedSummary pagination / cutoff ---
+
+func TestGetCompletedSummary_SumsAcrossPagesAndStopsAtCutoff(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	cfg := testConfig()
+	cfg.SABnzbd.URL = sabSrv.URL
+	sab := sabnzbd.NewClient(sabSrv.URL, "test-key")
+	tr := New(cfg, sab, nil)
+
+	sessionStart := time.Unix(10_000, 0)
+	inSession := int64(20_000) // >= cutoff
+	older := int64(5_000)      // < cutoff (a previous session)
+
+	const oneMB = int64(1024 * 1024)
+
+	var slots []sabnzbd.HistorySlot
+	// Page 1: a full page of in-session Completed slots, 1 MB / 1s each.
+	for i := 0; i < historyPageSize; i++ {
+		slots = append(slots, sabnzbd.HistorySlot{
+			Status: "Completed", Name: fmt.Sprintf("file-%d", i),
+			Bytes: oneMB, DownloadTime: 1, Completed: inSession,
+		})
+	}
+	// Page 2: one more in-session Completed slot (must be summed in — proves the
+	// paging crossed onto the second page) ...
+	slots = append(slots, sabnzbd.HistorySlot{
+		Status: "Completed", Name: "page2-file",
+		Bytes: 2 * oneMB, DownloadTime: 2, Completed: inSession,
+	})
+	// ... then an older Completed slot → the loop must STOP at the session cutoff.
+	slots = append(slots, sabnzbd.HistorySlot{
+		Status: "Completed", Name: "old-file",
+		Bytes: 999 * oneMB, DownloadTime: 999, Completed: older,
+	})
+	// ... and trailing in-session slots that must NOT be counted, proving the
+	// loop returned at the cutoff and did not keep paging.
+	slots = append(slots, sabnzbd.HistorySlot{
+		Status: "Completed", Name: "should-not-count",
+		Bytes: 999 * oneMB, DownloadTime: 999, Completed: inSession,
+	})
+
+	sabMk.setHistory(sabnzbd.History{Slots: slots})
+
+	totalBytes, totalDownloadTime, latestName := tr.getCompletedSummary(context.Background(), sessionStart)
+
+	wantBytes := int64(historyPageSize)*oneMB + 2*oneMB
+	if totalBytes != wantBytes {
+		t.Errorf("totalBytes = %d, want %d", totalBytes, wantBytes)
+	}
+	wantTime := historyPageSize*1 + 2
+	if totalDownloadTime != wantTime {
+		t.Errorf("totalDownloadTime = %d, want %d", totalDownloadTime, wantTime)
+	}
+	if latestName != "file-0" {
+		t.Errorf("latestName = %q, want %q", latestName, "file-0")
+	}
+}
+
+func TestGetCompletedSummary_FailedSlotBeforeCutoffStops(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	cfg := testConfig()
+	cfg.SABnzbd.URL = sabSrv.URL
+	sab := sabnzbd.NewClient(sabSrv.URL, "test-key")
+	tr := New(cfg, sab, nil)
+
+	sessionStart := time.Unix(10_000, 0)
+	inSession := int64(20_000)
+	older := int64(5_000)
+
+	const oneMB = int64(1024 * 1024)
+
+	slots := []sabnzbd.HistorySlot{
+		{Status: "Completed", Name: "recent", Bytes: 3 * oneMB, DownloadTime: 3, Completed: inSession},
+		// A Failed slot from a PREVIOUS session. Its non-Completed status must not
+		// let it slip past the timestamp cutoff — the loop must STOP here. (The
+		// regression: gating the cutoff on Completed status would `continue` past
+		// this slot and page through the whole history.)
+		{Status: "Failed", Name: "old-failed", Bytes: 0, DownloadTime: 0, Completed: older},
+		// A later in-session Completed slot that must NOT be counted, proving the
+		// failed slot's timestamp stopped the loop.
+		{Status: "Completed", Name: "trailing", Bytes: 7 * oneMB, DownloadTime: 7, Completed: inSession},
+	}
+	sabMk.setHistory(sabnzbd.History{Slots: slots})
+
+	totalBytes, totalDownloadTime, latestName := tr.getCompletedSummary(context.Background(), sessionStart)
+
+	if totalBytes != 3*oneMB {
+		t.Errorf("totalBytes = %d, want %d", totalBytes, 3*oneMB)
+	}
+	if totalDownloadTime != 3 {
+		t.Errorf("totalDownloadTime = %d, want 3", totalDownloadTime)
+	}
+	if latestName != "recent" {
+		t.Errorf("latestName = %q, want %q", latestName, "recent")
+	}
+}
+
+// --- track() fall-through: queue idle but post-processing active must not give up ---
+
+func TestTrack_QueueIdleButPostProcessingActive_DoesNotGiveUp(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+
+	// The queue stays Idle the whole time: the only signal that work is in flight
+	// is active post-processing in history. This drives the track() fall-through
+	// where waitForQueueActive fails but getPPStatus() != "" so it must keep
+	// tracking instead of giving up with a "No downloads" ENDED.
+	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
+
+	extracting := sabnzbd.History{
+		Slots: []sabnzbd.HistorySlot{{Status: "Extracting", Name: "test-file"}},
+	}
+	completed := sabnzbd.History{
+		Slots: []sabnzbd.HistorySlot{{
+			Status: "Completed", Name: "test-file",
+			Bytes: 524288000, DownloadTime: 10,
+			// Far-future timestamp so it is unconditionally >= the session cutoff.
+			Completed: time.Now().Add(time.Hour).Unix(),
+		}},
+	}
+
+	// History reads happen in a deterministic order: #1 ResumeIfActive, #2 the
+	// fall-through give-up check, #3 the first post-processing poll, then the
+	// completion reads. Keep PP active (Extracting) for the first three reads so
+	// the fall-through never sees an empty PP status, then flip to Completed so
+	// the PP loop ends and the summary carries real stats. No sleeps → no race.
+	var reads int
+	sabMk.setHistoryFn(func() sabnzbd.History {
+		reads++
+		if reads <= 3 {
+			return extracting
+		}
+		return completed
+	})
+
+	cfg := testConfig()
+	cfg.SABnzbd.URL = sabSrv.URL
+	sab := sabnzbd.NewClient(sabSrv.URL, "test-key")
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tr := New(cfg, sab, pw)
+	if !tr.ResumeIfActive(ctx) {
+		t.Fatal("expected ResumeIfActive to resume for active post-processing")
+	}
+	tr.Wait()
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) == 0 {
+		t.Fatal("expected PushWard calls")
+	}
+
+	// The give-up path would emit a "No downloads" ENDED; it must never appear,
+	// and the only ENDED must be the real completion summary.
+	endedCount := 0
+	for _, c := range got {
+		if c.Method != "PATCH" {
+			continue
+		}
+		var req pushward.UpdateRequest
+		testutil.UnmarshalBody(t, c.Body, &req)
+		if req.Content.State == "No downloads" {
+			t.Fatalf("tracker gave up with a 'No downloads' ENDED despite active post-processing")
+		}
+		if req.State == pushward.StateEnded {
+			endedCount++
+		}
+	}
+	// Resumed sessions send exactly one ENDED (no two-phase end).
+	if endedCount != 1 {
+		t.Fatalf("expected exactly 1 ENDED update, got %d", endedCount)
+	}
+
+	// The final ENDED must carry the real completion summary (500 MB @ 50 MB/s).
+	last := got[len(got)-1]
+	if last.Method != "PATCH" {
+		t.Fatalf("expected last call to be PATCH, got %s %s", last.Method, last.Path)
+	}
+	var lastReq pushward.UpdateRequest
+	testutil.UnmarshalBody(t, last.Body, &lastReq)
+	if lastReq.State != pushward.StateEnded {
+		t.Errorf("last update: expected ENDED, got %s", lastReq.State)
+	}
+	if !strings.Contains(lastReq.Content.State, "MB/s avg") {
+		t.Errorf("completion state should contain 'MB/s avg', got %q", lastReq.Content.State)
+	}
+	if !strings.Contains(lastReq.Content.State, "500 MB") {
+		t.Errorf("completion state should contain '500 MB', got %q", lastReq.Content.State)
 	}
 }

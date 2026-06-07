@@ -42,21 +42,23 @@ func KeyFromContext(ctx context.Context) string {
 //  1. Bearer hlk_... → use as integration key
 //  2. Basic Auth → extract hlk_ from password field
 func ExtractKey(authHeader string) string {
-	if authHeader == "" {
+	// RFC 7235 defines the auth-scheme token as case-insensitive, so match it
+	// with EqualFold rather than an exact-case prefix (webhook UIs and HTTP
+	// libraries vary in casing).
+	scheme, rest, ok := strings.Cut(authHeader, " ")
+	if !ok {
 		return ""
 	}
 
+	switch {
 	// Pattern 1: Bearer hlk_...
-	if after, ok := strings.CutPrefix(authHeader, "Bearer "); ok {
-		if strings.HasPrefix(after, "hlk_") {
-			return after
+	case strings.EqualFold(scheme, "Bearer"):
+		if strings.HasPrefix(rest, "hlk_") {
+			return rest
 		}
-	}
-
 	// Pattern 2: Basic Auth — hlk_ in password field
-	if after, ok := strings.CutPrefix(authHeader, "Basic "); ok {
-		decoded, err := base64.StdEncoding.DecodeString(after)
-		if err == nil {
+	case strings.EqualFold(scheme, "Basic"):
+		if decoded, err := base64.StdEncoding.DecodeString(rest); err == nil {
 			if _, password, ok := strings.Cut(string(decoded), ":"); ok {
 				if strings.HasPrefix(password, "hlk_") {
 					return password

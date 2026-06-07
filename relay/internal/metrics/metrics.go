@@ -124,7 +124,25 @@ func Middleware(next http.Handler) http.Handler {
 			route = "unknown"
 		}
 
-		httpRequestDuration.WithLabelValues(r.Method, route).Observe(duration)
-		httpRequestsTotal.WithLabelValues(r.Method, route, strconv.Itoa(rw.Status)).Inc()
+		// Sanitize the method: net/http accepts any RFC 9110 token, so an
+		// unsanitized r.Method is an unbounded Prometheus label dimension that an
+		// attacker can use to grow the registry without bound (CVE-2022-21698).
+		method := sanitizeMethod(r.Method)
+		httpRequestDuration.WithLabelValues(method, route).Observe(duration)
+		httpRequestsTotal.WithLabelValues(method, route, strconv.Itoa(rw.Status)).Inc()
 	})
+}
+
+// sanitizeMethod caps the HTTP method label to the known set plus "other",
+// mirroring promhttp's sanitizeMethod, so attacker-controlled method tokens
+// cannot inflate metric cardinality.
+func sanitizeMethod(m string) string {
+	switch m {
+	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodHead, http.MethodOptions,
+		http.MethodConnect, http.MethodTrace:
+		return m
+	default:
+		return "other"
+	}
 }

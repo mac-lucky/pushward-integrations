@@ -41,8 +41,18 @@ func New(metricsClient *metrics.Client, pwClient *pushward.Client, interval time
 
 // Start begins polling for the given slug and PromQL expression.
 // seriesLabel is the preferred metric label to use as series key (can be empty for auto-detect).
-// No-op if already polling for this slug.
+// No-op if already polling for this slug. Use Start when the firing webhook has
+// already seeded the activity's timeline template/styling.
 func (p *Poller) Start(slug, expr, seriesLabel string) {
+	p.StartWithSeed(slug, expr, seriesLabel, nil)
+}
+
+// StartWithSeed is like Start but, when seed is non-nil, the poller sends a full
+// UpdateActivity establishing the timeline template/styling on its first
+// successful tick (then value-only patches thereafter). Used when the firing
+// webhook had no values to seed with, so the activity would otherwise be left on
+// the generic template while ONGOING.
+func (p *Poller) StartWithSeed(slug, expr, seriesLabel string, seed *pushward.Content) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -53,7 +63,7 @@ func (p *Poller) Start(slug, expr, seriesLabel string) {
 	ctx, cancel := context.WithCancel(context.Background()) // #nosec G118 -- cancel is stored in p.active and called in Stop/StopAll
 	p.active[slug] = cancel
 	p.wg.Add(1)
-	go p.run(ctx, slug, expr, seriesLabel)
+	go p.run(ctx, slug, expr, seriesLabel, seed)
 }
 
 // Stop cancels the polling goroutine for the given slug.
@@ -101,12 +111,16 @@ func (p *Poller) SetUpdateCallback(cb UpdateCallback) {
 	p.mu.Unlock()
 }
 
-func (p *Poller) run(ctx context.Context, slug, expr, seriesLabel string) {
+func (p *Poller) run(ctx context.Context, slug, expr, seriesLabel string, seed *pushward.Content) {
 	defer p.wg.Done()
 
 	logger := slog.With("slug", slug)
 	ticker := time.NewTicker(p.interval)
 	defer ticker.Stop()
+
+	// seeded is false only when the firing webhook couldn't seed the activity
+	// (no values); the first successful tick then sends the full timeline seed.
+	seeded := seed == nil
 
 	for {
 		select {
@@ -114,23 +128,25 @@ func (p *Poller) run(ctx context.Context, slug, expr, seriesLabel string) {
 			logger.Info("poller stopped")
 			return
 		case <-ticker.C:
-			p.poll(ctx, logger, slug, expr, seriesLabel)
+			seeded = p.poll(ctx, logger, slug, expr, seriesLabel, seed, seeded)
 		}
 	}
 }
 
-func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seriesLabel string) {
+// poll queries the metric and pushes an update, returning the (possibly updated)
+// seeded state.
+func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seriesLabel string, seed *pushward.Content, seeded bool) bool {
 	points, err := p.metricsClient.QueryInstantAll(ctx, expr, time.Now())
 	if err != nil {
 		if ctx.Err() != nil {
-			return
+			return seeded
 		}
 		logger.Warn("poll failed", "error", err)
-		return
+		return seeded
 	}
 
 	if len(points) == 0 {
-		return
+		return seeded
 	}
 
 	values := make(map[string]float64, len(points))
@@ -139,18 +155,37 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seri
 		values[key] = lp.Point.Value
 	}
 
-	// Merge-patch with just the new sample. Template/units/accent/display config
-	// were seeded by the firing webhook and are preserved server-side.
-	err = p.pwClient.PatchActivity(ctx, slug, pushward.PatchRequest{
-		State:   pushward.StateOngoing,
-		Content: &pushward.ContentPatch{Value: values},
-	})
-	if err != nil {
-		if ctx.Err() != nil {
-			return
+	if !seeded {
+		// The firing webhook had no values, so establish the timeline
+		// template/styling now via a full UpdateActivity before switching to
+		// value-only patches. Leave seeded=false on failure so we retry.
+		content := *seed
+		content.Value = values
+		if err := p.pwClient.UpdateActivity(ctx, slug, pushward.UpdateRequest{
+			State:   pushward.StateOngoing,
+			Content: content,
+		}); err != nil {
+			if ctx.Err() != nil {
+				return seeded
+			}
+			logger.Warn("poll seed update failed", "error", err)
+			return seeded
 		}
-		logger.Warn("poll update failed", "error", err)
-		return
+		logger.Info("activity seeded by poller on first values")
+		seeded = true
+	} else {
+		// Merge-patch with just the new sample. Template/units/accent/display
+		// config were seeded already and are preserved server-side.
+		if err := p.pwClient.PatchActivity(ctx, slug, pushward.PatchRequest{
+			State:   pushward.StateOngoing,
+			Content: &pushward.ContentPatch{Value: values},
+		}); err != nil {
+			if ctx.Err() != nil {
+				return seeded
+			}
+			logger.Warn("poll update failed", "error", err)
+			return seeded
+		}
 	}
 
 	p.mu.Lock()
@@ -159,4 +194,5 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seri
 	if cb != nil {
 		cb(slug, values)
 	}
+	return seeded
 }

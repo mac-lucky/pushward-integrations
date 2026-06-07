@@ -164,6 +164,10 @@ func Load(path string) (*Config, error) {
 			Threshold: 5,
 			Cooldown:  30 * time.Second,
 		},
+		// SampleRate default lives here (not in telemetry.Init) so an explicit
+		// sample_rate: 0 in YAML can mean "sample nothing" while an unset value
+		// keeps the 1.0 default.
+		Telemetry: TelemetryConfig{SampleRate: 1.0},
 		Providers: ProvidersConfig{
 			Grafana: GrafanaConfig{
 				BaseProviderConfig: BaseProviderConfig{
@@ -314,6 +318,10 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("database.dsn is required (set PUSHWARD_DATABASE_DSN)")
 	}
 
+	if err := cfg.validateProviderTimeouts(); err != nil {
+		return nil, err
+	}
+
 	if err := cfg.validatePriorities(); err != nil {
 		return nil, err
 	}
@@ -413,29 +421,56 @@ func (cfg *Config) applyEnvOverrides() error {
 	return nil
 }
 
+// providerEntry pairs a provider's config-key name with its base config so the
+// validators can iterate one source-of-truth list instead of duplicating the
+// per-provider enumeration (adding a provider then touches only baseProviders).
+type providerEntry struct {
+	name string
+	base BaseProviderConfig
+}
+
+// baseProviders returns every provider's name and BaseProviderConfig. It is the
+// single list driving validateProviderTimeouts and validatePriorities.
+func (cfg *Config) baseProviders() []providerEntry {
+	return []providerEntry{
+		{"grafana", cfg.Providers.Grafana.BaseProviderConfig},
+		{"argocd", cfg.Providers.ArgoCD.BaseProviderConfig},
+		{"starr", cfg.Providers.Starr.BaseProviderConfig},
+		{"jellyfin", cfg.Providers.Jellyfin.BaseProviderConfig},
+		{"paperless", cfg.Providers.Paperless.BaseProviderConfig},
+		{"changedetection", cfg.Providers.Changedetection.BaseProviderConfig},
+		{"unmanic", cfg.Providers.Unmanic.BaseProviderConfig},
+		{"bazarr", cfg.Providers.Bazarr.BaseProviderConfig},
+		{"proxmox", cfg.Providers.Proxmox.BaseProviderConfig},
+		{"overseerr", cfg.Providers.Overseerr.BaseProviderConfig},
+		{"uptimekuma", cfg.Providers.UptimeKuma.BaseProviderConfig},
+		{"gatus", cfg.Providers.Gatus.BaseProviderConfig},
+		{"backrest", cfg.Providers.Backrest.BaseProviderConfig},
+	}
+}
+
+// validateProviderTimeouts rejects a non-positive StaleTimeout for any enabled
+// provider. A non-positive TTL makes the state store write rows with NULL
+// expiry that the periodic Cleanup never deletes (postgres.go) — an unbounded
+// table at 10k+ users.
+func (cfg *Config) validateProviderTimeouts() error {
+	for _, p := range cfg.baseProviders() {
+		if p.base.Enabled && p.base.StaleTimeout <= 0 {
+			return fmt.Errorf("providers.%s.stale_timeout must be > 0, got %s (a non-positive TTL writes state rows that are never cleaned up)", p.name, p.base.StaleTimeout)
+		}
+	}
+	// ArgoCD feeds SyncGracePeriod*2 as a TTL, so a negative value would also
+	// produce non-expiring rows.
+	if cfg.Providers.ArgoCD.Enabled && cfg.Providers.ArgoCD.SyncGracePeriod < 0 {
+		return fmt.Errorf("providers.argocd.sync_grace_period must be >= 0, got %s", cfg.Providers.ArgoCD.SyncGracePeriod)
+	}
+	return nil
+}
+
 func (cfg *Config) validatePriorities() error {
-	type entry struct {
-		name     string
-		priority int
-	}
-	providers := []entry{
-		{"grafana", cfg.Providers.Grafana.Priority},
-		{"argocd", cfg.Providers.ArgoCD.Priority},
-		{"starr", cfg.Providers.Starr.Priority},
-		{"jellyfin", cfg.Providers.Jellyfin.Priority},
-		{"paperless", cfg.Providers.Paperless.Priority},
-		{"changedetection", cfg.Providers.Changedetection.Priority},
-		{"unmanic", cfg.Providers.Unmanic.Priority},
-		{"bazarr", cfg.Providers.Bazarr.Priority},
-		{"proxmox", cfg.Providers.Proxmox.Priority},
-		{"overseerr", cfg.Providers.Overseerr.Priority},
-		{"uptimekuma", cfg.Providers.UptimeKuma.Priority},
-		{"gatus", cfg.Providers.Gatus.Priority},
-		{"backrest", cfg.Providers.Backrest.Priority},
-	}
-	for _, p := range providers {
-		if p.priority < 0 || p.priority > 10 {
-			return fmt.Errorf("providers.%s.priority: must be 0-10, got %d", p.name, p.priority)
+	for _, p := range cfg.baseProviders() {
+		if p.base.Priority < 0 || p.base.Priority > 10 {
+			return fmt.Errorf("providers.%s.priority: must be 0-10, got %d", p.name, p.base.Priority)
 		}
 	}
 	return nil

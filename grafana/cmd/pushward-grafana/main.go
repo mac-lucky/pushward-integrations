@@ -119,8 +119,12 @@ func main() {
 	}
 
 	slog.Info("shutting down")
-	p.StopAll()
+	// Drain in-flight webhook goroutines (producers) BEFORE cancelling the
+	// pollers (consumers): a webhook still in flight can call poller.Start,
+	// and a Start that wins the race after StopAll would insert a cancel that
+	// nothing invokes again, leaving p.Wait() blocked forever.
 	h.WaitIdle()
+	p.StopAll()
 	p.Wait()
 	h.WaitBackground()
 	if widgetManager != nil {

@@ -186,6 +186,56 @@ func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex
 	return srv, &calls, &mu
 }
 
+// MockPushWardServerFailingPatches records every PushWard call and fails the
+// first failPatches PATCH /activities/ requests with 400 (which the pushward
+// client treats as fail-fast, keeping the test quick), succeeding on subsequent
+// PATCHes. POST /activities and POST /notifications always succeed. It drives
+// handler update-failure scenarios where a final ONGOING tick fails but the
+// lifecycle must still proceed.
+func MockPushWardServerFailingPatches(t *testing.T, failPatches int) (*httptest.Server, *[]APICall, *sync.Mutex) {
+	t.Helper()
+	var calls []APICall
+	var mu sync.Mutex
+	patchN := 0
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /activities", func(w http.ResponseWriter, r *http.Request) {
+		recordCall(&calls, &mu, r)
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("POST /notifications", func(w http.ResponseWriter, r *http.Request) {
+		recordCall(&calls, &mu, r)
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("PATCH /activities/", func(w http.ResponseWriter, r *http.Request) {
+		recordCall(&calls, &mu, r)
+		mu.Lock()
+		patchN++
+		fail := patchN <= failPatches
+		mu.Unlock()
+		if fail {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, &calls, &mu
+}
+
+// CountPath returns the number of recorded calls whose path equals path.
+func CountPath(calls []APICall, path string) int {
+	n := 0
+	for _, c := range calls {
+		if c.Path == path {
+			n++
+		}
+	}
+	return n
+}
+
 // GetCalls returns a snapshot of the recorded API calls.
 func GetCalls(calls *[]APICall, mu *sync.Mutex) []APICall {
 	mu.Lock()

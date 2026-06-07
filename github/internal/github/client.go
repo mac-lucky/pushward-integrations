@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,6 +33,7 @@ type Client struct {
 	mu        sync.Mutex
 	remaining int
 	resetAt   time.Time
+	login     string // cached login of the token's user (lazy)
 }
 
 func NewClient(token string) *Client {
@@ -158,19 +160,58 @@ func (c *Client) doRequest(ctx context.Context, url string) ([]byte, error) {
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		return body, nil
 	}
-	if resp.StatusCode == 429 {
-		retryAfter := 60 * time.Second // default
-		if v := resp.Header.Get("Retry-After"); v != "" {
-			if secs, err := strconv.Atoi(v); err == nil {
-				retryAfter = time.Duration(secs) * time.Second
-			}
-		}
-		return nil, &rateLimitError{retryAfter: retryAfter, url: url}
+	// GitHub signals rate limiting as 429 OR as 403 carrying rate-limit headers
+	// (primary limit: X-RateLimit-Remaining: 0; secondary/abuse limit:
+	// Retry-After). Treat both as retryable so the poller backs off instead of
+	// hammering and re-tripping the limit.
+	if resp.StatusCode == 429 ||
+		(resp.StatusCode == 403 && (resp.Header.Get("Retry-After") != "" || resp.Header.Get("X-RateLimit-Remaining") == "0")) {
+		return nil, &rateLimitError{retryAfter: rateLimitRetryAfter(resp), url: url}
 	}
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 		return nil, &clientError{status: resp.StatusCode, url: url}
 	}
 	return nil, fmt.Errorf("unexpected status %d for %s", resp.StatusCode, url)
+}
+
+// rateLimitRetryAfter derives how long to wait before retrying a rate-limited
+// GitHub response. It prefers Retry-After (delta-seconds or HTTP-date per RFC
+// 7231), falls back to the X-RateLimit-Reset epoch, and finally a 60s default.
+// The wait is clamped so a hostile or skewed value can't park the poller.
+func rateLimitRetryAfter(resp *http.Response) time.Duration {
+	const (
+		defaultWait = 60 * time.Second
+		maxWait     = 15 * time.Minute
+	)
+	// clamp bounds a *successfully parsed* signal to [0, maxWait]. A non-positive
+	// value is authoritative, not garbage: "Retry-After: 0" means retry now, and
+	// an X-RateLimit-Reset / HTTP-date already in the past (clock skew or the
+	// window already reset) means the limit is open again — both map to an
+	// immediate retry, NOT the 60s default. defaultWait applies only when no
+	// header parses at all.
+	clamp := func(d time.Duration) time.Duration {
+		if d < 0 {
+			return 0
+		}
+		if d > maxWait {
+			return maxWait
+		}
+		return d
+	}
+	if v := resp.Header.Get("Retry-After"); v != "" {
+		if secs, err := strconv.Atoi(v); err == nil {
+			return clamp(time.Duration(secs) * time.Second)
+		}
+		if t, err := http.ParseTime(v); err == nil {
+			return clamp(time.Until(t))
+		}
+	}
+	if reset := resp.Header.Get("X-RateLimit-Reset"); reset != "" {
+		if epoch, err := strconv.ParseInt(reset, 10, 64); err == nil {
+			return clamp(time.Until(time.Unix(epoch, 0)))
+		}
+	}
+	return defaultWait
 }
 
 type clientError struct {
@@ -191,15 +232,26 @@ func (e *rateLimitError) Error() string {
 	return fmt.Sprintf("rate limited for %s (retry after %s)", e.url, e.retryAfter)
 }
 
-func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]WorkflowRun, error) {
+// splitRepo parses an "owner/repo" string into its two halves, returning an
+// error for any other shape. Centralizes the validation shared by the run/job
+// endpoints.
+func splitRepo(repo string) (owner, name string, err error) {
 	parts := strings.SplitN(repo, "/", 2)
 	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid repo format %q, expected owner/repo", repo)
+		return "", "", fmt.Errorf("invalid repo format %q, expected owner/repo", repo)
+	}
+	return parts[0], parts[1], nil
+}
+
+func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]WorkflowRun, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
 	}
 
 	// per_page=50 caps memory while covering concurrent workflows on busy repos.
 	// The poller selects only the most recent run, so ordering is stable.
-	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?status=in_progress&per_page=50", c.baseURL, parts[0], parts[1])
+	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?status=in_progress&per_page=50", c.baseURL, owner, name)
 
 	body, err := c.doWithRetry(ctx, url, "requesting workflow runs")
 	if err != nil {
@@ -213,17 +265,39 @@ func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]Workflow
 	return result.WorkflowRuns, nil
 }
 
+// GetRun fetches a single workflow run so callers can consult the run's own
+// authoritative Status/Conclusion rather than inferring completion from the
+// (lazily-created) job list.
+func (c *Client) GetRun(ctx context.Context, repo string, runID int64) (*WorkflowRun, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+
+	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d", c.baseURL, owner, name, runID)
+	body, err := c.doWithRetry(ctx, url, "requesting workflow run")
+	if err != nil {
+		return nil, err
+	}
+
+	var run WorkflowRun
+	if err := json.Unmarshal(body, &run); err != nil {
+		return nil, fmt.Errorf("decoding workflow run: %w", err)
+	}
+	return &run, nil
+}
+
 func (c *Client) GetJobs(ctx context.Context, repo string, runID int64) ([]Job, error) {
-	parts := strings.SplitN(repo, "/", 2)
-	if len(parts) != 2 {
-		return nil, fmt.Errorf("invalid repo format %q, expected owner/repo", repo)
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
 	}
 
 	var all []Job
 	page := 1
 
 	for {
-		url := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/jobs?per_page=100&page=%d", c.baseURL, parts[0], parts[1], runID, page)
+		url := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d/jobs?per_page=100&page=%d", c.baseURL, owner, name, runID, page)
 
 		body, err := c.doWithRetry(ctx, url, "requesting jobs")
 		if err != nil {
@@ -246,12 +320,69 @@ func (c *Client) GetJobs(ctx context.Context, repo string, runID int64) ([]Job, 
 	return all, nil
 }
 
+// authenticatedLogin returns the login of the token's user, cached after the
+// first successful lookup.
+func (c *Client) authenticatedLogin(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	login := c.login
+	c.mu.Unlock()
+	if login != "" {
+		return login, nil
+	}
+
+	body, err := c.doWithRetry(ctx, c.baseURL+"/user", "getting authenticated user")
+	if err != nil {
+		return "", err
+	}
+	var u User
+	if err := json.Unmarshal(body, &u); err != nil {
+		return "", fmt.Errorf("decoding authenticated user: %w", err)
+	}
+	c.mu.Lock()
+	c.login = u.Login
+	c.mu.Unlock()
+	return u.Login, nil
+}
+
+// ListRepos discovers repositories for owner, honoring it correctly:
+//   - the token's own account → GET /user/repos?affiliation=owner (includes
+//     private repos the user owns);
+//   - any other owner → GET /orgs/{owner}/repos (org repos the token can see),
+//     falling back to GET /users/{owner}/repos for personal accounts (public).
+//
+// Archived and disabled repos are filtered out.
 func (c *Client) ListRepos(ctx context.Context, owner string) ([]string, error) {
+	login, err := c.authenticatedLogin(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	if owner == "" || strings.EqualFold(owner, login) {
+		return c.listReposPaged(ctx, c.baseURL+"/user/repos?affiliation=owner&per_page=100")
+	}
+
+	orgURL := fmt.Sprintf("%s/orgs/%s/repos?per_page=100", c.baseURL, url.PathEscape(owner))
+	repos, err := c.listReposPaged(ctx, orgURL)
+	if err != nil {
+		var ce *clientError
+		if errors.As(err, &ce) && ce.status == http.StatusNotFound {
+			// Not an org — treat owner as a personal account (public repos).
+			userURL := fmt.Sprintf("%s/users/%s/repos?per_page=100", c.baseURL, url.PathEscape(owner))
+			return c.listReposPaged(ctx, userURL)
+		}
+		return nil, err
+	}
+	return repos, nil
+}
+
+// listReposPaged pages through a repos endpoint. baseURL must already carry a
+// query string (so "&page=N" is appended).
+func (c *Client) listReposPaged(ctx context.Context, baseURL string) ([]string, error) {
 	var all []string
 	page := 1
 
 	for {
-		url := fmt.Sprintf("%s/user/repos?affiliation=owner&per_page=100&page=%d", c.baseURL, page)
+		url := fmt.Sprintf("%s&page=%d", baseURL, page)
 
 		body, err := c.doWithRetry(ctx, url, "listing repos")
 		if err != nil {

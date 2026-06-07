@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -162,7 +163,10 @@ func TestGetJobs_InvalidRepo(t *testing.T) {
 
 func TestListRepos_FiltersArchivedAndDisabled(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(User{Login: "owner"})
+	})
+	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode([]Repository{
 			{FullName: "owner/active1"},
 			{FullName: "owner/archived", Archived: true},
@@ -172,6 +176,7 @@ func TestListRepos_FiltersArchivedAndDisabled(t *testing.T) {
 	})
 	c := testClient(t, mux)
 
+	// owner == token login → /user/repos (includes private repos).
 	repos, err := c.ListRepos(context.Background(), "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +191,10 @@ func TestListRepos_FiltersArchivedAndDisabled(t *testing.T) {
 
 func TestListRepos_Empty(t *testing.T) {
 	mux := http.NewServeMux()
-	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(User{Login: "owner"})
+	})
+	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode([]Repository{})
 	})
 	c := testClient(t, mux)
@@ -197,6 +205,77 @@ func TestListRepos_Empty(t *testing.T) {
 	}
 	if len(repos) != 0 {
 		t.Fatalf("expected 0 repos, got %d", len(repos))
+	}
+}
+
+// A different owner must hit the org endpoint (honoring the argument), not the
+// token user's own repos.
+func TestListRepos_OrgOwner(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(User{Login: "tokenuser"})
+	})
+	mux.HandleFunc("/orgs/some-org/repos", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]Repository{{FullName: "some-org/repo1"}})
+	})
+	mux.HandleFunc("/user/repos", func(_ http.ResponseWriter, _ *http.Request) {
+		t.Error("must not call /user/repos for a non-token owner")
+	})
+	c := testClient(t, mux)
+
+	repos, err := c.ListRepos(context.Background(), "some-org")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0] != "some-org/repo1" {
+		t.Errorf("expected [some-org/repo1], got %v", repos)
+	}
+}
+
+// When the org endpoint 404s, discovery falls back to the user-repos endpoint.
+func TestListRepos_FallsBackToUserEndpoint(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(User{Login: "tokenuser"})
+	})
+	mux.HandleFunc("/orgs/someone/repos", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/users/someone/repos", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]Repository{{FullName: "someone/pub"}})
+	})
+	c := testClient(t, mux)
+
+	repos, err := c.ListRepos(context.Background(), "someone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0] != "someone/pub" {
+		t.Errorf("expected [someone/pub], got %v", repos)
+	}
+}
+
+// A 403 carrying rate-limit headers must be retried like a 429, not treated as
+// a non-retryable client error.
+func TestDoRequest_403RateLimitRetried(t *testing.T) {
+	var calls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test", func(w http.ResponseWriter, _ *http.Request) {
+		if calls.Add(1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.Header().Set("X-RateLimit-Remaining", "0")
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	})
+	c := testClient(t, mux)
+
+	if _, err := c.doWithRetry(context.Background(), c.baseURL+"/test", "test"); err != nil {
+		t.Fatalf("expected 403 rate-limit to be retried to success, got %v", err)
+	}
+	if calls.Load() != 2 {
+		t.Errorf("expected 2 attempts (retry after 403 rate-limit), got %d", calls.Load())
 	}
 }
 
@@ -265,6 +344,26 @@ func TestDoRequest_ClientErrorNoRetry(t *testing.T) {
 	}
 }
 
+func TestDoRequest_403NoRateLimitHeadersNoRetry(t *testing.T) {
+	// A 403 WITHOUT rate-limit headers (bad token / insufficient scope) must
+	// fail fast as a client error, never be retried as a rate limit — otherwise
+	// auth failures turn into retry storms.
+	var attempts int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test", func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt32(&attempts, 1)
+		w.WriteHeader(http.StatusForbidden)
+	})
+	c := testClient(t, mux)
+
+	if _, err := c.doWithRetry(context.Background(), c.baseURL+"/test", "test"); err == nil {
+		t.Fatal("expected error for plain 403")
+	}
+	if got := atomic.LoadInt32(&attempts); got != 1 {
+		t.Errorf("expected 1 attempt (no retry for header-less 403), got %d", got)
+	}
+}
+
 func TestDoRequest_ServerErrorRetries(t *testing.T) {
 	var attempts int32
 	mux := http.NewServeMux()
@@ -305,16 +404,14 @@ func TestDoRequest_ContextCancellation(t *testing.T) {
 }
 
 func TestRecordRateLimit_ParsesHeaders(t *testing.T) {
-	resetTime := time.Now().Add(5 * time.Minute).Unix()
+	const resetEpoch int64 = 1893456000 // 2030-01-01T00:00:00Z
 
 	resp := &http.Response{
 		Header: http.Header{
 			"X-Ratelimit-Remaining": []string{"42"},
-			"X-Ratelimit-Reset":     []string{time.Unix(resetTime, 0).Format("1136239445")},
+			"X-Ratelimit-Reset":     []string{strconv.FormatInt(resetEpoch, 10)},
 		},
 	}
-	// Use the epoch format that strconv.ParseInt expects
-	resp.Header.Set("X-RateLimit-Reset", "1893456000")
 
 	c := NewClient("token")
 	c.recordRateLimit(resp)
@@ -323,6 +420,9 @@ func TestRecordRateLimit_ParsesHeaders(t *testing.T) {
 	defer c.mu.Unlock()
 	if c.remaining != 42 {
 		t.Errorf("expected remaining 42, got %d", c.remaining)
+	}
+	if got := c.resetAt.Unix(); got != resetEpoch {
+		t.Errorf("expected resetAt epoch %d, got %d", resetEpoch, got)
 	}
 }
 
@@ -419,6 +519,87 @@ func TestClientError_String(t *testing.T) {
 	e := &clientError{status: 404, url: "https://example.com"}
 	if got := e.Error(); got == "" {
 		t.Error("expected non-empty error string")
+	}
+}
+
+// rateLimitRetryAfter must honor each header form and clamp parsed signals to
+// [0, 15m]. A non-positive parsed value means "retry now" (NOT the 60s default,
+// which applies only when no header parses) — this pins the clamp fix.
+func TestRateLimitRetryAfter(t *testing.T) {
+	const maxWait = 15 * time.Minute
+
+	tests := []struct {
+		name    string
+		key     string
+		value   string
+		minWant time.Duration
+		maxWant time.Duration
+	}{
+		{
+			name:    "retry-after numeric seconds",
+			key:     "Retry-After",
+			value:   "30",
+			minWant: 30 * time.Second,
+			maxWant: 30 * time.Second,
+		},
+		{
+			// "Retry-After: 0" is authoritative: retry immediately, not 60s.
+			name:    "retry-after zero retries now",
+			key:     "Retry-After",
+			value:   "0",
+			minWant: 0,
+			maxWant: 0,
+		},
+		{
+			name:    "retry-after http-date near future",
+			key:     "Retry-After",
+			value:   time.Now().Add(2 * time.Minute).UTC().Format(http.TimeFormat),
+			minWant: 2*time.Minute - 10*time.Second,
+			maxWant: 2 * time.Minute,
+		},
+		{
+			// An HTTP-date already in the past → the window is open → retry now.
+			name:    "retry-after http-date in the past",
+			key:     "Retry-After",
+			value:   time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat),
+			minWant: 0,
+			maxWant: 0,
+		},
+		{
+			name:    "x-ratelimit-reset epoch in the past",
+			key:     "X-RateLimit-Reset",
+			value:   strconv.FormatInt(time.Now().Add(-5*time.Minute).Unix(), 10),
+			minWant: 0,
+			maxWant: 0,
+		},
+		{
+			// A reset far beyond maxWait must be clamped, never parked.
+			name:    "x-ratelimit-reset far future clamped to maxWait",
+			key:     "X-RateLimit-Reset",
+			value:   strconv.FormatInt(time.Now().Add(30*time.Minute).Unix(), 10),
+			minWant: maxWait,
+			maxWant: maxWait,
+		},
+		{
+			name:    "no headers falls back to 60s default",
+			key:     "",
+			value:   "",
+			minWant: 60 * time.Second,
+			maxWant: 60 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := http.Header{}
+			if tt.key != "" {
+				h.Set(tt.key, tt.value)
+			}
+			got := rateLimitRetryAfter(&http.Response{Header: h})
+			if got < tt.minWant || got > tt.maxWant {
+				t.Errorf("rateLimitRetryAfter() = %v, want in [%v, %v]", got, tt.minWant, tt.maxWant)
+			}
+		})
 	}
 }
 

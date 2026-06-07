@@ -468,6 +468,55 @@ func TestManager_MultiCleanupMissing(t *testing.T) {
 	}
 }
 
+// TestManager_MultiCleanupGraceAbsorbsSingleMiss pins the MissGrace debounce:
+// a series that disappears for exactly one tick and then returns must NOT be
+// pruned or DELETEd. MissGrace=2 tolerates one missing tick (missCount reaches
+// 1 < 2, then resets on recovery). Unlike TestManager_MultiCleanupMissing —
+// where the series stays gone forever and so is eventually deleted regardless —
+// this exercises the grace window itself: without it, the first miss DELETEs.
+func TestManager_MultiCleanupGraceAbsorbsSingleMiss(t *testing.T) {
+	stub, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	var calls atomic.Int64
+	src := MultiValueSourceFunc(func(_ context.Context) ([]LabeledValue, error) {
+		// Call 1 is the synchronous initial poll (creates k-x, k-y). Call 2 (the
+		// first tick) drops "y" for a single tick; call 3+ restore it.
+		if calls.Add(1) == 2 {
+			return []LabeledValue{
+				{Labels: map[string]string{"id": "x"}, Value: 1},
+			}, nil
+		}
+		return []LabeledValue{
+			{Labels: map[string]string{"id": "x"}, Value: 1},
+			{Labels: map[string]string{"id": "y"}, Value: 2},
+		}, nil
+	})
+
+	m, err := New(client, []Spec{{
+		Slug:           "cleanup",
+		MultiSource:    src,
+		SlugTemplate:   "k-{{.id}}",
+		Interval:       20 * time.Millisecond,
+		CleanupMissing: true,
+		MissGrace:      2, // tolerate exactly one missing tick
+	}}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = m.Start(ctx)
+
+	// Drive enough ticks that the miss (call 2) and several recoveries elapse.
+	waitFor(t, 1*time.Second, func() bool { return calls.Load() >= 5 })
+	cancel()
+	m.Wait()
+
+	if got := stub.deletes.Load(); got != 0 {
+		t.Errorf("expected 0 DELETE for a single-tick gap within MissGrace, got %d", got)
+	}
+}
+
 // --- validation ---
 
 func TestNew_RejectsMissingSource(t *testing.T) {
@@ -507,6 +556,30 @@ func TestNew_RejectsBadLabelTemplate(t *testing.T) {
 	_, err := New(client, []Spec{{Slug: "x", Source: src, LabelTemplate: "{{.Value"}}, quietLogger())
 	if err == nil {
 		t.Fatal("expected error for unparseable label template")
+	}
+}
+
+// TestNew_AcceptsAllFalseStatChangeMask pins the removal of the old
+// construction-time rejection of all-false masks. An all-false mask is a valid
+// "create once, never PATCH" static widget (statRowsEqualMasked treats rows past
+// the mask as triggers, and the frozen case can't be proven at New() time since
+// row count is unknown). New() must accept it even under UpdateOnChange.
+func TestNew_AcceptsAllFalseStatChangeMask(t *testing.T) {
+	_, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	src := StatListSourceFunc(func(_ context.Context) ([]pushward.StatRow, error) {
+		return []pushward.StatRow{{Label: "x", Value: "1"}}, nil
+	})
+	_, err := New(client, []Spec{{
+		Slug:           "static",
+		Name:           "Static",
+		StatListSource: src,
+		UpdateMode:     UpdateOnChange,
+		StatChangeMask: []bool{false, false},
+	}}, quietLogger())
+	if err != nil {
+		t.Fatalf("all-false StatChangeMask must be accepted (create-once static widget), got %v", err)
 	}
 }
 

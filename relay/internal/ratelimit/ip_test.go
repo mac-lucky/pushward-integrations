@@ -1,7 +1,6 @@
 package ratelimit
 
 import (
-	"net/http"
 	"net/http/httptest"
 	"testing"
 )
@@ -41,14 +40,17 @@ func TestClientIP_XRealIP(t *testing.T) {
 	}
 }
 
-func TestClientIP_XForwardedFor_FirstEntry(t *testing.T) {
+func TestClientIP_XForwardedFor_RightmostUntrusted(t *testing.T) {
 	setupTrustedProxy(t)
 
+	// The rightmost entry (10.0.0.5) is a trusted proxy hop and must be skipped;
+	// the next entry (9.10.11.12) is the closest untrusted client. The leftmost
+	// is client-controlled and must NOT be trusted blindly.
 	r := httptest.NewRequest("POST", "/", nil)
-	r.Header.Set("X-Forwarded-For", "9.10.11.12, 13.14.15.16")
+	r.Header.Set("X-Forwarded-For", "1.2.3.4, 9.10.11.12, 10.0.0.5")
 
 	if got := ClientIP(r.RemoteAddr, r.Header.Get); got != "9.10.11.12" {
-		t.Errorf("expected first XFF entry 9.10.11.12, got %s", got)
+		t.Errorf("expected rightmost untrusted XFF entry 9.10.11.12, got %s", got)
 	}
 }
 
@@ -107,69 +109,34 @@ func TestClientIP_UntrustedProxy_IgnoresHeaders(t *testing.T) {
 	}
 }
 
-func TestIPMiddleware_BurstExhaustion(t *testing.T) {
-	// Use a fresh limiter map for this test
+func TestAllowIP_BurstExhaustion(t *testing.T) {
 	saved := ipLimiters
 	ipLimiters = newLimiterMap(5, 20, 5_000)
 	t.Cleanup(func() { ipLimiters = saved })
 
-	handler := IPMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	// Exhaust burst (20 requests)
+	// Exhaust the burst (20 tokens).
 	for i := 0; i < 20; i++ {
-		r := httptest.NewRequest("POST", "/", nil)
-		r.RemoteAddr = "10.0.0.1:1234"
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, r)
-		if w.Code != http.StatusOK {
-			t.Fatalf("request %d: expected 200, got %d", i+1, w.Code)
+		if !AllowIP("10.0.0.1") {
+			t.Fatalf("request %d: expected allowed within burst", i+1)
 		}
 	}
-
-	// Next request should be rate limited
-	r := httptest.NewRequest("POST", "/", nil)
-	r.RemoteAddr = "10.0.0.1:1234"
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, r)
-	if w.Code != http.StatusTooManyRequests {
-		t.Errorf("expected 429 after burst exhaustion, got %d", w.Code)
+	if AllowIP("10.0.0.1") {
+		t.Error("expected rate limit after burst exhaustion")
 	}
 }
 
-func TestIPMiddleware_IndependentBuckets(t *testing.T) {
+func TestAllowIP_IndependentBuckets(t *testing.T) {
 	saved := ipLimiters
 	ipLimiters = newLimiterMap(5, 20, 5_000)
 	t.Cleanup(func() { ipLimiters = saved })
 
-	handler := IPMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	// Exhaust burst for IP A
 	for i := 0; i < 20; i++ {
-		r := httptest.NewRequest("POST", "/", nil)
-		r.RemoteAddr = "10.0.0.1:1234"
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, r)
+		AllowIP("10.0.0.1")
 	}
-
-	// IP A should be limited
-	r := httptest.NewRequest("POST", "/", nil)
-	r.RemoteAddr = "10.0.0.1:1234"
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, r)
-	if w.Code != http.StatusTooManyRequests {
-		t.Errorf("IP A: expected 429, got %d", w.Code)
+	if AllowIP("10.0.0.1") {
+		t.Error("IP A: expected rate limit")
 	}
-
-	// IP B should still be allowed
-	r = httptest.NewRequest("POST", "/", nil)
-	r.RemoteAddr = "10.0.0.2:1234"
-	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, r)
-	if w.Code != http.StatusOK {
-		t.Errorf("IP B: expected 200, got %d", w.Code)
+	if !AllowIP("10.0.0.2") {
+		t.Error("IP B: expected allowed (separate bucket)")
 	}
 }

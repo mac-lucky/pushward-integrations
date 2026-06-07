@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
 	"net/http"
 	"net/url"
@@ -75,6 +76,13 @@ type Client struct {
 
 // defaultTimeout is used when WithTimeout is not supplied.
 const defaultTimeout = 30 * time.Second
+
+// maxResponseBytes bounds how much of a metrics response is decoded. A
+// wide-window range query over many series can return tens of MB; this caps
+// memory while staying far above any response that feeds a Live-Activity widget
+// (a handful of points/series). Mirrors the LimitReader pattern in the sabnzbd
+// client.
+const maxResponseBytes = 16 << 20
 
 // NewClient creates a new metrics client. Default HTTP timeout is 30s;
 // override with WithTimeout.
@@ -156,14 +164,19 @@ func (c *Client) QueryRangeAll(ctx context.Context, expr string, from, to time.T
 	if err != nil {
 		return nil, fmt.Errorf("querying metrics: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	// Drain before close so the body is read to EOF (the JSON decoder leaves the
+	// trailing newline) and the keep-alive connection is reused across polls.
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("metrics query returned %d", resp.StatusCode)
 	}
 
 	var result queryRangeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
 
@@ -211,14 +224,17 @@ func (c *Client) QueryInstantAll(ctx context.Context, expr string, ts time.Time)
 	if err != nil {
 		return nil, fmt.Errorf("querying metrics: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("metrics query returned %d", resp.StatusCode)
 	}
 
 	var result instantQueryResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
 

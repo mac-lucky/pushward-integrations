@@ -186,7 +186,15 @@ func (h *Handler) StartCleanup(ctx context.Context) { // #nosec G118 -- intentio
 					appName := ge.appName
 					h.mu.Unlock()
 
-					app, ok, _ := h.loadApp(context.Background(), userKey, appName)
+					app, ok, err := h.loadApp(context.Background(), userKey, appName)
+					if err != nil {
+						// Transient DB read error — leave the timer in place and
+						// re-evaluate on the next tick. Treating a blip as
+						// "not pending" would delete a still-pending app's grace
+						// timer, so graceExpired never fires and the deferred
+						// "Syncing..." activity is silently lost.
+						continue
+					}
 					if !ok || !app.Pending {
 						h.mu.Lock()
 						if ge, ok := h.graceTimers[tk]; ok {
@@ -201,15 +209,35 @@ func (h *Handler) StartCleanup(ctx context.Context) { // #nosec G118 -- intentio
 	}()
 }
 
+// recoverConcurrency caps how many pending ArgoCD apps are recovered at once at
+// startup, so a restart coinciding with many in-flight syncs cannot fan out an
+// unbounded burst of goroutines and PushWard API calls.
+const recoverConcurrency = 16
+
+// StopAll stops and clears all pending grace timers. Call it on shutdown so a
+// grace timer can't fire graceExpired (which creates activities on a background
+// context) after the process has begun exiting. Persisted Pending=true state is
+// left intact so RecoverPending re-fires those apps on the next startup.
+func (h *Handler) StopAll() {
+	h.mu.Lock()
+	for tk, ge := range h.graceTimers {
+		ge.timer.Stop()
+		delete(h.graceTimers, tk)
+	}
+	h.mu.Unlock()
+}
+
 // RecoverPending scans the state store for ArgoCD entries that are still
-// pending (grace timer was lost on pod restart) and fires graceExpired for each.
+// pending (grace timer was lost on pod restart) and fires graceExpired for each,
+// with bounded concurrency, in the background so startup is not blocked.
 func (h *Handler) RecoverPending(ctx context.Context) {
 	entries, err := h.store.ListByProvider(ctx, "argocd")
 	if err != nil {
 		slog.Error("failed to list argocd state entries for recovery", "error", err)
 		return
 	}
-	var recovered int
+	type recoverItem struct{ userKey, key string }
+	var pending []recoverItem
 	for _, entry := range entries {
 		if entry.SubKey != "" {
 			continue // skip tombstones
@@ -222,12 +250,30 @@ func (h *Handler) RecoverPending(ctx context.Context) {
 		if !app.Pending {
 			continue
 		}
-		recovered++
-		go h.graceExpired(entry.UserKey, entry.Key) // #nosec G118 -- startup recovery, no request context
+		pending = append(pending, recoverItem{entry.UserKey, entry.Key})
 	}
-	if recovered > 0 {
-		slog.Info("recovered pending argocd apps", "count", recovered)
+	if len(pending) == 0 {
+		return
 	}
+
+	go func() { // #nosec G118 -- startup recovery, bounded concurrency, honors ctx
+		var wg sync.WaitGroup
+		sem := make(chan struct{}, recoverConcurrency)
+		for _, item := range pending {
+			if ctx.Err() != nil {
+				break // shutting down
+			}
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(userKey, key string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				h.graceExpired(userKey, key)
+			}(item.userKey, item.key)
+		}
+		wg.Wait()
+		slog.Info("recovered pending argocd apps", "count", len(pending))
+	}()
 }
 
 func timerKey(userKey, appName string) string {
@@ -648,14 +694,34 @@ type errorPreambleResult struct {
 	wasPending  bool
 }
 
-func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.Logger, p *argocdPayload, event string) (*errorPreambleResult, error) {
+// loadedApp lets a caller that already read app state under the per-app lock
+// hand it to errorPreamble, avoiding a redundant DB round-trip for the same row.
+type loadedApp struct {
+	app    *trackedAppState
+	exists bool
+}
+
+func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.Logger, p *argocdPayload, event string, pre *loadedApp) (*errorPreambleResult, error) {
 	slug := slugForApp(p.App)
 	tk := timerKey(userKey, p.App)
 
-	app, exists, err := h.loadApp(ctx, userKey, p.App)
-	if err != nil {
-		log.Error("failed to load app state", "app", p.App, "error", err)
-		return nil, nil
+	var (
+		app    *trackedAppState
+		exists bool
+	)
+	if pre != nil {
+		app, exists = pre.app, pre.exists
+	} else {
+		var err error
+		app, exists, err = h.loadApp(ctx, userKey, p.App)
+		if err != nil {
+			log.Error("failed to load app state", "app", p.App, "error", err)
+			// Surface the error (not nil,nil) so the caller propagates it as a
+			// 502 and ArgoCD retries — otherwise a transient DB read silently
+			// drops the sync-failed / health-degraded alert (the most important
+			// class).
+			return nil, err
+		}
 	}
 	currentStep := 1
 	wasPending := false
@@ -711,7 +777,7 @@ func (h *Handler) handleSyncFailed(ctx context.Context, userKey string, log *slo
 	unlock := h.lockApp(userKey, p.App)
 	defer unlock()
 
-	res, err := h.errorPreamble(ctx, userKey, log, p, "sync-failed")
+	res, err := h.errorPreamble(ctx, userKey, log, p, "sync-failed", nil)
 	if res == nil {
 		return err
 	}
@@ -747,7 +813,9 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, log 
 	app, exists, err := h.loadApp(ctx, userKey, p.App)
 	if err != nil {
 		log.Error("failed to load app state", "app", p.App, "error", err)
-		return nil
+		// Surface as 502 so ArgoCD retries; otherwise a transient DB read here
+		// swallows the degraded alert before errorPreamble even runs.
+		return err
 	}
 	isTransient := exists && !app.Pending && app.Step == 2
 
@@ -779,7 +847,9 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, log 
 		return nil
 	}
 
-	res, err := h.errorPreamble(ctx, userKey, log, p, "health-degraded")
+	// Reuse the app state already loaded above (under the lock) so errorPreamble
+	// doesn't re-read the same row from the DB.
+	res, err := h.errorPreamble(ctx, userKey, log, p, "health-degraded", &loadedApp{app: app, exists: exists})
 	if res == nil {
 		return err
 	}
@@ -813,16 +883,39 @@ func (h *Handler) graceExpired(userKey, appName string) {
 	unlock := h.lockApp(userKey, appName)
 	defer unlock()
 
-	app, ok, err := h.loadApp(context.Background(), userKey, appName)
+	// Bound every DB and API call so a slow or unreachable backend cannot hold
+	// the per-app lock indefinitely and wedge all concurrent webhooks for this
+	// app. 15s comfortably covers the DB round-trips plus the activity calls.
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	app, ok, err := h.loadApp(ctx, userKey, appName)
 	if err != nil {
-		log.Error("failed to load app state", "app", appName, "error", err)
+		log.Error("failed to load app state, re-arming grace retry", "app", appName, "error", err)
+		// The timer already fired; without re-arming, a transient DB error here
+		// would strand the pending app (no activity until the stale TTL). Re-arm
+		// unconditionally: RecoverPending (post-restart) calls graceExpired with
+		// no graceTimers entry, so a "re-arm only if present" guard would skip the
+		// recovery path — the exact case this retry is meant to cover.
+		h.mu.Lock()
+		ge, ok := h.graceTimers[tk]
+		if !ok {
+			ge = &graceEntry{userKey: userKey, appName: appName}
+			h.graceTimers[tk] = ge
+		}
+		ge.timer = time.AfterFunc(5*time.Second, func() { h.graceExpired(userKey, appName) })
+		h.mu.Unlock()
 		return
 	}
 	if !ok || !app.Pending {
+		// No longer pending (a webhook resolved it); drop the dead timer entry.
+		h.mu.Lock()
+		delete(h.graceTimers, tk)
+		h.mu.Unlock()
 		return
 	}
 	app.Pending = false
-	if err := h.saveApp(context.Background(), userKey, appName, app); err != nil {
+	if err := h.saveApp(ctx, userKey, appName, app); err != nil {
 		log.Error("failed to save app state", "app", appName, "error", err)
 	}
 	h.mu.Lock()
@@ -832,9 +925,6 @@ func (h *Handler) graceExpired(userKey, appName string) {
 	step := app.Step
 	revision := app.Revision
 	repoURL := app.RepoURL
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
 
 	pw := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())

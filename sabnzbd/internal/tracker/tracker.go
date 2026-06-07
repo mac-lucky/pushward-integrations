@@ -206,14 +206,14 @@ func timelineSample(value *float64) float64 {
 	return 0
 }
 
-// seedHistory returns a bootstrap history for the first non-zero sample, or
-// nil when history has already been seeded or sample is 0. Flips t.historySent
-// on first emission.
-func (t *Tracker) seedHistory(sample float64) map[string][]pushward.HistoryPoint {
+// buildSeedHistory returns a bootstrap history for the first non-zero sample,
+// or nil when history has already been seeded or sample is 0. It does NOT flip
+// t.historySent — callers commit that only after the send succeeds, so a failed
+// first tick doesn't consume the one-shot seed without ever delivering it.
+func (t *Tracker) buildSeedHistory(sample float64) map[string][]pushward.HistoryPoint {
 	if t.historySent || sample <= 0 {
 		return nil
 	}
-	t.historySent = true
 	now := time.Now().Unix()
 	return map[string][]pushward.HistoryPoint{
 		seriesKey: {
@@ -243,19 +243,32 @@ func (t *Tracker) sendSeed(ctx context.Context, progress float64, state, icon, a
 		AccentColor:   accentColor,
 		RemainingTime: positiveRemaining(remainingSeconds),
 	}
+	seeded := false
 	if template == pushward.TemplateTimeline {
 		sample := timelineSample(value)
 		t.applyTimelineSpeed(&content, sample)
-		content.History = t.seedHistory(sample)
+		if h := t.buildSeedHistory(sample); h != nil {
+			content.History = h
+			seeded = true
+		}
 	}
 
-	return t.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
+	if err := t.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 		State:   activityState,
 		Content: content,
-	})
+	}); err != nil {
+		return err
+	}
+	if seeded {
+		t.historySent = true
+	}
+	return nil
 }
 
-func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string, value *float64) {
+// send issues a merge-patch tick. It returns the PatchActivity error so callers
+// can avoid recording dedup state for an update the server never received
+// (e.g. retries exhausted or the circuit breaker is open).
+func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string, value *float64) error {
 	template := t.cfg.SABnzbd.Template
 	contentPatch := &pushward.ContentPatch{
 		Progress:      pushward.Float64Ptr(progress),
@@ -269,10 +282,14 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 	if subtitle != "" {
 		contentPatch.Subtitle = pushward.StringPtr(subtitle)
 	}
+	seeded := false
 	if template == pushward.TemplateTimeline {
 		sample := timelineSample(value)
 		contentPatch.Value = map[string]float64{seriesKey: sample}
-		contentPatch.History = t.seedHistory(sample)
+		if h := t.buildSeedHistory(sample); h != nil {
+			contentPatch.History = h
+			seeded = true
+		}
 	}
 
 	if err := t.pw.PatchActivity(ctx, slug, pushward.PatchRequest{
@@ -280,7 +297,12 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 		Content: contentPatch,
 	}); err != nil {
 		slog.Error("failed to send update", "error", err)
+		return err
 	}
+	if seeded {
+		t.historySent = true
+	}
+	return nil
 }
 
 func (t *Tracker) track(ctx context.Context, resumed bool) {
@@ -310,9 +332,17 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	}
 
 	if !t.waitForQueueActive(ctx, 12) {
-		slog.Warn("SABnzbd never started downloading, giving up")
-		t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", pushward.ColorGreen, nil, "", pushward.StateEnded, nil)
-		return
+		// The queue can be idle because the item is already in post-processing
+		// (resumed mid-unpack); waitForQueueActive only inspects the queue. Only
+		// give up when there is also no active post-processing — otherwise fall
+		// through to the main loop, which tracks the unpack and ends with the
+		// real completion summary.
+		if pp, _ := t.getPPStatus(ctx); pp == "" {
+			slog.Warn("SABnzbd never started downloading, giving up")
+			_ = t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", pushward.ColorGreen, nil, "", pushward.StateEnded, nil)
+			return
+		}
+		slog.Info("queue idle but post-processing active, tracking post-processing")
 	}
 
 	var totalPPElapsed time.Duration
@@ -491,7 +521,7 @@ func (t *Tracker) trackDownloads(ctx context.Context) {
 // Returns total post-processing duration.
 func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 	slog.Info("tracking post-processing")
-	t.send(ctx, 1.0, "Unpacking...", "archivebox", pushward.ColorOrange, nil, "", pushward.StateOngoing, nil)
+	_ = t.send(ctx, 1.0, "Unpacking...", "archivebox", pushward.ColorOrange, nil, "", pushward.StateOngoing, nil)
 	ppStart := time.Now()
 
 	timer := time.NewTimer(t.cfg.Polling.Interval)
@@ -515,8 +545,9 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 		subtitle := text.Truncate(ppName, 30)
 		stateStr := ppStatus + "..."
 		if t.shouldSend(1.0, 0, ppStatus, subtitle) {
-			t.send(ctx, 1.0, stateStr, icon, pushward.ColorOrange, nil, subtitle, pushward.StateOngoing, nil)
-			t.recordSent(1.0, 0, ppStatus, subtitle)
+			if err := t.send(ctx, 1.0, stateStr, icon, pushward.ColorOrange, nil, subtitle, pushward.StateOngoing, nil); err == nil {
+				t.recordSent(1.0, 0, ppStatus, subtitle)
+			}
 		}
 		timer.Reset(t.cfg.Polling.Interval)
 	}
@@ -565,8 +596,9 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 		if !t.shouldSend(progress, 0, modePaused, subtitle) {
 			return true
 		}
-		t.send(ctx, progress, "Paused", "pause.circle.fill", pushward.ColorBlue, nil, subtitle, pushward.StateOngoing, pushward.Float64Ptr(0))
-		t.recordSent(progress, 0, modePaused, subtitle)
+		if err := t.send(ctx, progress, "Paused", "pause.circle.fill", pushward.ColorBlue, nil, subtitle, pushward.StateOngoing, pushward.Float64Ptr(0)); err == nil {
+			t.recordSent(progress, 0, modePaused, subtitle)
+		}
 		return true
 	}
 
@@ -580,8 +612,9 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 		return true
 	}
 
-	t.send(ctx, progress, stateStr, "arrow.down.circle.fill", pushward.ColorBlue, remainingSeconds, subtitle, pushward.StateOngoing, pushward.Float64Ptr(speedMB))
-	t.recordSent(progress, speedMB, modeDownloading, subtitle)
+	if err := t.send(ctx, progress, stateStr, "arrow.down.circle.fill", pushward.ColorBlue, remainingSeconds, subtitle, pushward.StateOngoing, pushward.Float64Ptr(speedMB)); err == nil {
+		t.recordSent(progress, speedMB, modeDownloading, subtitle)
+	}
 	return true
 }
 
@@ -615,7 +648,7 @@ func (t *Tracker) recordSent(progress, speedMB float64, mode, subtitle string) {
 // getPPStatus checks history for active post-processing jobs.
 // Returns the status and name, or empty strings if none found.
 func (t *Tracker) getPPStatus(ctx context.Context) (string, string) {
-	history, err := t.sab.GetHistory(ctx, 5)
+	history, err := t.sab.GetHistory(ctx, 0, 5)
 	if err != nil {
 		slog.Warn("failed to fetch history", "error", err)
 		return "", ""
@@ -628,26 +661,57 @@ func (t *Tracker) getPPStatus(ctx context.Context) (string, string) {
 	return "", ""
 }
 
-// getCompletedSummary reads the SABnzbd history API once and returns aggregate
-// bytes, download time (seconds), and the most recently completed item's name
-// for slots completed in the current session.
+// historyPageSize is the page size used when paginating the SABnzbd history to
+// total up a session's completed downloads.
+const historyPageSize = 50
+
+// maxHistoryPages bounds the paging in getCompletedSummary. In the common case
+// a session's items sit on the first page or two; this cap is a backstop so a
+// backend that ignores the `start` offset (a caching reverse proxy, an older
+// SABnzbd) cannot spin the loop forever.
+const maxHistoryPages = 20
+
+// getCompletedSummary pages through the SABnzbd history (most-recently-completed
+// first) and returns aggregate bytes, download time (seconds), and the most
+// recently completed item's name for slots completed in the current session. It
+// stops as soon as it reaches a slot older than sessionStart, so a session with
+// more than one page of completed items is counted in full rather than truncated
+// at a fixed limit.
 func (t *Tracker) getCompletedSummary(ctx context.Context, sessionStart time.Time) (totalBytes int64, totalDownloadTime int, latestName string) {
-	history, err := t.sab.GetHistory(ctx, 10)
-	if err != nil {
-		slog.Warn("failed to fetch history for stats", "error", err)
-		return 0, 0, ""
-	}
 	cutoff := sessionStart.Unix()
-	for _, slot := range history.Slots {
-		if slot.Status != "Completed" || slot.Completed < cutoff {
-			continue
+	for page := 0; page < maxHistoryPages; page++ {
+		start := page * historyPageSize
+		history, err := t.sab.GetHistory(ctx, start, historyPageSize)
+		if err != nil {
+			slog.Warn("failed to fetch history for stats", "error", err, "start", start)
+			return
 		}
-		totalBytes += slot.Bytes
-		totalDownloadTime += slot.DownloadTime
-		if latestName == "" {
-			latestName = slot.Name
+		if len(history.Slots) == 0 {
+			return
+		}
+		for _, slot := range history.Slots {
+			// History is newest-first and Failed/Deleted slots also carry a
+			// Completed timestamp, so use the timestamp (not just Completed
+			// status) as the cutoff — otherwise a run of leading terminal-but-
+			// not-Completed slots would page through the entire history. The
+			// `!= 0` guard still skips genuinely in-progress slots (no end time).
+			if slot.Completed != 0 && slot.Completed < cutoff {
+				return
+			}
+			if slot.Status != "Completed" {
+				continue
+			}
+			totalBytes += slot.Bytes
+			totalDownloadTime += slot.DownloadTime
+			if latestName == "" {
+				latestName = slot.Name
+			}
+		}
+		if len(history.Slots) < historyPageSize {
+			return // last page
 		}
 	}
+	slog.Warn("history paging hit page cap; session stats may be incomplete", "max_pages", maxHistoryPages)
 	return
 }
 

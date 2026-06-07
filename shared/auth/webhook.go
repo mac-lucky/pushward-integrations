@@ -28,8 +28,14 @@ func RequireHeader(header, expected string) func(http.Handler) http.Handler {
 
 // CheckHeader reports whether the given header matches the expected value
 // using constant-time comparison. Useful for inline auth checks inside
-// handler methods that cannot easily be wrapped with middleware.
+// handler methods that cannot easily be wrapped with middleware. An empty
+// expected value always returns false (fail-closed), matching RequireHeader:
+// without this guard ConstantTimeCompare("", "") returns 1 and an unconfigured
+// secret would authenticate every request.
 func CheckHeader(r *http.Request, header, expected string) bool {
+	if expected == "" {
+		return false
+	}
 	got := []byte(r.Header.Get(header))
 	return subtle.ConstantTimeCompare(got, []byte(expected)) == 1
 }

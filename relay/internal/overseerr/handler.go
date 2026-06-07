@@ -105,6 +105,10 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 	mapKey := fmt.Sprintf("overseerr:%s:%s", p.Media.MediaType, p.Media.TmdbID)
 	subtitle := "Overseerr · " + text.TruncateHard(p.Subject, 50)
 
+	// Cancel any pending two-phase end from a prior terminal event so a new
+	// event for the same media (e.g. a re-request) isn't ended out from under us.
+	h.ender.StopTimer(userKey, mapKey)
+
 	cl := h.clients.Get(userKey)
 
 	// Send notification (always, independent of Live Activity)
@@ -113,10 +117,14 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 		Subtitle: text.TruncateHard(p.Subject, 100),
 		Body:     stateText,
 		ThreadID: mediathread.ThreadID(p.Media.MediaType, p.Media.TmdbID, p.Media.TvdbID),
-		Level:    pushward.LevelActive,
-		Source:   "overseerr",
-		Media:    pushward.MediaImage(p.Image),
-		Push:     true,
+		// CollapseID is per-event so only duplicate deliveries of the SAME
+		// lifecycle event collapse (incl. the client's own 5xx retries), while
+		// distinct lifecycle alerts remain separate pushes.
+		CollapseID: fmt.Sprintf("overseerr-%s-%s-%s", p.Media.MediaType, p.Media.TmdbID, stateText),
+		Level:      pushward.LevelActive,
+		Source:     "overseerr",
+		Media:      pushward.MediaImage(p.Image),
+		Push:       true,
 	}
 	meta := map[string]string{"media_type": p.Media.MediaType, "tmdb_id": p.Media.TmdbID}
 	if p.Subject != "" {

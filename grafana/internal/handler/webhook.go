@@ -59,7 +59,11 @@ type Handler struct {
 }
 
 type alertState struct {
-	slug         string
+	slug string
+	// alertname is the real "alertname" label ("" for anonymous alerts whose
+	// map key is the fingerprint). The alert-state checker matches on this, not
+	// the map key, so it can't query a fingerprint as an alertname.
+	alertname    string
 	expr         string
 	refID        string
 	seriesLabel  string
@@ -200,7 +204,7 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 			return
 		}
 		h.active[mapKey] = &alertState{
-			slug: slug, seriesLabel: seriesLabel, lastSeen: time.Now(),
+			slug: slug, alertname: a.Labels["alertname"], seriesLabel: seriesLabel, lastSeen: time.Now(),
 			fingerprints: map[string]struct{}{a.Fingerprint: {}},
 		}
 	} else {
@@ -250,11 +254,17 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	}
 
 	if len(values) == 0 {
-		logger.Warn("no values available, skipping initial update (poller will populate)",
+		logger.Warn("no values available, skipping initial update (poller will seed and populate)",
 			"expr_resolved", expr != "", "refID", refID)
 		if isNew && expr != "" {
-			h.poller.Start(slug, expr, seriesLabel)
-			logger.Info("poller started")
+			// Hand the timeline template/styling to the poller so it seeds the
+			// activity on its first tick that yields values — otherwise the
+			// activity would be left on the generic template while ONGOING.
+			// (A timeline seed with empty values would be rejected 422, so we
+			// can't seed here.)
+			seed := h.buildContent(a, severity, nil)
+			h.poller.StartWithSeed(slug, expr, seriesLabel, &seed)
+			logger.Info("poller started (will seed on first values)")
 		}
 		return
 	}
@@ -596,9 +606,15 @@ func (h *Handler) checkAlertStates(ctx context.Context) {
 	h.mu.Unlock()
 
 	for _, e := range entries {
-		firing, err := h.grafanaClient.IsAlertFiring(ctx, e.name)
+		// Anonymous alerts are keyed by fingerprint and have no alertname to
+		// query the alertmanager filter with; let StartSweeper's staleTimeout
+		// reap them instead of mistaking the always-false query for "resolved".
+		if e.state.alertname == "" {
+			continue
+		}
+		firing, err := h.grafanaClient.IsAlertFiring(ctx, e.state.alertname)
 		if err != nil {
-			slog.Warn("alert state check failed", "alertname", e.name, "error", err)
+			slog.Warn("alert state check failed", "alertname", e.state.alertname, "error", err)
 			continue
 		}
 		if firing {
@@ -607,18 +623,23 @@ func (h *Handler) checkAlertStates(ctx context.Context) {
 
 		// Alert is no longer firing — end the activity.
 		h.mu.Lock()
-		_, stillActive := h.active[e.name]
-		if stillActive {
+		cur, stillActive := h.active[e.name]
+		// Only end if the entry hasn't been refreshed since our snapshot: a
+		// firing webhook that re-fired the alert during the out-of-lock check
+		// bumps lastSeen, and we must not tear down that fresh activity/poller.
+		if stillActive && cur.lastSeen.Equal(e.state.lastSeen) {
 			delete(h.active, e.name)
+		} else {
+			stillActive = false
 		}
 		h.mu.Unlock()
 
 		if !stillActive {
-			continue // already resolved by webhook while we were checking
+			continue // resolved by webhook, or re-fired during the check
 		}
 
 		h.poller.Stop(e.state.slug)
-		h.endAlertActivity(ctx, e.name, &e.state)
+		h.endAlertActivity(ctx, e.state.alertname, &e.state)
 	}
 }
 

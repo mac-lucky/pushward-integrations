@@ -633,12 +633,11 @@ func TestFinishActivity_TwoPhaseEnd(t *testing.T) {
 
 	tr.finishActivity(context.Background(), state)
 
-	// Should immediately reset tracking
+	// Should immediately reset tracking so the MQTT event loop is unblocked.
+	// (lastState is intentionally not reset here — in production process()
+	// overwrites it with the terminal state on the same tick.)
 	if tr.tracking {
 		t.Error("finishActivity should reset tracking immediately")
-	}
-	if tr.lastState != "" {
-		t.Error("finishActivity should clear lastState")
 	}
 
 	// Wait for async two-phase end
@@ -725,6 +724,256 @@ func TestFailActivity_TwoPhaseEnd(t *testing.T) {
 	testutil.UnmarshalBody(t, recorded[1].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("phase 2 state = %q, want ENDED", phase2.State)
+	}
+}
+
+func TestProcess_DebounceSuppressAndRelease(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	printer := newMockPrinter()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	tr := newTestTracker(printer, client, cfg)
+	ctx := context.Background()
+
+	patchCount := func() int {
+		n := 0
+		for _, c := range testutil.GetCalls(calls, mu) {
+			if c.Method == "PATCH" {
+				n++
+			}
+		}
+		return n
+	}
+
+	// Seed the session on PREPARE so the first RUNNING tick is a genuine state
+	// transition (PREPARE -> RUNNING) and therefore always emits.
+	printer.SetState(bambulab.MergedState{
+		GcodeState:  bambulab.StatePrepare,
+		SubtaskName: "Part.3mf",
+	})
+	tr.process(ctx)
+	if !tr.tracking {
+		t.Fatal("expected tracking after PREPARE")
+	}
+	base := patchCount() // 1: the PREPARE seed PATCH
+
+	running := bambulab.MergedState{
+		GcodeState:    bambulab.StateRunning,
+		SubtaskName:   "Part.3mf",
+		Percent:       25,
+		RemainingTime: 60,
+		LayerNum:      50,
+		TotalLayerNum: 200,
+		NozzleTemper:  220.0,
+		NozzleTarget:  220.0,
+	}
+
+	// First RUNNING tick: a real PREPARE->RUNNING transition -> exactly one PATCH.
+	printer.SetState(running)
+	tr.process(ctx)
+	if got := patchCount(); got != base+1 {
+		t.Fatalf("first RUNNING tick: PATCH count = %d, want %d", got, base+1)
+	}
+
+	// Second RUNNING tick, identical state and content: suppressed. Two same
+	// ticks in a row yield only the one PATCH from the first.
+	tr.process(ctx)
+	if got := patchCount(); got != base+1 {
+		t.Fatalf("identical RUNNING tick: PATCH count = %d, want %d (suppressed)", got, base+1)
+	}
+
+	// Content-based suppression must hold even once the poll interval has fully
+	// elapsed: a byte-identical frame is never re-pushed. This fails if the
+	// debounce reverts to a pure time-based check.
+	cfg.Polling.UpdateInterval = time.Millisecond
+	tr.lastTickAt = time.Now().Add(-time.Hour)
+	tr.process(ctx)
+	if got := patchCount(); got != base+1 {
+		t.Fatalf("identical frame past interval: PATCH count = %d, want %d (suppressed)", got, base+1)
+	}
+
+	// Changed content WITHIN the interval is throttled (the time guard is not
+	// met). This fails if the time component of the debounce is dropped.
+	cfg.Polling.UpdateInterval = time.Hour
+	tr.lastTickAt = time.Now()
+	changed := running
+	changed.Percent = 26
+	changed.LayerNum = 51
+	printer.SetState(changed)
+	tr.process(ctx)
+	if got := patchCount(); got != base+1 {
+		t.Fatalf("changed content within interval: PATCH count = %d, want %d (throttled)", got, base+1)
+	}
+
+	// Changed content once the interval has elapsed: the PATCH fires (release).
+	tr.lastTickAt = time.Now().Add(-2 * time.Hour)
+	tr.process(ctx)
+	if got := patchCount(); got != base+2 {
+		t.Fatalf("changed content past interval: PATCH count = %d, want %d (released)", got, base+2)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	var last pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[len(recorded)-1].Body, &last)
+	if last.Content.State != "Layer 51/200" {
+		t.Errorf("released frame state = %q, want Layer 51/200", last.Content.State)
+	}
+}
+
+func TestProcess_StaleTwoPhaseEndDoesNotClobberNewSession(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	// Longer two-phase windows so the stale callback is still pending when the
+	// new session starts.
+	cfg.PushWard.EndDelay = 100 * time.Millisecond
+	cfg.PushWard.EndDisplayTime = 100 * time.Millisecond
+	printer := newMockPrinter()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	tr := newTestTracker(printer, client, cfg)
+	ctx := context.Background()
+
+	// Session 1: start, then finish (schedules the two-phase end).
+	printer.SetState(bambulab.MergedState{
+		GcodeState:  bambulab.StateRunning,
+		SubtaskName: "Old.3mf",
+		Percent:     90,
+	})
+	tr.process(ctx)
+	printer.SetState(bambulab.MergedState{
+		GcodeState:  bambulab.StateFinish,
+		SubtaskName: "Old.3mf",
+		Percent:     100,
+	})
+	tr.process(ctx)
+
+	// Session 2 starts immediately. startTracking bumps the generation, so the
+	// stale two-phase-end callback from session 1 must not end this new print.
+	printer.SetState(bambulab.MergedState{
+		GcodeState:  bambulab.StateRunning,
+		SubtaskName: "New.3mf",
+		Percent:     5,
+	})
+	tr.process(ctx)
+	if !tr.tracking {
+		t.Fatal("session 2 should be tracking")
+	}
+
+	// Wait well past EndDelay + EndDisplayTime for any stale callback to run.
+	time.Sleep(300 * time.Millisecond)
+	tr.endTimers.Wait()
+
+	// No ENDED "Complete" frame may have been sent by the stale callback.
+	for _, c := range testutil.GetCalls(calls, mu) {
+		if c.Method != "PATCH" {
+			continue
+		}
+		var req pushward.UpdateRequest
+		testutil.UnmarshalBody(t, c.Body, &req)
+		if req.State == pushward.StateEnded && req.Content.State == "Complete" {
+			t.Fatalf("stale two-phase end clobbered new session with ENDED Complete frame: %s", string(c.Body))
+		}
+	}
+}
+
+func TestScheduleTwoPhaseEnd_GenGuardBlocksStaleEnd(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	cfg.PushWard.EndDelay = 20 * time.Millisecond
+	cfg.PushWard.EndDisplayTime = 20 * time.Millisecond
+	printer := newMockPrinter()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	tr := newTestTracker(printer, client, cfg)
+	ctx := context.Background()
+
+	// Session 1: start + finish. finishActivity captures the current generation
+	// and arms the two-phase end (phase 1 in 20ms).
+	printer.SetState(bambulab.MergedState{
+		GcodeState:  bambulab.StateRunning,
+		SubtaskName: "Old.3mf",
+		Percent:     90,
+	})
+	tr.process(ctx)
+	printer.SetState(bambulab.MergedState{
+		GcodeState:  bambulab.StateFinish,
+		SubtaskName: "Old.3mf",
+		Percent:     100,
+	})
+	tr.process(ctx)
+
+	// Simulate a new session starting before phase 1 fires. startTracking and
+	// endActivity bump gen exactly like this — the in-flight callback must bail
+	// on the generation mismatch and emit neither the ONGOING nor the ENDED
+	// "Complete" frame.
+	tr.gen.Add(1)
+
+	time.Sleep(120 * time.Millisecond)
+	tr.endTimers.Wait()
+
+	for _, c := range testutil.GetCalls(calls, mu) {
+		if c.Method != "PATCH" {
+			continue
+		}
+		var req pushward.UpdateRequest
+		testutil.UnmarshalBody(t, c.Body, &req)
+		if req.Content.State == "Complete" {
+			t.Fatalf("stale two-phase end emitted a Complete frame after gen bump (state=%q)", req.State)
+		}
+	}
+}
+
+func TestProcess_StartTrackingOnPause(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	printer := newMockPrinter()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	tr := newTestTracker(printer, client, cfg)
+
+	// First observed state is PAUSE (e.g. the bridge restarted mid-paused-print).
+	printer.SetState(bambulab.MergedState{
+		GcodeState:    bambulab.StatePause,
+		SubtaskName:   "Paused.3mf",
+		Percent:       40,
+		LayerNum:      80,
+		TotalLayerNum: 200,
+		NozzleTemper:  60.0,
+		NozzleTarget:  0.0,
+	})
+	tr.process(context.Background())
+
+	if !tr.tracking {
+		t.Fatal("PAUSE as first observed state should start tracking")
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) < 2 {
+		t.Fatalf("expected >= 2 calls (create + seed), got %d", len(recorded))
+	}
+	if recorded[0].Method != "POST" || recorded[0].Path != "/activities" {
+		t.Errorf("call 0: expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
+	}
+	var createReq pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
+	if createReq.Name != "Paused.3mf" {
+		t.Errorf("name = %q, want Paused.3mf", createReq.Name)
+	}
+
+	// The seed PATCH must carry the Paused frame.
+	var seed pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &seed)
+	if seed.State != pushward.StateOngoing {
+		t.Errorf("seed state = %q, want ONGOING", seed.State)
+	}
+	if seed.Content.State != "Paused" {
+		t.Errorf("seed content state = %q, want Paused", seed.Content.State)
+	}
+	if seed.Content.Icon != "pause.circle.fill" {
+		t.Errorf("seed icon = %q, want pause.circle.fill", seed.Content.Icon)
+	}
+	if seed.Content.AccentColor != pushward.ColorOrange {
+		t.Errorf("seed accent = %q, want %q", seed.Content.AccentColor, pushward.ColorOrange)
+	}
+	if seed.Content.Progress != 0.4 {
+		t.Errorf("seed progress = %f, want 0.4", seed.Content.Progress)
 	}
 }
 

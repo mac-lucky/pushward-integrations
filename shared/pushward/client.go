@@ -13,6 +13,12 @@ import (
 	"time"
 )
 
+// maxRetryAfter caps how long a server-supplied Retry-After (header or
+// problem.retry_after_ms) may park the calling goroutine. Legitimate throttle
+// windows are seconds; this bounds a hostile or buggy value while still
+// honoring realistic backoff requests.
+const maxRetryAfter = 2 * time.Minute
+
 // parseRetryAfter parses a Retry-After header value as either seconds or HTTP-date.
 // Returns 0 if the header is empty or unparseable.
 func parseRetryAfter(header string) time.Duration {
@@ -103,11 +109,17 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 		var err error
 		reqBody, err = json.Marshal(body)
 		if err != nil {
+			// The breaker may have admitted this as a half-open probe; the
+			// request never reached the backend, so re-arm rather than wedge.
+			if c.breaker != nil {
+				c.breaker.Abort()
+			}
 			return fmt.Errorf("marshaling request body: %w", err)
 		}
 	}
 
 	var lastErr error
+	var lastThrottled bool
 	var retryAfterOverride time.Duration
 	attempts := 0
 	for attempt := 0; attempt < 5; attempt++ {
@@ -124,6 +136,11 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 			select {
 			case <-ctx.Done():
 				retryTimer.Stop()
+				// Probe abandoned before reaching the backend; re-arm the
+				// breaker so a half-open probe is not left dangling.
+				if c.breaker != nil {
+					c.breaker.Abort()
+				}
 				return ctx.Err()
 			case <-retryTimer.C:
 			}
@@ -138,6 +155,9 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 
 		httpReq, err := http.NewRequestWithContext(ctx, method, url, bodyReader)
 		if err != nil {
+			if c.breaker != nil {
+				c.breaker.Abort()
+			}
 			return fmt.Errorf("creating request: %w", err)
 		}
 		if reqBody != nil {
@@ -152,6 +172,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
 			lastErr = fmt.Errorf("sending request: %w", err)
+			lastThrottled = false
 			continue
 		}
 
@@ -159,17 +180,20 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 			_ = resp.Body.Close()
 			if done, cerr := handleConflict(respBody); done {
-				c.recordResult(ctx, operation, attempts, start, cerr, false)
+				// Backend answered (409) — it is reachable but this is not a
+				// success, so it must not zero the closed-state failure streak.
+				c.recordResult(ctx, operation, attempts, start, cerr, breakerReachable)
 				return cerr
 			}
 			// If handleConflict says not done, fall through to default handling
 			lastErr = fmt.Errorf("conflict (409)")
+			lastThrottled = false
 			continue
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			_ = resp.Body.Close()
-			c.recordResult(ctx, operation, attempts, start, nil, false)
+			c.recordResult(ctx, operation, attempts, start, nil, breakerHealthy)
 			return nil
 		}
 
@@ -186,11 +210,19 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 			if retryAfterOverride == 0 && problem.RetryAfterMs > 0 {
 				retryAfterOverride = time.Duration(problem.RetryAfterMs) * time.Millisecond
 			}
+			// Clamp a server-supplied Retry-After so a misbehaving or
+			// compromised server cannot park the calling goroutine for hours.
+			if retryAfterOverride > maxRetryAfter {
+				retryAfterOverride = maxRetryAfter
+			}
 			slog.Warn("rate limited by PushWard", "url", url, "retry_after", retryAfterOverride, "code", problem.Code)
-			lastErr = fmt.Errorf("rate limited (429)")
+			// Typed error so callers can errors.As the 429 (status + Retry-After).
+			lastErr = newHTTPError(http.StatusTooManyRequests, problem)
+			lastThrottled = true
 			continue
 		}
 		lastErr = newHTTPError(resp.StatusCode, problem)
+		lastThrottled = false
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			slog.Warn("PushWard client error",
 				"status", resp.StatusCode,
@@ -198,13 +230,23 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 				"code", problem.Code,
 				"detail", problem.Detail,
 			)
-			// 4xx client errors are not retryable and don't trip the breaker.
-			c.recordResult(ctx, operation, attempts, start, lastErr, false)
+			// 4xx client errors are not retryable, and the backend is clearly
+			// reachable, so this must not trip the breaker — but it is not a
+			// success either, so it must not zero the closed-state streak.
+			c.recordResult(ctx, operation, attempts, start, lastErr, breakerReachable)
 			return lastErr
 		}
 	}
 	err := fmt.Errorf("max retries exceeded: %w", lastErr)
-	c.recordResult(ctx, operation, attempts, start, err, true)
+	// Sustained 429 throttling is backpressure from a reachable backend, not a
+	// health fault — it must not open the (relay-wide shared) breaker. Only
+	// 5xx/network exhaustion counts as a fault. 429 is reachable-not-success, so
+	// it un-wedges a half-open probe without zeroing the closed-state streak.
+	signal := breakerFault
+	if lastThrottled {
+		signal = breakerReachable
+	}
+	c.recordResult(ctx, operation, attempts, start, err, signal)
 	return err
 }
 
@@ -291,14 +333,45 @@ func (e *HTTPError) Error() string {
 
 var _ error = (*HTTPError)(nil)
 
+// breakerSignal classifies a request outcome for the circuit breaker. The
+// breaker tracks backend *health*, which is distinct from request success: a
+// 4xx/409/429 proves the backend is reachable and serving (healthy), even
+// though the request itself failed.
+type breakerSignal int
+
+const (
+	// breakerHealthy: a genuine 2xx. Resets the failure count and closes a
+	// half-open probe.
+	breakerHealthy breakerSignal = iota
+	// breakerReachable: a response came back proving the backend is up but the
+	// request itself failed — a non-retryable 4xx, a resolved 409 conflict, or
+	// sustained 429 throttling. Closes a half-open probe (the backend recovered)
+	// but leaves the closed-state failure streak intact, so it neither counts as
+	// a fault nor zeroes a climbing streak of real 5xx/network faults.
+	breakerReachable
+	// breakerFault: the backend is unreachable or unhealthy — 5xx or network
+	// errors that survived all retries. Counts toward the open threshold and
+	// re-opens a half-open probe.
+	breakerFault
+)
+
 // recordResult records the breaker outcome and fires the onResult callback.
-// Only retryable failures (5xx/network exhaustion) trip the breaker; 4xx client
-// errors, conflict resolutions, and circuit-open short-circuits do not.
-func (c *Client) recordResult(ctx context.Context, operation string, attempts int, start time.Time, err error, retryable bool) {
+// Only genuine backend faults (5xx/network exhaustion) trip the breaker; a 2xx
+// is breakerHealthy, while 4xx client errors, 429 throttling, and conflict
+// resolutions are breakerReachable (un-wedge a half-open probe without zeroing
+// the closed-state streak). The circuit-open short-circuit returns before
+// reaching recordResult (it calls c.onResult directly at the Allow() guard), and
+// a probe admitted by Allow() that never reaches the backend must call
+// breaker.Abort() directly, not recordResult, so it does not register a fake
+// success — see the early-return paths in doWithRetry.
+func (c *Client) recordResult(ctx context.Context, operation string, attempts int, start time.Time, err error, signal breakerSignal) {
 	if c.breaker != nil {
-		if err == nil {
+		switch signal {
+		case breakerHealthy:
 			c.breaker.RecordSuccess()
-		} else if retryable {
+		case breakerReachable:
+			c.breaker.RecordReachable()
+		case breakerFault:
 			c.breaker.RecordFailure()
 		}
 	}

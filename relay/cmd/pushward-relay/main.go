@@ -93,6 +93,11 @@ func main() {
 			os.Exit(1)
 		}
 		slog.Info("configured trusted proxy CIDRs", "count", len(cfg.TrustedProxyCIDRs))
+	} else {
+		// Without trusted proxies, ClientIP falls back to the socket peer — which
+		// behind a reverse proxy (Cloudflare/gateway) is the SAME proxy IP for
+		// every request, collapsing all traffic into one per-IP bucket (5 r/s).
+		slog.Warn("no trusted_proxy_cidrs configured: per-IP rate limiting will collapse all reverse-proxied traffic into a single bucket; set PUSHWARD_TRUSTED_PROXY_CIDRS if running behind Cloudflare/a gateway")
 	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -166,8 +171,10 @@ func main() {
 		slog.Info("enabled provider", "provider", "grafana")
 	}
 
+	var argocdHandler *argocd.Handler
 	if cfg.Providers.ArgoCD.Enabled {
 		ah := argocd.RegisterRoutes(api, store, clients, &cfg.Providers.ArgoCD)
+		argocdHandler = ah
 		collectEnder(ah)
 		ah.StartCleanup(ctx)
 		ah.RecoverPending(ctx)
@@ -314,6 +321,11 @@ func main() {
 	if err := server.ListenAndServe(ctx, cfg.Server.Address, handler); err != nil {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
+	}
+
+	// Stop ArgoCD grace timers so none fire graceExpired mid-shutdown.
+	if argocdHandler != nil {
+		argocdHandler.StopAll()
 	}
 
 	// Flush all pending ender timers (send ENDED immediately), then wait for in-flight callbacks.

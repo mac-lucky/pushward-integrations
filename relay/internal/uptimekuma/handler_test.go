@@ -1,6 +1,7 @@
 package uptimekuma
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/state/statetest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
@@ -298,5 +300,82 @@ func TestMonitorMaintenanceSendsTestNotification(t *testing.T) {
 	}
 	if update.Content.Template != "alert" {
 		t.Errorf("expected template alert, got %s", update.Content.Template)
+	}
+}
+
+// newHandlerWithStore wires an Uptime Kuma handler against a custom store and
+// base URL, for the store-degradation and update-failure scenarios.
+func newHandlerWithStore(t *testing.T, cfg *config.UptimeKumaConfig, store state.Store, baseURL string) http.Handler {
+	t.Helper()
+	lifecycle.SetRetryDelay(10 * time.Millisecond)
+	pool := client.NewPool(baseURL, nil)
+	mux, api := humautil.NewTestAPI()
+	RegisterRoutes(api, store, pool, cfg)
+	return mux
+}
+
+const downBody = `{
+	"monitor": {"id": 1, "name": "My Website", "url": "https://example.com", "type": "http"},
+	"heartbeat": {"status": 0, "time": "2024-01-15T10:30:00.000Z", "msg": "Connection refused", "ping": null, "duration": 0, "important": true},
+	"msg": "My Website is DOWN"
+}`
+
+// TestMonitorDown_StoreErrorStillDelivers pins the best-effort store
+// degradation: when the state store fails (Get + Set error), a brand-new DOWN
+// alert is still treated as new and fully delivered (create + ONGOING update +
+// notification) rather than being dropped on a DB blip.
+func TestMonitorDown_StoreErrorStillDelivers(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	h := newHandlerWithStore(t, testConfig(), statetest.FailingStore{}, srv.URL)
+
+	w := send(t, h, downBody)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 despite store errors, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + ONGOING update + notification = 3 (alert NOT dropped).
+	if len(recorded) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(recorded))
+	}
+	if n := testutil.CountPath(recorded, "/notifications"); n != 1 {
+		t.Fatalf("expected the new-alert notification to be sent, got %d notifications", n)
+	}
+}
+
+// TestMonitorDown_UpdateFailureRollsBackDedup pins the rollback branch: when
+// UpdateActivity fails for a brand-new alert, the dedup row written moments
+// earlier is deleted, so a re-send is treated as new again and re-triggers the
+// isNew-gated notification (instead of being permanently suppressed).
+func TestMonitorDown_UpdateFailureRollsBackDedup(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServerFailingPatches(t, 1) // first PATCH fails, then succeeds.
+	store := state.NewMemoryStore()
+	h := newHandlerWithStore(t, testConfig(), store, srv.URL)
+
+	// First send: create OK, UpdateActivity fails → dedup row rolled back → 502.
+	w := send(t, h, downBody)
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502 on update failure, got %d", w.Code)
+	}
+
+	// Rollback: no uptimekuma dedup row should remain.
+	entries, err := store.ListByProvider(context.Background(), "uptimekuma")
+	if err != nil {
+		t.Fatalf("ListByProvider: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected dedup row rolled back, got %d entries", len(entries))
+	}
+	if n := testutil.CountPath(testutil.GetCalls(calls, mu), "/notifications"); n != 0 {
+		t.Fatalf("expected 0 notifications after failed update, got %d", n)
+	}
+
+	// Re-send identical: treated as new again, so the notification re-triggers.
+	w = send(t, h, downBody)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 on re-send, got %d", w.Code)
+	}
+	if n := testutil.CountPath(testutil.GetCalls(calls, mu), "/notifications"); n != 1 {
+		t.Fatalf("expected 1 notification after dedup re-trigger, got %d", n)
 	}
 }

@@ -117,16 +117,18 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 	// a race where ENDED fires after this new ONGOING update.
 	h.ender.StopTimer(userKey, mapKey)
 
+	// Degrade to best-effort delivery on store errors: dropping a new DOWN
+	// alert on a transient DB blip is worse than a possible duplicate, and
+	// Uptime Kuma has no notification retry queue.
 	existing, err := h.store.Get(ctx, "uptimekuma", userKey, mapKey, "")
 	if err != nil {
-		log.Error("failed to check state", "monitor_id", p.Monitor.ID, "error", err)
-		return nil
+		log.Error("failed to check state, treating alert as new", "monitor_id", p.Monitor.ID, "error", err)
+		existing = nil
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "uptimekuma", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		log.Error("failed to store state", "monitor_id", p.Monitor.ID, "error", err)
-		return nil
+		log.Error("failed to store state, continuing", "monitor_id", p.Monitor.ID, "error", err)
 	}
 
 	isNew := existing == nil
@@ -171,6 +173,13 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
+		// Roll back dedup state for a brand-new alert so a retry re-seeds and
+		// re-sends the (isNew-gated) notification rather than being suppressed.
+		if isNew {
+			if err := h.store.Delete(ctx, "uptimekuma", userKey, mapKey, ""); err != nil {
+				log.Warn("state store delete failed", "error", err, "provider", "uptimekuma", "slug", slug)
+			}
+		}
 		return err
 	}
 	log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "critical")
@@ -234,6 +243,10 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 
 func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *uptimekumaPayload) error {
 	slug, mapKey, _ := h.slugAndKey(p)
+
+	// Cancel any pending end armed by a prior UP so it can't dismiss the
+	// "Checking..." activity we re-create here (mirrors handleDown).
+	h.ender.StopTimer(userKey, mapKey)
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "uptimekuma", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {

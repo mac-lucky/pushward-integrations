@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -186,8 +185,7 @@ func sonarrContentKey(s SonarrSeries, eps []SonarrEpisode, downloadID string) (s
 		joined := strings.Join(parts, "-")
 		contentID = seriesID + "-e-" + joined
 		if len("sonarr-")+len(contentID) > maxSlugLen {
-			// SlugHash returns "-<hex>"; strip leading dash for clean joining.
-			contentID = seriesID + "-e-" + strings.TrimPrefix(text.SlugHash("", joined, 8), "-")
+			contentID = seriesID + "-e-" + text.HashHex(joined, 8)
 		}
 	}
 	return "sonarr-" + contentID, "sonarr:" + contentID
@@ -226,13 +224,17 @@ func (h *Handler) getTrackedSlug(ctx context.Context, userKey, mapKey string) (s
 	return ts.Slug, true
 }
 
-// setTrackedSlug stores a tracked download slug in the state store.
+// setTrackedSlug stores a tracked download slug in the state store. The TTL is
+// derived from config (not a hardcoded 60m) so the dedup record can never
+// outlive the server-side activity: otherwise a retry Grab between the activity
+// expiry and the dedup expiry would skip CreateActivity and PATCH a slug the
+// server already evicted (404 → 502).
 func (h *Handler) setTrackedSlug(ctx context.Context, userKey, mapKey, slug string) error {
 	data, err := json.Marshal(trackedSlug{Slug: slug})
 	if err != nil {
 		return err
 	}
-	return h.store.Set(ctx, "starr", userKey, mapKey, "", data, 60*time.Minute)
+	return h.store.Set(ctx, "starr", userKey, mapKey, "", data, h.config.StaleTimeout)
 }
 
 // deleteTrackedSlug removes a tracked download from the state store.

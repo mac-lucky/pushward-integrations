@@ -142,3 +142,56 @@ func TestTimerGroup(t *testing.T) {
 		}
 	})
 }
+
+// waitReturns runs g.Wait() in a goroutine and reports whether it returned
+// within timeout. It fails the test if Wait blocked (a wedged group).
+func waitReturns(t *testing.T, g *TimerGroup, timeout time.Duration) {
+	t.Helper()
+	done := make(chan struct{})
+	go func() { g.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		t.Fatal("Wait blocked — group wedged")
+	}
+}
+
+func TestTimerGroupClose(t *testing.T) {
+	t.Run("reset after close is a permanent no-op", func(t *testing.T) {
+		var g TimerGroup
+		var n atomic.Int32
+		g.Close()
+		// Reset must not arm a timer once Close has run.
+		g.Reset(1*time.Millisecond, func() { n.Add(1) })
+		waitReturns(t, &g, 100*time.Millisecond)
+		// Give a (wrongly) scheduled timer ample time to fire before asserting.
+		time.Sleep(20 * time.Millisecond)
+		if n.Load() != 0 {
+			t.Errorf("callback fired after Reset-post-Close (got %d)", n.Load())
+		}
+	})
+
+	t.Run("close cancels a pending timer", func(t *testing.T) {
+		var g TimerGroup
+		var n atomic.Int32
+		g.Reset(50*time.Millisecond, func() { n.Add(1) })
+		g.Close() // cancels the not-yet-fired timer and balances its wg.Add
+		waitReturns(t, &g, 100*time.Millisecond)
+		// Past the original 50ms deadline: a cancelled callback must never run.
+		time.Sleep(60 * time.Millisecond)
+		if n.Load() != 0 {
+			t.Errorf("pending callback fired after Close (got %d)", n.Load())
+		}
+	})
+
+	t.Run("close races a self-rescheduling callback without wedging", func(t *testing.T) {
+		var g TimerGroup
+		// The callback reschedules itself every tick (a two-phase-end re-arm).
+		// Without Close making Reset terminal, this could keep Wait blocked.
+		g.Reset(1*time.Millisecond, func() {
+			g.Reset(1*time.Millisecond, func() {})
+		})
+		go g.Close()
+		waitReturns(t, &g, 2*time.Second)
+	})
+}

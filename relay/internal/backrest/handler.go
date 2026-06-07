@@ -203,7 +203,8 @@ func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Log
 func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, stateText, color, icon string) error {
 	slug, mapKey := h.slugAndKey(p)
 
-	if _, err := h.createActivity(ctx, userKey, log, slug, p); err != nil {
+	cl, err := h.createActivity(ctx, userKey, log, slug, p)
+	if err != nil {
 		return err
 	}
 
@@ -219,6 +220,16 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 		CurrentStep: &step,
 		TotalSteps:  &total,
 		StepLabels:  stepLabels,
+	}
+
+	// Send the completion frame synchronously so it shows immediately, instead
+	// of waiting for the ender's phase-1 (~EndDelay later) — otherwise a
+	// finished backup keeps showing "Backing up..." (or a standalone
+	// SUCCESS/ERROR shows an empty activity) for several seconds. Phase-1 then
+	// re-sends identical content (one accepted redundant update).
+	if err := cl.UpdateActivity(ctx, slug, pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}); err != nil {
+		log.Error("failed to update backrest activity", "slug", slug, "error", err)
+		return err
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})

@@ -145,11 +145,21 @@ func TestApplyEnvOverrides_NoVars(t *testing.T) {
 }
 
 func TestApplyEnvOverrides_InvalidPriority(t *testing.T) {
-	t.Setenv("PUSHWARD_PRIORITY", "not-a-number")
-	cfg := PushWardConfig{}
-	err := cfg.ApplyEnvOverrides()
-	if err == nil {
-		t.Fatal("expected error for invalid priority")
+	// strconv.Atoi rejects trailing garbage that the old fmt.Sscanf silently
+	// accepted (parsing "5x"→5, "0x10"→0). "not-a-number" fails under both
+	// implementations, so only the trailing-garbage cases pin the fix. Each
+	// must return an error AND leave Priority untouched.
+	for _, value := range []string{"not-a-number", "5x", "0x10"} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("PUSHWARD_PRIORITY", value)
+			cfg := PushWardConfig{Priority: 3}
+			if err := cfg.ApplyEnvOverrides(); err == nil {
+				t.Fatalf("expected error for invalid priority %q", value)
+			}
+			if cfg.Priority != 3 {
+				t.Errorf("Priority changed on rejected input %q: got %d, want 3 (unchanged)", value, cfg.Priority)
+			}
+		})
 	}
 }
 

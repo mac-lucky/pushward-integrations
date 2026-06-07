@@ -9,6 +9,12 @@ import (
 	"time"
 )
 
+// evictionSampleSize bounds the approximate-LRU eviction scan: instead of
+// scanning every entry for the global minimum lastAccess (O(n) under the write
+// lock), GetOrCreate samples this many pseudo-randomly-ordered entries and
+// evicts the oldest of them.
+const evictionSampleSize = 8
+
 type entry[V any] struct {
 	value      V
 	lastAccess atomic.Int64 // UnixNano
@@ -62,19 +68,27 @@ func (m *Map[V]) GetOrCreate(key string, create func() V) V {
 		return e.value
 	}
 
-	// Evict LRU if at capacity.
+	// Evict (approximate) LRU if at capacity.
 	var evictKey string
 	var evictVal V
 	var didEvict bool
 	if len(m.entries) >= m.maxSize {
+		// Sample at most evictionSampleSize entries and evict the oldest among
+		// them. Go randomizes map iteration order, so this is a pseudo-random
+		// sample — making eviction O(K) instead of an O(n) scan of up to 100k
+		// entries under the write lock on the per-request hot path.
 		var oldestTime int64
 		first := true
+		sampled := 0
 		for k, e := range m.entries {
 			access := e.lastAccess.Load()
 			if first || access < oldestTime {
 				evictKey = k
 				oldestTime = access
 				first = false
+			}
+			if sampled++; sampled >= evictionSampleSize {
+				break
 			}
 		}
 		evictVal = m.entries[evictKey].value

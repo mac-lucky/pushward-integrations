@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	grafanaapi "github.com/mac-lucky/pushward-integrations/grafana/internal/grafana"
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/poller"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -576,6 +578,150 @@ func TestWebhook_ResolveFallsBackToLastValues(t *testing.T) {
 	}
 	if _, ok := valMap["10.0.0.1:9100"]; !ok {
 		t.Errorf("end value should reuse last known instance key when query fails, got %v", valMap)
+	}
+}
+
+// alertmanagerRecorder is a Grafana alertmanager stub that records the
+// `alertname=...` filters it was queried with and always reports "not firing"
+// (empty alert list).
+type alertmanagerRecorder struct {
+	server *httptest.Server
+
+	mu      sync.Mutex
+	filters []string
+}
+
+func newAlertmanagerRecorder(t *testing.T) *alertmanagerRecorder {
+	t.Helper()
+	a := &alertmanagerRecorder{}
+	a.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		a.mu.Lock()
+		a.filters = append(a.filters, r.URL.Query().Get("filter"))
+		a.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`)) // no active alerts => not firing
+	}))
+	t.Cleanup(a.server.Close)
+	return a
+}
+
+func (a *alertmanagerRecorder) getFilters() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]string{}, a.filters...)
+}
+
+func countEnded(updates []pushward.UpdateRequest) int {
+	n := 0
+	for _, u := range updates {
+		if u.State == pushward.StateEnded {
+			n++
+		}
+	}
+	return n
+}
+
+// TestCheckAlertStates_SkipsAnonymousEndsNamed pins the anonymous-skip guard:
+// checkAlertStates never queries the alertmanager for an entry with an empty
+// alertname (it is keyed by fingerprint and would always look "not firing"),
+// leaving it for the sweeper; a NAMED entry that the alertmanager reports as
+// not firing is deleted and ended.
+func TestCheckAlertStates_SkipsAnonymousEndsNamed(t *testing.T) {
+	pw := newMockPWServer()
+	defer pw.close()
+
+	am := newAlertmanagerRecorder(t)
+	gc := grafanaapi.NewClient(am.server.URL, "token")
+	defer gc.Close()
+
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	mc := metrics.NewClient("http://unused:9090")
+	p := poller.New(mc, pwClient, 1*time.Hour)
+	defer p.StopAll()
+
+	h := NewHandler(pwClient, mc, gc, p, Config{})
+
+	now := time.Now()
+	h.active["NamedAlert"] = &alertState{
+		slug:      "grafana-named",
+		alertname: "NamedAlert",
+		lastSeen:  now,
+	}
+	const anonKey = "fp-anonymous"
+	h.active[anonKey] = &alertState{
+		slug:      "grafana-anon",
+		alertname: "", // anonymous: keyed by fingerprint, no alertname to query
+		lastSeen:  now,
+	}
+
+	h.checkAlertStates(context.Background())
+
+	// Anonymous entry must be left intact and never queried.
+	if _, ok := h.active[anonKey]; !ok {
+		t.Error("anonymous entry was removed; it must be left for the sweeper")
+	}
+	filters := am.getFilters()
+	if len(filters) != 1 {
+		t.Fatalf("alertmanager queries = %d, want 1 (named only); got %v", len(filters), filters)
+	}
+	if filters[0] != `alertname="NamedAlert"` {
+		t.Errorf("filter = %q, want alertname=\"NamedAlert\"", filters[0])
+	}
+
+	// Named entry is no longer firing => deleted + ended.
+	if _, ok := h.active["NamedAlert"]; ok {
+		t.Error("named entry should be deleted after teardown")
+	}
+	if got := countEnded(pw.getUpdates()); got != 1 {
+		t.Errorf("ENDED updates = %d, want 1 (named alert torn down)", got)
+	}
+}
+
+// TestCheckAlertStates_LastSeenGuardSkipsTeardown pins the lastSeen-equality
+// recheck guard: when a firing webhook re-fires the alert during the out-of-lock
+// IsAlertFiring call (bumping lastSeen), the recheck must NOT tear down the
+// freshly refreshed activity/poller. The alertmanager stub simulates the
+// concurrent re-fire by mutating lastSeen while it answers the query.
+func TestCheckAlertStates_LastSeenGuardSkipsTeardown(t *testing.T) {
+	pw := newMockPWServer()
+	defer pw.close()
+
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	mc := metrics.NewClient("http://unused:9090")
+	p := poller.New(mc, pwClient, 1*time.Hour)
+	defer p.StopAll()
+
+	var h *Handler
+	am := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// Simulate a concurrent re-fire during the out-of-lock alertmanager call.
+		h.mu.Lock()
+		if st, ok := h.active["NamedAlert"]; ok {
+			st.lastSeen = st.lastSeen.Add(time.Minute)
+		}
+		h.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`)) // not firing
+	}))
+	defer am.Close()
+
+	gc := grafanaapi.NewClient(am.URL, "token")
+	defer gc.Close()
+
+	h = NewHandler(pwClient, mc, gc, p, Config{})
+	h.active["NamedAlert"] = &alertState{
+		slug:      "grafana-named",
+		alertname: "NamedAlert",
+		lastSeen:  time.Now(),
+	}
+
+	h.checkAlertStates(context.Background())
+
+	// lastSeen changed between snapshot and recheck => entry must survive.
+	if _, ok := h.active["NamedAlert"]; !ok {
+		t.Error("named entry must survive teardown when lastSeen changed (re-fired)")
+	}
+	if got := countEnded(pw.getUpdates()); got != 0 {
+		t.Errorf("ENDED updates = %d, want 0 (entry re-fired during the check)", got)
 	}
 }
 

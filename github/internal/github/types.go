@@ -46,3 +46,9 @@ type Repository struct {
 	Archived bool   `json:"archived"`
 	Disabled bool   `json:"disabled"`
 }
+
+// User is the subset of GET /user used to resolve the token's own login so
+// repo discovery can choose the correct endpoint for owner.
+type User struct {
+	Login string `json:"login"`
+}

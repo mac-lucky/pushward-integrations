@@ -122,16 +122,18 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 	// Cancel any pending end timer from a previous RESOLVED event
 	h.ender.StopTimer(userKey, mapKey)
 
+	// Degrade to best-effort delivery on store errors: dropping a new outage
+	// alert on a transient DB blip is worse than a possible duplicate, and
+	// neither Gatus nor this bridge reliably retries the alert.
 	existing, err := h.store.Get(ctx, "gatus", userKey, mapKey, "")
 	if err != nil {
-		log.Error("failed to check state", "endpoint", p.EndpointName, "error", err)
-		return nil
+		log.Error("failed to check state, treating alert as new", "endpoint", p.EndpointName, "error", err)
+		existing = nil
 	}
 
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
 	if err := h.store.Set(ctx, "gatus", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
-		log.Error("failed to store state", "endpoint", p.EndpointName, "error", err)
-		return nil
+		log.Error("failed to store state, continuing", "endpoint", p.EndpointName, "error", err)
 	}
 
 	isNew := existing == nil
@@ -175,6 +177,14 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
+		// Roll back the dedup state for a brand-new alert so a retry re-seeds
+		// and re-sends the (isNew-gated) notification instead of being
+		// permanently suppressed by the orphaned state row.
+		if isNew {
+			if err := h.store.Delete(ctx, "gatus", userKey, mapKey, ""); err != nil {
+				log.Warn("state store delete failed", "error", err, "provider", "gatus", "slug", slug)
+			}
+		}
 		return err
 	}
 	log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "error")

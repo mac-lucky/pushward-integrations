@@ -1,12 +1,10 @@
 package poller
 
-import "time"
+import (
+	"time"
 
-// timerPair holds both phase-1 and phase-2 timers so they can both be cancelled.
-type timerPair struct {
-	phase1 *time.Timer
-	phase2 *time.Timer
-}
+	"github.com/mac-lucky/pushward-integrations/shared/syncx"
+)
 
 type trackedRun struct {
 	Repo       string
@@ -15,7 +13,11 @@ type trackedRun struct {
 	Slug       string
 	HTMLURL    string
 	LastUpdate time.Time
-	endTimers  *timerPair
+	trackedAt  time.Time // when this run was first tracked; bounds absolute lifetime
+	// endTimers is non-nil once a two-phase end is pending. The TimerGroup
+	// holds the current phase timer (phase 1, then phase 2) and lets shutdown
+	// drain in-flight end deliveries (Stop/Close + Wait).
+	endTimers *syncx.TimerGroup
 
 	// maxTotalSteps tracks the highest TotalSteps seen across polls.
 	// GitHub lazily creates jobs behind unsatisfied needs/if conditions,
@@ -28,4 +30,15 @@ type trackedRun struct {
 	// step_rows/step_labels in a merge-patch. When unchanged across polls
 	// we skip those slices to keep the tick payload minimal.
 	shapeSent int
+
+	// Change-detection state for pollActive: a PATCH (and the APNs push it
+	// triggers) is sent only when one of these scalars changes or a heartbeat
+	// is due, so a run parked on one long step (build wait, integration tests)
+	// doesn't emit an identical update to every device every tick. Promoted
+	// only after a successful patch so a failed send is re-evaluated next tick.
+	lastProgress    float64
+	lastState       string
+	lastCurrentStep int
+	lastTotalSteps  int
+	lastPatchAt     time.Time
 }

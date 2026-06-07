@@ -94,8 +94,8 @@ func TestSnapshotLifecycle(t *testing.T) {
 	// START: create + ONGOING = 2
 	// SUCCESS: create + phase1(ONGOING) + phase2(ENDED) = 3
 	// Total = 5
-	if len(recorded) != 5 {
-		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
 
 	// Verify create from START
@@ -175,7 +175,7 @@ func TestSnapshotLifecycle(t *testing.T) {
 
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[5].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
@@ -212,8 +212,8 @@ func TestSnapshotError(t *testing.T) {
 	// START: create + ONGOING = 2
 	// ERROR: create + phase1(ONGOING) + phase2(ENDED) = 3
 	// Total = 5
-	if len(recorded) != 5 {
-		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
 
 	// Phase 1: red/failed
@@ -240,7 +240,7 @@ func TestSnapshotError(t *testing.T) {
 
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[5].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
@@ -270,8 +270,8 @@ func TestSnapshotWarning(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 5 {
-		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
 
 	// Phase 1: orange/warning
@@ -348,8 +348,8 @@ func TestPruneLifecycle(t *testing.T) {
 	// PRUNE_START: create + ONGOING = 2
 	// PRUNE_SUCCESS: create + phase1(ONGOING) + phase2(ENDED) = 3
 	// Total = 5
-	if len(recorded) != 5 {
-		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
 
 	// Verify PRUNE_START ONGOING
@@ -417,8 +417,8 @@ func TestCheckLifecycle(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 5 {
-		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
 
 	// Verify CHECK_START ONGOING
@@ -489,8 +489,8 @@ func TestForgetLifecycle(t *testing.T) {
 	// FORGET_START: create + ONGOING = 2
 	// FORGET_SUCCESS: create + phase1(ONGOING) + phase2(ENDED) = 3
 	// Total = 5
-	if len(recorded) != 5 {
-		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
 
 	// Verify FORGET_START ONGOING
@@ -533,7 +533,7 @@ func TestForgetLifecycle(t *testing.T) {
 
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[5].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
@@ -566,8 +566,8 @@ func TestForgetError(t *testing.T) {
 	// FORGET_START: create + ONGOING = 2
 	// FORGET_ERROR: create + phase1(ONGOING) + phase2(ENDED) = 3
 	// Total = 5
-	if len(recorded) != 5 {
-		t.Fatalf("expected 5 calls, got %d", len(recorded))
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
 
 	// Phase 1: red/failed
@@ -594,7 +594,7 @@ func TestForgetError(t *testing.T) {
 
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[4].Body, &phase2)
+	testutil.UnmarshalBody(t, recorded[5].Body, &phase2)
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}

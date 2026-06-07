@@ -987,6 +987,61 @@ func TestStateDedup_GroupedSameWebhookTwice(t *testing.T) {
 	}
 }
 
+// TestStateDedup_CaseAndPunctuationIndependent verifies that alertnames that
+// differ only in casing/punctuation dedup INDEPENDENTLY. The dedup state key is
+// derived with text.SlugHash, which is collision-resistant — unlike text.Slug,
+// which would collapse "High CPU" and "high_cpu" to the same key
+// ("grafana-high-cpu") and cross-contaminate their dedup state.
+//
+// Both alerts carry the same fingerprint on purpose: under the buggy Slug
+// derivation the second group's state would compare equal to the first's stored
+// state and be suppressed, so the second notification would be dropped. With the
+// SlugHash derivation each group has its own key and both deliver.
+func TestStateDedup_CaseAndPunctuationIndependent(t *testing.T) {
+	handler, calls, mu, _ := setup(t)
+
+	highCPU := `{
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "High CPU", "severity": "critical"},
+			"annotations": {"summary": "CPU is high"},
+			"fingerprint": "fp1"
+		}]
+	}`
+	highCPUUnderscore := `{
+		"alerts": [{
+			"status": "firing",
+			"labels": {"alertname": "high_cpu", "severity": "critical"},
+			"annotations": {"summary": "CPU is high"},
+			"fingerprint": "fp1"
+		}]
+	}`
+
+	// First delivery of "High CPU": one notification.
+	sendWebhook(t, handler, highCPU)
+	if got := len(testutil.GetCalls(calls, mu)); got != 1 {
+		t.Fatalf("after first 'High CPU' delivery: expected 1 notification, got %d", got)
+	}
+
+	// First delivery of "high_cpu": must NOT be suppressed by "High CPU" state —
+	// distinct SlugHash key, so a second notification fires. (Buggy Slug key
+	// would collapse both to one key and suppress this, leaving the count at 1.)
+	sendWebhook(t, handler, highCPUUnderscore)
+	if got := len(testutil.GetCalls(calls, mu)); got != 2 {
+		t.Fatalf("after first 'high_cpu' delivery: expected 2 notifications (independent dedup), got %d", got)
+	}
+
+	// Re-deliver each group identically: each suppressed by its own state.
+	sendWebhook(t, handler, highCPU)
+	if got := len(testutil.GetCalls(calls, mu)); got != 2 {
+		t.Fatalf("after re-delivering 'High CPU': expected still 2 (own dedup), got %d", got)
+	}
+	sendWebhook(t, handler, highCPUUnderscore)
+	if got := len(testutil.GetCalls(calls, mu)); got != 2 {
+		t.Fatalf("after re-delivering 'high_cpu': expected still 2 (own dedup), got %d", got)
+	}
+}
+
 // TestNotificationURL_HTTPAndPrivateHostsKept verifies that http URLs and
 // private-host URLs (common in self-hosted Grafana behind a reverse proxy on
 // the user's LAN) are forwarded to the server unchanged — the iOS device
