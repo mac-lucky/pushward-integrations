@@ -243,17 +243,11 @@ func splitRepo(repo string) (owner, name string, err error) {
 	return parts[0], parts[1], nil
 }
 
-func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]WorkflowRun, error) {
-	owner, name, err := splitRepo(repo)
-	if err != nil {
-		return nil, err
-	}
-
-	// per_page=50 caps memory while covering concurrent workflows on busy repos.
-	// The poller selects only the most recent run, so ordering is stable.
-	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?status=in_progress&per_page=50", c.baseURL, owner, name)
-
-	body, err := c.doWithRetry(ctx, url, "requesting workflow runs")
+// fetchWorkflowRuns issues a GET against a workflow-runs list endpoint and
+// decodes the run list. The repo-level (in-progress) and workflow-level (latest)
+// list endpoints share this response shape and error context.
+func (c *Client) fetchWorkflowRuns(ctx context.Context, url, operation string) ([]WorkflowRun, error) {
+	body, err := c.doWithRetry(ctx, url, operation)
 	if err != nil {
 		return nil, err
 	}
@@ -263,6 +257,18 @@ func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]Workflow
 		return nil, fmt.Errorf("decoding workflow runs: %w", err)
 	}
 	return result.WorkflowRuns, nil
+}
+
+func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]WorkflowRun, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+
+	// per_page=50 caps memory while covering concurrent workflows on busy repos.
+	// The poller selects only the most recent run, so ordering is stable.
+	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?status=in_progress&per_page=50", c.baseURL, owner, name)
+	return c.fetchWorkflowRuns(ctx, url, "requesting workflow runs")
 }
 
 // GetRun fetches a single workflow run so callers can consult the run's own
@@ -285,6 +291,38 @@ func (c *Client) GetRun(ctx context.Context, repo string, runID int64) (*Workflo
 		return nil, fmt.Errorf("decoding workflow run: %w", err)
 	}
 	return &run, nil
+}
+
+// GetLatestWorkflowRun returns the most recent run of the given workflow on the
+// given branch matching status (a GitHub run status/conclusion filter value such
+// as "success" or "completed"), or nil if none exists. Used to learn a run's
+// full step shape up front: GitHub creates jobs lazily within a run, so a fresh
+// scan only sees the first wave, but a finished prior run has revealed its entire
+// job DAG. The per-workflow runs endpoint sorts created-descending, so per_page=1
+// is the latest match.
+func (c *Client) GetLatestWorkflowRun(ctx context.Context, repo string, workflowID int64, branch, status string) (*WorkflowRun, error) {
+	owner, name, err := splitRepo(repo)
+	if err != nil {
+		return nil, err
+	}
+
+	q := url.Values{"per_page": {"1"}}
+	if status != "" {
+		q.Set("status", status)
+	}
+	if branch != "" {
+		q.Set("branch", branch)
+	}
+	reqURL := fmt.Sprintf("%s/repos/%s/%s/actions/workflows/%d/runs?%s", c.baseURL, owner, name, workflowID, q.Encode())
+
+	runs, err := c.fetchWorkflowRuns(ctx, reqURL, "requesting latest workflow run")
+	if err != nil {
+		return nil, err
+	}
+	if len(runs) == 0 {
+		return nil, nil
+	}
+	return &runs[0], nil
 }
 
 func (c *Client) GetJobs(ctx context.Context, repo string, runID int64) ([]Job, error) {

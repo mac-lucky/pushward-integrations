@@ -8,6 +8,7 @@ Polls the GitHub Actions API for in-progress workflow runs and sends real-time u
 
 - **Repo auto-discovery** -- set `owner` and all non-archived, non-disabled repos are discovered automatically (refreshes every 5 min)
 - **Matrix job grouping** -- parallel matrix jobs (e.g. `Build (ubuntu, node-16)`) are grouped into a single step with `step_rows` for multi-row progress display
+- **Stable step total** -- GitHub creates jobs lazily (behind `needs:`/`if:`), so a fresh scan can't know the total upfront and the denominator would climb (`1/2` → `3/4` → `5/6`). The total is seeded from the last successful run of the same workflow+branch (which already revealed its full job graph), giving a steady `X/N` from the first frame. Falls back to a live scan when there's no prior run.
 - **Reusable workflow support** -- caller prefixes (`ci-cd / Build`) are stripped to show clean step names
 - **URL links** -- each update includes the workflow run URL and a secondary repo link
 - **Two-phase end** -- on completion, sends an `ONGOING` update with final content (after `end_delay`) so Dynamic Island shows the result, then sends `ENDED` (after `end_display_time`) to dismiss
@@ -98,9 +99,9 @@ services:
 
 1. **Startup** -- if `owner` is set, discovers all non-archived repos via the GitHub API (refreshes every 5 min). Explicitly configured `repos` are merged in.
 2. **Idle polling** -- polls each repo at the configured interval (default 60s) for in-progress workflow runs via `GET /repos/{owner}/{repo}/actions/runs?status=in_progress`.
-3. **Workflow found** -- creates a PushWard activity with slug `gh-<repo-name>` and sends an initial `ONGOING` update using the `steps` template (triggers push-to-start Live Activity on iOS). Jobs are fetched immediately for accurate initial step counts.
-4. **Active polling** -- on each cycle, fetches jobs for tracked runs, groups matrix jobs by base name into steps, and sends progress updates with step count, step rows, step labels, and accent color. The total step count only increases (never decreases) as GitHub lazily creates jobs behind `needs`/`if` conditions.
-5. **Completed** -- schedules a two-phase end: first sends a final `ONGOING` update (green for success, red for failure/cancellation), then after `end_display_time` sends `ENDED` to dismiss the Live Activity. If a new workflow starts on the same repo while an end is pending, the end is cancelled and the new run takes over.
+3. **Workflow found** -- creates a PushWard activity with slug `gh-<repo-name>` and sends an initial `ONGOING` update using the `steps` template (triggers push-to-start Live Activity on iOS). The initial step count is seeded from the last successful run of the same workflow+branch so the `X/N` denominator is stable from the first frame; if no prior run exists, it falls back to a live scan of the current run's jobs.
+4. **Active polling** -- on each cycle, fetches jobs for tracked runs, groups matrix jobs by base name into steps, and sends progress updates with step count, step rows, step labels, and accent color. The total step count only increases (never decreases) -- if a workflow genuinely grows past the seeded total (e.g. jobs added since the prior run), the denominator clamps upward.
+5. **Completed** -- schedules a two-phase end: first sends a final `ONGOING` update (green for success, red for failure/cancellation), then after `end_display_time` sends `ENDED` to dismiss the Live Activity. The final frame forces `N/N`, so a seed that over-counted (this run took a shorter `if`-gated path than the prior run) self-heals to a full bar. If a new workflow starts on the same repo while an end is pending, the end is cancelled and the new run takes over.
 6. **Cleanup** -- the server auto-deletes the activity after the `ended_ttl` (cleanup_delay) expires.
 
 ## Tests

@@ -39,11 +39,20 @@ const (
 	jobStatusCompleted  = "completed"
 	jobStatusInProgress = "in_progress"
 
+	conclusionSuccess        = "success"
 	conclusionFailure        = "failure"
 	conclusionCancelled      = "cancelled"
 	conclusionTimedOut       = "timed_out"
 	conclusionStartupFailure = "startup_failure"
 )
+
+// seedStatuses orders the prior-run lookups used to seed a stable step total:
+// prefer the last fully-successful run (it executed the whole job DAG, so its
+// group count is the most accurate), then fall back to any completed run. Note
+// GitHub's runs `status` filter accepts both conclusions ("success") and
+// statuses ("completed"), so a single "completed" call would not distinguish a
+// truncated failed run from a full success — hence both, in this order.
+var seedStatuses = []string{conclusionSuccess, jobStatusCompleted}
 
 // jobFailed reports whether a completed job's conclusion indicates failure.
 func jobFailed(conclusion string) bool {
@@ -252,22 +261,31 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		}
 		p.mu.Unlock()
 
-		// Fetch jobs for accurate initial step count.
-		initialTotalSteps := 1
-		var initialStepRows []int
-		var initialStepLabels []string
+		// Determine the initial step shape. GitHub creates jobs lazily within a
+		// run (jobs gated by needs/if appear only after their deps finish), so a
+		// fresh scan sees just the first wave and the denominator would climb
+		// (1/2 → 3/4 → 5/6). Seed from a prior run of the same workflow+branch,
+		// which already revealed its full DAG, for a stable total from frame 1.
+		shape := stepInfo{TotalSteps: 1}
 		if jobs, err := p.gh.GetJobs(ctx, repo, run.ID); err != nil {
 			slog.Warn("failed to fetch jobs for initial step count, using default",
 				"repo", repo, "run_id", run.ID, "error", err)
 		} else if len(jobs) > 0 {
-			info := computeSteps(jobs)
-			initialTotalSteps = info.TotalSteps
-			initialStepRows = info.StepRows
-			initialStepLabels = info.StepLabels
+			shape = computeSteps(jobs)
 			slog.Info("initial job scan",
 				"repo", repo, "jobs", len(jobs),
-				"steps", info.TotalSteps, "step_rows", info.StepRows)
+				"steps", shape.TotalSteps, "step_rows", shape.StepRows)
 		}
+		// Adopt the prior run's shape wholesale when it has MORE step-groups than
+		// the current scan (the prior full run, or a current run that has since
+		// grown). Choosing one coherent shape — not an element-wise merge — keeps
+		// step_labels consistent with current_step's index into them.
+		if base, ok := p.baselineShape(ctx, repo, run.WorkflowID, run.HeadBranch); ok && base.TotalSteps > shape.TotalSteps {
+			shape = base
+		}
+		initialTotalSteps := shape.TotalSteps
+		initialStepRows := shape.StepRows
+		initialStepLabels := shape.StepLabels
 
 		p.mu.Lock()
 		if t, ok := p.tracked[repo]; ok {
@@ -404,6 +422,64 @@ func computeSteps(jobs []ghclient.Job) stepInfo {
 		AnyFailed:       anyFailed,
 		Progress:        progress,
 	}
+}
+
+// baselineShape returns the step shape of a prior run of the same workflow on
+// the same branch, used to seed a stable total-steps denominator. A finished run
+// has revealed its entire job DAG, so its group count is ground truth. Returns
+// ok=false (so the caller keeps the current-run scan) when there is no usable
+// prior run or any lookup fails.
+//
+// A blank branch is rejected: without it the lookup would seed from whatever
+// branch ran most recently, whose job shape may differ. workflowID==0 likewise
+// can't target a workflow, so both short-circuit to the live scan.
+//
+// The seed is an upper-or-lower estimate, not a guarantee. If this run takes a
+// shorter path than the seed (if-gated jobs skipped), the total over-counts and
+// the final frame shows the phantom steps as done (self-heals to N/N via
+// scheduleEnd). If it grows past the seed, the pollActive clamp raises the total.
+func (p *Poller) baselineShape(ctx context.Context, repo string, workflowID int64, branch string) (stepInfo, bool) {
+	if workflowID == 0 || branch == "" {
+		return stepInfo{}, false
+	}
+	prev := p.lastFinishedRun(ctx, repo, workflowID, branch)
+	if prev == nil {
+		return stepInfo{}, false
+	}
+	jobs, err := p.gh.GetJobs(ctx, repo, prev.ID)
+	if err != nil {
+		slog.Warn("failed to fetch prior-run jobs for step seed",
+			"repo", repo, "prev_run_id", prev.ID, "error", err)
+		return stepInfo{}, false
+	}
+	if len(jobs) == 0 {
+		return stepInfo{}, false
+	}
+	info := computeSteps(jobs)
+	slog.Info("seeded steps from prior run",
+		"repo", repo, "prev_run_id", prev.ID, "steps", info.TotalSteps, "step_rows", info.StepRows)
+	return info, true
+}
+
+// lastFinishedRun returns the most relevant finished run to seed step shape from:
+// the last successful run (it ran the full DAG, so it's the most accurate), or —
+// when none exists (e.g. a brand-new branch) — the last completed run of any
+// conclusion. An early-aborted failure may under-count, but the pollActive
+// upward clamp then degrades gracefully to a fresh scan. Returns nil when neither
+// lookup yields a run or either errors.
+func (p *Poller) lastFinishedRun(ctx context.Context, repo string, workflowID int64, branch string) *ghclient.WorkflowRun {
+	for _, status := range seedStatuses {
+		run, err := p.gh.GetLatestWorkflowRun(ctx, repo, workflowID, branch, status)
+		if err != nil {
+			slog.Warn("failed to look up prior run for step seed",
+				"repo", repo, "status", status, "error", err)
+			return nil
+		}
+		if run != nil {
+			return run
+		}
+	}
+	return nil
 }
 
 func (p *Poller) pollActive(ctx context.Context) error {

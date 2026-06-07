@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -786,6 +787,364 @@ func TestPollIdle_PicksMostRecentRun(t *testing.T) {
 	p.mu.Unlock()
 	if tracked.RunID != 20 {
 		t.Errorf("expected most recent run (ID=20), got %d", tracked.RunID)
+	}
+}
+
+func TestPollIdle_SeedsStepsFromPreviousRun(t *testing.T) {
+	ghMux := http.NewServeMux()
+	// In-progress run carries a workflow_id so the prior-run lookup can target it.
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+			TotalCount: 1,
+			WorkflowRuns: []ghclient.WorkflowRun{
+				{
+					ID: 42, Name: "CI", Status: "in_progress", HeadBranch: "main", WorkflowID: 99,
+					HTMLURL: "https://github.com/owner/repo/actions/runs/42",
+				},
+			},
+		})
+	})
+	// Current run has only revealed its first wave (1 job) — GitHub creates jobs lazily.
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 1,
+			Jobs:       []ghclient.Job{{ID: 1, Name: "Lint", Status: "in_progress"}},
+		})
+	})
+	// Last successful run of the same workflow+branch revealed its full 6-step DAG.
+	ghMux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("status") != "success" {
+			t.Errorf("expected status=success on first lookup, got %q", r.URL.Query().Get("status"))
+		}
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+			TotalCount:   1,
+			WorkflowRuns: []ghclient.WorkflowRun{{ID: 41, WorkflowID: 99, HeadBranch: "main"}},
+		})
+	})
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/41/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 6,
+			Jobs: []ghclient.Job{
+				{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+				{ID: 2, Name: "Build", Status: "completed", Conclusion: "success"},
+				{ID: 3, Name: "Test", Status: "completed", Conclusion: "success"},
+				{ID: 4, Name: "Scan", Status: "completed", Conclusion: "success"},
+				{ID: 5, Name: "Publish", Status: "completed", Conclusion: "success"},
+				{ID: 6, Name: "Notify", Status: "completed", Conclusion: "success"},
+			},
+		})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	p := &Poller{
+		cfg:     testConfig(),
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo"},
+	}
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// The seed update (PATCH) must carry the prior run's stable 6-step shape, not
+	// the current scan's single revealed job.
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PushWard calls (create + update), got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &req)
+	if req.Content.TotalSteps == nil || *req.Content.TotalSteps != 6 {
+		t.Errorf("expected seeded TotalSteps=6, got %v", req.Content.TotalSteps)
+	}
+	wantLabels := []string{"Lint", "Build", "Test", "Scan", "Publish", "Notify"}
+	if !reflect.DeepEqual(req.Content.StepLabels, wantLabels) {
+		t.Errorf("expected labels adopted wholesale from prior run %v, got %v", wantLabels, req.Content.StepLabels)
+	}
+	if len(req.Content.StepRows) != 6 {
+		t.Errorf("expected 6 seeded StepRows, got %v", req.Content.StepRows)
+	}
+
+	p.mu.Lock()
+	tracked := p.tracked["owner/repo"]
+	p.mu.Unlock()
+	if tracked == nil || tracked.maxTotalSteps != 6 {
+		t.Errorf("expected tracked.maxTotalSteps=6, got %v", tracked)
+	}
+}
+
+func TestPollIdle_FallsBackWhenNoPriorRun(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+			TotalCount: 1,
+			WorkflowRuns: []ghclient.WorkflowRun{
+				{ID: 42, Name: "CI", Status: "in_progress", HeadBranch: "feature", WorkflowID: 99},
+			},
+		})
+	})
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 2,
+			Jobs: []ghclient.Job{
+				{ID: 1, Name: "Build", Status: "in_progress"},
+				{ID: 2, Name: "Test", Status: "queued"},
+			},
+		})
+	})
+	// No prior success or completed run exists for this workflow+branch.
+	ghMux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	p := &Poller{
+		cfg:     testConfig(),
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo"},
+	}
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PushWard calls (create + update), got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &req)
+	if req.Content.TotalSteps == nil || *req.Content.TotalSteps != 2 {
+		t.Errorf("expected fallback TotalSteps=2 from current scan, got %v", req.Content.TotalSteps)
+	}
+
+	p.mu.Lock()
+	tracked := p.tracked["owner/repo"]
+	p.mu.Unlock()
+	if tracked == nil || tracked.maxTotalSteps != 2 {
+		t.Errorf("expected tracked.maxTotalSteps=2, got %v", tracked)
+	}
+}
+
+func TestPollIdle_SeedsFromCompletedWhenNoSuccess(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+			TotalCount: 1,
+			WorkflowRuns: []ghclient.WorkflowRun{
+				{ID: 42, Name: "CI", Status: "in_progress", HeadBranch: "feature", WorkflowID: 99},
+			},
+		})
+	})
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 1,
+			Jobs:       []ghclient.Job{{ID: 1, Name: "Build", Status: "in_progress"}},
+		})
+	})
+	// No successful run on this branch, but the last *completed* run (a failure
+	// that still ran the full DAG) seeds the shape — the success→completed fallback.
+	ghMux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Query().Get("status") {
+		case "success":
+			_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{TotalCount: 0})
+		case "completed":
+			_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+				TotalCount:   1,
+				WorkflowRuns: []ghclient.WorkflowRun{{ID: 40, WorkflowID: 99, HeadBranch: "feature"}},
+			})
+		default:
+			t.Errorf("unexpected status filter %q", r.URL.Query().Get("status"))
+		}
+	})
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/40/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 4,
+			Jobs: []ghclient.Job{
+				{ID: 1, Name: "Build", Status: "completed", Conclusion: "success"},
+				{ID: 2, Name: "Test", Status: "completed", Conclusion: "success"},
+				{ID: 3, Name: "Scan", Status: "completed", Conclusion: "failure"},
+				{ID: 4, Name: "Publish", Status: "completed", Conclusion: "skipped"},
+			},
+		})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	p := &Poller{
+		cfg:     testConfig(),
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo"},
+	}
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PushWard calls (create + update), got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &req)
+	if req.Content.TotalSteps == nil || *req.Content.TotalSteps != 4 {
+		t.Errorf("expected TotalSteps=4 seeded from the completed run, got %v", req.Content.TotalSteps)
+	}
+}
+
+func TestPollIdle_KeepsCurrentScanWhenPriorRunSmaller(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+			TotalCount: 1,
+			WorkflowRuns: []ghclient.WorkflowRun{
+				{ID: 42, Name: "CI", Status: "in_progress", HeadBranch: "main", WorkflowID: 99},
+			},
+		})
+	})
+	// Current run already reveals 3 groups...
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 3,
+			Jobs: []ghclient.Job{
+				{ID: 1, Name: "Lint", Status: "in_progress"},
+				{ID: 2, Name: "Build", Status: "queued"},
+				{ID: 3, Name: "Test", Status: "queued"},
+			},
+		})
+	})
+	// ...while the prior successful run only had 2 — the seed must NOT shrink the total.
+	ghMux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+			TotalCount:   1,
+			WorkflowRuns: []ghclient.WorkflowRun{{ID: 41, WorkflowID: 99, HeadBranch: "main"}},
+		})
+	})
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/41/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 2,
+			Jobs: []ghclient.Job{
+				{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+				{ID: 2, Name: "Build", Status: "completed", Conclusion: "success"},
+			},
+		})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	p := &Poller{
+		cfg:     testConfig(),
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo"},
+	}
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PushWard calls (create + update), got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &req)
+	if req.Content.TotalSteps == nil || *req.Content.TotalSteps != 3 {
+		t.Errorf("expected current scan's TotalSteps=3 to be kept over smaller prior shape, got %v", req.Content.TotalSteps)
+	}
+	wantLabels := []string{"Lint", "Build", "Test"}
+	if !reflect.DeepEqual(req.Content.StepLabels, wantLabels) {
+		t.Errorf("expected current scan labels %v, got %v", wantLabels, req.Content.StepLabels)
+	}
+}
+
+func TestPollIdle_SeedAbortsOnSuccessLookupError(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+			TotalCount: 1,
+			WorkflowRuns: []ghclient.WorkflowRun{
+				{ID: 42, Name: "CI", Status: "in_progress", HeadBranch: "main", WorkflowID: 99},
+			},
+		})
+	})
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 2,
+			Jobs: []ghclient.Job{
+				{ID: 1, Name: "Build", Status: "in_progress"},
+				{ID: 2, Name: "Test", Status: "queued"},
+			},
+		})
+	})
+	// The success lookup fails (4xx, non-retryable). The seed must abort outright —
+	// NOT silently fall through to a completed lookup — so the live scan is kept.
+	ghMux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("status") == "completed" {
+			t.Error("completed lookup must not run after the success lookup errored")
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	p := &Poller{
+		cfg:     testConfig(),
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo"},
+	}
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PushWard calls (create + update), got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &req)
+	if req.Content.TotalSteps == nil || *req.Content.TotalSteps != 2 {
+		t.Errorf("expected live-scan TotalSteps=2 after seed aborted, got %v", req.Content.TotalSteps)
+	}
+}
+
+func TestBaselineShape_ShortCircuits(t *testing.T) {
+	// Both guards (workflowID==0 and blank branch) must skip the lookup entirely —
+	// the catch-all handler fails the test if any GitHub call is made.
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/", func(_ http.ResponseWriter, r *http.Request) {
+		t.Errorf("unexpected GitHub call: %s", r.URL.Path)
+	})
+	gh := mockGitHubClient(t, ghMux)
+	p := &Poller{cfg: testConfig(), gh: gh, tracked: make(map[string]*trackedRun)}
+
+	if _, ok := p.baselineShape(context.Background(), "owner/repo", 0, "main"); ok {
+		t.Error("expected ok=false when workflowID==0")
+	}
+	if _, ok := p.baselineShape(context.Background(), "owner/repo", 99, ""); ok {
+		t.Error("expected ok=false when branch is blank")
 	}
 }
 

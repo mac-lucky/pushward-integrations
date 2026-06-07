@@ -161,6 +161,82 @@ func TestGetJobs_InvalidRepo(t *testing.T) {
 	}
 }
 
+func TestGetLatestWorkflowRun_Success(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Get("status") != "success" {
+			t.Errorf("expected status=success, got %q", q.Get("status"))
+		}
+		if q.Get("branch") != "main" {
+			t.Errorf("expected branch=main, got %q", q.Get("branch"))
+		}
+		if q.Get("per_page") != "1" {
+			t.Errorf("expected per_page=1, got %q", q.Get("per_page"))
+		}
+		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{
+			TotalCount: 1,
+			WorkflowRuns: []WorkflowRun{
+				{ID: 41, Name: "CI", Status: "completed", Conclusion: "success", WorkflowID: 99, HeadBranch: "main"},
+			},
+		})
+	})
+	c := testClient(t, mux)
+
+	run, err := c.GetLatestWorkflowRun(context.Background(), "owner/repo", 99, "main", "success")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run == nil {
+		t.Fatal("expected a run, got nil")
+	}
+	if run.ID != 41 {
+		t.Errorf("expected run ID 41, got %d", run.ID)
+	}
+}
+
+func TestGetLatestWorkflowRun_Empty(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{TotalCount: 0})
+	})
+	c := testClient(t, mux)
+
+	run, err := c.GetLatestWorkflowRun(context.Background(), "owner/repo", 99, "main", "success")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run != nil {
+		t.Fatalf("expected nil run for empty list, got %+v", run)
+	}
+}
+
+func TestGetLatestWorkflowRun_InvalidRepo(t *testing.T) {
+	c := NewClient("test-token")
+	_, err := c.GetLatestWorkflowRun(context.Background(), "noslash", 1, "main", "success")
+	if err == nil {
+		t.Fatal("expected error for invalid repo format")
+	}
+}
+
+func TestGetLatestWorkflowRun_APIError(t *testing.T) {
+	mux := http.NewServeMux()
+	// 4xx is a non-retryable clientError, so the call returns immediately
+	// (a 5xx would trigger the retry backoff and slow the test).
+	mux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	c := testClient(t, mux)
+
+	run, err := c.GetLatestWorkflowRun(context.Background(), "owner/repo", 99, "main", "success")
+	if err == nil {
+		t.Fatal("expected error for 404 response")
+	}
+	if run != nil {
+		t.Errorf("expected nil run on error, got %+v", run)
+	}
+}
+
 func TestListRepos_FiltersArchivedAndDisabled(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {

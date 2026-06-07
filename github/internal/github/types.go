@@ -15,7 +15,11 @@ type WorkflowRun struct {
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 	HeadBranch string    `json:"head_branch"`
-	HTMLURL    string    `json:"html_url"`
+	// WorkflowID identifies the workflow definition this run belongs to. It is
+	// stable across runs of the same workflow, letting us look up a prior run's
+	// full step shape to seed a stable total-steps denominator.
+	WorkflowID int64  `json:"workflow_id"`
+	HTMLURL    string `json:"html_url"`
 }
 
 type JobsResponse struct {
