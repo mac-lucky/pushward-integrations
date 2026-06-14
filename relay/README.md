@@ -1,234 +1,382 @@
-# pushward-relay
+[![Website](https://img.shields.io/badge/pushward.app-5B4FE5?style=for-the-badge&logo=safari&logoColor=white)](https://pushward.app)
+[![App Store](https://img.shields.io/badge/App_Store-Download-0D96F6?style=for-the-badge&logo=apple&logoColor=white)](https://apps.apple.com/app/id6759689999)
+[![Docs](https://img.shields.io/badge/Docs-API_Reference-5B4FE5?style=for-the-badge&logo=readthedocs&logoColor=white)](https://pushward.app)
 
-Multi-tenant webhook gateway that consolidates multiple providers into a single [PushWard](https://pushward.app) bridge with PostgreSQL shared state. Each tenant authenticates with their own `hlk_` integration key per request — no per-service API key configuration needed.
+[![CI/CD Relay](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml)
+[![Image](https://img.shields.io/badge/ghcr.io-pushward--relay-2496ED?logo=docker&logoColor=white)](https://github.com/mac-lucky/pushward-integrations/pkgs/container/pushward-relay)
+
+# PushWard Relay
+
+Self-hostable, multi-tenant webhook gateway that turns webhooks from your homelab and infrastructure tools — Grafana, ArgoCD, the \*arr suite, Proxmox, Jellyfin, and more — into **PushWard Live Activities and push notifications** on iPhone (Dynamic Island + Lock Screen). One binary serves many tenants: each request is authenticated by its own `hlk_` integration key, so there is **no per-service API key in config**.
+
+> **New to PushWard?** PushWard delivers real-time Live Activities to your iPhone's Dynamic Island and Lock Screen. Learn more at [pushward.app](https://pushward.app) and download the app from the [App Store](https://apps.apple.com/app/id6759689999).
+
+## Contents
+
+- [How it works](#how-it-works)
+- [Features](#features)
+- [Prerequisites](#prerequisites)
+- [Quickstart (Docker)](#quickstart-docker)
+- [Configuration](#configuration)
+- [Build & run from source](#build--run-from-source)
+- [Endpoints](#endpoints)
+- [Providers](#providers)
+- [Development](#development)
+- [CI/CD & Releases](#cicd--releases)
+- [Server compatibility](#server-compatibility)
+- [Troubleshooting](#troubleshooting)
+- [Requirements & License](#requirements--license)
+
+## How it works
+
+```
+external service ──POST /<provider>──▶ pushward-relay ──REST API──▶ pushward-server ──APNs──▶ iOS
+   (hlk_ key in Authorization)        (auth + rate limit)        (api.pushward.app)        (Live Activity / push)
+```
+
+A service POSTs its native webhook to a per-provider route (e.g. `POST /grafana`). The relay extracts the tenant's `hlk_` key from the `Authorization` header, decodes the payload, maps the event to the PushWard activity lifecycle (create / update / two-phase end) or a one-shot push notification, and calls the [pushward-server](https://pushward.app) REST API. The server delivers via APNs to the PushWard iOS app. Per-tenant state (alert grouping, ArgoCD sync tracking, download dedup) is persisted in PostgreSQL with TTL cleanup.
 
 ## Features
 
-- **Multi-tenant** — tenants are identified by their `hlk_` integration key, extracted from every request by a shared auth middleware
-- **14 providers** — Grafana, ArgoCD, Radarr, Sonarr, Bazarr, Jellyfin, Paperless-ngx, Changedetection.io, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest
-- **PostgreSQL state** — persistent state store with automatic TTL cleanup for alert grouping, sync tracking, and download tracking
-- **Per-tenant client pool** — LRU pool of PushWard API clients keyed by integration key hash (max 1000 concurrent tenants)
-- **Rate limiting** — dual-layer: per-IP (5 req/s, burst 20) and per-key (1 req/s, burst 10)
-- **Two-phase end** — activities show final content on Dynamic Island before dismissing (ArgoCD, Starr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest)
-- **Push notifications** — fire-and-forget APNs alerts for one-shot events (Bazarr)
-- **Retry with backoff** — PushWard API calls retry up to 5 times with exponential backoff and 429 rate-limit handling
-- **Live credential rotation** — optional `password_file` support with fsnotify watching; the connection pool resets automatically when the file changes
-- **Graceful shutdown** — waits for in-flight requests on SIGINT/SIGTERM
+- **Multi-tenant by design** — tenants are identified by their `hlk_` integration key, extracted from every request by shared auth middleware. No per-service key configuration; one relay serves many users.
+- **15 webhook routes** across **13 configurable provider blocks** (the `starr` block serves Radarr, Sonarr, and Prowlarr). See [Providers](#providers).
+- **Two-phase end lifecycle** — completion events send a final `ONGOING` update (so the result shows on the Dynamic Island), then `ENDED` after a short display delay. Used by ArgoCD, Starr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, and Backrest. Grafana, Changedetection, and Bazarr are fire-and-forget.
+- **Push notifications** — one-shot APNs alerts for events that don't fit a Live Activity (Grafana alerts, Bazarr subtitle downloads, Prowlarr grabs).
+- **Cross-provider notification threads** — Radarr/Sonarr/Overseerr/Jellyfin notifications about the same movie (TMDB id) or show (TVDB id) collapse into one iOS notification thread.
+- **PostgreSQL state store** — persistent alert grouping, sync tracking, and download dedup with a background TTL sweep every 30s.
+- **Per-tenant client pool** — LRU pool of PushWard API clients keyed by `hlk_` hash (up to 1,000 concurrent tenants), wrapped in a shared circuit breaker.
+- **Dual-layer rate limiting** — per-IP (5 req/s, burst 20) and per-key (1 req/s, burst 10) token buckets.
+- **Live credential rotation** — optional DB `password_file` watched via fsnotify; the connection pool resets automatically when the file changes.
+- **Built-in observability** — auto-generated OpenAPI 3.1 spec (`/openapi.json`) + interactive docs (`/docs`), Prometheus `/metrics` on a separate internal listener, and optional OpenTelemetry OTLP/gRPC tracing.
+- **Graceful shutdown** — flushes pending two-phase ENDED timers and waits for in-flight callbacks on SIGINT/SIGTERM.
 
 ## Prerequisites
 
-- A running PushWard server
-- A PostgreSQL database
-- The PushWard iOS app
-- At least one PushWard integration key (`hlk_` prefix) per tenant
+- A running **PushWard server** (`https://api.pushward.app`, or your own deployment)
+- A **PostgreSQL** database for the relay state store
+- The **PushWard iOS app** ([App Store](https://apps.apple.com/app/id6759689999)) subscribed to the slugs you push to
+- One **PushWard integration key** (`hlk_` prefix) per tenant — created in the PushWard app
 
-## Build & Run
+## Quickstart (Docker)
+
+The Docker build context **must be the repo root** so the Dockerfile can `COPY shared/` and `relay/`.
 
 ```bash
-# Build from source
-go build ./relay/cmd/pushward-relay
-
-# Run with config file
-./pushward-relay -config relay/config.example.yml
-
-# Run with env vars
-PUSHWARD_URL=https://api.pushward.app \
-PUSHWARD_DATABASE_DSN=postgres://user:pass@localhost:5432/pushward_relay?sslmode=disable \
-./pushward-relay
-
-# Docker build (context must be repo root)
+# Build (context = repo root, not the relay/ dir)
 docker build -f relay/Dockerfile -t pushward-relay .
 
-# Docker run
-docker run -p 8090:8090 \
-  -v ./config.yml:/config/config.yml:ro \
+# Run (exposes the webhook server :8090 and the metrics server :9090)
+docker run -p 8090:8090 -p 9090:9090 \
+  -v "$(pwd)/config.yml:/config/config.yml:ro" \
   -e PUSHWARD_URL=https://api.pushward.app \
+  -e PUSHWARD_DATABASE_DSN='postgres://user:pass@db:5432/pushward_relay?sslmode=disable' \
   pushward-relay
 ```
 
-## Testing
-
-```bash
-# All relay tests
-go test ./relay/... -v -count=1
-
-# With race detector
-go test ./relay/... -race -count=1 -v
-
-# Single provider
-go test ./relay/internal/grafana/... -run TestGrafana -v -count=1
-```
-
-> DB state tests (`relay/internal/state/...`) use testcontainers-go and require a running Docker daemon.
-
-## Docker Compose
+### Docker Compose
 
 ```yaml
 services:
   pushward-relay:
     image: ghcr.io/mac-lucky/pushward-relay:latest
     ports:
-      - "8090:8090"
+      - "8090:8090"   # webhook server
+      - "9090:9090"   # internal Prometheus metrics
     volumes:
       - ./config.yml:/config/config.yml:ro
     environment:
-      - PUSHWARD_DATABASE_DSN=postgres://user:pass@db:5432/pushward_relay?sslmode=disable
       - PUSHWARD_URL=https://api.pushward.app
+      - PUSHWARD_DATABASE_DSN=postgres://user:pass@db:5432/pushward_relay?sslmode=disable
 ```
 
+The image `ENTRYPOINT` is `/pushward-relay` with default `CMD ["-config", "/config/config.yml"]`, runs as non-root UID 1000, and exposes ports 8090 and 9090.
+
+## Configuration
+
+Settings come from a YAML config file (`-config` flag, default `config.yml`) **or** environment variables. **Environment variables override YAML.** The standardized env prefix is `PUSHWARD_*`. See [`config.example.yml`](./config.example.yml) for the full annotated example.
+
+### Required
+
+| Env Variable | Config Key | Description | Required |
+|---|---|---|---|
+| `PUSHWARD_URL` | _(none)_ — also `-pushward-url` flag | PushWard server base URL the relay calls to create/update/end activities and send notifications. The `-pushward-url` flag wins over the env var. | Yes |
+| `PUSHWARD_DATABASE_DSN` | `database.dsn` | PostgreSQL connection string (pgx DSN). Config load fails if empty. | Yes |
+
+### Server & runtime
+
+| Env Variable | Config Key | Description | Default |
+|---|---|---|---|
+| `PUSHWARD_SERVER_ADDRESS` | `server.address` | Listen address for the main webhook HTTP server. | `:8090` |
+| `PUSHWARD_SERVER_METRICS_ADDRESS` | `server.metrics_address` | Listen address for the internal-only Prometheus metrics server (`GET /metrics`). Must differ from `server.address` or config load fails. Set empty to disable. | `:9090` |
+| `PUSHWARD_DATABASE_PASSWORD_FILE` | `database.password_file` | Path to a file holding the DB password; overrides the password in the DSN and is watched via fsnotify for live rotation (pool resets on change). | _(empty)_ |
+| `PUSHWARD_TRUSTED_PROXY_CIDRS` | `trusted_proxy_cidrs` | CIDRs of trusted reverse proxies. Only when `RemoteAddr` falls in one of these are `CF-Connecting-IP` / `X-Real-IP` / `X-Forwarded-For` honored for per-IP rate limiting. Comma-separated as env; a YAML list in the file. | _(empty)_ |
+| _(none)_ | `circuit_breaker.threshold` | Consecutive outbound-API failures before the breaker opens. Must be `>= 1`. | `5` |
+| _(none)_ | `circuit_breaker.cooldown` | How long the breaker stays open before allowing a probe. Must be `>= 1s`. | `30s` |
+
+### Telemetry (OpenTelemetry, optional)
+
+Tracing is fully disabled when `telemetry.endpoint` is empty.
+
+| Env Variable | Config Key | Description | Default |
+|---|---|---|---|
+| `PUSHWARD_OTEL_ENDPOINT` | `telemetry.endpoint` | OTLP gRPC endpoint. Empty disables tracing entirely. | _(empty)_ |
+| `PUSHWARD_OTEL_TLS_CERT_PATH` | `telemetry.tls_cert_path` | Client certificate PEM for mTLS (cert and key both required for mTLS). | _(empty)_ |
+| `PUSHWARD_OTEL_TLS_KEY_PATH` | `telemetry.tls_key_path` | Client private key PEM for mTLS. | _(empty)_ |
+| `PUSHWARD_OTEL_SAMPLE_RATE` | `telemetry.sample_rate` | Trace sampling rate `0.0`–`1.0`. | `1.0` |
+
+### Provider toggles
+
+All 13 provider blocks default to `enabled: true`. Env toggles exist **only** for `grafana`, `argocd`, and `starr`; every other provider can be disabled via YAML (`enabled: false`).
+
+| Env Variable | Config Key | Description | Default |
+|---|---|---|---|
+| `PUSHWARD_GRAFANA_ENABLED` | `providers.grafana.enabled` | Enable/disable the Grafana provider. | `true` |
+| `PUSHWARD_ARGOCD_ENABLED` | `providers.argocd.enabled` | Enable/disable the ArgoCD provider. | `true` |
+| `PUSHWARD_STARR_ENABLED` | `providers.starr.enabled` | Enable/disable Radarr/Sonarr/Prowlarr. | `true` |
+| `PUSHWARD_STARR_MODE` | `providers.starr.mode` | Radarr/Sonarr routing: `activity` (default), `notify`, or `smart`. | `activity` |
+| `PUSHWARD_ARGOCD_URL` | `providers.argocd.url` | ArgoCD UI base URL used to build deep links in activities. | _(empty)_ |
+| `PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD` | `providers.argocd.sync_grace_period` | Defers activity creation for fast syncs that complete within this window. `PUSHWARD_SYNC_GRACE_PERIOD` is a legacy fallback. | `10s` |
+
+### Per-provider tuning (YAML only)
+
+Each provider block accepts these keys (defaults vary per provider — see [`config.example.yml`](./config.example.yml)):
+
+| Config Key | Description | Typical default |
+|---|---|---|
+| `priority` | PushWard activity priority `0`–`10`. | varies (grafana `10` compiled-in but `5` in `config.example.yml`, uptimekuma/gatus `5`, proxmox `4`, argocd `3`, changedetection/backrest `2`, most `1`) |
+| `cleanup_delay` | Maps to the activity's ended TTL (how long an ended activity lingers). | `15m` |
+| `stale_timeout` | State-store stale TTL. Must be `> 0` for any enabled provider — a non-positive TTL writes rows that are never cleaned up (config load fails). | varies (`24h` / `1h` / `30m`) |
+| `end_delay` | Delay before the final `ONGOING` (phase-1) update; `ENDED` then follows `end_display_time` later. Unused by grafana/changedetection. | `5s` |
+| `end_display_time` | How long the final completion content shows before `ENDED`. Unused by grafana/changedetection. | `4s` |
+
+Provider-specific extras: `argocd.url`, `argocd.sync_grace_period`, `starr.mode`, `jellyfin.progress_debounce` (default `10s`), `jellyfin.pause_timeout` (default `5m`).
+
+## Build & run from source
+
+`pushward-relay` lives in a Go workspace (`go.work`) with a shared module. The build path differs depending on where you run it:
+
+```bash
+# From the pushward-integrations workspace root (uses go.work)
+go build ./relay/cmd/pushward-relay
+
+# From inside the relay/ directory
+go build -o pushward-relay ./cmd/pushward-relay
+
+# Run with a config file (from the workspace root)
+./pushward-relay -config relay/config.example.yml
+
+# Minimum run with env vars (no config file needed)
+PUSHWARD_URL=https://api.pushward.app \
+PUSHWARD_DATABASE_DSN='postgres://user:pass@localhost:5432/pushward_relay?sslmode=disable' \
+./pushward-relay
+```
+
+Flags: `-config` (default `config.yml`) and `-pushward-url` (overrides `PUSHWARD_URL`).
+
 ## Endpoints
+
+All `POST` webhook routes require an `hlk_` key (Bearer or HTTP Basic password), enforce a 1 MB body limit, and return `200` with `{"status":"ok"}` on success — `401` if the key is missing, `429` when rate-limited. Requests with a missing or `text/plain` `Content-Type` are normalized to `application/json` so misconfigured senders are still accepted.
 
 | Method | Path | Description |
 |---|---|---|
 | POST | `/grafana` | Grafana alert webhooks |
 | POST | `/argocd` | ArgoCD sync webhooks |
-| POST | `/radarr` | Radarr webhooks |
-| POST | `/sonarr` | Sonarr webhooks |
-| POST | `/bazarr` | Bazarr Apprise subtitle notifications |
-| POST | `/jellyfin` | Jellyfin webhook plugin |
+| POST | `/radarr` | Radarr download/library/health webhooks |
+| POST | `/sonarr` | Sonarr download/library/health webhooks |
+| POST | `/prowlarr` | Prowlarr indexer grab/health/application-update webhooks |
+| POST | `/bazarr` | Bazarr subtitle Apprise notifications (push) |
+| POST | `/jellyfin` | Jellyfin webhook-plugin notifications |
 | POST | `/paperless` | Paperless-ngx workflow webhooks |
 | POST | `/changedetection` | Changedetection.io notifications |
 | POST | `/unmanic` | Unmanic Apprise notifications |
 | POST | `/proxmox` | Proxmox VE notification webhooks |
-| POST | `/overseerr` | Overseerr/Jellyseerr media request webhooks |
-| POST | `/uptimekuma` | Uptime Kuma monitor status webhooks |
-| POST | `/gatus` | Gatus health check alert webhooks |
-| POST | `/backrest` | Backrest backup/prune/check webhooks |
-| GET | `/health` | Health check (returns `ok`) |
+| POST | `/overseerr` | Overseerr/Jellyseerr request webhooks |
+| POST | `/uptimekuma` | Uptime Kuma monitor webhooks |
+| POST | `/gatus` | Gatus health-check alert webhooks |
+| POST | `/backrest` | Backrest backup/prune/check/forget webhooks |
+| GET | `/health` | Liveness — returns `ok` |
+| GET | `/ready` | Readiness — `ready`, or `503` if the DB ping fails |
+| GET | `/openapi.json` | Auto-generated OpenAPI 3.1 spec |
+| GET | `/docs` | Interactive API docs |
+| GET | `/metrics` | Prometheus metrics — served on the **separate** internal listener (`:9090`), not on `:8090` |
 
 ## Providers
 
+| Service | Route | Auth | Output | Two-phase end |
+|---|---|---|---|---|
+| Grafana | `POST /grafana` | Bearer | Push notification | No (fire-and-forget) |
+| ArgoCD | `POST /argocd` | Bearer | Live Activity (steps) | Yes |
+| Radarr | `POST /radarr` | Basic | Live Activity (steps) + push (health) | Yes |
+| Sonarr | `POST /sonarr` | Basic | Live Activity (steps) + push (health) | Yes |
+| Prowlarr | `POST /prowlarr` | Basic | Push notification | No (fire-and-forget) |
+| Bazarr | `POST /bazarr` | Basic | Push notification | No (fire-and-forget) |
+| Jellyfin | `POST /jellyfin` | Bearer | Live Activity + push | Yes |
+| Paperless-ngx | `POST /paperless` | Bearer | Live Activity | Yes |
+| Changedetection.io | `POST /changedetection` | Bearer | Live Activity (alert) | No (fire-and-forget) |
+| Unmanic | `POST /unmanic` | Bearer | Live Activity | Yes |
+| Proxmox VE | `POST /proxmox` | Bearer | Live Activity | Yes |
+| Overseerr / Jellyseerr | `POST /overseerr` | Bearer | Live Activity (steps) | Yes |
+| Uptime Kuma | `POST /uptimekuma` | Bearer | Live Activity (alert) | Yes |
+| Gatus | `POST /gatus` | Bearer | Live Activity (alert) | Yes |
+| Backrest | `POST /backrest` | Bearer | Live Activity (steps) | Yes |
+
+### Authentication
+
+Every route requires the `hlk_` integration key. The relay accepts it two ways (scheme match is case-insensitive):
+
+- **Bearer** (default) — `Authorization: Bearer hlk_...`. Used by Grafana, ArgoCD, Jellyfin, Paperless, Changedetection, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest.
+- **HTTP Basic** — the `hlk_` key is the password (username ignored), because the webhook UIs require Basic Auth. Used by **Radarr, Sonarr, Prowlarr, and Bazarr**.
+
+---
+
 ### Grafana
 
-Receives Grafana alert webhooks. Groups alerts by `alertname`, worst severity drives icon/color.
+Receives Grafana alert webhooks. Groups alerts by `alertname` into one push notification per group.
 
-| Route | `POST /grafana` |
+| | |
 |---|---|
-| Template | `alert` |
-| Auth | `Authorization: Bearer hlk_...` |
-| Slug | `grafana-<sha256(alertname)[:6]>` |
+| Route | `POST /grafana` · Auth Bearer |
+| CollapseID | `grafana-<sha256(alertname)[:12]>` (first 6 bytes = 12 hex chars) |
 
-**Events:** `firing` → ONGOING (red/orange/blue by severity), `resolved` → ENDED (green checkmark)
+**Events:** `firing` → active push, `resolved` → passive push (notification `Level`). Fire-and-forget (no two-phase end). Severity is recorded only in the notification metadata — no color or icon mapping is applied.
 
-**Setup:** In Grafana, go to Alerts & IRM > Alerting > Contact points. Add a contact point with integration type "Webhook". Set URL to `https://relay.example.com/grafana`. Under Optional settings, set Authorization header scheme to `Bearer` and credentials to your `hlk_` key. Adding a `severity` label (critical/warning/info) to alert rules enables severity-based display.
+**Setup:** In Grafana, go to **Alerts & IRM > Alerting > Contact points**. Add a contact point with integration type **Webhook**. Set the URL to `https://relay.pushward.app/grafana`. Under *Optional settings*, set the Authorization header scheme to `Bearer` and credentials to your `hlk_` key. Adding a `severity` label (`critical`/`warning`/`info`) to alert rules records the severity in the notification metadata.
 
 ### ArgoCD
 
 Receives ArgoCD sync webhooks via argocd-notifications. Maps sync progress to a 3-step pipeline.
 
-| Route | `POST /argocd` |
+| | |
 |---|---|
-| Template | `steps` |
-| Auth | `Authorization: Bearer hlk_...` |
+| Route | `POST /argocd` · Template `steps` · Auth Bearer |
 | Slug | `argocd-<sanitized-app-name>` |
 
-**Events:** `sync-running` → Step 1/3 Syncing, `sync-succeeded` → Step 2/3 Rolling out, `deployed` → Step 3/3 Deployed, `sync-failed` → Sync Failed, `health-degraded` → Degraded (transient warning during rollout)
+**Events:** `sync-running` → Step 1/3 Syncing, `sync-succeeded` → Step 2/3 Rolling out, `deployed` → Step 3/3 Deployed, `sync-failed` → Sync Failed, `health-degraded` → Degraded (transient warning during rollout).
 
-**Grace period:** Configurable `sync_grace_period` (default 10s) defers activity creation for fast syncs that complete before the grace period expires, preventing unnecessary notifications.
+**Grace period:** `sync_grace_period` (default `10s`) defers activity creation for fast syncs that complete before the window expires, suppressing no-op notifications.
 
-**Setup:** ArgoCD notifications are built-in since v2.3. Configure `argocd-notifications-cm` with a webhook service pointing to `POST /argocd`, Go-templated body templates for each event, and trigger expressions. Store the `hlk_` key in `argocd-notifications-secret` and reference it as `$KEY_NAME` in the `Authorization: Bearer` header. Use `oncePer: app.status.operationState.startedAt` so each sync fires all events even when the revision hasn't changed. Subscribe applications via default `subscriptions` in the ConfigMap or per-app annotations. See [ArgoCD Notification Docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/services/webhook/) for full configuration.
-
-**Webhook body:** `{"app":"…","event":"…","revision":"…","repo_url":"…"}` — only these four fields are required.
+**Setup:** Configure `argocd-notifications-cm` with a webhook service pointing to `POST /argocd`, Go-templated bodies per event, and trigger expressions. Store the `hlk_` key in `argocd-notifications-secret` and reference it as `$KEY_NAME` in the `Authorization: Bearer` header. Use `oncePer: app.status.operationState.startedAt` so every sync fires all events. See the [ArgoCD webhook docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/services/webhook/). The webhook body needs only: `{"app":"…","event":"…","revision":"…","repo_url":"…"}`. Set `providers.argocd.url` to build deep links.
 
 ### Radarr / Sonarr
 
-Receives Radarr and Sonarr webhooks. Tracks download lifecycle from grab to import.
+Receives Radarr and Sonarr webhooks. Tracks the download lifecycle from grab to import.
 
-| Route | `POST /radarr` / `POST /sonarr` |
+| | |
 |---|---|
-| Template | `steps` (downloads), `alert` (health) |
-| Auth | Basic Auth with `hlk_` key as password |
-| Slug | `radarr-<downloadId>` / `sonarr-<downloadId>` |
+| Route | `POST /radarr` / `POST /sonarr` · Template `steps` (downloads) · Auth Basic |
+| Slug | `radarr-movie-<tmdbId>` / `sonarr-series-<tvdbId>[-e-<episodeIds>]` (falls back to `<provider>-<downloadId>` when no TMDB/TVDB id is present, which lets retries of the same media collapse into one activity) |
 
-**Events:**
+Live Activity events (downloads):
 
 | Event | State | Icon | Color |
 |---|---|---|---|
 | `Grab` | Grabbed | `arrow.down.circle` | blue |
-| `ManualInteractionRequired` | Import Failed | `exclamationmark.triangle.fill` | orange |
+| `ManualInteractionRequired` | Needs attention | `exclamationmark.triangle.fill` | orange |
 | `Download` | Imported / Upgraded | `checkmark.circle.fill` | green |
-| `Health` | (health message) | `exclamationmark.triangle.fill` / `.octagon.fill` | orange / red |
-| `HealthRestored` | (restored message) | `checkmark.circle.fill` | green |
-| `Test` | (provider-specific test activity) | varies | varies |
+| `Test` | provider-specific test activity | varies | varies |
 
-**Setup:** In Radarr/Sonarr, go to Settings > Connect > + > Webhook. Set URL to `https://relay.example.com/radarr` (or `/sonarr`). Leave Username as any value, set Password to your `hlk_` key (Basic Auth). Enable triggers: On Grab, On Import, On Health Issue, On Health Restored. Click Test, then Save.
+Push notification events (no Live Activity, no template):
+
+| Event | Notification |
+|---|---|
+| `Health` | Warning / Critical · (health message) |
+| `HealthRestored` | Resolved · (health message) |
+
+In the default `activity` mode, `Grab` and `Download` also write a notification record (not pushed) alongside the Live Activity; in `notify`/`smart` mode they are delivered as standalone push notifications instead.
+
+Routing is governed by `starr.mode`: `activity` (default, all events → Live Activity), `notify` (all → push), or `smart` (handler decides per event).
+
+**Setup:** In Radarr/Sonarr, go to **Settings > Connect > + > Webhook**. Set the URL to `https://relay.pushward.app/radarr` (or `/sonarr`). Leave Username as any value, set Password to your `hlk_` key (Basic Auth). Enable triggers: On Grab, On Import, On Health Issue, On Health Restored. Click Test, then Save.
+
+### Prowlarr
+
+Receives Prowlarr webhooks. All events are **push notifications**: indexer grabs are grouped into a thread derived from the parsed release base title (Prowlarr payloads carry no TMDB/TVDB id), and health and application-update events are sent as standalone pushes.
+
+| | |
+|---|---|
+| Route | `POST /prowlarr` · Auth Basic |
+| Thread | `prowlarr-<release-base-title>` (grabs) |
+
+**Events:** `Grab` → push notification with indexer, size, and categories · `Health` / `HealthRestored` · `ApplicationUpdate` · `Test`.
+
+> A Prowlarr `Test` event logs `unknown provider: prowlarr` instead of rendering a sample activity (Prowlarr has no self-test fixture). Its real `Grab` / `Health` events work normally.
+
+**Setup:** In Prowlarr, go to **Settings > Connect > + > Webhook**. Set the URL to `https://relay.pushward.app/prowlarr`, leave Username as any value, set Password to your `hlk_` key (Basic Auth). Enable the triggers you want (On Grab, On Health Issue, etc.), then Test and Save.
 
 ### Bazarr
 
-Receives Bazarr subtitle download notifications via Apprise. Sends a push notification (not a Live Activity) with the media title, language, provider, and match score.
+Receives Bazarr subtitle download notifications via Apprise. Sends a **push notification** (not a Live Activity) with the media title, language, and match score.
 
-| Route | `POST /bazarr` |
+| | |
 |---|---|
-| Type | Push notification |
-| Auth | Basic Auth with `hlk_` key as password |
+| Route | `POST /bazarr` · Auth Basic |
 | CollapseID | `bazarr-<sha256(media)[:8]>` |
-
-**Events:**
 
 | Action | Title | Subtitle | Body |
 |---|---|---|---|
-| `downloaded` | media title | Downloaded · language | score% from provider |
-| `upgraded` | media title | Upgraded · language | score% from provider |
-| `manually downloaded` | media title | Downloaded · language | score% from provider |
+| `downloaded` | Downloaded · language | media title | media title · Downloaded · language · score% |
+| `upgraded` | Upgraded · language | media title | media title · Upgraded · language · score% |
+| `manually downloaded` | Downloaded · language | media title | media title · Downloaded · language · score% |
 
-**Setup:** In Bazarr, go to Settings > Notifications. Add a notification provider with the URL:
+**Setup:** In Bazarr, go to **Settings > Notifications**. Add a provider with this URL (the `hlk_` key is the Basic Auth password; the username can be anything):
 
 ```
-jsons://user:hlk_YOUR_KEY@relay.example.com/bazarr
+jsons://user:hlk_YOUR_KEY@relay.pushward.app/bazarr
 ```
 
-The `hlk_` key is passed as the Basic Auth password — the username can be anything. Enable subtitle download events, then click Test and Save.
+Enable subtitle download events, then Test and Save.
 
 ### Jellyfin
 
-Receives Jellyfin webhook plugin notifications. Tracks playback progress, library additions, scheduled tasks, and auth failures.
+Receives Jellyfin webhook-plugin notifications. Tracks playback, library additions, scheduled tasks, and auth failures.
 
-| Route | `POST /jellyfin` |
+| | |
 |---|---|
-| Template | `generic` (playback), `steps` (items/tasks), `alert` (auth failures) |
-| Auth | `Authorization: Bearer hlk_...` |
-| Slug | `jellyfin-<sha256(ItemId+UserName)[:10]>` (playback), `jellyfin-item-<hash>` (library), `jellyfin-task-<hash>` (tasks), `jellyfin-auth-<hash>` (auth) |
+| Route | `POST /jellyfin` · Template `generic` (playback) · Auth Bearer |
+| Slug (Live Activity) | `jellyfin-<hash>` (playback) |
+| CollapseID (push) | `jellyfin-item-<itemId>`, `jellyfin-task-<taskName>`, `jellyfin-auth` |
 
-**Events:**
+Live Activity events (playback, `generic` template):
 
 | Event | State | Icon | Color |
 |---|---|---|---|
 | `PlaybackStart` | Playing on (device) | `play.circle.fill` | blue |
 | `PlaybackProgress` | Playing / Paused on (device) | `play.circle.fill` / `pause.circle.fill` | blue |
 | `PlaybackStop` | Watched on (device) | `checkmark.circle.fill` | green |
-| `ItemAdded` | Added to library | `plus.circle.fill` | green |
-| `ScheduledTaskStarted` | Running... | `arrow.triangle.2.circlepath` | blue |
-| `ScheduledTaskCompleted` | Complete / Failed | `checkmark.circle.fill` / `xmark.circle.fill` | green / red |
-| `AuthenticationFailure` | Failed login: user from IP | `lock.shield.fill` | red |
-| `GenericUpdateNotification` | (provider-specific test activity) | varies | varies |
 
-**Debounce:** `PlaybackProgress` updates within `progress_debounce` (default 10s) are skipped. State changes (play/pause) bypass the debounce.
+Push notification events (no Live Activity, no template):
 
-**Pause timeout:** After `pause_timeout` (default 5m) of being paused with no progress change, the activity is auto-ended.
+| Event | Notification |
+|---|---|
+| `ItemAdded` | Added · (media) |
+| `ScheduledTaskStarted` | Started · (task) |
+| `ScheduledTaskCompleted` | Complete · (task) / Failed · (task) |
+| `AuthenticationFailure` | Failed login: (user) from (IP) |
 
-**Setup:** Install the [Webhook plugin](https://github.com/jellyfin/jellyfin-plugin-webhook) from the Jellyfin plugin catalog. Go to Dashboard > Plugins > Webhook. Add a Generic destination with URL `https://relay.example.com/jellyfin`. Under **Add Request Header**, set Key to `Authorization` and Value to `Bearer hlk_...`. Select notification types: Playback Start, Playback Progress, Playback Stop, Item Added, Task Started, Task Completed, Authentication Failure.
+`GenericUpdateNotification` triggers a provider-specific test activity.
+
+**Debounce:** `PlaybackProgress` updates within `progress_debounce` (default `10s`) are skipped; play/pause state changes bypass the debounce. After `pause_timeout` (default `5m`) of being paused with no progress change, the activity auto-ends.
+
+**Setup:** Install the [Webhook plugin](https://github.com/jellyfin/jellyfin-plugin-webhook). Go to **Dashboard > Plugins > Webhook**, add a Generic destination with URL `https://relay.pushward.app/jellyfin`. Under *Add Request Header*, set Key `Authorization` and Value `Bearer hlk_...`. Select notification types: Playback Start/Progress/Stop, Item Added, Task Started/Completed, Authentication Failure.
 
 ### Paperless-ngx
 
-Receives document consumption webhooks. Users configure the JSON body via a Jinja2 template in the Paperless Workflows UI.
+Receives document consumption webhooks. The JSON body is built from a Jinja2 template in the Paperless Workflows UI.
 
-| Route | `POST /paperless` |
+| | |
 |---|---|
-| Template | `generic` |
-| Auth | `Authorization: Bearer hlk_...` |
-| Slug | `paperless-<doc_id>` (added/updated), `paperless-<sha256(filename)[:8]>` (consumption started) |
-
-**Events:**
+| Route | `POST /paperless` · Template `generic` · Auth Bearer |
+| Slug | `paperless-<doc_id>` (added/updated), `paperless-<sha256(filename)[:8]>` (consumption_started) |
 
 | Event | State | Icon | Color |
 |---|---|---|---|
 | `added` | Processed | `doc.text.fill` | green |
 | `updated` | Updated | `doc.text.fill` | green |
-| `consumption_started` | Processing... | `arrow.triangle.2.circlepath` | blue |
+| `consumption_started` | Processing… | `arrow.triangle.2.circlepath` | blue |
 
-**Setup:** In Paperless-ngx, go to Settings > Workflows. Create a separate workflow for each event type. Set the action to "Webhook" with URL `https://relay.example.com/paperless`, encoding "JSON", body type "Text". Add an `Authorization: Bearer hlk_...` header.
+**Setup:** In Paperless-ngx, go to **Settings > Workflows** and create a workflow per event type. Action **Webhook**, URL `https://relay.pushward.app/paperless`, encoding JSON, body type Text, header `Authorization: Bearer hlk_...`.
 
-Body template for **Document Added** (also use for Updated, with `"event":"updated"`):
+Body template for **Document Added** (reuse for Updated with `"event":"updated"`):
 
 ```
 {"event":"added","doc_id":{{doc_id}},"title":{{doc_title|tojson}},"correspondent":{{correspondent|tojson}},"document_type":{{document_type|tojson}},"doc_url":{{doc_url|tojson}},"filename":{{original_filename|tojson}}}
@@ -242,31 +390,22 @@ Body template for **Consumption Started** (only `original_filename` is available
 
 ### Changedetection.io
 
-Receives page change notifications. Users configure the JSON body via a Jinja2 template in Changedetection.io's notification settings.
+Receives page-change notifications. The JSON body is a custom Jinja2 template in Changedetection's notification settings.
 
-| Route | `POST /changedetection` |
+| | |
 |---|---|
-| Template | `alert` |
-| Auth | `Authorization: Bearer hlk_...` |
+| Route | `POST /changedetection` · Template `alert` · Auth Bearer |
 | Slug | `cd-<sha256(url)[:8]>` |
 
-**Events:** Single event type — page changed. Creates a fire-and-forget alert notification (ONGOING + immediate ENDED).
+**Events:** single event — page changed. Creates a fire-and-forget alert (ONGOING + immediate ENDED). Icon `eye.fill`, color `#FF9500`, links `diff_url` and `preview_url`.
 
-| Field | Value |
-|---|---|
-| State | Triggered text (or "Page changed") |
-| Icon | `eye.fill` |
-| Color | `#FF9500` (orange) |
-| URL | `diff_url` |
-| Secondary URL | `preview_url` |
-
-**Setup:** In Changedetection.io, set the notification URL to:
+**Setup:** Set the notification URL to:
 
 ```
-posts://relay.example.com/changedetection?+Authorization=Bearer+hlk_...
+posts://relay.pushward.app/changedetection?+Authorization=Bearer+hlk_YOUR_KEY
 ```
 
-Set `notification_format` to `custom` and use this body template:
+Set `notification_format` to `custom` with this body:
 
 ```
 {"url":{{watch_url|tojson}},"title":{{watch_title|tojson}},"tag":{{watch_tag|tojson}},"diff_url":{{diff_url|tojson}},"preview_url":{{preview_url|tojson}},"triggered_text":{{triggered_text|tojson}},"timestamp":{{notification_timestamp|tojson}}}
@@ -274,58 +413,52 @@ Set `notification_format` to `custom` and use this body template:
 
 ### Unmanic
 
-Receives Apprise `json://` notifications from Unmanic on transcoding task completion or failure.
+Receives Apprise `json://` notifications from Unmanic on transcode completion or failure.
 
-| Route | `POST /unmanic` |
+| | |
 |---|---|
-| Template | `generic` |
-| Auth | `Authorization: Bearer hlk_...` |
+| Route | `POST /unmanic` · Template `generic` · Auth Bearer |
 | Slug | `unmanic-<sha256(filename)[:8]>` |
-
-**Events:**
 
 | Type | State | Icon | Color |
 |---|---|---|---|
 | `success` | Complete | `checkmark.circle.fill` | green |
 | `failure` | Failed | `xmark.circle.fill` | red |
-| `info` | (provider-specific test activity) | varies | varies |
+| `info` | provider-specific test activity | varies | varies |
 
-**Setup:** In Unmanic, go to Settings > Notifications. Add a notification URL:
+**Setup:** In Unmanic, go to **Settings > Notifications** and add:
 
 ```
-jsons://relay.example.com/unmanic?+Authorization=Bearer+hlk_...
+jsons://relay.pushward.app/unmanic?+Authorization=Bearer+hlk_YOUR_KEY
 ```
 
 ### Proxmox VE
 
-Receives Proxmox VE notification webhooks for backup, replication, fencing, and package update events.
+Receives Proxmox VE notification webhooks for backup, replication, fencing, and package-update events.
 
-| Route | `POST /proxmox` |
+| | |
 |---|---|
-| Template | `steps` (backup/replication), `alert` (fencing/package-updates) |
-| Auth | `Authorization: Bearer hlk_...` |
+| Route | `POST /proxmox` · Template `steps` (backup/replication), `alert` (fencing/package-updates) · Auth Bearer |
 | Slug | `proxmox-backup-<hash>`, `proxmox-repl-<hash>`, `proxmox-fence-<hash>`, `proxmox-updates-<hash>` |
-
-**Events:**
 
 | Event | State | Icon | Color |
 |---|---|---|---|
-| `vzdump` (start) | Backing up... | `externaldrive.fill.badge.timemachine` | blue |
+| `vzdump` (start) | Backing up… | `externaldrive.fill.badge.timemachine` | blue |
 | `vzdump` (complete) | Backup Complete | `checkmark.circle.fill` | green |
 | `vzdump` (failed) | Backup Failed | `xmark.circle.fill` | red |
-| `replication` (start) | Replicating... | `arrow.triangle.2.circlepath` | blue |
+| `replication` (start) | Replicating… | `arrow.triangle.2.circlepath` | blue |
 | `replication` (complete) | Replication Complete | `checkmark.circle.fill` | green |
 | `replication` (failed) | Replication Failed | `xmark.circle.fill` | red |
-| `fencing` | (title from notification) | `exclamationmark.octagon.fill` | red |
-| `package-updates` | (title from notification) | `arrow.down.circle` | blue |
-| `system` | (test notification) | varies | varies |
+| `fencing` | (title) | `exclamationmark.octagon.fill` | red |
+| `package-updates` | (title) | `arrow.down.circle` | blue |
+| `system` | test notification | varies | varies |
 
-**Setup:** In Proxmox VE, go to Datacenter > Notifications. Add a webhook target:
+**Setup:** In Proxmox VE, go to **Datacenter > Notifications** and add a webhook target:
 
-- **URL:** `https://relay.example.com/proxmox`
+- **URL:** `https://relay.pushward.app/proxmox`
 - **Method:** POST
 - **Headers:** `Content-Type: application/json` and `Authorization: Bearer {{ secrets.token }}`
-- **Secrets:** Add key `token` with your `hlk_` integration key
+- **Secrets:** add key `token` with your `hlk_` integration key
 - **Body:**
 
 ```
@@ -336,26 +469,23 @@ Create a Matcher to route notifications (vzdump, replication, fencing, package-u
 
 ### Overseerr / Jellyseerr
 
-Receives Overseerr/Jellyseerr media request webhooks. Tracks request lifecycle from pending to available.
+Receives media request webhooks. Tracks the request lifecycle from pending to available.
 
-| Route | `POST /overseerr` |
+| | |
 |---|---|
-| Template | `steps` |
-| Auth | `Authorization: Bearer hlk_...` |
+| Route | `POST /overseerr` · Template `steps` · Auth Bearer |
 | Slug | `overseerr-<mediaType>-<tmdbId>` |
-
-**Events:**
 
 | Event | State | Step | Color |
 |---|---|---|---|
 | `MEDIA_PENDING` | Requested | 1/4 | orange |
 | `MEDIA_APPROVED` / `MEDIA_AUTO_APPROVED` | Approved | 2/4 | blue |
 | `MEDIA_AVAILABLE` | Available | 4/4 | green |
-| `MEDIA_DECLINED` | Declined | - | red |
-| `MEDIA_FAILED` | Failed | - | red |
-| `TEST_NOTIFICATION` | (test notification) | - | varies |
+| `MEDIA_DECLINED` | Declined | – | red |
+| `MEDIA_FAILED` | Failed | – | red |
+| `TEST_NOTIFICATION` | test notification | – | varies |
 
-**Setup:** In Overseerr/Jellyseerr, go to Settings > Notifications > Webhook. Set the Webhook URL to `https://relay.example.com/overseerr`. Set the Authorization Header to `Bearer hlk_...`. Set the JSON Payload to:
+**Setup:** In Overseerr/Jellyseerr, go to **Settings > Notifications > Webhook**. Set the Webhook URL to `https://relay.pushward.app/overseerr`, the Authorization Header to `Bearer hlk_...`, and the JSON Payload to:
 
 ```json
 {
@@ -369,40 +499,34 @@ Receives Overseerr/Jellyseerr media request webhooks. Tracks request lifecycle f
 }
 ```
 
-Enable notification types: Request Pending, Approved, Available, Declined, Failed.
+Enable: Request Pending, Approved, Available, Declined, Failed.
 
 ### Uptime Kuma
 
-Receives Uptime Kuma monitor status webhooks. Maps monitor heartbeat status to alert notifications.
+Receives monitor status webhooks. Maps monitor heartbeat status to alert notifications.
 
-| Route | `POST /uptimekuma` |
+| | |
 |---|---|
-| Template | `alert` |
-| Auth | `Authorization: Bearer hlk_...` |
+| Route | `POST /uptimekuma` · Template `alert` · Auth Bearer |
 | Slug | `uptime-<monitorId>` |
-
-**Events:**
 
 | Status | State | Icon | Color |
 |---|---|---|---|
 | `0` (DOWN) | (heartbeat message or "Monitor Down") | `exclamationmark.triangle.fill` | red |
 | `1` (UP) | Resolved | `checkmark.circle.fill` | green |
-| `2` (PENDING) | Checking... | `hourglass` | orange |
-| `3` (MAINTENANCE) | (test notification) | varies | varies |
+| `2` (PENDING) | Checking… | `hourglass` | orange |
+| `3` (MAINTENANCE) | test notification | varies | varies |
 
-**Setup:** In Uptime Kuma, go to Settings > Notifications > Setup Notification. Set type to "Webhook", Post URL to `https://relay.example.com/uptimekuma`, Request Body to "JSON". In Additional Headers, enter `{"Authorization": "Bearer hlk_..."}`. Check "Default Enabled" to apply to all monitors.
+**Setup:** In Uptime Kuma, go to **Settings > Notifications > Setup Notification**. Type **Webhook**, Post URL `https://relay.pushward.app/uptimekuma`, Request Body JSON. In *Additional Headers*: `{"Authorization": "Bearer hlk_..."}`. Check *Default Enabled* to apply to all monitors.
 
 ### Gatus
 
-Receives Gatus health check alert webhooks. Maps endpoint TRIGGERED/RESOLVED states to alert notifications.
+Receives health-check alert webhooks. Maps endpoint TRIGGERED/RESOLVED states to alert notifications.
 
-| Route | `POST /gatus` |
+| | |
 |---|---|
-| Template | `alert` |
-| Auth | `Authorization: Bearer hlk_...` |
+| Route | `POST /gatus` · Template `alert` · Auth Bearer |
 | Slug | `gatus-<sha256(group/endpoint_name)[:12]>` |
-
-**Events:**
 
 | Status | State | Icon | Color |
 |---|---|---|---|
@@ -414,7 +538,7 @@ Receives Gatus health check alert webhooks. Maps endpoint TRIGGERED/RESOLVED sta
 ```yaml
 alerting:
   custom:
-    url: "https://relay.example.com/gatus"
+    url: "https://relay.pushward.app/gatus"
     method: "POST"
     headers:
       Content-Type: "application/json"
@@ -430,107 +554,117 @@ alerting:
       }
 ```
 
-Then reference `type: custom` in your endpoint alerts with `send-on-resolved: true`.
+Reference `type: custom` in your endpoint alerts with `send-on-resolved: true`.
 
 ### Backrest
 
-Receives Backrest backup operation webhooks for snapshot, prune, and check operations.
+Receives backup operation webhooks for snapshot, prune, check, and forget operations.
 
-| Route | `POST /backrest` |
+| | |
 |---|---|
-| Template | `steps` (operations), `alert` (errors/skipped) |
-| Auth | `Authorization: Bearer hlk_...` |
+| Route | `POST /backrest` · Template `steps` (operations), `alert` (errors/skipped) · Auth Bearer |
 | Slug | `backrest-<sha256(plan+repo)[:8]>` |
-
-**Events:**
 
 | Condition | State | Icon | Color |
 |---|---|---|---|
-| `CONDITION_SNAPSHOT_START` | Backing up... | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_SNAPSHOT_START` | Backing up… | `arrow.triangle.2.circlepath` | blue |
 | `CONDITION_SNAPSHOT_SUCCESS` | Complete (+ data added) | `checkmark.circle.fill` | green |
 | `CONDITION_SNAPSHOT_WARNING` | Complete (warnings) | `exclamationmark.triangle.fill` | orange |
 | `CONDITION_SNAPSHOT_ERROR` | Failed | `xmark.circle.fill` | red |
-| `CONDITION_PRUNE_START` | Pruning... | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_PRUNE_START` | Pruning… | `arrow.triangle.2.circlepath` | blue |
 | `CONDITION_PRUNE_SUCCESS` | Pruned | `checkmark.circle.fill` | green |
 | `CONDITION_PRUNE_ERROR` | Prune Failed | `xmark.circle.fill` | red |
-| `CONDITION_CHECK_START` | Checking... | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_CHECK_START` | Checking… | `arrow.triangle.2.circlepath` | blue |
 | `CONDITION_CHECK_SUCCESS` | Check Passed | `checkmark.circle.fill` | green |
 | `CONDITION_CHECK_ERROR` | Check Failed | `xmark.circle.fill` | red |
-| `CONDITION_FORGET_START` | Applying retention... | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_FORGET_START` | Applying retention… | `arrow.triangle.2.circlepath` | blue |
 | `CONDITION_FORGET_SUCCESS` | Retention applied | `checkmark.circle.fill` | green |
 | `CONDITION_FORGET_ERROR` | Retention failed | `xmark.circle.fill` | red |
 | `CONDITION_ANY_ERROR` | (error message) | `exclamationmark.triangle.fill` | red |
 | `CONDITION_SNAPSHOT_SKIPPED` | Snapshot Skipped | `info.circle.fill` | blue |
 
-**Setup:** In Backrest, go to the Plan or Repo you want to monitor. Under Hooks, click **+ Add Hook** and select **Shoutrrr**. Select these 15 conditions: `CONDITION_SNAPSHOT_START`, `CONDITION_SNAPSHOT_SUCCESS`, `CONDITION_SNAPSHOT_WARNING`, `CONDITION_SNAPSHOT_ERROR`, `CONDITION_PRUNE_START`, `CONDITION_PRUNE_SUCCESS`, `CONDITION_PRUNE_ERROR`, `CONDITION_CHECK_START`, `CONDITION_CHECK_SUCCESS`, `CONDITION_CHECK_ERROR`, `CONDITION_FORGET_START`, `CONDITION_FORGET_SUCCESS`, `CONDITION_FORGET_ERROR`, `CONDITION_ANY_ERROR`, `CONDITION_SNAPSHOT_SKIPPED`. Set On Error to "Ignore".
-
-Set the **Shoutrrr URL** to (the `@authorization` param adds the Authorization header):
+**Setup:** In Backrest, on the Plan or Repo, under *Hooks* click **+ Add Hook** and select **Shoutrrr**. Select the 15 conditions above and set *On Error* to "Ignore". Set the **Shoutrrr URL** (the `@authorization` param adds the header):
 
 ```
-generic+https://relay.example.com/backrest?@authorization=Bearer+hlk_YOUR_KEY&contenttype=application/json
+generic+https://relay.pushward.app/backrest?@authorization=Bearer+hlk_YOUR_KEY&contenttype=application/json
 ```
 
-Set the **Template** to (Go template that renders the JSON body):
+Set the **Template** (Go template that renders the JSON body):
 
 ```
 {"event":"{{ .Event }}","plan":"{{ .Plan.Id }}","repo":"{{ .Repo.Id }}","snapshot_id":"{{ .SnapshotId }}","data_added":{{ if .SnapshotStats }}{{ .SnapshotStats.DataAdded }}{{ else }}0{{ end }},"error":"{{ .Error }}"}
 ```
 
-## Configuration
+## Development
 
-All settings can be provided via YAML config file (`-config` flag, default `config.yml`) or environment variables. Environment variables take precedence.
+Commands match CI (`go-cicd-reusable.yml`, which builds with `go_module_path: ./relay`, `go_test_args: -race -count=1 -v`).
 
-### Required
+```bash
+# Build (workspace root)
+go build ./relay/cmd/pushward-relay
 
-| Variable | Description |
-|---|---|
-| `PUSHWARD_URL` | PushWard server URL (also accepts `-pushward-url` flag) |
-| `PUSHWARD_DATABASE_DSN` | PostgreSQL connection string |
+# All relay tests
+go test ./relay/... -v -count=1
 
-### Optional
+# With the race detector (matches CI)
+go test ./relay/... -race -count=1 -v
 
-| Variable | Description | Default |
+# Single provider
+go test ./relay/internal/grafana/... -run TestGrafana -v -count=1
+
+# Lint (matches CI)
+golangci-lint run
+
+# Docker (context is the repo root so the Dockerfile can COPY shared/)
+docker build -f relay/Dockerfile -t pushward-relay .
+docker build -f relay/Dockerfile --build-arg GO_VERSION=1.26.4 -t pushward-relay .
+```
+
+> DB state tests (`relay/internal/state/...`) use testcontainers-go and require a running Docker daemon.
+
+## CI/CD & Releases
+
+Bridges are versioned **independently**. Tag format: `<bridge>/v<X.Y.Z>` (e.g. `relay/v0.4.1`). Pushing the tag triggers `release.yml`, which builds and publishes images with auto-generated changelog notes (categorized via `.github/release.yml`).
+
+Images publish to **GHCR** (`ghcr.io/mac-lucky/pushward-relay`). The image-tag channels:
+
+| Trigger | Tags published | Purpose |
 |---|---|---|
-| `PUSHWARD_SERVER_ADDRESS` | HTTP listen address | `:8090` |
-| `PUSHWARD_DATABASE_PASSWORD_FILE` | Path to file containing the DB password (overrides DSN password, supports live rotation via fsnotify) | |
-| `PUSHWARD_TRUSTED_PROXY_CIDRS` | Comma-separated CIDRs of trusted reverse proxies (enables `CF-Connecting-IP`, `X-Real-IP`, `X-Forwarded-For` parsing) | |
-| `PUSHWARD_GRAFANA_ENABLED` | Enable/disable Grafana provider | `true` |
-| `PUSHWARD_ARGOCD_ENABLED` | Enable/disable ArgoCD provider | `true` |
-| `PUSHWARD_STARR_ENABLED` | Enable/disable Radarr/Sonarr provider | `true` |
-| `PUSHWARD_ARGOCD_URL` | ArgoCD UI URL for deep links | |
-| `PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD` | Skip no-op syncs within this window | `10s` |
+| Pull request | _(none)_ | Tests + analysis only |
+| Push to `main` | `:main`, `:main-<short-sha>` | Rolling latest + immutable per-commit pin |
+| Git tag `relay/v<X.Y.Z>` | `:X.Y.Z`, `:X.Y`, `:latest` (and `:X` once `X >= 1`) | Stable release |
 
-See [`config.example.yml`](./config.example.yml) for the full config with per-provider settings (priority, cleanup_delay, stale_timeout, end_delay, end_display_time).
+`:latest` moves only on a tagged release — never on a `main` push.
 
-## How It Works
+```bash
+# Single-bridge release
+git tag relay/v0.4.1
+git push origin relay/v0.4.1
+```
 
-1. **Request arrives** — IP rate limiter checks the client IP against a per-IP token bucket (5 req/s, burst 20). Forwarding headers are only trusted when `RemoteAddr` falls within a configured trusted proxy CIDR.
-2. **Auth** — the `hlk_` integration key is extracted from `Authorization: Bearer` or Basic Auth password and stored in the request context.
-3. **Key rate limit** — a per-key token bucket (1 req/s, burst 10) prevents any single tenant from flooding the relay.
-4. **Provider handler** — the matched handler decodes the JSON payload, determines the event type, and maps it to a PushWard activity lifecycle.
-5. **Client pool** — a per-tenant PushWard API client is retrieved from an LRU pool (or created on first use) and used for all API calls.
-6. **State store** — PostgreSQL stores tracked state (alert instances, sync progress, download slugs) with automatic TTL expiry.
-7. **Two-phase end** — on completion events, handlers send a final ONGOING update (so the content appears on Dynamic Island), then ENDED after a configurable display delay.
-8. **Background cleanup** — a goroutine runs every 30s to delete expired state store entries.
+## Server compatibility
 
-## Authentication
+The relay calls the [pushward-server](https://pushward.app) REST API to create/update/end **activities** (`POST /activities`, `PATCH /activities/{slug}`) and to send notifications — the server then delivers via APNs to the iOS app. The API contract (endpoints, JSON shape, auth headers) is owned by pushward-server's `openapi.yaml`. The relay targets that surface at its `MAJOR.MINOR`; patch releases (`relay/v*.*.X`) are bridge-only fixes that need no coordinated server bump.
 
-### Bearer Token (most providers)
+## Troubleshooting
 
-Most providers authenticate with a Bearer token containing the `hlk_` integration key in the `Authorization` header:
+Logs are structured JSON on stdout (`slog`). View them with `docker logs <container>` or your platform's log viewer; each request log includes a hashed `tenant` field for correlation (the raw `hlk_` key is never logged).
 
-- Grafana
-- ArgoCD
-- Jellyfin
-- Paperless-ngx
-- Changedetection.io
-- Unmanic
-- Proxmox
-- Overseerr
-- Uptime Kuma
-- Gatus
-- Backrest
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `401` on every webhook | No valid `hlk_` key in the `Authorization` header. | Send `Bearer hlk_...`, or for Radarr/Sonarr/Prowlarr/Bazarr put the key in the Basic Auth **password**. |
+| `429` responses | Per-IP (5 r/s) or per-key (1 r/s) rate limit. | Slow the sender, or set `trusted_proxy_cidrs` so per-IP limiting uses the real client IP instead of the proxy IP. |
+| All traffic shares one IP bucket | Running behind a reverse proxy/Cloudflare without `trusted_proxy_cidrs`. A startup warning is logged. | Set `PUSHWARD_TRUSTED_PROXY_CIDRS` to your proxy's CIDRs. |
+| `config load` fails: `metrics_address must differ from address` | `server.metrics_address` equals `server.address`. | Use different ports (defaults `:8090` / `:9090`), or set `metrics_address` empty to disable metrics. |
+| `config load` fails: `stale_timeout must be > 0` | A provider has a non-positive `stale_timeout`. | Set a positive duration (a non-positive TTL writes state rows that are never cleaned up). |
+| `/ready` returns `503` | DB ping check failed. | Verify `PUSHWARD_DATABASE_DSN` / `password_file` and that PostgreSQL is reachable. |
+| Prowlarr `Test` logs `unknown provider: prowlarr` | Prowlarr has no self-test fixture. | Expected — real `Grab`/`Health` events still work. |
+| Upstream `401`/`403`/`429` surfaced to the sender | The PushWard server rejected the `hlk_` key or rate-limited. | Check the key is valid and has capacity; the relay forwards these statuses so the source app reports the real cause. |
 
-### HTTP Basic Auth (Radarr/Sonarr/Bazarr)
+## Requirements & License
 
-Radarr, Sonarr, and Bazarr send the `hlk_` integration key as the Basic Auth password. The username field is ignored.
+- **Go** `1.26.x` (toolchain `1.26.4`; Docker builds default to `golang:1.26.4-alpine`, final image `alpine:3.23`).
+- **PostgreSQL** for the state store.
+- A running **PushWard server** and a per-tenant `hlk_` integration key.
+
+Part of the public [`pushward-integrations`](https://github.com/mac-lucky/pushward-integrations) repository — see the repository root for license terms.
