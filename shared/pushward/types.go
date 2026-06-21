@@ -241,7 +241,7 @@ type WidgetContent struct {
 	// Trend annotates value/gauge widgets with a directional arrow. One of
 	// "up" / "down" / "flat". Ignored for other templates.
 	Trend string `json:"trend,omitempty"`
-	// StatRows powers the stat_list template — a 1-4 row label/value list.
+	// StatRows powers the stat_list template — a 1-6 row label/value list.
 	// Required when template == stat_list, ignored otherwise.
 	StatRows []StatRow `json:"stat_rows,omitempty"`
 }

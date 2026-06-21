@@ -146,6 +146,8 @@ func TestValidateWidgets_StatListRejectsCases(t *testing.T) {
 				{Label: "c", Query: "q", ValueTemplate: "{{.Value}}"},
 				{Label: "d", Query: "q", ValueTemplate: "{{.Value}}"},
 				{Label: "e", Query: "q", ValueTemplate: "{{.Value}}"},
+				{Label: "f", Query: "q", ValueTemplate: "{{.Value}}"},
+				{Label: "g", Query: "q", ValueTemplate: "{{.Value}}"},
 			}},
 			"exceeds server cap",
 		},

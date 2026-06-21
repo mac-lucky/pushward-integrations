@@ -170,7 +170,7 @@ var validWidgetTemplates = map[string]bool{
 // here keeps misconfigurations on the integration side instead of bouncing
 // off a 422 at runtime.
 const (
-	statListMaxRows      = 4
+	statListMaxRows      = 6
 	statListLabelMaxRune = 32
 	statListUnitMaxRune  = 16
 )

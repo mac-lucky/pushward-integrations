@@ -155,11 +155,11 @@ Widgets are **independent of alerts**. Each entry in the `widgets:` list (or `PU
 | `status` | `query` | Scalar; renders as a status chip. |
 | `progress` | `query` | Scalar; requires `content.min_value` + `content.max_value`. |
 | `gauge` | `query` | Scalar; requires `content.min_value` + `content.max_value`. |
-| `stat_list` | per-row `query` | 1–4 `stat_rows`, each with its own `query` + `value_template`. |
+| `stat_list` | per-row `query` | 1–6 `stat_rows`, each with its own `query` + `value_template`. |
 
 Multi-series fan-out: set `query_all` instead of `query` plus a required `slug_template` to publish one widget per result series.
 
-Server-mirrored validation runs at config load: `interval` defaults to `60s` and must be `≥ 5s`; `update_mode` is `on_change` (default) or `always`; slug must match `^[a-z0-9_-]{1,128}$`; `stat_list` allows at most 4 rows, with row label ≤ 32 chars and row unit ≤ 16 chars. The per-user widget cap on the server is 50.
+Server-mirrored validation runs at config load: `interval` defaults to `60s` and must be `≥ 5s`; `update_mode` is `on_change` (default) or `always`; slug must match `^[a-z0-9_-]{1,128}$`; `stat_list` allows at most 6 rows, with row label ≤ 32 chars and row unit ≤ 16 chars. The per-user widget cap on the server is 50.
 
 ```yaml
 widgets:

@@ -49,7 +49,7 @@ type Spec struct {
 	MultiSource    MultiValueSource
 	StatListSource StatListSource
 	// MaxStatRows caps the rows accepted from StatListSource; the server
-	// rejects payloads over 4 rows, so the default is 4. Set to 0 for the
+	// rejects payloads over 6 rows, so the default is 6. Set to 0 for the
 	// default; tests can raise/lower this independently.
 	MaxStatRows int
 
@@ -105,7 +105,7 @@ type Spec struct {
 const (
 	DefaultInterval    = 60 * time.Second
 	DefaultMaxSeries   = 20
-	DefaultMaxStatRows = 4 // server cap; clients must not exceed
+	DefaultMaxStatRows = 6 // server cap; clients must not exceed
 	jitterFraction     = 4 // ticker jitter = interval / jitterFraction (25%)
 	// DefaultMissGrace tolerates one transient missing tick before pruning a
 	// multi-source series; the series is pruned on the second consecutive miss.

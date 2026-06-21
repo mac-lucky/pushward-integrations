@@ -71,7 +71,7 @@ func TestStatRowsEqualMasked(t *testing.T) {
 }
 
 func TestTrimStatRows(t *testing.T) {
-	in := []pushward.StatRow{{Label: "a"}, {Label: "b"}, {Label: "c"}, {Label: "d"}, {Label: "e"}}
+	in := []pushward.StatRow{{Label: "a"}, {Label: "b"}, {Label: "c"}, {Label: "d"}, {Label: "e"}, {Label: "f"}, {Label: "g"}}
 	got := trimStatRows(in, 3)
 	if len(got) != 3 {
 		t.Errorf("len = %d, want 3", len(got))

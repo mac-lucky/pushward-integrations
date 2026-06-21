@@ -185,7 +185,7 @@ if errors.As(err, &he) && he.Code == pushward.ErrCodeActivityLimitExceeded {
 
 A generic background poller that publishes numeric values to the widget API — a primitive separate from Live Activities. `New(client, []Spec, logger)` validates specs; `Manager.Start` spawns one goroutine per scalar widget and one supervisor per multi-source / `stat_list` spec. The first poll is synchronous so the initial `CreateWidget` carries a real value; `gauge`/`progress` defer creation until the first numeric value. Implement `ValueSource` (single scalar), `MultiValueSource` (label-keyed fan-out), or `StatListSource` (rows), or use the `…Func` adapters. Return `ErrNoData` to skip a tick.
 
-Defaults: `DefaultInterval` 60s, `DefaultMaxSeries` 20, `DefaultMaxStatRows` 4 (server cap), `DefaultMissGrace` 2; ticker jitter is 25% of the interval. `UpdateMode` is `UpdateOnChange` (default, within `MinChange` tolerance) or `UpdateAlways`. Currently consumed by the `grafana` bridge.
+Defaults: `DefaultInterval` 60s, `DefaultMaxSeries` 20, `DefaultMaxStatRows` 6 (server cap), `DefaultMissGrace` 2; ticker jitter is 25% of the interval. `UpdateMode` is `UpdateOnChange` (default, within `MinChange` tolerance) or `UpdateAlways`. Currently consumed by the `grafana` bridge.
 
 ### Auth (`auth`)
 
