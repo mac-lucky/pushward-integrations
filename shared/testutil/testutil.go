@@ -23,9 +23,14 @@ type APICall struct {
 }
 
 var (
-	slugPattern     = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
-	hexColor        = regexp.MustCompile(`^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$`)
-	validTemplates  = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true, "timeline": true}
+	slugPattern    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
+	hexColor       = regexp.MustCompile(`^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$`)
+	validTemplates = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true, "timeline": true, "board": true, "log": true}
+	// validTrends / validLogLevels include "" because trend and level are
+	// optional — an omitted value is valid; only a non-empty unknown value fails.
+	validTrends     = map[string]bool{"": true, pushward.TrendUp: true, pushward.TrendDown: true, pushward.TrendFlat: true}
+	validLogLevels  = map[string]bool{"": true, pushward.LogInfo: true, pushward.LogWarn: true, pushward.LogError: true}
+	validTapMethods = map[string]bool{"": true, "GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "HEAD": true}
 	validStates     = map[string]bool{pushward.StateOngoing: true, pushward.StateEnded: true}
 	validSeverities = map[string]bool{"critical": true, "warning": true, "info": true}
 )
@@ -45,42 +50,72 @@ type updateRequest struct {
 }
 
 type apiContent struct {
-	Template          string          `json:"template"`
-	Progress          float64         `json:"progress"`
-	State             string          `json:"state,omitempty"`
-	Icon              string          `json:"icon,omitempty"`
-	Subtitle          string          `json:"subtitle,omitempty"`
-	AccentColor       string          `json:"accent_color,omitempty"`
-	BackgroundColor   string          `json:"background_color,omitempty"`
-	TextColor         string          `json:"text_color,omitempty"`
-	CurrentStep       *int            `json:"current_step,omitempty"`
-	TotalSteps        *int            `json:"total_steps,omitempty"`
-	StepRows          []int           `json:"step_rows,omitempty"`
-	StepLabels        []string        `json:"step_labels,omitempty"`
-	URL               string          `json:"url,omitempty"`
-	SecondaryURL      string          `json:"secondary_url,omitempty"`
-	Severity          string          `json:"severity,omitempty"`
-	FiredAt           *int64          `json:"fired_at,omitempty"`
-	RemainingTime     *int            `json:"remaining_time,omitempty"`
-	CompletionMessage string          `json:"completion_message,omitempty"`
-	EndDate           *int64          `json:"end_date,omitempty"`
-	StartDate         *int64          `json:"start_date,omitempty"`
-	WarningThreshold  *int            `json:"warning_threshold,omitempty"`
-	Value             any             `json:"value,omitempty"`
-	MinValue          *float64        `json:"min_value,omitempty"`
-	MaxValue          *float64        `json:"max_value,omitempty"`
-	Unit              string          `json:"unit,omitempty"`
-	Scale             string          `json:"scale,omitempty"`
-	Decimals          *int            `json:"decimals,omitempty"`
-	Smoothing         *bool           `json:"smoothing,omitempty"`
-	Thresholds        []testThreshold `json:"thresholds,omitempty"`
-	Duration          *string         `json:"duration,omitempty"`
+	Template           string          `json:"template"`
+	Progress           float64         `json:"progress"`
+	State              string          `json:"state,omitempty"`
+	Icon               string          `json:"icon,omitempty"`
+	Subtitle           string          `json:"subtitle,omitempty"`
+	AccentColor        string          `json:"accent_color,omitempty"`
+	BackgroundColor    string          `json:"background_color,omitempty"`
+	TextColor          string          `json:"text_color,omitempty"`
+	CurrentStep        *int            `json:"current_step,omitempty"`
+	TotalSteps         *int            `json:"total_steps,omitempty"`
+	StepRows           []int           `json:"step_rows,omitempty"`
+	StepLabels         []string        `json:"step_labels,omitempty"`
+	URL                string          `json:"url,omitempty"`
+	SecondaryURL       string          `json:"secondary_url,omitempty"`
+	Severity           string          `json:"severity,omitempty"`
+	FiredAt            *int64          `json:"fired_at,omitempty"`
+	RemainingTime      *int            `json:"remaining_time,omitempty"`
+	CompletionMessage  string          `json:"completion_message,omitempty"`
+	EndDate            *int64          `json:"end_date,omitempty"`
+	StartDate          *int64          `json:"start_date,omitempty"`
+	WarningThreshold   *int            `json:"warning_threshold,omitempty"`
+	Value              any             `json:"value,omitempty"`
+	MinValue           *float64        `json:"min_value,omitempty"`
+	MaxValue           *float64        `json:"max_value,omitempty"`
+	Unit               string          `json:"unit,omitempty"`
+	Scale              string          `json:"scale,omitempty"`
+	Decimals           *int            `json:"decimals,omitempty"`
+	Smoothing          *bool           `json:"smoothing,omitempty"`
+	Thresholds         []testThreshold `json:"thresholds,omitempty"`
+	Duration           *string         `json:"duration,omitempty"`
+	Tiles              []testBoardTile `json:"tiles,omitempty"`
+	Lines              []testLogLine   `json:"lines,omitempty"`
+	TapAction          *testTapAction  `json:"tap_action,omitempty"`
+	URLAction          *testTapAction  `json:"url_action,omitempty"`
+	SecondaryURLAction *testTapAction  `json:"secondary_url_action,omitempty"`
 }
 
 type testThreshold struct {
 	Value float64 `json:"value"`
 	Color string  `json:"color,omitempty"`
 	Label string  `json:"label,omitempty"`
+}
+
+type testBoardTile struct {
+	Label     string         `json:"label"`
+	Value     string         `json:"value"`
+	Unit      string         `json:"unit,omitempty"`
+	Icon      string         `json:"icon,omitempty"`
+	Color     string         `json:"color,omitempty"`
+	Trend     string         `json:"trend,omitempty"`
+	URLAction *testTapAction `json:"url_action,omitempty"`
+}
+
+type testLogLine struct {
+	Text  string `json:"text"`
+	At    *int64 `json:"at,omitempty"`
+	Level string `json:"level,omitempty"`
+}
+
+type testTapAction struct {
+	URL     string            `json:"url"`
+	Method  string            `json:"method,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    string            `json:"body,omitempty"`
+	Title   string            `json:"title,omitempty"`
+	Icon    string            `json:"icon,omitempty"`
 }
 
 // MockPushWardServer starts an httptest server that records all requests and
@@ -318,7 +353,7 @@ func validateContent(c *apiContent) error {
 	// Under merge-patch, template may be absent on ticks; only per-template
 	// required-field validation is gated on it.
 	if c.Template != "" && !validTemplates[c.Template] {
-		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, gauge, timeline")
+		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, gauge, timeline, board, log")
 	}
 	if c.Progress < 0 || c.Progress > 1 {
 		return fmt.Errorf("progress must be 0.0-1.0")
@@ -344,15 +379,8 @@ func validateContent(c *apiContent) error {
 	if err := validateURL(c.SecondaryURL, "secondary_url"); err != nil {
 		return err
 	}
-	// URL links are only supported on steps and alert templates.
-	if c.Template != "steps" && c.Template != "alert" {
-		if c.URL != "" {
-			return fmt.Errorf("url is not supported for %q template, only for steps and alert", c.Template)
-		}
-		if c.SecondaryURL != "" {
-			return fmt.Errorf("secondary_url is not supported for %q template, only for steps and alert", c.Template)
-		}
-	}
+	// url / secondary_url (and the structured tap-action slots) are accepted on
+	// every template — the server no longer gates tap routing to steps/alert.
 	if err := validateColor(c.AccentColor, "accent_color"); err != nil {
 		return err
 	}
@@ -360,6 +388,15 @@ func validateContent(c *apiContent) error {
 		return err
 	}
 	if err := validateColor(c.TextColor, "text_color"); err != nil {
+		return err
+	}
+	if err := validateTapAction(c.TapAction, "tap_action"); err != nil {
+		return err
+	}
+	if err := validateTapAction(c.URLAction, "url_action"); err != nil {
+		return err
+	}
+	if err := validateTapAction(c.SecondaryURLAction, "secondary_url_action"); err != nil {
 		return err
 	}
 
@@ -382,6 +419,14 @@ func validateContent(c *apiContent) error {
 		}
 	case "timeline":
 		if err := validateTimeline(c); err != nil {
+			return err
+		}
+	case "board":
+		if err := validateBoard(c); err != nil {
+			return err
+		}
+	case "log":
+		if err := validateLog(c); err != nil {
 			return err
 		}
 	}
@@ -520,6 +565,94 @@ func validateTimeline(c *apiContent) error {
 	for k := range values {
 		if utf8.RuneCountInString(k) > 32 {
 			return fmt.Errorf("value key %q must be at most 32 characters", k)
+		}
+	}
+	return nil
+}
+
+func validateBoard(c *apiContent) error {
+	if len(c.Tiles) < 1 || len(c.Tiles) > 4 {
+		return fmt.Errorf("tiles must have between 1 and 4 entries for board template, got %d", len(c.Tiles))
+	}
+	for i, tile := range c.Tiles {
+		if tile.Label == "" {
+			return fmt.Errorf("tiles[%d].label is required", i)
+		}
+		if utf8.RuneCountInString(tile.Label) > 32 {
+			return fmt.Errorf("tiles[%d].label must be at most 32 characters", i)
+		}
+		if tile.Value == "" {
+			return fmt.Errorf("tiles[%d].value is required", i)
+		}
+		if utf8.RuneCountInString(tile.Value) > 16 {
+			return fmt.Errorf("tiles[%d].value must be at most 16 characters", i)
+		}
+		if utf8.RuneCountInString(tile.Unit) > 8 {
+			return fmt.Errorf("tiles[%d].unit must be at most 8 characters", i)
+		}
+		if utf8.RuneCountInString(tile.Icon) > 128 {
+			return fmt.Errorf("tiles[%d].icon must be at most 128 characters", i)
+		}
+		if err := validateColor(tile.Color, fmt.Sprintf("tiles[%d].color", i)); err != nil {
+			return err
+		}
+		if !validTrends[tile.Trend] {
+			return fmt.Errorf("tiles[%d].trend must be one of up, down, flat", i)
+		}
+		if err := validateTapAction(tile.URLAction, fmt.Sprintf("tiles[%d].url_action", i)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateTapAction mirrors the server's TapAction.Validate for the checks the
+// mock cares about: url is required, the scheme is not one of the blocked ones,
+// the HTTP method (when set) is in the allow list, and the button label/icon and
+// webhook body stay within their length caps. It does not reproduce the server's
+// full http-only cross-field matrix — the mock is a contract sanity check, not a
+// reimplementation. Custom schemes (e.g. homeassistant://) are allowed.
+func validateTapAction(a *testTapAction, field string) error {
+	if a == nil {
+		return nil
+	}
+	if a.URL == "" {
+		return fmt.Errorf("%s.url is required", field)
+	}
+	lower := strings.ToLower(a.URL)
+	for _, bad := range []string{"javascript:", "data:", "file:", "vbscript:"} {
+		if strings.HasPrefix(lower, bad) {
+			return fmt.Errorf("%s.url scheme is not allowed", field)
+		}
+	}
+	if !validTapMethods[strings.ToUpper(a.Method)] {
+		return fmt.Errorf("%s.method must be one of GET, POST, PUT, PATCH, DELETE, HEAD", field)
+	}
+	if utf8.RuneCountInString(a.Title) > 64 {
+		return fmt.Errorf("%s.title must be at most 64 characters", field)
+	}
+	if utf8.RuneCountInString(a.Icon) > 64 {
+		return fmt.Errorf("%s.icon must be at most 64 characters", field)
+	}
+	if utf8.RuneCountInString(a.Body) > 1024 {
+		return fmt.Errorf("%s.body must be at most 1024 characters", field)
+	}
+	return nil
+}
+
+func validateLog(c *apiContent) error {
+	if len(c.Lines) < 1 || len(c.Lines) > 20 {
+		return fmt.Errorf("lines must have between 1 and 20 entries for log template, got %d", len(c.Lines))
+	}
+	for i, line := range c.Lines {
+		if line.Text == "" {
+			return fmt.Errorf("lines[%d].text is required", i)
+		}
+		if utf8.RuneCountInString(line.Text) > 128 {
+			return fmt.Errorf("lines[%d].text must be at most 128 characters", i)
+		}
+		if !validLogLevels[line.Level] {
+			return fmt.Errorf("lines[%d].level must be one of info, warn, error", i)
 		}
 	}
 	return nil

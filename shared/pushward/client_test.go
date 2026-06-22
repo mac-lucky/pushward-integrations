@@ -854,3 +854,131 @@ func TestDoWithRetry_InterleavedClientError_DoesNotResetFaultStreak(t *testing.T
 		t.Error("breaker must open: the interleaved 4xx must not have reset the fault streak (RecordReachable, not RecordSuccess)")
 	}
 }
+
+// --- board / log / tap-action wire shape ---
+
+func TestPatchActivity_BoardTilesAndTapActions(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			t.Errorf("expected PATCH, got %s", r.Method)
+		}
+		if r.URL.Path != "/activities/board-app" {
+			t.Errorf("expected /activities/board-app, got %s", r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	err := c.PatchActivity(context.Background(), "board-app", PatchRequest{
+		State: StateOngoing,
+		Content: &ContentPatch{
+			Template:  StringPtr(TemplateBoard),
+			TapAction: &TapAction{URL: "pushward://activity"},
+			Tiles: []BoardTile{{
+				Label:     "Living Room",
+				Value:     "21.5",
+				Unit:      "°C",
+				Trend:     TrendUp,
+				URLAction: &TapAction{URL: "https://ha.local/toggle", Method: "POST"},
+			}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+
+	content, ok := got["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("no content object in body: %v", got)
+	}
+	if content["template"] != "board" {
+		t.Errorf("expected template board, got %v", content["template"])
+	}
+	if tap, ok := content["tap_action"].(map[string]any); !ok || tap["url"] != "pushward://activity" {
+		t.Errorf("tap_action wrong: %v", content["tap_action"])
+	}
+	tiles, ok := content["tiles"].([]any)
+	if !ok || len(tiles) != 1 {
+		t.Fatalf("expected 1 tile, got %v", content["tiles"])
+	}
+	tile := tiles[0].(map[string]any)
+	if tile["label"] != "Living Room" || tile["value"] != "21.5" || tile["unit"] != "°C" || tile["trend"] != "up" {
+		t.Errorf("tile fields wrong: %v", tile)
+	}
+	ua, ok := tile["url_action"].(map[string]any)
+	if !ok || ua["url"] != "https://ha.local/toggle" || ua["method"] != "POST" {
+		t.Errorf("tile url_action wrong: %v", tile["url_action"])
+	}
+}
+
+func TestUpdateActivity_LogLines(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	at := int64(1800000000)
+	c := NewClient(srv.URL, "hlk_test")
+	err := c.UpdateActivity(context.Background(), "log-app", UpdateRequest{
+		State: StateOngoing,
+		Content: Content{
+			Template: TemplateLog,
+			Lines:    []LogLine{{Text: "build started", Level: LogInfo, At: &at}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+
+	content, ok := got["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("no content object in body: %v", got)
+	}
+	if content["template"] != "log" {
+		t.Errorf("expected template log, got %v", content["template"])
+	}
+	lines, ok := content["lines"].([]any)
+	if !ok || len(lines) != 1 {
+		t.Fatalf("expected 1 line, got %v", content["lines"])
+	}
+	line := lines[0].(map[string]any)
+	if line["text"] != "build started" || line["level"] != "info" {
+		t.Errorf("line fields wrong: %v", line)
+	}
+	if line["at"].(float64) != float64(at) {
+		t.Errorf("line at wrong: %v", line["at"])
+	}
+}
+
+func TestUpdateWidget_TapActionSlots(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	err := c.UpdateWidget(context.Background(), "cpu", UpdateWidgetRequest{
+		Content: &WidgetContent{
+			Template:  WidgetTemplateValue,
+			TapAction: &TapAction{URL: "https://grafana.local/d/abc", Foreground: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	content, ok := got["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("no content object in body: %v", got)
+	}
+	tap, ok := content["tap_action"].(map[string]any)
+	if !ok || tap["url"] != "https://grafana.local/d/abc" || tap["foreground"] != true {
+		t.Errorf("widget tap_action wrong: %v", content["tap_action"])
+	}
+}

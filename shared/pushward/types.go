@@ -14,6 +14,24 @@ const (
 	TemplateCountdown = "countdown"
 	TemplateGauge     = "gauge"
 	TemplateTimeline  = "timeline"
+	TemplateBoard     = "board"
+	TemplateLog       = "log"
+)
+
+// Trend direction constants annotate a board tile (and value/gauge widget)
+// with a directional arrow. Mirrors the server's TrendDirection enum.
+const (
+	TrendUp   = "up"
+	TrendDown = "down"
+	TrendFlat = "flat"
+)
+
+// Log level constants tag an individual log-template line. Mirrors the
+// server's LogLevel enum.
+const (
+	LogInfo  = "info"
+	LogWarn  = "warn"
+	LogError = "error"
 )
 
 // Notification interruption level constants.
@@ -57,6 +75,50 @@ type Threshold struct {
 	Label string  `json:"label,omitempty"`
 }
 
+// TapAction is a routed tap target on a Live Activity (or widget). It mirrors
+// the server's model.TapAction and NotificationAction routing fields, so iOS
+// dispatches a tap the same way across notifications and Live Activities. The
+// behavior is inferred from the URL scheme + Foreground flag:
+//   - custom scheme (e.g. youtube://, homeassistant://) → opens that app
+//   - http(s) + Foreground=true → opens the URL in Safari / in-app browser
+//   - http(s) + Foreground=false → silent webhook (Method/Headers/Body honored)
+//
+// Title and Icon are only meaningful when the action is rendered as a button
+// (url_action / secondary_url_action); the widget-wide tap_action ignores them.
+type TapAction struct {
+	URL        string            `json:"url"`
+	Foreground bool              `json:"foreground,omitempty"`
+	Method     string            `json:"method,omitempty"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Body       string            `json:"body,omitempty"`
+	Title      string            `json:"title,omitempty"`
+	Icon       string            `json:"icon,omitempty"`
+}
+
+// BoardTile is a single cell in a board template (1-4 per activity). Value is a
+// string so callers can render non-numeric states ("Open", "On") alongside
+// numbers. Trend is one of TrendUp/TrendDown/TrendFlat. URLAction reuses the
+// shared TapAction routing type so a tile tap behaves like any other target.
+type BoardTile struct {
+	Label     string     `json:"label"`
+	Value     string     `json:"value"`
+	Unit      string     `json:"unit,omitempty"`
+	Icon      string     `json:"icon,omitempty"`
+	Color     string     `json:"color,omitempty"`
+	Trend     string     `json:"trend,omitempty"`
+	URLAction *TapAction `json:"url_action,omitempty"`
+}
+
+// LogLine is a single entry in a log template (1-20 per activity, newest-first).
+// At is an optional unix timestamp (seconds); Level is an optional severity tag
+// (LogInfo/LogWarn/LogError). The server accumulates a rolling backlog of lines
+// server-side; that backlog is read-only and never sent by clients.
+type LogLine struct {
+	Text  string `json:"text"`
+	At    *int64 `json:"at,omitempty"`
+	Level string `json:"level,omitempty"`
+}
+
 // Content is the superset of all content fields used across integrations.
 // Unused fields use omitempty and won't appear in JSON.
 type Content struct {
@@ -72,6 +134,14 @@ type Content struct {
 	RemainingTime   *int    `json:"remaining_time,omitempty"`
 	URL             string  `json:"url,omitempty"`
 	SecondaryURL    string  `json:"secondary_url,omitempty"`
+
+	// Tap-action routing (any template). tap_action overrides the widget-wide
+	// tap target; url_action / secondary_url_action render as routed buttons
+	// alongside (and taking precedence over) the legacy URL / SecondaryURL
+	// string fields.
+	TapAction          *TapAction `json:"tap_action,omitempty"`
+	URLAction          *TapAction `json:"url_action,omitempty"`
+	SecondaryURLAction *TapAction `json:"secondary_url_action,omitempty"`
 
 	// Alert template
 	Severity string `json:"severity,omitempty"`
@@ -112,6 +182,14 @@ type Content struct {
 	Thresholds []Threshold               `json:"thresholds,omitempty"`
 	Units      map[string]string         `json:"units,omitempty"`
 	History    map[string][]HistoryPoint `json:"history,omitempty"`
+
+	// Board template: 1-4 tiles, replaced wholesale on each update.
+	Tiles []BoardTile `json:"tiles,omitempty"`
+
+	// Log template: 1-20 lines, newest-first, replaced wholesale on each
+	// update. The server-accumulated log_backlog is read-only and omitted here
+	// (this client never reads it).
+	Lines []LogLine `json:"lines,omitempty"`
 }
 
 // CreateActivityRequest is the body for POST /activities.
@@ -155,6 +233,14 @@ type ContentPatch struct {
 	URL             *string  `json:"url,omitempty"`
 	SecondaryURL    *string  `json:"secondary_url,omitempty"`
 
+	// Tap-action routing (any template). Each slot is a *TapAction: nil is
+	// omitted (preserve server-side). A present value is deep-merged into the
+	// stored action per RFC 7396 (the set fields overwrite, omitted fields are
+	// preserved), so send the whole action to fully replace it.
+	TapAction          *TapAction `json:"tap_action,omitempty"`
+	URLAction          *TapAction `json:"url_action,omitempty"`
+	SecondaryURLAction *TapAction `json:"secondary_url_action,omitempty"`
+
 	// Alert template
 	Severity *string `json:"severity,omitempty"`
 	FiredAt  *int64  `json:"fired_at,omitempty"`
@@ -188,6 +274,14 @@ type ContentPatch struct {
 	Thresholds []Threshold               `json:"thresholds,omitempty"`
 	Units      map[string]string         `json:"units,omitempty"`
 	History    map[string][]HistoryPoint `json:"history,omitempty"`
+
+	// Board template: 1-4 tiles. Sending the slice replaces all tiles
+	// (RFC 7396 array semantics); omitting it preserves the stored tiles.
+	Tiles []BoardTile `json:"tiles,omitempty"`
+
+	// Log template: 1-20 lines, newest-first. Sending the slice replaces the
+	// live line snapshot; omitting it preserves the stored lines.
+	Lines []LogLine `json:"lines,omitempty"`
 }
 
 // PatchRequest is the typed body for PATCH /activities/{slug}. State is a
@@ -244,6 +338,12 @@ type WidgetContent struct {
 	// StatRows powers the stat_list template — a 1-6 row label/value list.
 	// Required when template == stat_list, ignored otherwise.
 	StatRows []StatRow `json:"stat_rows,omitempty"`
+	// Tap-action routing on a widget. tap_action overrides the whole-widget tap
+	// target; url_action / secondary_url_action render as routed buttons. Mirrors
+	// the same slots on activity Content.
+	TapAction          *TapAction `json:"tap_action,omitempty"`
+	URLAction          *TapAction `json:"url_action,omitempty"`
+	SecondaryURLAction *TapAction `json:"secondary_url_action,omitempty"`
 }
 
 // CreateWidgetRequest is the body for POST /widgets. The server upserts on

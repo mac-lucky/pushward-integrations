@@ -196,3 +196,170 @@ func TestValidateTimeline(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateBoard(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "happy path single tile",
+			body:       `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"Living Room","value":"21.5","unit":"°C","icon":"thermometer","color":"#FF3B30","trend":"up"}]}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "four tiles with tap action",
+			body:       `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1"},{"label":"B","value":"2"},{"label":"C","value":"3"},{"label":"D","value":"On","url_action":{"url":"https://example.com"}}]}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "no tiles",
+			body:       `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[]}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "too many tiles",
+			body:       `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1"},{"label":"B","value":"2"},{"label":"C","value":"3"},{"label":"D","value":"4"},{"label":"E","value":"5"}]}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "tile missing label",
+			body:       `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"value":"1"}]}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "tile missing value",
+			body:       `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A"}]}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "tile value too long",
+			body:       `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"` + strings.Repeat("9", 17) + `"}]}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "tile bad trend",
+			body:       `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1","trend":"sideways"}]}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "tile bad color",
+			body:       `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1","color":"neon"}]}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "tile url_action custom scheme ok",
+			body:       `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"On","url_action":{"url":"homeassistant://navigate"}}]}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "tile url_action empty url",
+			body:       `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1","url_action":{"url":""}}]}}`,
+			wantStatus: 400,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "board-app", "Board App")
+			if got := patchActivity(t, srv.URL, "board-app", tt.body); got != tt.wantStatus {
+				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestValidateLog(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "happy path single line",
+			body:       `{"state":"ongoing","content":{"template":"log","progress":0,"lines":[{"text":"build started","level":"info","at":1800000000}]}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "no lines",
+			body:       `{"state":"ongoing","content":{"template":"log","progress":0,"lines":[]}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "line missing text",
+			body:       `{"state":"ongoing","content":{"template":"log","progress":0,"lines":[{"level":"warn"}]}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "line text too long",
+			body:       `{"state":"ongoing","content":{"template":"log","progress":0,"lines":[{"text":"` + strings.Repeat("x", 129) + `"}]}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "line bad level",
+			body:       `{"state":"ongoing","content":{"template":"log","progress":0,"lines":[{"text":"oops","level":"fatal"}]}}`,
+			wantStatus: 400,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "log-app", "Log App")
+			if got := patchActivity(t, srv.URL, "log-app", tt.body); got != tt.wantStatus {
+				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// TestValidateURLAnyTemplate asserts the relaxed rule: url / tap-action routing
+// is accepted on every template now, not just steps/alert (the server moved tap
+// routing into the shared content base).
+func TestValidateURLAnyTemplate(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "url on generic ok",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"url":"https://example.com/page"}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "url on timeline ok",
+			body:       `{"state":"ongoing","content":{"template":"timeline","progress":0.5,"value":{"CPU":1},"url":"https://example.com"}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "malformed url still rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"url":"example.com/page"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "tap_action on generic ok",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"tap_action":{"url":"https://example.com"}}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "tap_action missing url rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"tap_action":{"title":"Open"}}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "url_action bad method rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"url_action":{"url":"https://example.com","method":"FETCH"}}}`,
+			wantStatus: 400,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "url-app", "URL App")
+			if got := patchActivity(t, srv.URL, "url-app", tt.body); got != tt.wantStatus {
+				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+}
