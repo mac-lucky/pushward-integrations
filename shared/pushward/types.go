@@ -36,8 +36,10 @@ const (
 
 // Notification interruption level constants.
 const (
-	LevelActive  = "active"
-	LevelPassive = "passive"
+	LevelActive        = "active"
+	LevelPassive       = "passive"
+	LevelTimeSensitive = "time-sensitive"
+	LevelCritical      = "critical"
 )
 
 // ActivitySound is a Live Activity alert-sound identifier. The typed alias
@@ -412,6 +414,7 @@ type SendNotificationRequest struct {
 	ThreadID          string               `json:"thread_id,omitempty"`
 	CollapseID        string               `json:"collapse_id,omitempty"`
 	Level             string               `json:"level,omitempty"`
+	Volume            *float64             `json:"volume,omitempty"` // Sound volume for critical alerts (0.0-1.0)
 	Source            string               `json:"source,omitempty"`
 	SourceDisplayName string               `json:"source_display_name,omitempty"`
 	URL               string               `json:"url,omitempty"`
