@@ -72,7 +72,13 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		apiErr = h.handleFencing(ctx, userKey, log, payload)
 	case "package-updates":
 		apiErr = h.handleUpdates(ctx, userKey, log, payload)
-	case "system":
+	case "system-mail":
+		apiErr = h.handleSystemMail(ctx, userKey, log, payload)
+	case "", "test", "system":
+		// Proxmox's "Test" button (Datacenter > Notifications) fires a
+		// notification with an empty type metadata field. Treat that, and the
+		// explicit "test"/"system" aliases, as a self-test so users can verify
+		// the integration end to end.
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "proxmox"); err != nil {
 			log.Error("test notification failed", "provider", "proxmox", "error", err)
@@ -391,5 +397,74 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey string, log *slog.L
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	log.Info("proxmox updates event", "slug", slug, "hostname", p.Hostname)
+	return nil
+}
+
+// handleSystemMail surfaces Proxmox's catch-all "system-mail" notifications
+// (certificate renewals, ZFS/SMART errors, ad-hoc system events) as an alert
+// activity. It collapses to one activity per host (like handleFencing /
+// handleUpdates) rather than per title: system-mail is the highest-volume,
+// least-structured type, and a per-title slug would let a routine maintenance
+// mail storm exceed the server's small concurrent-activity budget and evict
+// in-progress backups. There is no completion event to correlate, so unlike
+// vzdump/replication it persists no state (the ender's cleanup Delete is a
+// harmless no-op).
+func (h *Handler) handleSystemMail(ctx context.Context, userKey string, log *slog.Logger, p *proxmoxPayload) error {
+	hostname := p.Hostname
+	if hostname == "" {
+		hostname = "system"
+	}
+	// Proxmox forwards mailed events here; a missing subject yields an empty
+	// title, which the server rejects (name is required). Fall back so the
+	// alert still fires.
+	title := p.Title
+	if title == "" {
+		title = "Proxmox system event"
+	}
+	slug := text.SlugHash("proxmox-system", hostname, 4)
+	mapKey := fmt.Sprintf("system-mail:%s", hostname)
+	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(hostname, 50))
+
+	cl := h.clients.Get(userKey)
+	endedTTL := int(h.config.CleanupDelay.Seconds())
+	staleTTL := int(h.config.StaleTimeout.Seconds())
+
+	if err := cl.CreateActivity(ctx, slug, text.TruncateHard(title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		log.Error("failed to create proxmox system activity", "slug", slug, "error", err)
+		return err
+	}
+
+	// Map the Proxmox severity (error/warning/notice/info) onto PushWard's
+	// vocabulary, then reuse SeverityColor for the accent.
+	severity := pushward.SeverityInfo
+	switch strings.ToLower(p.Severity) {
+	case "error":
+		severity = pushward.SeverityCritical
+	case "warning":
+		severity = pushward.SeverityWarning
+	}
+	icon := "bell.fill"
+	if severity != pushward.SeverityInfo {
+		icon = "exclamationmark.triangle.fill"
+	}
+
+	content := pushward.Content{
+		Template:    "alert",
+		Progress:    1.0,
+		State:       text.TruncateHard(title, 100),
+		Icon:        icon,
+		Subtitle:    subtitle,
+		AccentColor: pushward.SeverityColor(severity),
+		Severity:    severity,
+	}
+
+	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
+	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
+		log.Error("failed to update proxmox system activity", "slug", slug, "error", err)
+		return err
+	}
+
+	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
+	log.Info("proxmox system event", "slug", slug, "hostname", hostname)
 	return nil
 }

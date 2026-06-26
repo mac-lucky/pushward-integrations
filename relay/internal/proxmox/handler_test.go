@@ -351,3 +351,160 @@ func TestSystemEventSendsTestNotification(t *testing.T) {
 		t.Errorf("expected template steps, got %s", update.Content.Template)
 	}
 }
+
+// The "Test" button under Datacenter > Notifications fires a webhook with an
+// empty type metadata field (verified against PVE 8.4); it must still produce
+// the self-test activity so users can confirm the integration works.
+func TestTestButtonSendsSelfTest(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := send(t, h, `{
+		"type": "",
+		"title": "Test notification ",
+		"message": "This is a test of the PushWard target.",
+		"severity": "info",
+		"hostname": ""
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 2 {
+		t.Fatalf("expected 2 calls for empty-type test webhook (selftest), got %d", len(recorded))
+	}
+
+	var create pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &create)
+	if create.Slug != "relay-test-proxmox" {
+		t.Errorf("expected slug relay-test-proxmox, got %s", create.Slug)
+	}
+}
+
+func TestSystemMailAlert(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := send(t, h, `{
+		"type": "system-mail",
+		"title": "Certificate renewal failed",
+		"message": "Could not renew ACME certificate for pve1",
+		"severity": "error",
+		"hostname": "pve1"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	// Wait for two-phase end
+	time.Sleep(100 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 4
+	if len(recorded) != 4 {
+		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	}
+
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.State != pushward.StateOngoing {
+		t.Errorf("expected ONGOING, got %s", update.State)
+	}
+	if update.Content.Template != "alert" {
+		t.Errorf("expected template 'alert', got %s", update.Content.Template)
+	}
+	if update.Content.AccentColor != pushward.ColorRed {
+		t.Errorf("expected red accent for error severity, got %s", update.Content.AccentColor)
+	}
+	if update.Content.Severity != "critical" {
+		t.Errorf("expected severity 'critical' for error, got %s", update.Content.Severity)
+	}
+	if update.Content.State != "Certificate renewal failed" {
+		t.Errorf("expected state 'Certificate renewal failed', got %s", update.Content.State)
+	}
+	if update.Content.Subtitle != "Proxmox \u00b7 pve1" {
+		t.Errorf("expected subtitle 'Proxmox \u00b7 pve1', got %q", update.Content.Subtitle)
+	}
+
+	// Phase 2: ENDED
+	var phase2 pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
+	if phase2.State != pushward.StateEnded {
+		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
+	}
+}
+
+// system-mail is the catch-all type; distinct titles on one host must collapse
+// to a single activity slug so a maintenance mail storm can't exhaust the
+// server's concurrent-activity budget and evict in-progress backups.
+func TestSystemMailCollapsesPerHost(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	send(t, h, `{
+		"type": "system-mail",
+		"title": "Certificate renewal failed",
+		"severity": "error",
+		"hostname": "pve1"
+	}`)
+	time.Sleep(50 * time.Millisecond)
+	send(t, h, `{
+		"type": "system-mail",
+		"title": "SMART warning on /dev/sda",
+		"severity": "warning",
+		"hostname": "pve1"
+	}`)
+	time.Sleep(50 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	var slugs []string
+	for _, c := range recorded {
+		if c.Method == "POST" && c.Path == "/activities" {
+			var cr pushward.CreateActivityRequest
+			testutil.UnmarshalBody(t, c.Body, &cr)
+			slugs = append(slugs, cr.Slug)
+		}
+	}
+	if len(slugs) < 2 {
+		t.Fatalf("expected 2 create calls, got %d", len(slugs))
+	}
+	if slugs[0] != slugs[1] {
+		t.Errorf("expected one slug per host, got %q and %q", slugs[0], slugs[1])
+	}
+}
+
+// A forwarded mail with no subject yields an empty title; the server requires a
+// non-empty name, so the handler must fall back rather than POST an empty name.
+func TestSystemMailEmptyTitleFallback(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := send(t, h, `{
+		"type": "system-mail",
+		"title": "",
+		"message": "ZFS pool degraded",
+		"severity": "warning",
+		"hostname": "pve1"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	time.Sleep(50 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) < 2 {
+		t.Fatalf("expected create + update, got %d calls", len(recorded))
+	}
+
+	var create pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &create)
+	if create.Name == "" {
+		t.Error("expected a non-empty name fallback for an empty title")
+	}
+
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.State == "" {
+		t.Error("expected a non-empty alert state for an empty title")
+	}
+	if update.Content.AccentColor != pushward.ColorOrange {
+		t.Errorf("expected orange accent for warning severity, got %s", update.Content.AccentColor)
+	}
+}

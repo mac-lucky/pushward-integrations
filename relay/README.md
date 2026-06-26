@@ -434,12 +434,12 @@ jsons://relay.pushward.app/unmanic?+Authorization=Bearer+hlk_YOUR_KEY
 
 ### Proxmox VE
 
-Receives Proxmox VE notification webhooks for backup, replication, fencing, and package-update events.
+Receives Proxmox VE notification webhooks for backup, replication, fencing, package-update, and general system (`system-mail`) events. The Datacenter test button is supported too.
 
 | | |
 |---|---|
-| Route | `POST /proxmox` · Template `steps` (backup/replication), `alert` (fencing/package-updates) · Auth Bearer |
-| Slug | `proxmox-backup-<hash>`, `proxmox-repl-<hash>`, `proxmox-fence-<hash>`, `proxmox-updates-<hash>` |
+| Route | `POST /proxmox` · Template `steps` (backup/replication), `alert` (fencing/package-updates/system-mail) · Auth Bearer |
+| Slug | `proxmox-backup-<hash>`, `proxmox-repl-<hash>`, `proxmox-fence-<hash>`, `proxmox-updates-<hash>`, `proxmox-system-<hash>` |
 
 | Event | State | Icon | Color |
 |---|---|---|---|
@@ -451,7 +451,8 @@ Receives Proxmox VE notification webhooks for backup, replication, fencing, and 
 | `replication` (failed) | Replication Failed | `xmark.circle.fill` | red |
 | `fencing` | (title) | `exclamationmark.octagon.fill` | red |
 | `package-updates` | (title) | `arrow.down.circle` | blue |
-| `system` | test notification | varies | varies |
+| `system-mail` | (title) | `bell.fill` / `exclamationmark.triangle.fill` | by severity (blue/orange/red) |
+| test button (empty `type`) | test notification | varies | varies |
 
 **Setup:** In Proxmox VE, go to **Datacenter > Notifications** and add a webhook target:
 
@@ -465,7 +466,7 @@ Receives Proxmox VE notification webhooks for backup, replication, fencing, and 
 {"type":"{{ fields.type }}","title":"{{ escape title }}","message":"{{ escape message }}","severity":"{{ severity }}","hostname":"{{ fields.hostname }}"}
 ```
 
-Create a Matcher to route notifications (vzdump, replication, fencing, package-updates) to this target.
+Create a Matcher to route notifications to this target. The test button on the same screen sends a webhook with an empty `type`, which the relay handles as a self-test so you can confirm delivery without waiting for a real event.
 
 ### Overseerr / Jellyseerr
 

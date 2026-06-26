@@ -1,0 +1,7 @@
+{
+  "type": "system-mail",
+  "title": "Certificate renewal failed",
+  "message": "Could not renew ACME certificate for pve1",
+  "severity": "error",
+  "hostname": "pve1"
+}
