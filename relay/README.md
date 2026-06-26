@@ -466,7 +466,15 @@ Receives Proxmox VE notification webhooks for backup, replication, fencing, pack
 {"type":"{{ fields.type }}","title":"{{ escape title }}","message":"{{ escape message }}","severity":"{{ severity }}","hostname":"{{ fields.hostname }}"}
 ```
 
-Create a Matcher to route notifications to this target. The test button on the same screen sends a webhook with an empty `type`, which the relay handles as a self-test so you can confirm delivery without waiting for a real event.
+A target on its own does nothing: Proxmox only calls it when a **matcher** selects a notification and lists that target. Add `PushWard` as a target on a matcher, either the built-in `default-matcher` or a dedicated one. In the UI go to **Datacenter > Notifications**, edit a matcher, and add `PushWard` under the targets to notify (a matcher can list several, so mail and PushWard both fire). Or from the shell:
+
+```
+pvesh set /cluster/notifications/matchers/default-matcher --target mail-to-root --target PushWard
+```
+
+`--target` replaces the whole list, so pass the existing targets too or you'll drop them. Skip this step and the webhook is never called: the target exists but no event reaches it.
+
+The test button on the same screen sends a webhook with an empty `type`, which the relay handles as a self-test so you can confirm delivery without waiting for a real event.
 
 ### Overseerr / Jellyseerr
 
