@@ -9,6 +9,10 @@ on:
     paths: ['github/**', 'shared/**', '.github/workflows/github-ci-cd.yml']
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   ci-cd:
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
