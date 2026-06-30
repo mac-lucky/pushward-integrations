@@ -43,6 +43,7 @@ jobs:
       contents: read
       packages: write
       security-events: write
+      actions: read
     with:
       app_name: "pushward-bambulab"
       ghcr_image: "ghcr.io/mac-lucky/pushward-bambulab"
@@ -68,6 +69,7 @@ jobs:
       contents: read
       packages: write
       security-events: write
+      actions: read
     with:
       app_name: "pushward-github"
       ghcr_image: "ghcr.io/mac-lucky/pushward-github"
@@ -93,6 +95,7 @@ jobs:
       contents: read
       packages: write
       security-events: write
+      actions: read
     with:
       app_name: "pushward-grafana"
       ghcr_image: "ghcr.io/mac-lucky/pushward-grafana"
@@ -118,6 +121,7 @@ jobs:
       contents: read
       packages: write
       security-events: write
+      actions: read
     with:
       app_name: "pushward-relay"
       ghcr_image: "ghcr.io/mac-lucky/pushward-relay"
@@ -143,6 +147,7 @@ jobs:
       contents: read
       packages: write
       security-events: write
+      actions: read
     with:
       app_name: "pushward-sabnzbd"
       ghcr_image: "ghcr.io/mac-lucky/pushward-sabnzbd"

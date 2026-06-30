@@ -20,6 +20,7 @@ jobs:
       contents: read
       packages: write
       security-events: write
+      actions: read
     with:
       app_name: "pushward-github"
       ghcr_image: "ghcr.io/mac-lucky/pushward-github"
