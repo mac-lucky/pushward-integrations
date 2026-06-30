@@ -648,8 +648,8 @@ func validateLog(c *apiContent) error {
 		if line.Text == "" {
 			return fmt.Errorf("lines[%d].text is required", i)
 		}
-		if utf8.RuneCountInString(line.Text) > 128 {
-			return fmt.Errorf("lines[%d].text must be at most 128 characters", i)
+		if utf8.RuneCountInString(line.Text) > 512 {
+			return fmt.Errorf("lines[%d].text must be at most 512 characters", i)
 		}
 		if !validLogLevels[line.Level] {
 			return fmt.Errorf("lines[%d].level must be one of info, warn, error", i)

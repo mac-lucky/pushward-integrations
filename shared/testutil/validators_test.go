@@ -293,7 +293,7 @@ func TestValidateLog(t *testing.T) {
 		},
 		{
 			name:       "line text too long",
-			body:       `{"state":"ongoing","content":{"template":"log","progress":0,"lines":[{"text":"` + strings.Repeat("x", 129) + `"}]}}`,
+			body:       `{"state":"ongoing","content":{"template":"log","progress":0,"lines":[{"text":"` + strings.Repeat("x", 513) + `"}]}}`,
 			wantStatus: 400,
 		},
 		{
