@@ -66,6 +66,7 @@ type apiContent struct {
 	SecondaryURL       string          `json:"secondary_url,omitempty"`
 	Severity           string          `json:"severity,omitempty"`
 	FiredAt            *int64          `json:"fired_at,omitempty"`
+	SeverityLabel      string          `json:"severity_label,omitempty"`
 	RemainingTime      *int            `json:"remaining_time,omitempty"`
 	CompletionMessage  string          `json:"completion_message,omitempty"`
 	EndDate            *int64          `json:"end_date,omitempty"`

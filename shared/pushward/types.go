@@ -146,8 +146,9 @@ type Content struct {
 	SecondaryURLAction *TapAction `json:"secondary_url_action,omitempty"`
 
 	// Alert template
-	Severity string `json:"severity,omitempty"`
-	FiredAt  *int64 `json:"fired_at,omitempty"`
+	Severity      string `json:"severity,omitempty"`
+	FiredAt       *int64 `json:"fired_at,omitempty"`
+	SeverityLabel string `json:"severity_label,omitempty"`
 
 	// Steps template
 	CurrentStep *int     `json:"current_step,omitempty"`
@@ -244,8 +245,9 @@ type ContentPatch struct {
 	SecondaryURLAction *TapAction `json:"secondary_url_action,omitempty"`
 
 	// Alert template
-	Severity *string `json:"severity,omitempty"`
-	FiredAt  *int64  `json:"fired_at,omitempty"`
+	Severity      *string `json:"severity,omitempty"`
+	FiredAt       *int64  `json:"fired_at,omitempty"`
+	SeverityLabel *string `json:"severity_label,omitempty"`
 
 	// Steps template
 	CurrentStep *int     `json:"current_step,omitempty"`
