@@ -39,8 +39,10 @@ func KeyFromContext(ctx context.Context) string {
 // ExtractKey extracts the hlk_ integration key from an Authorization header value.
 //
 // Supported patterns:
-//  1. Bearer hlk_... → use as integration key
-//  2. Basic Auth → extract hlk_ from password field
+//  1. Bearer hlk_... -> use as integration key
+//  2. Basic Auth -> extract hlk_ from password field
+//  3. GenieKey hlk_... -> TrueNAS's OpsGenie alert service sends the API key
+//     under the OpsGenie "GenieKey" scheme
 func ExtractKey(authHeader string) string {
 	// RFC 7235 defines the auth-scheme token as case-insensitive, so match it
 	// with EqualFold rather than an exact-case prefix (webhook UIs and HTTP
@@ -64,6 +66,11 @@ func ExtractKey(authHeader string) string {
 					return password
 				}
 			}
+		}
+	// Pattern 3: GenieKey hlk_... (OpsGenie scheme used by TrueNAS)
+	case strings.EqualFold(scheme, "GenieKey"):
+		if strings.HasPrefix(rest, "hlk_") {
+			return rest
 		}
 	}
 

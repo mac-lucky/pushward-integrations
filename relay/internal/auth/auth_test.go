@@ -33,6 +33,13 @@ func TestExtractKey(t *testing.T) {
 		{"basic no colon", "Basic " + base64.StdEncoding.EncodeToString([]byte("nopassword")), ""},
 		{"basic invalid base64", "Basic not_base64!!!", ""},
 
+		// GenieKey scheme (OpsGenie, used by TrueNAS), scheme case-insensitive.
+		{"geniekey canonical", "GenieKey hlk_x", "hlk_x"},
+		{"geniekey lowercase", "geniekey hlk_x", "hlk_x"},
+		{"geniekey mixed case", "GenIeKeY hlk_x", "hlk_x"},
+		{"geniekey non-hlk token", "GenieKey abc123", ""},
+		{"geniekey empty token", "GenieKey ", ""},
+
 		// Missing / malformed headers.
 		{"empty header", "", ""},
 		{"no space", "Bearer", ""},

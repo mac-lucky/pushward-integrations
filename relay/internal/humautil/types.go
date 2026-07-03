@@ -42,6 +42,25 @@ func RegisterWebhook[I, O any](api huma.API, path, operationID, summary, descrip
 	}, handler)
 }
 
+// RegisterDelete registers a DELETE webhook endpoint with the same defaults as
+// RegisterWebhook (RegisterWebhook is POST-only). Used by providers whose
+// upstream clears an alert with a DELETE call (e.g. the OpsGenie protocol
+// TrueNAS speaks). The input type declares its own path/query params via huma
+// field tags.
+func RegisterDelete[I, O any](api huma.API, path, operationID, summary, description string, tags []string, handler func(ctx context.Context, input *I) (*O, error)) {
+	huma.Register(api, huma.Operation{
+		OperationID:   operationID,
+		Method:        http.MethodDelete,
+		Path:          path,
+		Summary:       summary,
+		Description:   description,
+		Tags:          tags,
+		Security:      webhookSecurity,
+		MaxBodyBytes:  1 << 20,
+		DefaultStatus: http.StatusOK,
+	}, handler)
+}
+
 // NewAPI creates a Huma API with standard relay config (additional properties
 // allowed, fields optional by default). Returns the mux and API.
 func NewAPI(title, version string) (*http.ServeMux, huma.API) {
