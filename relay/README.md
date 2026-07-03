@@ -175,7 +175,7 @@ Flags: `-config` (default `config.yml`) and `-pushward-url` (overrides `PUSHWARD
 
 ## Endpoints
 
-All `POST` webhook routes require an `hlk_` key (Bearer or HTTP Basic password), enforce a 1 MB body limit, and return `200` with `{"status":"ok"}` on success — `401` if the key is missing, `429` when rate-limited. Requests with a missing or `text/plain` `Content-Type` are normalized to `application/json` so misconfigured senders are still accepted.
+All webhook routes require an `hlk_` key (Bearer, HTTP Basic password, or the OpsGenie `GenieKey` scheme), enforce a 1 MB body limit, and return `200` with `{"status":"ok"}` on success - `401` if the key is missing, `429` when rate-limited. Requests with a missing or `text/plain` `Content-Type` are normalized to `application/json` so misconfigured senders are still accepted.
 
 | Method | Path | Description |
 |---|---|---|
@@ -197,6 +197,8 @@ All `POST` webhook routes require an `hlk_` key (Bearer or HTTP Basic password),
 | POST | `/gitea` | Gitea Actions workflow_run/workflow_job webhooks |
 | POST | `/forgejo` | Forgejo Actions action_run_* webhooks |
 | POST | `/komodo` | Komodo Custom-alerter webhooks |
+| POST | `/truenas/v2/alerts` | TrueNAS OpsGenie create-alert calls |
+| DELETE | `/truenas/v2/alerts/{id}` | TrueNAS OpsGenie close-alert calls |
 | GET | `/health` | Liveness — returns `ok` |
 | GET | `/ready` | Readiness — `ready`, or `503` if the DB ping fails |
 | GET | `/openapi.json` | Auto-generated OpenAPI 3.1 spec |
@@ -225,13 +227,15 @@ All `POST` webhook routes require an `hlk_` key (Bearer or HTTP Basic password),
 | Gitea | `POST /gitea` | Bearer | Live Activity (steps) | Yes |
 | Forgejo | `POST /forgejo` | Bearer | Live Activity (generic) | Yes |
 | Komodo | `POST /komodo` | Basic | Live Activity (alert) + push | Yes |
+| TrueNAS | `POST /truenas/v2/alerts` · `DELETE /truenas/v2/alerts/{id}` | GenieKey | Live Activity (alert) + push | Yes |
 
 ### Authentication
 
 Every route requires the `hlk_` integration key. The relay accepts it two ways (scheme match is case-insensitive):
 
-- **Bearer** (default) — `Authorization: Bearer hlk_...`. Used by Grafana, ArgoCD, Jellyfin, Paperless, Changedetection, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest, Gitea, Forgejo.
-- **HTTP Basic** — the `hlk_` key is the password (username ignored), because the sender only offers Basic Auth or a URL with userinfo. Used by **Radarr, Sonarr, Prowlarr, Bazarr, and Komodo**.
+- **Bearer** (default) - `Authorization: Bearer hlk_...`. Used by Grafana, ArgoCD, Jellyfin, Paperless, Changedetection, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest, Gitea, Forgejo.
+- **HTTP Basic** - the `hlk_` key is the password (username ignored), because the sender only offers Basic Auth or a URL with userinfo. Used by **Radarr, Sonarr, Prowlarr, Bazarr, and Komodo**.
+- **GenieKey** - the OpsGenie scheme (`Authorization: GenieKey hlk_...`). Used by **TrueNAS** (its OpsGenie alert service sends the key this way).
 
 ---
 
@@ -664,6 +668,24 @@ Receives Komodo Custom-alerter events. Resolvable server conditions become a Liv
 The activity is keyed on the alert condition (target + type), not the alert id, so a resolve collapses onto the same activity as its trigger. The resolve frame always renders "Resolved" (the payload's carried error is stale by then).
 
 **Setup:** In Komodo, go to **Settings > Alerters** and add a **Custom** alerter. Store your `hlk_` key as a Komodo Secret and set the alerter URL with the key in userinfo: `https://pushward:[[PUSHWARD_KEY]]@relay.pushward.app/komodo`. Komodo posts via reqwest, which turns the URL userinfo into an HTTP Basic `Authorization` header that the relay reads the key from.
+
+### TrueNAS
+
+Emulates the OpsGenie alert service that TrueNAS ships with. TrueNAS opens an alert with `POST /v2/alerts` and clears it with `DELETE /v2/alerts/{alias}`, so each alert becomes a Live Activity that ends when TrueNAS clears it.
+
+| | |
+|---|---|
+| Route | `POST /truenas/v2/alerts` · `DELETE /truenas/v2/alerts/{id}` · Auth GenieKey |
+| Slug | `truenas-<sha256(alias)[:12]>` |
+
+| Call | Behavior |
+|---|---|
+| `POST /v2/alerts` | Creates the activity (alert, warning/orange) + active push |
+| `DELETE /v2/alerts/{alias}` | Ends the activity (Resolved, green) + passive push; unknown alias is a no-op |
+
+**Setup:** In TrueNAS, go to **System Settings > Alert Services > Add**. Set **Type** to **OpsGenie**, **API Key** to your `hlk_` key, and **API URL** to `https://relay.pushward.app/truenas` (no trailing slash). Pick the alert **Level** to forward, then **Send Test Alert** to verify (a test flows as a real create then clear).
+
+**Limitations:** TrueNAS's OpsGenie payload carries no hostname (multi-NAS setups cannot tell boxes apart in the activity) and no severity level, so alerts render with a fixed warning style; filter what you forward using the per-service **Level** in TrueNAS. The API URL must have no trailing slash.
 
 ## Development
 

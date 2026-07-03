@@ -37,6 +37,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/starr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/telemetry"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/truenas"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/uptimekuma"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -258,6 +259,12 @@ func main() {
 		kh := komodo.RegisterRoutes(api, store, clients, &cfg.Providers.Komodo)
 		collectEnder(kh)
 		slog.Info("enabled provider", "provider", "komodo")
+	}
+
+	if cfg.Providers.TrueNAS.Enabled {
+		tnh := truenas.RegisterRoutes(api, store, clients, &cfg.Providers.TrueNAS)
+		collectEnder(tnh)
+		slog.Info("enabled provider", "provider", "truenas")
 	}
 
 	// Wrap mux with metrics middleware and optional OTel tracing.

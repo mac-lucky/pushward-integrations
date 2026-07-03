@@ -185,3 +185,14 @@ providers:
     # URL with the key in userinfo (stored as a Komodo Secret):
     #   https://pushward:[[PUSHWARD_KEY]]@relay.example.com/komodo
     # Komodo posts via reqwest, which turns the URL userinfo into HTTP Basic auth.
+
+  truenas:
+    enabled: true
+    priority: 5
+    cleanup_delay: 15m
+    stale_timeout: 24h                      # long-lived alerts end server-side; a later DELETE no-ops
+    end_delay: 5s
+    end_display_time: 4s
+    # Configure in TrueNAS: System > Alert Services > Add > Type OpsGenie
+    # API Key: your hlk_ key   API URL: https://relay.example.com/truenas   (no trailing slash)
+    # Pick the Level to forward, then Send Test Alert.

@@ -1,0 +1,5 @@
+{
+  "message": "New alerts for TrueNAS @ nas.local",
+  "alias": "a1b2c3d4-1234-5678-9abc-def012345678",
+  "description": "Pool tank is DEGRADED: one or more devices has experienced an error."
+}

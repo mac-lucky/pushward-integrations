@@ -57,6 +57,7 @@ type ProvidersConfig struct {
 	Backrest        BackrestConfig        `yaml:"backrest"`
 	Gitea           GiteaConfig           `yaml:"gitea"`
 	Komodo          KomodoConfig          `yaml:"komodo"`
+	TrueNAS         TrueNASConfig         `yaml:"truenas"`
 }
 
 // BaseProviderConfig holds fields shared by all provider configs.
@@ -167,6 +168,13 @@ type GiteaConfig struct {
 
 // KomodoConfig holds Komodo Custom-alerter settings.
 type KomodoConfig struct {
+	BaseProviderConfig `yaml:",inline"`
+}
+
+// TrueNASConfig holds TrueNAS OpsGenie-alert-service settings. StaleTimeout
+// defaults high (24h): a long-lived alert that TrueNAS never clears is ended
+// server-side at the timeout, and a later DELETE no-ops.
+type TrueNASConfig struct {
 	BaseProviderConfig `yaml:",inline"`
 }
 
@@ -335,6 +343,16 @@ func Load(path string) (*Config, error) {
 					EndDisplayTime: 4 * time.Second,
 				},
 			},
+			TrueNAS: TrueNASConfig{
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       5,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   24 * time.Hour,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
+			},
 		},
 	}
 
@@ -492,6 +510,7 @@ func (cfg *Config) baseProviders() []providerEntry {
 		{"backrest", cfg.Providers.Backrest.BaseProviderConfig},
 		{"gitea", cfg.Providers.Gitea.BaseProviderConfig},
 		{"komodo", cfg.Providers.Komodo.BaseProviderConfig},
+		{"truenas", cfg.Providers.TrueNAS.BaseProviderConfig},
 	}
 }
 
