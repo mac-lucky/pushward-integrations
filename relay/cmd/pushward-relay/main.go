@@ -27,6 +27,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/grafana"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/jellyfin"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/komodo"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overseerr"
@@ -251,6 +252,12 @@ func main() {
 		gih := gitea.RegisterRoutes(api, store, clients, &cfg.Providers.Gitea)
 		collectEnder(gih)
 		slog.Info("enabled provider", "provider", "gitea")
+	}
+
+	if cfg.Providers.Komodo.Enabled {
+		kh := komodo.RegisterRoutes(api, store, clients, &cfg.Providers.Komodo)
+		collectEnder(kh)
+		slog.Info("enabled provider", "provider", "komodo")
 	}
 
 	// Wrap mux with metrics middleware and optional OTel tracing.

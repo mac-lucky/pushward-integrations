@@ -1,0 +1,11 @@
+{
+  "ts": 1730000000000,
+  "resolved": false,
+  "level": "OK",
+  "target": {"type": "System", "id": "system"},
+  "data": {
+    "type": "Test",
+    "data": {"id": "system", "name": "Test Alert"}
+  },
+  "resolved_ts": null
+}

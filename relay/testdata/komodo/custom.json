@@ -1,0 +1,12 @@
+{
+  "_id": "custom-alert-1",
+  "ts": 1730000000000,
+  "resolved": false,
+  "level": "OK",
+  "target": {"type": "System", "id": "system"},
+  "data": {
+    "type": "Custom",
+    "data": {"message": "Nightly backup complete", "details": "42 GB archived"}
+  },
+  "resolved_ts": null
+}

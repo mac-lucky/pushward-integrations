@@ -171,6 +171,18 @@ var providers = map[string]providerTest{
 			AccentColor: pushward.ColorBlue,
 		},
 	},
+	"komodo": {
+		name: "Komodo Test",
+		content: pushward.Content{
+			Template:    "alert",
+			Progress:    1.0,
+			State:       "High CPU",
+			Icon:        "exclamationmark.triangle.fill",
+			Subtitle:    "Komodo \u00b7 test-server",
+			AccentColor: pushward.ColorOrange,
+			Severity:    "warning",
+		},
+	},
 }
 
 // SendTest creates a test activity and sends an ONGOING update for the given provider.

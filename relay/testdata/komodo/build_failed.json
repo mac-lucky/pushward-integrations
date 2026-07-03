@@ -1,0 +1,11 @@
+{
+  "ts": 1730000000000,
+  "resolved": false,
+  "level": "CRITICAL",
+  "target": {"type": "Build", "id": "bld-1"},
+  "data": {
+    "type": "BuildFailed",
+    "data": {"id": "bld-1", "name": "api", "version": {"major": 1, "minor": 2, "patch": 0}}
+  },
+  "resolved_ts": null
+}

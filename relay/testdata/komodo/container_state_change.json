@@ -1,0 +1,12 @@
+{
+  "_id": {"$oid": "6650f1c2a1b2c3d4e5f60790"},
+  "ts": 1730000000000,
+  "resolved": false,
+  "level": "WARNING",
+  "target": {"type": "Deployment", "id": "dep-1"},
+  "data": {
+    "type": "ContainerStateChange",
+    "data": {"id": "dep-1", "name": "web", "server_id": "srv-1", "server_name": "prod-node", "from": "Running", "to": "Exited"}
+  },
+  "resolved_ts": null
+}

@@ -444,6 +444,7 @@ var sourceDisplayNames = map[string]string{
 	"uptimekuma":      "Uptime Kuma",
 	"gatus":           "Gatus",
 	"backrest":        "Backrest",
+	"komodo":          "Komodo",
 	"sabnzbd":         "SABnzbd",
 	"github":          "GitHub",
 	"bambulab":        "BambuLab",

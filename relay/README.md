@@ -196,6 +196,7 @@ All `POST` webhook routes require an `hlk_` key (Bearer or HTTP Basic password),
 | POST | `/backrest` | Backrest backup/prune/check/forget webhooks |
 | POST | `/gitea` | Gitea Actions workflow_run/workflow_job webhooks |
 | POST | `/forgejo` | Forgejo Actions action_run_* webhooks |
+| POST | `/komodo` | Komodo Custom-alerter webhooks |
 | GET | `/health` | Liveness — returns `ok` |
 | GET | `/ready` | Readiness — `ready`, or `503` if the DB ping fails |
 | GET | `/openapi.json` | Auto-generated OpenAPI 3.1 spec |
@@ -223,13 +224,14 @@ All `POST` webhook routes require an `hlk_` key (Bearer or HTTP Basic password),
 | Backrest | `POST /backrest` | Bearer | Live Activity (steps) | Yes |
 | Gitea | `POST /gitea` | Bearer | Live Activity (steps) | Yes |
 | Forgejo | `POST /forgejo` | Bearer | Live Activity (generic) | Yes |
+| Komodo | `POST /komodo` | Basic | Live Activity (alert) + push | Yes |
 
 ### Authentication
 
 Every route requires the `hlk_` integration key. The relay accepts it two ways (scheme match is case-insensitive):
 
 - **Bearer** (default) — `Authorization: Bearer hlk_...`. Used by Grafana, ArgoCD, Jellyfin, Paperless, Changedetection, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest, Gitea, Forgejo.
-- **HTTP Basic** — the `hlk_` key is the password (username ignored), because the webhook UIs require Basic Auth. Used by **Radarr, Sonarr, Prowlarr, and Bazarr**.
+- **HTTP Basic** — the `hlk_` key is the password (username ignored), because the sender only offers Basic Auth or a URL with userinfo. Used by **Radarr, Sonarr, Prowlarr, Bazarr, and Komodo**.
 
 ---
 
@@ -643,6 +645,25 @@ Receives Forgejo Actions webhooks. Forgejo emits only terminal run events (`acti
 | `failure` | Failed | `xmark.circle.fill` | red |
 
 **Setup:** In Forgejo, add a webhook the same way (repo/org **Settings > Webhooks**), URL `https://relay.pushward.app/forgejo`, **Authorization Header** `Bearer hlk_...`, and enable the **Action Run** events. If a future Forgejo release adds `workflow_run`/`workflow_job` webhooks, point it at `/gitea` instead for live progress. The exact minimum Forgejo version shipping the `action_run_*` events is not pinned here; check your Forgejo release notes.
+
+### Komodo
+
+Receives Komodo Custom-alerter events. Resolvable server conditions become a Live Activity that resolves when Komodo clears them; every other alert is a one-shot push notification.
+
+| | |
+|---|---|
+| Route | `POST /komodo` · Auth Basic (via URL userinfo) |
+| Slug | `komodo-<sha256(target_type/target_id/data_type)[:12]>` |
+
+| Alert kind | Output |
+|---|---|
+| Resolvable (`ServerUnreachable`, `ServerCpu`, `ServerMem`, `ServerDisk`, `ServerVersionMismatch`, `SwarmUnhealthy`) | Live Activity (alert) that resolves on clear + active/passive push |
+| One-shot (container/stack state change, image update, build/procedure/action failed, sync pending, scheduled run, custom, ...) | Push notification (OK -> passive, WARNING -> active, CRITICAL -> time-sensitive) |
+| `Test` | Test Live Activity |
+
+The activity is keyed on the alert condition (target + type), not the alert id, so a resolve collapses onto the same activity as its trigger. The resolve frame always renders "Resolved" (the payload's carried error is stale by then).
+
+**Setup:** In Komodo, go to **Settings > Alerters** and add a **Custom** alerter. Store your `hlk_` key as a Komodo Secret and set the alerter URL with the key in userinfo: `https://pushward:[[PUSHWARD_KEY]]@relay.pushward.app/komodo`. Komodo posts via reqwest, which turns the URL userinfo into an HTTP Basic `Authorization` header that the relay reads the key from.
 
 ## Development
 

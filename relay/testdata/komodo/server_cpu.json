@@ -1,0 +1,11 @@
+{
+  "ts": 1730000000000,
+  "resolved": false,
+  "level": "WARNING",
+  "target": {"type": "Server", "id": "srv-1"},
+  "data": {
+    "type": "ServerCpu",
+    "data": {"id": "srv-1", "name": "prod-node", "region": null, "percentage": 92.5}
+  },
+  "resolved_ts": null
+}

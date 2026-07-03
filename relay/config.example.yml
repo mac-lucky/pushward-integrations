@@ -173,3 +173,15 @@ providers:
     # Authorization Header: Bearer hlk_...  Custom Events: Workflow Run + Workflow Job
     # Forgejo: same setup, URL https://relay.example.com/forgejo, events: Action Run
     # (Forgejo only sends terminal run events, so it shows a completion result, not live per-job progress)
+
+  komodo:
+    enabled: true
+    priority: 5
+    cleanup_delay: 15m
+    stale_timeout: 24h
+    end_delay: 5s
+    end_display_time: 4s
+    # Configure in Komodo: Settings > Alerters > add a Custom alerter
+    # URL with the key in userinfo (stored as a Komodo Secret):
+    #   https://pushward:[[PUSHWARD_KEY]]@relay.example.com/komodo
+    # Komodo posts via reqwest, which turns the URL userinfo into HTTP Basic auth.

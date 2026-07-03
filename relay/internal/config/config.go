@@ -56,6 +56,7 @@ type ProvidersConfig struct {
 	Gatus           GatusConfig           `yaml:"gatus"`
 	Backrest        BackrestConfig        `yaml:"backrest"`
 	Gitea           GiteaConfig           `yaml:"gitea"`
+	Komodo          KomodoConfig          `yaml:"komodo"`
 }
 
 // BaseProviderConfig holds fields shared by all provider configs.
@@ -161,6 +162,11 @@ type UptimeKumaConfig struct {
 // job emits no webhook between its in_progress and completed events, so a 30m
 // TTL would evict the run state mid-build.
 type GiteaConfig struct {
+	BaseProviderConfig `yaml:",inline"`
+}
+
+// KomodoConfig holds Komodo Custom-alerter settings.
+type KomodoConfig struct {
 	BaseProviderConfig `yaml:",inline"`
 }
 
@@ -315,6 +321,16 @@ func Load(path string) (*Config, error) {
 					Priority:       3,
 					CleanupDelay:   15 * time.Minute,
 					StaleTimeout:   4 * time.Hour,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
+			},
+			Komodo: KomodoConfig{
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       5,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   24 * time.Hour,
 					EndDelay:       5 * time.Second,
 					EndDisplayTime: 4 * time.Second,
 				},
@@ -475,6 +491,7 @@ func (cfg *Config) baseProviders() []providerEntry {
 		{"gatus", cfg.Providers.Gatus.BaseProviderConfig},
 		{"backrest", cfg.Providers.Backrest.BaseProviderConfig},
 		{"gitea", cfg.Providers.Gitea.BaseProviderConfig},
+		{"komodo", cfg.Providers.Komodo.BaseProviderConfig},
 	}
 }
 
