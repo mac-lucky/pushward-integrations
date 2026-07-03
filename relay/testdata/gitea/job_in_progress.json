@@ -1,0 +1,19 @@
+{
+  "action": "in_progress",
+  "workflow_job": {
+    "id": 100,
+    "run_id": 42,
+    "name": "Build (ubuntu, node-20)",
+    "status": "in_progress",
+    "conclusion": "",
+    "html_url": "https://gitea.example.com/acme/app/actions/runs/42/jobs/100",
+    "steps": [
+      {"name": "Set up job", "number": 0, "status": "completed", "conclusion": "success"},
+      {"name": "Checkout", "number": 1, "status": "in_progress", "conclusion": ""}
+    ]
+  },
+  "repository": {
+    "full_name": "acme/app",
+    "html_url": "https://gitea.example.com/acme/app"
+  }
+}

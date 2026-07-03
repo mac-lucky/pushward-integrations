@@ -194,6 +194,8 @@ All `POST` webhook routes require an `hlk_` key (Bearer or HTTP Basic password),
 | POST | `/uptimekuma` | Uptime Kuma monitor webhooks |
 | POST | `/gatus` | Gatus health-check alert webhooks |
 | POST | `/backrest` | Backrest backup/prune/check/forget webhooks |
+| POST | `/gitea` | Gitea Actions workflow_run/workflow_job webhooks |
+| POST | `/forgejo` | Forgejo Actions action_run_* webhooks |
 | GET | `/health` | Liveness — returns `ok` |
 | GET | `/ready` | Readiness — `ready`, or `503` if the DB ping fails |
 | GET | `/openapi.json` | Auto-generated OpenAPI 3.1 spec |
@@ -219,12 +221,14 @@ All `POST` webhook routes require an `hlk_` key (Bearer or HTTP Basic password),
 | Uptime Kuma | `POST /uptimekuma` | Bearer | Live Activity (alert) | Yes |
 | Gatus | `POST /gatus` | Bearer | Live Activity (alert) | Yes |
 | Backrest | `POST /backrest` | Bearer | Live Activity (steps) | Yes |
+| Gitea | `POST /gitea` | Bearer | Live Activity (steps) | Yes |
+| Forgejo | `POST /forgejo` | Bearer | Live Activity (generic) | Yes |
 
 ### Authentication
 
 Every route requires the `hlk_` integration key. The relay accepts it two ways (scheme match is case-insensitive):
 
-- **Bearer** (default) — `Authorization: Bearer hlk_...`. Used by Grafana, ArgoCD, Jellyfin, Paperless, Changedetection, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest.
+- **Bearer** (default) — `Authorization: Bearer hlk_...`. Used by Grafana, ArgoCD, Jellyfin, Paperless, Changedetection, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest, Gitea, Forgejo.
 - **HTTP Basic** — the `hlk_` key is the password (username ignored), because the webhook UIs require Basic Auth. Used by **Radarr, Sonarr, Prowlarr, and Bazarr**.
 
 ---
@@ -603,6 +607,42 @@ Set the **Template** (Go template that renders the JSON body):
 ```
 {"event":"{{ .Event }}","plan":"{{ .Plan.Id }}","repo":"{{ .Repo.Id }}","snapshot_id":"{{ .SnapshotId }}","data_added":{{ if .SnapshotStats }}{{ .SnapshotStats.DataAdded }}{{ else }}0{{ end }},"error":"{{ .Error }}"}
 ```
+
+### Gitea
+
+Receives Gitea Actions webhooks and renders a run as a live build-progress Live Activity. Jobs are grouped into steps (matrix jobs fold into one group), and the activity is reused across consecutive runs of the same repo.
+
+| | |
+|---|---|
+| Route | `POST /gitea` · Template `steps` · Auth Bearer |
+| Slug | `gitea-<sha256(repo_full_name)[:8]>` (one activity per repo) |
+
+| Event | Behavior |
+|---|---|
+| `workflow_run` requested / in_progress | Creates the activity, seeds "Queued"/"Running" |
+| `workflow_job` queued / in_progress / completed | Updates per-job step progress |
+| `workflow_run` completed | Final frame (Success/Failed/Cancelled/Skipped) then two-phase end |
+
+A newer run supersedes an older one on the same repo; events for an older run, or jobs arriving after a run completed, are dropped. Runs with more than 10 step groups drop the per-step labels to stay inside the APNs payload budget.
+
+**Setup:** In Gitea, go to the repo (or org) **Settings > Webhooks > Add Webhook > Gitea**. Set the URL to `https://relay.pushward.app/gitea`, set **Authorization Header** to `Bearer hlk_...`, and under **Custom Events** enable **Workflow Run** and **Workflow Job**. Requires Gitea 1.24+ for `workflow_job` and 1.25+ for `workflow_run`; 1.26+ is recommended (earlier versions do not emit run-level `in_progress`).
+
+### Forgejo
+
+Receives Forgejo Actions webhooks. Forgejo emits only terminal run events (`action_run_success` / `action_run_failure` / `action_run_recover`), so it shows a completion result rather than live per-job progress.
+
+| | |
+|---|---|
+| Route | `POST /forgejo` · Template `generic` · Auth Bearer |
+| Slug | `forgejo-<sha256(repo_full_name)[:8]>` (one activity per repo) |
+
+| Action | State | Icon | Color |
+|---|---|---|---|
+| `success` | Succeeded | `checkmark.circle.fill` | green |
+| `recover` | Recovered | `checkmark.circle.fill` | green |
+| `failure` | Failed | `xmark.circle.fill` | red |
+
+**Setup:** In Forgejo, add a webhook the same way (repo/org **Settings > Webhooks**), URL `https://relay.pushward.app/forgejo`, **Authorization Header** `Bearer hlk_...`, and enable the **Action Run** events. If a future Forgejo release adds `workflow_run`/`workflow_job` webhooks, point it at `/gitea` instead for live progress. The exact minimum Forgejo version shipping the `action_run_*` events is not pinned here; check your Forgejo release notes.
 
 ## Development
 

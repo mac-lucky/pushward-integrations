@@ -23,6 +23,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/gatus"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/gitea"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/grafana"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/jellyfin"
@@ -244,6 +245,12 @@ func main() {
 		bh := backrest.RegisterRoutes(api, store, clients, &cfg.Providers.Backrest)
 		collectEnder(bh)
 		slog.Info("enabled provider", "provider", "backrest")
+	}
+
+	if cfg.Providers.Gitea.Enabled {
+		gih := gitea.RegisterRoutes(api, store, clients, &cfg.Providers.Gitea)
+		collectEnder(gih)
+		slog.Info("enabled provider", "provider", "gitea")
 	}
 
 	// Wrap mux with metrics middleware and optional OTel tracing.

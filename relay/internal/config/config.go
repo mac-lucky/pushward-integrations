@@ -55,6 +55,7 @@ type ProvidersConfig struct {
 	UptimeKuma      UptimeKumaConfig      `yaml:"uptimekuma"`
 	Gatus           GatusConfig           `yaml:"gatus"`
 	Backrest        BackrestConfig        `yaml:"backrest"`
+	Gitea           GiteaConfig           `yaml:"gitea"`
 }
 
 // BaseProviderConfig holds fields shared by all provider configs.
@@ -150,6 +151,16 @@ type GatusConfig struct {
 
 // UptimeKumaConfig holds Uptime Kuma-specific settings.
 type UptimeKumaConfig struct {
+	BaseProviderConfig `yaml:",inline"`
+}
+
+// GiteaConfig holds Gitea/Forgejo Actions-webhook settings. The single config
+// backs both the /gitea and /forgejo routes.
+//
+// StaleTimeout defaults higher than most providers (4h): a single long-running
+// job emits no webhook between its in_progress and completed events, so a 30m
+// TTL would evict the run state mid-build.
+type GiteaConfig struct {
 	BaseProviderConfig `yaml:",inline"`
 }
 
@@ -298,6 +309,16 @@ func Load(path string) (*Config, error) {
 					EndDisplayTime: 4 * time.Second,
 				},
 			},
+			Gitea: GiteaConfig{
+				BaseProviderConfig: BaseProviderConfig{
+					Enabled:        true,
+					Priority:       3,
+					CleanupDelay:   15 * time.Minute,
+					StaleTimeout:   4 * time.Hour,
+					EndDelay:       5 * time.Second,
+					EndDisplayTime: 4 * time.Second,
+				},
+			},
 		},
 	}
 
@@ -400,6 +421,13 @@ func (cfg *Config) applyEnvOverrides() error {
 	if v := os.Getenv("PUSHWARD_STARR_MODE"); v != "" {
 		cfg.Providers.Starr.Mode = NotificationMode(v)
 	}
+	if v := os.Getenv("PUSHWARD_GITEA_ENABLED"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return fmt.Errorf("parsing PUSHWARD_GITEA_ENABLED: %w", err)
+		}
+		cfg.Providers.Gitea.Enabled = b
+	}
 	// ArgoCD overrides
 	if v := os.Getenv("PUSHWARD_ARGOCD_URL"); v != "" {
 		cfg.Providers.ArgoCD.URL = v
@@ -446,6 +474,7 @@ func (cfg *Config) baseProviders() []providerEntry {
 		{"uptimekuma", cfg.Providers.UptimeKuma.BaseProviderConfig},
 		{"gatus", cfg.Providers.Gatus.BaseProviderConfig},
 		{"backrest", cfg.Providers.Backrest.BaseProviderConfig},
+		{"gitea", cfg.Providers.Gitea.BaseProviderConfig},
 	}
 }
 

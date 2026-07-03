@@ -1,0 +1,15 @@
+{
+  "action": "failure",
+  "prior_status": "running",
+  "run": {
+    "id": 56,
+    "title": "Build and test",
+    "workflow_id": "ci.yml",
+    "prettyref": "main",
+    "html_url": "https://forgejo.example.com/acme/app/actions/runs/56",
+    "repository": {
+      "full_name": "acme/app",
+      "html_url": "https://forgejo.example.com/acme/app"
+    }
+  }
+}

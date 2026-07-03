@@ -1,0 +1,20 @@
+{
+  "action": "completed",
+  "workflow": {
+    "name": "CI",
+    "path": ".gitea/workflows/ci.yml"
+  },
+  "workflow_run": {
+    "id": 42,
+    "display_title": "Add feature",
+    "head_branch": "main",
+    "run_number": 7,
+    "status": "completed",
+    "conclusion": "failure",
+    "html_url": "https://gitea.example.com/acme/app/actions/runs/42"
+  },
+  "repository": {
+    "full_name": "acme/app",
+    "html_url": "https://gitea.example.com/acme/app"
+  }
+}

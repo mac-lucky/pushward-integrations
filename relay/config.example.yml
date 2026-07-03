@@ -161,3 +161,15 @@ providers:
     # Configure in Backrest: Settings > Notifications
     # Add a webhook with URL: https://relay.example.com/backrest
     # Set header: Authorization: Bearer hlk_...
+
+  gitea:
+    enabled: true                          # backs both /gitea and /forgejo
+    priority: 3
+    cleanup_delay: 15m
+    stale_timeout: 4h                      # long single-job builds emit nothing between in_progress and completed
+    end_delay: 5s
+    end_display_time: 4s
+    # Gitea (1.24+): Repo/Org Settings > Webhooks > Gitea. URL https://relay.example.com/gitea
+    # Authorization Header: Bearer hlk_...  Custom Events: Workflow Run + Workflow Job
+    # Forgejo: same setup, URL https://relay.example.com/forgejo, events: Action Run
+    # (Forgejo only sends terminal run events, so it shows a completion result, not live per-job progress)

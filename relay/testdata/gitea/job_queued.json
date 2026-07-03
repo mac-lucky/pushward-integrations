@@ -1,0 +1,19 @@
+{
+  "action": "queued",
+  "workflow_job": {
+    "id": 100,
+    "run_id": 42,
+    "name": "Build (ubuntu, node-20)",
+    "status": "queued",
+    "conclusion": "",
+    "html_url": "https://gitea.example.com/acme/app/actions/runs/42/jobs/100",
+    "steps": [
+      {"name": "Set up job", "number": 0, "status": "queued", "conclusion": ""},
+      {"name": "Checkout", "number": 1, "status": "queued", "conclusion": ""}
+    ]
+  },
+  "repository": {
+    "full_name": "acme/app",
+    "html_url": "https://gitea.example.com/acme/app"
+  }
+}
