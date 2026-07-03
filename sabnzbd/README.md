@@ -90,7 +90,14 @@ In SABnzbd, go to **Config → Notifications → Notification Script / URL** and
 http://<pushward-sabnzbd-host>:8090/webhook
 ```
 
-If you set `PUSHWARD_SABNZBD_WEBHOOK_SECRET`, send the same value in an `X-Webhook-Secret` request header.
+If you set `PUSHWARD_SABNZBD_WEBHOOK_SECRET`, every call must carry the same value in an `X-Webhook-Secret` header. SABnzbd itself has no field for the secret, so use a notification script that adds the header:
+
+```bash
+#!/bin/sh
+curl -X POST -H "X-Webhook-Secret: YOUR_WEBHOOK_SECRET" http://<pushward-sabnzbd-host>:8090/webhook
+```
+
+The secret is defined only on the bridge (the env var above, or `sabnzbd.webhook_secret` in YAML); SABnzbd just sends it back with each call. Requests with a missing or wrong header get a 401.
 
 ## Configuration
 
