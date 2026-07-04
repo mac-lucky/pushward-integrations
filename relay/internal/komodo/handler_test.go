@@ -285,6 +285,23 @@ func TestOverrideChannelsNotificationFallsBackToOneShot(t *testing.T) {
 	}
 }
 
+func TestOverrideChannelsNotificationResolveClearsDedup(t *testing.T) {
+	h, calls, mu := newHandler(t)
+	// down -> up -> down again: the resolve must clear the dedup row even
+	// though ScheduleEnd is suppressed, so the second outage still notifies.
+	sendTo(t, h, "/komodo?channels=notification", bodyUnreachable)
+	sendTo(t, h, "/komodo?channels=notification", bodyUnreachableResolved)
+	sendTo(t, h, "/komodo?channels=notification", bodyUnreachable)
+
+	recorded := testutil.GetCalls(calls, mu)
+	if n := countActivityCalls(recorded); n != 0 {
+		t.Fatalf("expected no activity calls with channels=notification, got %d", n)
+	}
+	if n := testutil.CountPath(recorded, "/notifications"); n != 3 {
+		t.Fatalf("expected 3 notifications (down, resolved, down again), got %d", n)
+	}
+}
+
 func TestOverrideChannelsActivitySuppressesNotifications(t *testing.T) {
 	h, calls, mu := newHandler(t)
 	sendTo(t, h, "/komodo?channels=activity", bodyUnreachable)

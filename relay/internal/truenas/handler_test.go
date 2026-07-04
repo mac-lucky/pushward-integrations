@@ -219,3 +219,43 @@ func TestGenieKeyRequired(t *testing.T) {
 		t.Fatalf("expected 401 without a key, got %d", w.Code)
 	}
 }
+
+// TestOverrideChannelsNotificationClearDropsDedup pins the dedup cleanup on
+// the clear path when the activity channel is suppressed: ScheduleEnd (which
+// normally deletes the row) never runs, so the handler must drop the row
+// itself or a re-fired alert within the stale timeout would be silenced.
+func TestOverrideChannelsNotificationClearDropsDedup(t *testing.T) {
+	h, calls, mu := newHandler(t)
+
+	create := func() {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/truenas/v2/alerts?channels=notification", strings.NewReader(createBody))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "GenieKey hlk_test")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("create: expected 200, got %d (%s)", w.Code, w.Body.String())
+		}
+	}
+
+	create()
+	req := httptest.NewRequest(http.MethodDelete, "/truenas/v2/alerts/"+alias+"?identifierType=alias&channels=notification", nil)
+	req.Header.Set("Authorization", "GenieKey hlk_test")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("clear: expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	create()
+
+	recorded := testutil.GetCalls(calls, mu)
+	for _, c := range recorded {
+		if strings.HasPrefix(c.Path, "/activities") {
+			t.Fatalf("expected no activity calls with channels=notification, got %s %s", c.Method, c.Path)
+		}
+	}
+	if n := testutil.CountPath(recorded, "/notifications"); n != 3 {
+		t.Fatalf("expected 3 notifications (alert, cleared, alert again), got %d", n)
+	}
+}

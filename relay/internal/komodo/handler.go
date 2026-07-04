@@ -194,6 +194,13 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 			Severity:    "info",
 		}
 		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
+	} else {
+		// ScheduleEnd normally clears the dedup row after the two-phase end.
+		// With the activity suppressed it never runs, so drop the row here or
+		// the next alert within the stale timeout would be deduped into silence.
+		if derr := h.store.Delete(ctx, "komodo", userKey, mapKey, ""); derr != nil {
+			log.Warn("state store delete failed", "error", derr, "provider", "komodo", "slug", slug)
+		}
 	}
 
 	if ov.AllowsNotification() {

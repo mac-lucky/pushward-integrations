@@ -233,6 +233,13 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 			URL:         text.SanitizeURL(p.EndpointURL),
 		}
 		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
+	} else {
+		// ScheduleEnd normally clears the dedup row after the two-phase end.
+		// With the activity suppressed it never runs, so drop the row here or
+		// the next alert within the stale timeout would be deduped into silence.
+		if err := h.store.Delete(ctx, "gatus", userKey, mapKey, ""); err != nil {
+			log.Warn("state store delete failed", "error", err, "provider", "gatus", "slug", slug)
+		}
 	}
 
 	if ov.AllowsNotification() {

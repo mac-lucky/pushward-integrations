@@ -379,3 +379,43 @@ func TestMonitorDown_UpdateFailureRollsBackDedup(t *testing.T) {
 		t.Fatalf("expected 1 notification after dedup re-trigger, got %d", n)
 	}
 }
+
+// TestOverrideChannelsNotificationUpClearsDedup pins the dedup cleanup on the
+// UP path when the activity channel is suppressed: ScheduleEnd (which normally
+// deletes the row) never runs, so the handler must drop the row itself or the
+// next DOWN within the stale timeout would be silenced.
+func TestOverrideChannelsNotificationUpClearsDedup(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	sendOv := func(payload string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/uptimekuma?channels=notification", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer hlk_test")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+		}
+	}
+
+	upBody := `{
+		"monitor": {"id": 1, "name": "My Website", "url": "https://example.com", "type": "http"},
+		"heartbeat": {"status": 1, "time": "2024-01-15T10:35:00.000Z", "msg": "", "ping": 42, "duration": 300, "important": true},
+		"msg": "My Website is UP"
+	}`
+
+	sendOv(downBody)
+	sendOv(upBody)
+	sendOv(downBody)
+
+	recorded := testutil.GetCalls(calls, mu)
+	for _, c := range recorded {
+		if strings.HasPrefix(c.Path, "/activities") {
+			t.Fatalf("expected no activity calls with channels=notification, got %s %s", c.Method, c.Path)
+		}
+	}
+	if n := testutil.CountPath(recorded, "/notifications"); n != 3 {
+		t.Fatalf("expected 3 notifications (down, resolved, down again), got %d", n)
+	}
+}

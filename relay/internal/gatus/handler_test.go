@@ -373,3 +373,46 @@ func TestTriggered_UpdateFailureRollsBackDedup(t *testing.T) {
 		t.Fatalf("expected 1 notification after dedup re-trigger, got %d", n)
 	}
 }
+
+// TestOverrideChannelsNotificationResolveClearsDedup pins the dedup cleanup on
+// the resolve path when the activity channel is suppressed: ScheduleEnd (which
+// normally deletes the row) never runs, so the handler must drop the row
+// itself or the next TRIGGERED within the stale timeout would be silenced.
+func TestOverrideChannelsNotificationResolveClearsDedup(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	sendOv := func(payload string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/gatus?channels=notification", strings.NewReader(payload))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer hlk_test")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+		}
+	}
+
+	resolvedBody := `{
+		"endpoint_name": "My API",
+		"endpoint_group": "",
+		"endpoint_url": "https://api.example.com/health",
+		"alert_description": "Health check failed",
+		"status": "RESOLVED",
+		"result_errors": ""
+	}`
+
+	sendOv(triggeredBody)
+	sendOv(resolvedBody)
+	sendOv(triggeredBody)
+
+	recorded := testutil.GetCalls(calls, mu)
+	for _, c := range recorded {
+		if strings.HasPrefix(c.Path, "/activities") {
+			t.Fatalf("expected no activity calls with channels=notification, got %s %s", c.Method, c.Path)
+		}
+	}
+	if n := testutil.CountPath(recorded, "/notifications"); n != 3 {
+		t.Fatalf("expected 3 notifications (triggered, resolved, triggered again), got %d", n)
+	}
+}
