@@ -14,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -79,6 +80,7 @@ func (h *Handler) handleCreate(ctx context.Context, input *struct {
 func (h *Handler) create(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *createAlert) error {
 	slug := slugFor(p.Alias)
 	mapKey := mapKeyFor(p.Alias)
+	ov := overrides.FromContext(ctx)
 
 	// Cancel any pending end from a prior clear so ENDED can't land after this
 	// new ONGOING update (re-fired alert reusing the alias).
@@ -102,10 +104,12 @@ func (h *Handler) create(ctx context.Context, userKey string, log *slog.Logger, 
 	}
 
 	isNew := existing == nil
-	if isNew {
+	// channels=notification suppresses the Live Activity; the isNew notification
+	// below still fires so the alert reaches the user as a one-shot.
+	if isNew && ov.AllowsActivity() {
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(title, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			if derr := h.store.Delete(ctx, "truenas", userKey, mapKey, ""); derr != nil {
 				log.Warn("state store delete failed", "error", derr, "provider", "truenas", "slug", slug)
@@ -118,35 +122,37 @@ func (h *Handler) create(ctx context.Context, userKey string, log *slog.Logger, 
 	if stateText == "" {
 		stateText = "Alert"
 	}
-	// The payload carries no severity; TrueNAS filters alerts by Level per
-	// service, so a fixed warning styling keeps the Live Activity readable.
-	req := pushward.UpdateRequest{
-		State: pushward.StateOngoing,
-		Content: pushward.Content{
-			Template:    pushward.TemplateAlert,
-			Progress:    1.0,
-			State:       stateText,
-			Icon:        "exclamationmark.triangle.fill",
-			Subtitle:    "TrueNAS",
-			AccentColor: pushward.ColorOrange,
-			Severity:    "warning",
-			FiredAt:     pushward.Int64Ptr(time.Now().Unix()),
-		},
-	}
-	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
-		log.Error("failed to update activity", "slug", slug, "error", err)
-		if isNew {
-			if derr := h.store.Delete(ctx, "truenas", userKey, mapKey, ""); derr != nil {
-				log.Warn("state store delete failed", "error", derr, "provider", "truenas", "slug", slug)
-			}
+	if ov.AllowsActivity() {
+		// The payload carries no severity; TrueNAS filters alerts by Level per
+		// service, so a fixed warning styling keeps the Live Activity readable.
+		req := pushward.UpdateRequest{
+			State: pushward.StateOngoing,
+			Content: pushward.Content{
+				Template:    pushward.TemplateAlert,
+				Progress:    1.0,
+				State:       stateText,
+				Icon:        "exclamationmark.triangle.fill",
+				Subtitle:    "TrueNAS",
+				AccentColor: pushward.ColorOrange,
+				Severity:    "warning",
+				FiredAt:     pushward.Int64Ptr(time.Now().Unix()),
+			},
 		}
-		return err
+		if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
+			log.Error("failed to update activity", "slug", slug, "error", err)
+			if isNew {
+				if derr := h.store.Delete(ctx, "truenas", userKey, mapKey, ""); derr != nil {
+					log.Warn("state store delete failed", "error", derr, "provider", "truenas", "slug", slug)
+				}
+			}
+			return err
+		}
 	}
 
-	if isNew {
+	if isNew && ov.AllowsNotification() {
 		notif := notification(p.Alias, title, slug)
 		notif.Body = stateText
-		notif.Level = pushward.LevelActive
+		notif.Level = ov.LevelOr(pushward.LevelActive)
 		if err := pwClient.SendNotification(ctx, notif); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
 		}
@@ -194,22 +200,27 @@ func (h *Handler) clear(ctx context.Context, userKey string, log *slog.Logger, p
 		return nil
 	}
 
-	content := pushward.Content{
-		Template:    pushward.TemplateAlert,
-		Progress:    1.0,
-		State:       "Resolved",
-		Icon:        "checkmark.circle.fill",
-		Subtitle:    "TrueNAS",
-		AccentColor: pushward.ColorGreen,
-		Severity:    "info",
+	ov := overrides.FromContext(ctx)
+	if ov.AllowsActivity() {
+		content := pushward.Content{
+			Template:    pushward.TemplateAlert,
+			Progress:    1.0,
+			State:       "Resolved",
+			Icon:        "checkmark.circle.fill",
+			Subtitle:    "TrueNAS",
+			AccentColor: pushward.ColorGreen,
+			Severity:    "info",
+		}
+		h.ender.ScheduleEnd(userKey, mapKey, rec.Slug, content)
 	}
-	h.ender.ScheduleEnd(userKey, mapKey, rec.Slug, content)
 
-	notif := notification(alias, rec.Title, rec.Slug)
-	notif.Body = "Resolved \u00b7 " + rec.Title
-	notif.Level = pushward.LevelPassive
-	if err := pwClient.SendNotification(ctx, notif); err != nil {
-		log.Error("failed to send notification", "slug", rec.Slug, "error", err)
+	if ov.AllowsNotification() {
+		notif := notification(alias, rec.Title, rec.Slug)
+		notif.Body = "Resolved \u00b7 " + rec.Title
+		notif.Level = ov.LevelOr(pushward.LevelPassive)
+		if err := pwClient.SendNotification(ctx, notif); err != nil {
+			log.Error("failed to send notification", "slug", rec.Slug, "error", err)
+		}
 	}
 	log.Info("truenas alert cleared", "slug", rec.Slug, "alias", alias)
 	return nil

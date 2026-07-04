@@ -8,6 +8,7 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/ratelimit"
 )
 
@@ -22,6 +23,24 @@ func AuthMiddleware(api huma.API) func(huma.Context, func(huma.Context)) {
 			return
 		}
 		ctx = huma.WithValue(ctx, auth.ContextKey(), key)
+		next(ctx)
+	}
+}
+
+// OverridesMiddleware returns a Huma middleware that parses the per-request
+// query-parameter overrides (channels / priority / level) and stores them on
+// the context for handlers to consult. Invalid values return 400 before the
+// handler runs; absent params leave the request at default behavior. It applies
+// to every provider route, including DELETE routes.
+func OverridesMiddleware(api huma.API) func(huma.Context, func(huma.Context)) {
+	return func(ctx huma.Context, next func(huma.Context)) {
+		u := ctx.URL()
+		ov, err := overrides.Parse(u.Query())
+		if err != nil {
+			_ = huma.WriteErr(api, ctx, http.StatusBadRequest, err.Error())
+			return
+		}
+		ctx = huma.WithValue(ctx, overrides.ContextKey(), ov)
 		next(ctx)
 	}
 }

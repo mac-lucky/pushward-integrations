@@ -15,6 +15,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -95,10 +96,40 @@ func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Lo
 	slug := slugForFile(filename)
 
 	cl := h.clients.Get(userKey)
+
+	ov := overrides.FromContext(ctx)
+	// channels=notification: a completed transcode is a one-shot event, so
+	// report the result as a notification instead of the activity.
+	if !ov.AllowsActivity() {
+		if !ov.AllowsNotification() {
+			return nil
+		}
+		body := "Complete"
+		if !success {
+			body = "Failed"
+		}
+		req := pushward.SendNotificationRequest{
+			Title:      filename,
+			Subtitle:   "Unmanic \u00b7 " + filename,
+			Body:       body,
+			ThreadID:   "unmanic",
+			CollapseID: slug,
+			Level:      ov.LevelOr(pushward.LevelActive),
+			Source:     "unmanic",
+			Push:       true,
+		}
+		if err := cl.SendNotification(ctx, req); err != nil {
+			log.Error("failed to send unmanic notification", "slug", slug, "error", err)
+			return err
+		}
+		log.Info("unmanic notification", "slug", slug, "type", p.Type, "filename", filename)
+		return nil
+	}
+
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
-	if err := cl.CreateActivity(ctx, slug, filename, h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, filename, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 		log.Error("failed to create unmanic activity", "slug", slug, "error", err)
 		return err
 	}

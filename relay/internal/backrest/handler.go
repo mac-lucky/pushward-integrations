@@ -14,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -153,7 +154,7 @@ func (h *Handler) createActivity(ctx context.Context, userKey string, log *slog.
 		name = "Backup"
 	}
 
-	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, name, overrides.FromContext(ctx).PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 		log.Error("failed to create backrest activity", "slug", slug, "error", err)
 		return nil, err
 	}
@@ -161,6 +162,11 @@ func (h *Handler) createActivity(ctx context.Context, userKey string, log *slog.
 }
 
 func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, stateText string) error {
+	// Backrest is Live-Activity-only with no notification path, so
+	// channels=notification has nothing to fall back to.
+	if !overrides.FromContext(ctx).AllowsActivity() {
+		return nil
+	}
 	slug, mapKey := h.slugAndKey(p)
 
 	cl, err := h.createActivity(ctx, userKey, log, slug, p)
@@ -201,6 +207,9 @@ func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Log
 }
 
 func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, stateText, color, icon string) error {
+	if !overrides.FromContext(ctx).AllowsActivity() {
+		return nil
+	}
 	slug, mapKey := h.slugAndKey(p)
 
 	cl, err := h.createActivity(ctx, userKey, log, slug, p)
@@ -243,6 +252,9 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 }
 
 func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, stateText, color, severity string) error {
+	if !overrides.FromContext(ctx).AllowsActivity() {
+		return nil
+	}
 	slug := text.SlugHash("backrest-alert", p.Plan+p.Repo+p.Event, 4)
 	mapKey := fmt.Sprintf("backrest:alert:%s:%s:%s", p.Plan, p.Repo, p.Event)
 

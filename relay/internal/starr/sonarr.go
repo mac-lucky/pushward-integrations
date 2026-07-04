@@ -10,6 +10,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/mediathread"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -129,47 +130,56 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 	h.ender.StopTimer(userKey, mapKey)
 
 	cl := h.clients.Get(userKey)
+	ov := overrides.FromContext(ctx)
 
-	// Always send notification record
-	sgReq := pushward.SendNotificationRequest{
-		Title:      "Sonarr",
-		Subtitle:   text.Truncate(subtitle, 100),
-		Body:       "Grabbed",
-		ThreadID:   sonarrMediaThreadID(p.Series),
-		CollapseID: "sonarr-grab" + episodeCollapseSuffix(p.Episodes),
-		Level:      pushward.LevelActive,
-		Source:     "sonarr",
-		Push:       h.shouldNotify("Grab"),
-		URL:        sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug),
-		Media:      pushward.MediaImage(posterURL(p.Series.Images)),
-	}
-	sgMeta := map[string]string{"quality": p.Release.Quality}
-	if p.Release.Indexer != "" {
-		sgMeta["indexer"] = p.Release.Indexer
-	}
-	if p.Release.ReleaseGroup != "" {
-		sgMeta["release_group"] = p.Release.ReleaseGroup
-	}
-	if p.Release.Size > 0 {
-		sgMeta["size"] = text.FormatBytes(p.Release.Size)
-	}
-	if len(p.Episodes) > 0 && p.Episodes[0].Title != "" {
-		sgMeta["episode_title"] = p.Episodes[0].Title
-	}
-	if p.Series.Title != "" {
-		sgMeta["series_title"] = p.Series.Title
-	}
-	if p.Series.TvdbID > 0 {
-		sgMeta["tvdb_id"] = strconv.Itoa(p.Series.TvdbID)
-	}
-	sgReq.Metadata = sgMeta
-	if err := cl.SendNotification(ctx, sgReq); err != nil {
-		log.Error("failed to send notification", "slug", slug, "error", err)
+	// Always send notification record. When channels=notification suppresses the
+	// Live Activity, force a push so the grab still reaches the user as a one-shot.
+	if ov.AllowsNotification() {
+		sgReq := pushward.SendNotificationRequest{
+			Title:      "Sonarr",
+			Subtitle:   text.Truncate(subtitle, 100),
+			Body:       "Grabbed",
+			ThreadID:   sonarrMediaThreadID(p.Series),
+			CollapseID: "sonarr-grab" + episodeCollapseSuffix(p.Episodes),
+			Level:      ov.LevelOr(pushward.LevelActive),
+			Source:     "sonarr",
+			Push:       h.shouldNotify("Grab") || !ov.AllowsActivity(),
+			URL:        sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug),
+			Media:      pushward.MediaImage(posterURL(p.Series.Images)),
+		}
+		sgMeta := map[string]string{"quality": p.Release.Quality}
+		if p.Release.Indexer != "" {
+			sgMeta["indexer"] = p.Release.Indexer
+		}
+		if p.Release.ReleaseGroup != "" {
+			sgMeta["release_group"] = p.Release.ReleaseGroup
+		}
+		if p.Release.Size > 0 {
+			sgMeta["size"] = text.FormatBytes(p.Release.Size)
+		}
+		if len(p.Episodes) > 0 && p.Episodes[0].Title != "" {
+			sgMeta["episode_title"] = p.Episodes[0].Title
+		}
+		if p.Series.Title != "" {
+			sgMeta["series_title"] = p.Series.Title
+		}
+		if p.Series.TvdbID > 0 {
+			sgMeta["tvdb_id"] = strconv.Itoa(p.Series.TvdbID)
+		}
+		sgReq.Metadata = sgMeta
+		if err := cl.SendNotification(ctx, sgReq); err != nil {
+			log.Error("failed to send notification", "slug", slug, "error", err)
+		}
 	}
 
 	// In notify/smart mode for Grab, skip Live Activity
 	if h.shouldNotify("Grab") {
 		log.Info("grab notification sent", "slug", slug, "series", p.Series.Title, "mode", h.config.Mode)
+		return nil
+	}
+
+	// channels=notification: the notification above already delivered the grab.
+	if !ov.AllowsActivity() {
 		return nil
 	}
 
@@ -185,7 +195,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 	if !alreadyTracked {
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
 			return err
@@ -227,6 +237,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 	h.ender.StopTimer(userKey, mapKey)
 
 	cl := h.clients.Get(userKey)
+	ov := overrides.FromContext(ctx)
 	quality := p.EpisodeFile.Quality
 
 	state := "Downloaded"
@@ -236,40 +247,48 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 
 	subtitle := FormatSubtitle(p.Series, p.Episodes, quality)
 
-	// Always send notification record
-	sdReq := pushward.SendNotificationRequest{
-		Title:      "Sonarr",
-		Subtitle:   text.Truncate(subtitle, 100),
-		Body:       state,
-		ThreadID:   sonarrMediaThreadID(p.Series),
-		CollapseID: "sonarr-download" + episodeCollapseSuffix(p.Episodes),
-		Level:      pushward.LevelActive,
-		Source:     "sonarr",
-		Push:       h.shouldNotify("Download"),
-		URL:        sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug),
-		Media:      pushward.MediaImage(posterURL(p.Series.Images)),
-	}
-	sdMeta := map[string]string{"quality": quality}
-	if p.EpisodeFile.Size > 0 {
-		sdMeta["size"] = text.FormatBytes(p.EpisodeFile.Size)
-	}
-	if len(p.Episodes) > 0 && p.Episodes[0].Title != "" {
-		sdMeta["episode_title"] = p.Episodes[0].Title
-	}
-	if p.Series.Title != "" {
-		sdMeta["series_title"] = p.Series.Title
-	}
-	if p.Series.TvdbID > 0 {
-		sdMeta["tvdb_id"] = strconv.Itoa(p.Series.TvdbID)
-	}
-	sdReq.Metadata = sdMeta
-	if err := cl.SendNotification(ctx, sdReq); err != nil {
-		log.Error("failed to send notification", "error", err)
+	// Always send notification record. When channels=notification suppresses the
+	// Live Activity, force a push so the import still reaches the user.
+	if ov.AllowsNotification() {
+		sdReq := pushward.SendNotificationRequest{
+			Title:      "Sonarr",
+			Subtitle:   text.Truncate(subtitle, 100),
+			Body:       state,
+			ThreadID:   sonarrMediaThreadID(p.Series),
+			CollapseID: "sonarr-download" + episodeCollapseSuffix(p.Episodes),
+			Level:      ov.LevelOr(pushward.LevelActive),
+			Source:     "sonarr",
+			Push:       h.shouldNotify("Download") || !ov.AllowsActivity(),
+			URL:        sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug),
+			Media:      pushward.MediaImage(posterURL(p.Series.Images)),
+		}
+		sdMeta := map[string]string{"quality": quality}
+		if p.EpisodeFile.Size > 0 {
+			sdMeta["size"] = text.FormatBytes(p.EpisodeFile.Size)
+		}
+		if len(p.Episodes) > 0 && p.Episodes[0].Title != "" {
+			sdMeta["episode_title"] = p.Episodes[0].Title
+		}
+		if p.Series.Title != "" {
+			sdMeta["series_title"] = p.Series.Title
+		}
+		if p.Series.TvdbID > 0 {
+			sdMeta["tvdb_id"] = strconv.Itoa(p.Series.TvdbID)
+		}
+		sdReq.Metadata = sdMeta
+		if err := cl.SendNotification(ctx, sdReq); err != nil {
+			log.Error("failed to send notification", "error", err)
+		}
 	}
 
 	// In notify/smart mode for Download, skip Live Activity
 	if h.shouldNotify("Download") {
 		log.Info("download notification sent", "slug", slug, "series", p.Series.Title, "mode", h.config.Mode)
+		return nil
+	}
+
+	// channels=notification: the notification above already delivered the import.
+	if !ov.AllowsActivity() {
 		return nil
 	}
 
@@ -286,7 +305,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
 			return err
@@ -321,7 +340,9 @@ func (h *Handler) handleSonarrManualInteraction(ctx context.Context, userKey str
 		log.Error("manual interaction notify failed", "error", err)
 	}
 
-	if p.Series == nil || h.shouldNotify("ManualInteractionRequired") {
+	// channels=notification suppresses the "Needs attention" activity flip; the
+	// notify above already reached the user.
+	if p.Series == nil || h.shouldNotify("ManualInteractionRequired") || !overrides.FromContext(ctx).AllowsActivity() {
 		return nil
 	}
 

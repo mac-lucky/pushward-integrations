@@ -12,6 +12,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
@@ -75,9 +76,35 @@ func (h *Handler) handleChange(ctx context.Context, payload *changedetectionPayl
 		firedAtPtr = pushward.Int64Ptr(t.Unix())
 	}
 
+	ov := overrides.FromContext(ctx)
+	// channels=notification: the change is a single create/ongoing/ended burst,
+	// so fall back to a one-shot notification instead of the activity.
+	if !ov.AllowsActivity() {
+		if !ov.AllowsNotification() {
+			return nil
+		}
+		req := pushward.SendNotificationRequest{
+			Title:      name,
+			Subtitle:   subtitle,
+			Body:       stateText,
+			ThreadID:   "changedetection",
+			CollapseID: slug,
+			Level:      ov.LevelOr(pushward.LevelActive),
+			Source:     "changedetection",
+			URL:        text.SanitizeURL(payload.DiffURL),
+			Push:       true,
+		}
+		if err := pwClient.SendNotification(ctx, req); err != nil {
+			log.Error("failed to send notification", "slug", slug, "error", err)
+			return err
+		}
+		log.Info("processed changedetection webhook", "slug", slug, "url", payload.URL)
+		return nil
+	}
+
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
-	if err := pwClient.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := pwClient.CreateActivity(ctx, slug, name, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 		log.Error("failed to create activity", "slug", slug, "error", err)
 		return err
 	}

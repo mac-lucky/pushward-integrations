@@ -14,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -118,6 +119,7 @@ func (h *Handler) buildNotification(p *gatusPayload, slug, subtitle string) push
 
 func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *gatusPayload) error {
 	slug, mapKey := h.slugAndKey(p)
+	ov := overrides.FromContext(ctx)
 
 	// Cancel any pending end timer from a previous RESOLVED event
 	h.ender.StopTimer(userKey, mapKey)
@@ -137,10 +139,12 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 	}
 
 	isNew := existing == nil
-	if isNew {
+	// channels=notification suppresses the Live Activity; the isNew notification
+	// below still fires so the outage reaches the user as a one-shot.
+	if isNew && ov.AllowsActivity() {
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.EndpointName, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.EndpointName, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			if err := h.store.Delete(ctx, "gatus", userKey, mapKey, ""); err != nil {
 				log.Warn("state store delete failed", "error", err, "provider", "gatus", "slug", slug)
@@ -158,41 +162,43 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 		stateText = "Health Check Failed"
 	}
 
-	firedAt := pushward.Int64Ptr(time.Now().Unix())
 	subtitle := h.subtitle(p)
 
-	req := pushward.UpdateRequest{
-		State: pushward.StateOngoing,
-		Content: pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       stateText,
-			Icon:        "exclamationmark.triangle.fill",
-			Subtitle:    subtitle,
-			AccentColor: pushward.ColorRed,
-			Severity:    "critical",
-			FiredAt:     firedAt,
-			URL:         text.SanitizeURL(p.EndpointURL),
-		},
-	}
-	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
-		log.Error("failed to update activity", "slug", slug, "error", err)
-		// Roll back the dedup state for a brand-new alert so a retry re-seeds
-		// and re-sends the (isNew-gated) notification instead of being
-		// permanently suppressed by the orphaned state row.
-		if isNew {
-			if err := h.store.Delete(ctx, "gatus", userKey, mapKey, ""); err != nil {
-				log.Warn("state store delete failed", "error", err, "provider", "gatus", "slug", slug)
-			}
+	if ov.AllowsActivity() {
+		firedAt := pushward.Int64Ptr(time.Now().Unix())
+		req := pushward.UpdateRequest{
+			State: pushward.StateOngoing,
+			Content: pushward.Content{
+				Template:    "alert",
+				Progress:    1.0,
+				State:       stateText,
+				Icon:        "exclamationmark.triangle.fill",
+				Subtitle:    subtitle,
+				AccentColor: pushward.ColorRed,
+				Severity:    "critical",
+				FiredAt:     firedAt,
+				URL:         text.SanitizeURL(p.EndpointURL),
+			},
 		}
-		return err
+		if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
+			log.Error("failed to update activity", "slug", slug, "error", err)
+			// Roll back the dedup state for a brand-new alert so a retry re-seeds
+			// and re-sends the (isNew-gated) notification instead of being
+			// permanently suppressed by the orphaned state row.
+			if isNew {
+				if err := h.store.Delete(ctx, "gatus", userKey, mapKey, ""); err != nil {
+					log.Warn("state store delete failed", "error", err, "provider", "gatus", "slug", slug)
+				}
+			}
+			return err
+		}
+		log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "error")
 	}
-	log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "error")
 
-	if isNew {
+	if isNew && ov.AllowsNotification() {
 		notifReq := h.buildNotification(p, slug, subtitle)
 		notifReq.Body = p.EndpointName + " · " + stateText
-		notifReq.Level = pushward.LevelActive
+		notifReq.Level = ov.LevelOr(pushward.LevelActive)
 		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
 		}
@@ -212,26 +218,30 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 		return nil // No prior TRIGGERED — skip routine RESOLVED
 	}
 
+	ov := overrides.FromContext(ctx)
 	subtitle := h.subtitle(p)
 
-	content := pushward.Content{
-		Template:    "alert",
-		Progress:    1.0,
-		State:       "Resolved",
-		Icon:        "checkmark.circle.fill",
-		Subtitle:    subtitle,
-		AccentColor: pushward.ColorGreen,
-		Severity:    "info",
-		URL:         text.SanitizeURL(p.EndpointURL),
+	if ov.AllowsActivity() {
+		content := pushward.Content{
+			Template:    "alert",
+			Progress:    1.0,
+			State:       "Resolved",
+			Icon:        "checkmark.circle.fill",
+			Subtitle:    subtitle,
+			AccentColor: pushward.ColorGreen,
+			Severity:    "info",
+			URL:         text.SanitizeURL(p.EndpointURL),
+		}
+		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	}
 
-	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-
-	notifReq := h.buildNotification(p, slug, subtitle)
-	notifReq.Body = "Resolved · " + p.EndpointName
-	notifReq.Level = pushward.LevelPassive
-	if err := pwClient.SendNotification(ctx, notifReq); err != nil {
-		log.Error("failed to send notification", "slug", slug, "error", err)
+	if ov.AllowsNotification() {
+		notifReq := h.buildNotification(p, slug, subtitle)
+		notifReq.Body = "Resolved · " + p.EndpointName
+		notifReq.Level = ov.LevelOr(pushward.LevelPassive)
+		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
+			log.Error("failed to send notification", "slug", slug, "error", err)
+		}
 	}
 
 	log.Info("scheduled end for activity", "slug", slug, "endpoint", p.EndpointName)

@@ -151,10 +151,16 @@ type Content struct {
 	SeverityLabel string `json:"severity_label,omitempty"`
 
 	// Steps template
-	CurrentStep *int     `json:"current_step,omitempty"`
-	TotalSteps  *int     `json:"total_steps,omitempty"`
-	StepRows    []int    `json:"step_rows,omitempty"`
-	StepLabels  []string `json:"step_labels,omitempty"`
+	CurrentStep *int      `json:"current_step,omitempty"`
+	TotalSteps  *int      `json:"total_steps,omitempty"`
+	StepRows    []int     `json:"step_rows,omitempty"`
+	StepLabels  []string  `json:"step_labels,omitempty"`
+	StepWeights []float64 `json:"step_weights,omitempty"`
+	StepColors  []string  `json:"step_colors,omitempty"`
+
+	// LiveProgress opts the generic template into client-side interpolation of
+	// the progress bar and ETA between pushes. Requires end_date.
+	LiveProgress *bool `json:"live_progress,omitempty"`
 
 	// Countdown template
 	Duration          *string `json:"duration,omitempty"`
@@ -185,6 +191,9 @@ type Content struct {
 	Thresholds []Threshold               `json:"thresholds,omitempty"`
 	Units      map[string]string         `json:"units,omitempty"`
 	History    map[string][]HistoryPoint `json:"history,omitempty"`
+	// PrimarySeries names the timeline series driving the headline number and
+	// compact range. Falls back to the first series alphabetically.
+	PrimarySeries string `json:"primary_series,omitempty"`
 
 	// Board template: 1-4 tiles, replaced wholesale on each update.
 	Tiles []BoardTile `json:"tiles,omitempty"`
@@ -250,10 +259,16 @@ type ContentPatch struct {
 	SeverityLabel *string `json:"severity_label,omitempty"`
 
 	// Steps template
-	CurrentStep *int     `json:"current_step,omitempty"`
-	TotalSteps  *int     `json:"total_steps,omitempty"`
-	StepRows    []int    `json:"step_rows,omitempty"`
-	StepLabels  []string `json:"step_labels,omitempty"`
+	CurrentStep *int      `json:"current_step,omitempty"`
+	TotalSteps  *int      `json:"total_steps,omitempty"`
+	StepRows    []int     `json:"step_rows,omitempty"`
+	StepLabels  []string  `json:"step_labels,omitempty"`
+	StepWeights []float64 `json:"step_weights,omitempty"`
+	StepColors  []string  `json:"step_colors,omitempty"`
+
+	// LiveProgress opts the generic template into client-side interpolation of
+	// the progress bar and ETA between pushes. Requires end_date.
+	LiveProgress *bool `json:"live_progress,omitempty"`
 
 	// Countdown template
 	Duration          *string `json:"duration,omitempty"`
@@ -278,6 +293,9 @@ type ContentPatch struct {
 	Thresholds []Threshold               `json:"thresholds,omitempty"`
 	Units      map[string]string         `json:"units,omitempty"`
 	History    map[string][]HistoryPoint `json:"history,omitempty"`
+	// PrimarySeries names the timeline series driving the headline number and
+	// compact range. Falls back to the first series alphabetically.
+	PrimarySeries *string `json:"primary_series,omitempty"`
 
 	// Board template: 1-4 tiles. Sending the slice replaces all tiles
 	// (RFC 7396 array semantics); omitting it preserves the stored tiles.

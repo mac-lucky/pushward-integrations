@@ -76,5 +76,6 @@ func NewAPI(title, version string) (*http.ServeMux, huma.API) {
 func NewTestAPI() (http.Handler, huma.API) {
 	mux, api := NewAPI("Test", "1.0.0")
 	api.UseMiddleware(AuthMiddleware(api))
+	api.UseMiddleware(OverridesMiddleware(api))
 	return mux, api
 }

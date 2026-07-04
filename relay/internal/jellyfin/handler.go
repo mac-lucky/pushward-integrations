@@ -17,6 +17,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/mediathread"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -186,7 +187,23 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	return humautil.NewOK(), nil
 }
 
+// notify sends a push notification, honoring the per-request channels and level
+// overrides. channels=activity suppresses it; level overrides its interruption level.
+func (h *Handler) notify(ctx context.Context, userKey string, log *slog.Logger, req pushward.SendNotificationRequest) error {
+	ov := overrides.FromContext(ctx)
+	if !ov.AllowsNotification() {
+		return nil
+	}
+	req.Level = ov.LevelOr(req.Level)
+	return h.clients.SendNotification(ctx, userKey, log, req)
+}
+
 func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
+	// Jellyfin playback is a Live-Activity-only progress flow with no
+	// notification path, so channels=notification has nothing to fall back to.
+	if !overrides.FromContext(ctx).AllowsActivity() {
+		return nil
+	}
 	slug := playbackSlug(p.ItemID, p.UserName)
 
 	// Skip paused starts �� Jellyfin fires PlaybackStart with IsPaused=true
@@ -215,7 +232,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
 	name := mediaName(p)
-	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, name, overrides.FromContext(ctx).PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 		log.Error("failed to create activity", "slug", slug, "error", err)
 		return err
 	}
@@ -259,6 +276,9 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *
 }
 
 func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
+	if !overrides.FromContext(ctx).AllowsActivity() {
+		return nil
+	}
 	slug := playbackSlug(p.ItemID, p.UserName)
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
@@ -338,7 +358,7 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		name := mediaName(p)
-		if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := cl.CreateActivity(ctx, slug, name, overrides.FromContext(ctx).PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			return err
 		}
@@ -379,6 +399,9 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 }
 
 func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) {
+	if !overrides.FromContext(ctx).AllowsActivity() {
+		return
+	}
 	slug := playbackSlug(p.ItemID, p.UserName)
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
@@ -431,7 +454,7 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog
 		}
 	}
 
-	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+	return h.notify(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      mediaName(p),
 		Subtitle:   subtitle,
 		Body:       "Added · " + mediaName(p),
@@ -463,7 +486,7 @@ func jellyfinMediaThreadID(p *jellyfinPayload) string {
 }
 
 func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
-	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+	return h.notify(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      p.TaskName,
 		Subtitle:   "Jellyfin",
 		Body:       "Started · " + p.TaskName,
@@ -483,7 +506,7 @@ func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, log *
 		level = pushward.LevelActive
 	}
 
-	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+	return h.notify(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      p.TaskName,
 		Subtitle:   "Jellyfin",
 		Body:       body,
@@ -496,7 +519,7 @@ func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, log *
 }
 
 func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
-	return h.clients.SendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+	return h.notify(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      "Auth Failure",
 		Subtitle:   "Jellyfin",
 		Body:       "Failed login: " + text.TruncateHard(p.UserName, 40) + " from " + text.TruncateHard(p.RemoteEndPoint, 40),

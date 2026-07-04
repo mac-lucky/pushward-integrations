@@ -17,6 +17,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -80,6 +81,12 @@ func (h *Handler) handleGitea(ctx context.Context, input *struct {
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	pwClient := h.clients.Get(userKey)
 	p := &input.Body
+
+	// Gitea is Live-Activity-only with no notification path, so
+	// channels=notification has nothing to fall back to.
+	if !overrides.FromContext(ctx).AllowsActivity() {
+		return humautil.NewOK(), nil
+	}
 
 	if p.Repository == nil || p.Repository.FullName == "" {
 		log.Debug("gitea event without repository, ignoring", "action", p.Action)
@@ -352,6 +359,10 @@ func (h *Handler) handleForgejo(ctx context.Context, input *struct {
 	pwClient := h.clients.Get(userKey)
 	p := &input.Body
 
+	if !overrides.FromContext(ctx).AllowsActivity() {
+		return humautil.NewOK(), nil
+	}
+
 	if p.Run == nil || p.Run.Repository == nil || p.Run.Repository.FullName == "" {
 		log.Debug("forgejo event without run/repository, ignoring", "action", p.Action)
 		return humautil.NewOK(), nil
@@ -405,7 +416,7 @@ func (h *Handler) handleForgejo(ctx context.Context, input *struct {
 func (h *Handler) createActivity(ctx context.Context, pwClient *pushward.Client, slug, name string) error {
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
-	return pwClient.CreateActivity(ctx, slug, text.TruncateHard(name, 100), h.config.Priority, endedTTL, staleTTL)
+	return pwClient.CreateActivity(ctx, slug, text.TruncateHard(name, 100), overrides.FromContext(ctx).PriorityOr(h.config.Priority), endedTTL, staleTTL)
 }
 
 // getGroup reads the per-slug state group, degrading to an empty group on a

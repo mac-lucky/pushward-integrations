@@ -17,6 +17,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -351,6 +352,12 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	ctx = metrics.WithProvider(ctx, "argocd")
 
+	// ArgoCD is Live-Activity-only with no notification path, so
+	// channels=notification has nothing to fall back to.
+	if !overrides.FromContext(ctx).AllowsActivity() {
+		return humautil.NewOK(), nil
+	}
+
 	var err error
 	switch payload.Event {
 	case "sync-running":
@@ -449,7 +456,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
 	if needsCreate {
-		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := pw.CreateActivity(ctx, slug, p.App, overrides.FromContext(ctx).PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteApp(ctx, log, userKey, p.App)
 			return err
@@ -555,7 +562,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 		pw := h.clients.Get(userKey)
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := pw.CreateActivity(ctx, slug, p.App, overrides.FromContext(ctx).PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteApp(ctx, log, userKey, p.App)
 			return err
@@ -650,7 +657,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.
 		pw := h.clients.Get(userKey)
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := pw.CreateActivity(ctx, slug, p.App, overrides.FromContext(ctx).PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteApp(ctx, log, userKey, p.App)
 			return err
@@ -757,7 +764,7 @@ func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.L
 		pw := h.clients.Get(userKey)
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := pw.CreateActivity(ctx, slug, p.App, h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := pw.CreateActivity(ctx, slug, p.App, overrides.FromContext(ctx).PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteApp(ctx, log, userKey, p.App)
 			return nil, err

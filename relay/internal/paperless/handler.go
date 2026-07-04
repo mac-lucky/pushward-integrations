@@ -14,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -86,20 +87,46 @@ func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.
 	mapKey := slug
 
 	cl := h.clients.Get(userKey)
-	endedTTL := int(h.config.CleanupDelay.Seconds())
-	staleTTL := int(h.config.StaleTimeout.Seconds())
+	ov := overrides.FromContext(ctx)
 
 	name := p.Title
 	if name == "" {
 		name = "Document"
 	}
 
-	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
+	subtitle := buildSubtitle(p.DocumentType, p.Correspondent)
+
+	// channels=notification: a processed document is a one-shot event, so
+	// report it as a notification instead of the activity.
+	if !ov.AllowsActivity() {
+		if !ov.AllowsNotification() {
+			return nil
+		}
+		notifReq := pushward.SendNotificationRequest{
+			Title:      name,
+			Subtitle:   subtitle,
+			Body:       stateText,
+			ThreadID:   "paperless",
+			CollapseID: slug,
+			Level:      ov.LevelOr(pushward.LevelActive),
+			Source:     "paperless",
+			Push:       true,
+		}
+		if err := cl.SendNotification(ctx, notifReq); err != nil {
+			log.Error("failed to send paperless notification", "slug", slug, "error", err)
+			return err
+		}
+		log.Info("paperless document", "slug", slug, "event", p.Event, "state", stateText)
+		return nil
+	}
+
+	endedTTL := int(h.config.CleanupDelay.Seconds())
+	staleTTL := int(h.config.StaleTimeout.Seconds())
+
+	if err := cl.CreateActivity(ctx, slug, name, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 		log.Error("failed to create paperless activity", "slug", slug, "error", err)
 		return err
 	}
-
-	subtitle := buildSubtitle(p.DocumentType, p.Correspondent)
 
 	content := pushward.Content{
 		Template:    "generic",
@@ -136,6 +163,13 @@ func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, 
 	slug := text.SlugHash("paperless", p.Filename, 4)
 	mapKey := slug
 
+	ov := overrides.FromContext(ctx)
+	// consumption_started is a transient activity-only state with no
+	// notification, so channels=notification has nothing to fall back to.
+	if !ov.AllowsActivity() {
+		return nil
+	}
+
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
@@ -145,7 +179,7 @@ func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, 
 		name = "Document"
 	}
 
-	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, name, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 		log.Error("failed to create paperless activity", "slug", slug, "error", err)
 		return err
 	}

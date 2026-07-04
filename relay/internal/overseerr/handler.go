@@ -16,6 +16,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/mediathread"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -104,39 +105,47 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 	slug := fmt.Sprintf("overseerr-%s-%s", p.Media.MediaType, p.Media.TmdbID)
 	mapKey := fmt.Sprintf("overseerr:%s:%s", p.Media.MediaType, p.Media.TmdbID)
 	subtitle := "Overseerr · " + text.TruncateHard(p.Subject, 50)
-
-	// Cancel any pending two-phase end from a prior terminal event so a new
-	// event for the same media (e.g. a re-request) isn't ended out from under us.
-	h.ender.StopTimer(userKey, mapKey)
+	ov := overrides.FromContext(ctx)
 
 	cl := h.clients.Get(userKey)
 
 	// Send notification (always, independent of Live Activity)
-	notifReq := pushward.SendNotificationRequest{
-		Title:    "Overseerr",
-		Subtitle: text.TruncateHard(p.Subject, 100),
-		Body:     stateText,
-		ThreadID: mediathread.ThreadID(p.Media.MediaType, p.Media.TmdbID, p.Media.TvdbID),
-		// CollapseID is per-event so only duplicate deliveries of the SAME
-		// lifecycle event collapse (incl. the client's own 5xx retries), while
-		// distinct lifecycle alerts remain separate pushes.
-		CollapseID: fmt.Sprintf("overseerr-%s-%s-%s", p.Media.MediaType, p.Media.TmdbID, stateText),
-		Level:      pushward.LevelActive,
-		Source:     "overseerr",
-		Media:      pushward.MediaImage(p.Image),
-		Push:       true,
+	if ov.AllowsNotification() {
+		notifReq := pushward.SendNotificationRequest{
+			Title:    "Overseerr",
+			Subtitle: text.TruncateHard(p.Subject, 100),
+			Body:     stateText,
+			ThreadID: mediathread.ThreadID(p.Media.MediaType, p.Media.TmdbID, p.Media.TvdbID),
+			// CollapseID is per-event so only duplicate deliveries of the SAME
+			// lifecycle event collapse (incl. the client's own 5xx retries), while
+			// distinct lifecycle alerts remain separate pushes.
+			CollapseID: fmt.Sprintf("overseerr-%s-%s-%s", p.Media.MediaType, p.Media.TmdbID, stateText),
+			Level:      ov.LevelOr(pushward.LevelActive),
+			Source:     "overseerr",
+			Media:      pushward.MediaImage(p.Image),
+			Push:       true,
+		}
+		meta := map[string]string{"media_type": p.Media.MediaType, "tmdb_id": p.Media.TmdbID}
+		if p.Subject != "" {
+			meta["media_title"] = text.TruncateHard(p.Subject, 100)
+		}
+		if p.Request.RequestedBy != "" {
+			meta["requested_by"] = p.Request.RequestedBy
+		}
+		notifReq.Metadata = meta
+		if err := cl.SendNotification(ctx, notifReq); err != nil {
+			log.Error("failed to send notification", "slug", slug, "error", err)
+		}
 	}
-	meta := map[string]string{"media_type": p.Media.MediaType, "tmdb_id": p.Media.TmdbID}
-	if p.Subject != "" {
-		meta["media_title"] = text.TruncateHard(p.Subject, 100)
+
+	if !ov.AllowsActivity() {
+		log.Info("overseerr event", "slug", slug, "type", stateText)
+		return nil
 	}
-	if p.Request.RequestedBy != "" {
-		meta["requested_by"] = p.Request.RequestedBy
-	}
-	notifReq.Metadata = meta
-	if err := cl.SendNotification(ctx, notifReq); err != nil {
-		log.Error("failed to send notification", "slug", slug, "error", err)
-	}
+
+	// Cancel any pending two-phase end from a prior terminal event so a new
+	// event for the same media (e.g. a re-request) isn't ended out from under us.
+	h.ender.StopTimer(userKey, mapKey)
 
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
@@ -146,7 +155,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 		name = "Media Request"
 	}
 
-	if err := cl.CreateActivity(ctx, slug, name, h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, name, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 		log.Error("failed to create overseerr activity", "slug", slug, "error", err)
 		return err
 	}

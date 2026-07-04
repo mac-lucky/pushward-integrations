@@ -15,6 +15,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -85,6 +86,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 // Kuma / Gatus down-then-up pattern.
 func (h *Handler) handleResolvable(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *komodoPayload) error {
 	slug, mapKey := slugAndKey(p)
+	ov := overrides.FromContext(ctx)
 
 	if p.Resolved {
 		return h.handleResolved(ctx, userKey, log, pwClient, p, slug, mapKey)
@@ -109,10 +111,12 @@ func (h *Handler) handleResolvable(ctx context.Context, userKey string, log *slo
 
 	name := resourceName(p)
 	isNew := existing == nil
-	if isNew {
+	// channels=notification suppresses the Live Activity; the isNew notification
+	// below still fires so the alert reaches the user as a one-shot.
+	if isNew && ov.AllowsActivity() {
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(name, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(name, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			if derr := h.store.Delete(ctx, "komodo", userKey, mapKey, ""); derr != nil {
 				log.Warn("state store delete failed", "error", derr, "provider", "komodo", "slug", slug)
@@ -121,37 +125,39 @@ func (h *Handler) handleResolvable(ctx context.Context, userKey string, log *slo
 		}
 	}
 
-	color, severity := levelStyle(p.Level)
 	stateText := summarize(&p.Data)
-	req := pushward.UpdateRequest{
-		State: pushward.StateOngoing,
-		Content: pushward.Content{
-			Template:    pushward.TemplateAlert,
-			Progress:    1.0,
-			State:       stateText,
-			Icon:        "exclamationmark.triangle.fill",
-			Subtitle:    subtitle(name),
-			AccentColor: color,
-			Severity:    severity,
-			FiredAt:     firedAt(p.TS),
-		},
-	}
-	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
-		log.Error("failed to update activity", "slug", slug, "error", err)
-		// Roll back a brand-new alert's dedup row so a retry re-seeds and
-		// re-sends the isNew-gated notification instead of being suppressed.
-		if isNew {
-			if derr := h.store.Delete(ctx, "komodo", userKey, mapKey, ""); derr != nil {
-				log.Warn("state store delete failed", "error", derr, "provider", "komodo", "slug", slug)
-			}
+	if ov.AllowsActivity() {
+		color, severity := levelStyle(p.Level)
+		req := pushward.UpdateRequest{
+			State: pushward.StateOngoing,
+			Content: pushward.Content{
+				Template:    pushward.TemplateAlert,
+				Progress:    1.0,
+				State:       stateText,
+				Icon:        "exclamationmark.triangle.fill",
+				Subtitle:    subtitle(name),
+				AccentColor: color,
+				Severity:    severity,
+				FiredAt:     firedAt(p.TS),
+			},
 		}
-		return err
+		if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
+			log.Error("failed to update activity", "slug", slug, "error", err)
+			// Roll back a brand-new alert's dedup row so a retry re-seeds and
+			// re-sends the isNew-gated notification instead of being suppressed.
+			if isNew {
+				if derr := h.store.Delete(ctx, "komodo", userKey, mapKey, ""); derr != nil {
+					log.Warn("state store delete failed", "error", derr, "provider", "komodo", "slug", slug)
+				}
+			}
+			return err
+		}
 	}
 
-	if isNew {
+	if isNew && ov.AllowsNotification() {
 		notif := h.notification(p, name, slug)
 		notif.Body = name + " \u00b7 " + stateText
-		notif.Level = pushward.LevelActive
+		notif.Level = ov.LevelOr(pushward.LevelActive)
 		if err := pwClient.SendNotification(ctx, notif); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
 		}
@@ -171,24 +177,32 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 	}
 
 	name := resourceName(p)
-	// The carried err/summary is stale on a resolve event, so render a plain
-	// "Resolved" and never surface the original error.
-	content := pushward.Content{
-		Template:    pushward.TemplateAlert,
-		Progress:    1.0,
-		State:       "Resolved",
-		Icon:        "checkmark.circle.fill",
-		Subtitle:    subtitle(name),
-		AccentColor: pushward.ColorGreen,
-		Severity:    "info",
-	}
-	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
+	ov := overrides.FromContext(ctx)
 
-	notif := h.notification(p, name, slug)
-	notif.Body = "Resolved \u00b7 " + name
-	notif.Level = pushward.LevelPassive
-	if err := pwClient.SendNotification(ctx, notif); err != nil {
-		log.Error("failed to send notification", "slug", slug, "error", err)
+	// channels=notification never touches the activity; the resolved
+	// notification below still fires (channels permitting).
+	if ov.AllowsActivity() {
+		// The carried err/summary is stale on a resolve event, so render a plain
+		// "Resolved" and never surface the original error.
+		content := pushward.Content{
+			Template:    pushward.TemplateAlert,
+			Progress:    1.0,
+			State:       "Resolved",
+			Icon:        "checkmark.circle.fill",
+			Subtitle:    subtitle(name),
+			AccentColor: pushward.ColorGreen,
+			Severity:    "info",
+		}
+		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
+	}
+
+	if ov.AllowsNotification() {
+		notif := h.notification(p, name, slug)
+		notif.Body = "Resolved \u00b7 " + name
+		notif.Level = ov.LevelOr(pushward.LevelPassive)
+		if err := pwClient.SendNotification(ctx, notif); err != nil {
+			log.Error("failed to send notification", "slug", slug, "error", err)
+		}
 	}
 	log.Info("komodo alert resolved", "slug", slug, "type", p.Data.Type)
 	return nil
@@ -198,10 +212,16 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 // notification. Levels map OK -> passive, WARNING -> active, CRITICAL ->
 // time-sensitive.
 func (h *Handler) handleOneShot(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *komodoPayload) error {
+	ov := overrides.FromContext(ctx)
+	// A one-shot has no Live Activity to keep, so channels=activity leaves
+	// nothing to deliver.
+	if !ov.AllowsNotification() {
+		return nil
+	}
 	name := resourceName(p)
 	notif := h.notification(p, name, oneShotCollapseID(p))
 	notif.Body = summarize(&p.Data)
-	notif.Level = oneShotLevel(p.Level)
+	notif.Level = ov.LevelOr(oneShotLevel(p.Level))
 	if err := pwClient.SendNotification(ctx, notif); err != nil {
 		log.Error("failed to send notification", "type", p.Data.Type, "error", err)
 		return err

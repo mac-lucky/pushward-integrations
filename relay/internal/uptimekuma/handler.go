@@ -16,6 +16,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -112,6 +113,7 @@ func (h *Handler) buildNotification(p *uptimekumaPayload, subtitle string, monit
 
 func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *uptimekumaPayload) error {
 	slug, mapKey, monitorIDStr := h.slugAndKey(p)
+	ov := overrides.FromContext(ctx)
 
 	// Cancel any pending end timer from a previous UP event to prevent
 	// a race where ENDED fires after this new ONGOING update.
@@ -132,10 +134,12 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 	}
 
 	isNew := existing == nil
-	if isNew {
+	// channels=notification suppresses the Live Activity; the isNew notification
+	// below still fires so the outage reaches the user as a one-shot.
+	if isNew && ov.AllowsActivity() {
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.Monitor.Name, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.Monitor.Name, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			if err := h.store.Delete(ctx, "uptimekuma", userKey, mapKey, ""); err != nil {
 				log.Warn("state store delete failed", "error", err, "provider", "uptimekuma", "slug", slug)
@@ -150,44 +154,45 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 		stateText = "Monitor Down"
 	}
 
-	var firedAtPtr *int64
-	if t, err := time.Parse(time.RFC3339Nano, p.Heartbeat.Time); err == nil {
-		firedAtPtr = pushward.Int64Ptr(t.Unix())
-	}
-
 	subtitle := h.subtitle(p)
 
-	req := pushward.UpdateRequest{
-		State: pushward.StateOngoing,
-		Content: pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       stateText,
-			Icon:        "exclamationmark.triangle.fill",
-			Subtitle:    subtitle,
-			AccentColor: pushward.ColorRed,
-			Severity:    "critical",
-			FiredAt:     firedAtPtr,
-			URL:         text.SanitizeURL(p.Monitor.URL),
-		},
-	}
-	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
-		log.Error("failed to update activity", "slug", slug, "error", err)
-		// Roll back dedup state for a brand-new alert so a retry re-seeds and
-		// re-sends the (isNew-gated) notification rather than being suppressed.
-		if isNew {
-			if err := h.store.Delete(ctx, "uptimekuma", userKey, mapKey, ""); err != nil {
-				log.Warn("state store delete failed", "error", err, "provider", "uptimekuma", "slug", slug)
-			}
+	if ov.AllowsActivity() {
+		var firedAtPtr *int64
+		if t, err := time.Parse(time.RFC3339Nano, p.Heartbeat.Time); err == nil {
+			firedAtPtr = pushward.Int64Ptr(t.Unix())
 		}
-		return err
+		req := pushward.UpdateRequest{
+			State: pushward.StateOngoing,
+			Content: pushward.Content{
+				Template:    "alert",
+				Progress:    1.0,
+				State:       stateText,
+				Icon:        "exclamationmark.triangle.fill",
+				Subtitle:    subtitle,
+				AccentColor: pushward.ColorRed,
+				Severity:    "critical",
+				FiredAt:     firedAtPtr,
+				URL:         text.SanitizeURL(p.Monitor.URL),
+			},
+		}
+		if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
+			log.Error("failed to update activity", "slug", slug, "error", err)
+			// Roll back dedup state for a brand-new alert so a retry re-seeds and
+			// re-sends the (isNew-gated) notification rather than being suppressed.
+			if isNew {
+				if err := h.store.Delete(ctx, "uptimekuma", userKey, mapKey, ""); err != nil {
+					log.Warn("state store delete failed", "error", err, "provider", "uptimekuma", "slug", slug)
+				}
+			}
+			return err
+		}
+		log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "critical")
 	}
-	log.Info("updated activity", "slug", slug, "state", pushward.StateOngoing, "severity", "critical")
 
-	if isNew {
+	if isNew && ov.AllowsNotification() {
 		notifReq := h.buildNotification(p, subtitle, monitorIDStr)
 		notifReq.Body = p.Monitor.Name + " · " + stateText
-		notifReq.Level = pushward.LevelActive
+		notifReq.Level = ov.LevelOr(pushward.LevelActive)
 		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
 		}
@@ -208,6 +213,7 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 	}
 
 	slug, _, monitorIDStr := h.slugAndKey(p)
+	ov := overrides.FromContext(ctx)
 	subtitle := h.subtitle(p)
 
 	activityState := "Resolved"
@@ -217,24 +223,27 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 		notifBody = fmt.Sprintf("Resolved \u00b7 %s \u00b7 %dms", p.Monitor.Name, *p.Heartbeat.Ping)
 	}
 
-	content := pushward.Content{
-		Template:    "alert",
-		Progress:    1.0,
-		State:       activityState,
-		Icon:        "checkmark.circle.fill",
-		Subtitle:    subtitle,
-		AccentColor: pushward.ColorGreen,
-		Severity:    "info",
-		URL:         text.SanitizeURL(p.Monitor.URL),
+	if ov.AllowsActivity() {
+		content := pushward.Content{
+			Template:    "alert",
+			Progress:    1.0,
+			State:       activityState,
+			Icon:        "checkmark.circle.fill",
+			Subtitle:    subtitle,
+			AccentColor: pushward.ColorGreen,
+			Severity:    "info",
+			URL:         text.SanitizeURL(p.Monitor.URL),
+		}
+		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	}
 
-	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
-
-	notifReq := h.buildNotification(p, subtitle, monitorIDStr)
-	notifReq.Body = notifBody
-	notifReq.Level = pushward.LevelPassive
-	if err := pwClient.SendNotification(ctx, notifReq); err != nil {
-		log.Error("failed to send notification", "slug", slug, "error", err)
+	if ov.AllowsNotification() {
+		notifReq := h.buildNotification(p, subtitle, monitorIDStr)
+		notifReq.Body = notifBody
+		notifReq.Level = ov.LevelOr(pushward.LevelPassive)
+		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
+			log.Error("failed to send notification", "slug", slug, "error", err)
+		}
 	}
 
 	log.Info("scheduled end for activity", "slug", slug, "monitor", p.Monitor.Name)
@@ -243,6 +252,13 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 
 func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *uptimekumaPayload) error {
 	slug, mapKey, _ := h.slugAndKey(p)
+	ov := overrides.FromContext(ctx)
+
+	// PENDING is a transient activity-only state with no notification, so
+	// channels=notification has nothing to fall back to.
+	if !ov.AllowsActivity() {
+		return nil
+	}
 
 	// Cancel any pending end armed by a prior UP so it can't dismiss the
 	// "Checking..." activity we re-create here (mirrors handleDown).
@@ -256,7 +272,7 @@ func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.L
 
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
-	if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.Monitor.Name, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := pwClient.CreateActivity(ctx, slug, text.TruncateHard(p.Monitor.Name, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 		log.Error("failed to create activity", "slug", slug, "error", err)
 		if err := h.store.Delete(ctx, "uptimekuma", userKey, mapKey, ""); err != nil {
 			log.Warn("state store delete failed", "error", err, "provider", "uptimekuma", "slug", slug)

@@ -70,6 +70,54 @@ func sendDelete(t *testing.T, h http.Handler, id string) *httptest.ResponseRecor
 	return w
 }
 
+// TestOverrideChannelsOnDeleteRoute confirms the overrides middleware reaches
+// the DELETE route: channels=activity on the clear call must keep the two-phase
+// end but drop the resolved notification.
+func TestOverrideChannelsOnDeleteRoute(t *testing.T) {
+	h, calls, mu := newHandler(t)
+	sendCreate(t, h, createBody)
+
+	req := httptest.NewRequest(http.MethodDelete, "/truenas/v2/alerts/"+alias+"?identifierType=alias&channels=activity", nil)
+	req.Header.Set("Authorization", "GenieKey hlk_test")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// The create path sent one active notification; the clear path must add none.
+	if n := testutil.CountPath(recorded, "/notifications"); n != 1 {
+		t.Fatalf("expected 1 notification (from create only), got %d", n)
+	}
+	// Clear still runs the two-phase end (phase1 ONGOING + phase2 ENDED).
+	var sawEnded bool
+	for _, c := range recorded {
+		if c.Method == http.MethodPatch {
+			var upd pushward.UpdateRequest
+			testutil.UnmarshalBody(t, c.Body, &upd)
+			if upd.State == pushward.StateEnded {
+				sawEnded = true
+			}
+		}
+	}
+	if !sawEnded {
+		t.Error("expected the activity to be ended despite channels=activity")
+	}
+}
+
+func TestOverrideInvalidLevelRejectedOnDelete(t *testing.T) {
+	h, _, _ := newHandler(t)
+	req := httptest.NewRequest(http.MethodDelete, "/truenas/v2/alerts/"+alias+"?level=bogus", nil)
+	req.Header.Set("Authorization", "GenieKey hlk_test")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid level on DELETE, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
 func TestCreateAlert(t *testing.T) {
 	h, calls, mu := newHandler(t)
 

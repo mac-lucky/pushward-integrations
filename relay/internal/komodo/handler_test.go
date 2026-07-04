@@ -86,7 +86,12 @@ func newHandler(t *testing.T) (http.Handler, *[]testutil.APICall, *sync.Mutex) {
 
 func send(t *testing.T, h http.Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/komodo", strings.NewReader(payload))
+	return sendTo(t, h, "/komodo", payload)
+}
+
+func sendTo(t *testing.T, h http.Handler, target, payload string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, target, strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer hlk_test")
 	w := httptest.NewRecorder()
@@ -95,6 +100,16 @@ func send(t *testing.T, h http.Handler, payload string) *httptest.ResponseRecord
 		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
 	}
 	return w
+}
+
+func countActivityCalls(calls []testutil.APICall) int {
+	n := 0
+	for _, c := range calls {
+		if strings.HasPrefix(c.Path, "/activities") {
+			n++
+		}
+	}
+	return n
 }
 
 func TestServerUnreachableActive(t *testing.T) {
@@ -249,6 +264,76 @@ func TestOneShotCustomPassive(t *testing.T) {
 	}
 	if notif.Level != pushward.LevelPassive { // OK
 		t.Errorf("expected passive for OK, got %s", notif.Level)
+	}
+}
+
+func TestOverrideChannelsNotificationFallsBackToOneShot(t *testing.T) {
+	h, calls, mu := newHandler(t)
+	sendTo(t, h, "/komodo?channels=notification", bodyUnreachable)
+
+	recorded := testutil.GetCalls(calls, mu)
+	if n := countActivityCalls(recorded); n != 0 {
+		t.Fatalf("expected no activity calls with channels=notification, got %d", n)
+	}
+	if n := testutil.CountPath(recorded, "/notifications"); n != 1 {
+		t.Fatalf("expected 1 fallback notification, got %d", n)
+	}
+	var notif pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &notif)
+	if notif.Level != pushward.LevelActive {
+		t.Errorf("expected active level, got %s", notif.Level)
+	}
+}
+
+func TestOverrideChannelsActivitySuppressesNotifications(t *testing.T) {
+	h, calls, mu := newHandler(t)
+	sendTo(t, h, "/komodo?channels=activity", bodyUnreachable)
+	sendTo(t, h, "/komodo?channels=activity", bodyUnreachableResolved)
+	time.Sleep(100 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	if n := testutil.CountPath(recorded, "/notifications"); n != 0 {
+		t.Fatalf("expected no notifications on new or resolved path with channels=activity, got %d", n)
+	}
+	// create + ONGOING (new) + phase1 ONGOING + phase2 ENDED (resolve) = 4
+	if n := countActivityCalls(recorded); n != 4 {
+		t.Fatalf("expected 4 activity calls, got %d", n)
+	}
+}
+
+func TestOverridePriorityReachesCreateActivity(t *testing.T) {
+	h, calls, mu := newHandler(t)
+	sendTo(t, h, "/komodo?priority=2", bodyUnreachable)
+
+	recorded := testutil.GetCalls(calls, mu)
+	var create pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &create)
+	if create.Priority != 2 {
+		t.Errorf("expected priority 2 (config default is 5), got %d", create.Priority)
+	}
+}
+
+func TestOverrideLevelReachesSendNotification(t *testing.T) {
+	h, calls, mu := newHandler(t)
+	sendTo(t, h, "/komodo?level=critical", bodyUnreachable)
+
+	recorded := testutil.GetCalls(calls, mu)
+	var notif pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[2].Body, &notif)
+	if notif.Level != pushward.LevelCritical {
+		t.Errorf("expected level override critical, got %s", notif.Level)
+	}
+}
+
+func TestOverrideInvalidParamRejected(t *testing.T) {
+	h, _, _ := newHandler(t)
+	req := httptest.NewRequest(http.MethodPost, "/komodo?priority=99", strings.NewReader(bodyUnreachable))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer hlk_test")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for out-of-range priority, got %d (%s)", w.Code, w.Body.String())
 	}
 }
 

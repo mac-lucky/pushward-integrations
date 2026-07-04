@@ -237,6 +237,26 @@ Every route requires the `hlk_` integration key. The relay accepts it two ways (
 - **HTTP Basic** - the `hlk_` key is the password (username ignored), because the sender only offers Basic Auth or a URL with userinfo. Used by **Radarr, Sonarr, Prowlarr, Bazarr, and Komodo**.
 - **GenieKey** - the OpsGenie scheme (`Authorization: GenieKey hlk_...`). Used by **TrueNAS** (its OpsGenie alert service sends the key this way).
 
+### Query parameters
+
+Append query parameters to any webhook URL to override how the relay handles that one request. They work on every route (including the TrueNAS `DELETE`), and an explicit parameter always wins over the provider's computed value and the static config. Leave them off and behavior is byte-for-byte unchanged.
+
+| Parameter | Values | Effect |
+|---|---|---|
+| `channels` | comma-separated subset of `activity`, `notification` | Restricts delivery to the listed surfaces. `channels=notification` never creates or updates a Live Activity (each event is delivered as a one-shot notification where the provider has one); `channels=activity` drops every push notification the handler would send (new and resolved) but keeps the Live Activity flow. |
+| `priority` | integer `0`-`10` | Overrides the provider's `priority` config for the activity it creates. |
+| `level` | `passive`, `active`, `time-sensitive`, `critical` | Overrides the interruption level of every notification the handler sends. |
+
+An unknown `channels` value, an out-of-range or non-integer `priority`, or an invalid `level` returns `400` before the handler runs.
+
+Example: deliver Komodo as notifications only, at priority 8, with a passive interruption level:
+
+```
+https://relay.pushward.app/komodo?channels=notification&priority=8&level=passive
+```
+
+Note the asymmetry: Live-Activity-only providers (ArgoCD, Proxmox, Backrest, Gitea/Forgejo, Jellyfin playback) have no one-shot notification to fall back to, so `channels=notification` suppresses their output entirely; notification-only providers (Grafana, Prowlarr, Bazarr) have no Live Activity, so `channels=activity` suppresses theirs.
+
 ---
 
 ### Grafana

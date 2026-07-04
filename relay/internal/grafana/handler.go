@@ -19,6 +19,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -138,6 +139,12 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	log := slog.With("tenant", auth.KeyHash(userKey))
 	cl := h.clients.Get(userKey)
 
+	// Grafana is notification-only, so channels=activity leaves nothing to send.
+	ov := overrides.FromContext(ctx)
+	if !ov.AllowsNotification() {
+		return humautil.NewOK(), nil
+	}
+
 	// Group alerts by alertname, preserving insertion order.
 	groups, groupOrder := h.groupAlerts(log, input.Body.Alerts)
 
@@ -161,6 +168,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		} else {
 			req = h.buildGroupedNotification(g)
 		}
+		req.Level = ov.LevelOr(req.Level)
 
 		if err := cl.SendNotification(ctx, req); err != nil {
 			log.Error("failed to send notification", "alertname", alertname, "error", err)

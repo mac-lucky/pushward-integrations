@@ -10,6 +10,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/mediathread"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -148,50 +149,59 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 	h.ender.StopTimer(userKey, mapKey)
 
 	cl := h.clients.Get(userKey)
+	ov := overrides.FromContext(ctx)
 
 	body := "Grabbed"
 	if p.Release.Quality != "" {
 		body = "Grabbed · " + p.Release.Quality
 	}
 
-	// Always send notification record
-	grabReq := pushward.SendNotificationRequest{
-		Title:      "Radarr",
-		Subtitle:   title,
-		Body:       body,
-		ThreadID:   radarrMediaThreadID(p.Movie),
-		CollapseID: "radarr-grab",
-		Level:      pushward.LevelActive,
-		Source:     "radarr",
-		Push:       h.shouldNotify("Grab"),
-		URL:        radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID),
-		Media:      pushward.MediaImage(posterURL(p.Movie.Images)),
-	}
-	meta := map[string]string{"quality": p.Release.Quality}
-	if p.Release.Indexer != "" {
-		meta["indexer"] = p.Release.Indexer
-	}
-	if p.Release.ReleaseGroup != "" {
-		meta["release_group"] = p.Release.ReleaseGroup
-	}
-	if p.Release.Size > 0 {
-		meta["size"] = text.FormatBytes(p.Release.Size)
-	}
-	if p.Movie.Title != "" {
-		meta["media_title"] = movieTitle(p.Movie)
-	}
-	if p.Movie.TmdbID > 0 {
-		meta["tmdb_id"] = strconv.Itoa(p.Movie.TmdbID)
-	}
-	grabReq.Metadata = meta
-	if err := cl.SendNotification(ctx, grabReq); err != nil {
-		log.Error("failed to send notification", "slug", slug, "error", err)
-		// Non-fatal: continue to activity creation if applicable
+	// Always send notification record. When channels=notification suppresses the
+	// Live Activity, force a push so the grab still reaches the user as a one-shot.
+	if ov.AllowsNotification() {
+		grabReq := pushward.SendNotificationRequest{
+			Title:      "Radarr",
+			Subtitle:   title,
+			Body:       body,
+			ThreadID:   radarrMediaThreadID(p.Movie),
+			CollapseID: "radarr-grab",
+			Level:      ov.LevelOr(pushward.LevelActive),
+			Source:     "radarr",
+			Push:       h.shouldNotify("Grab") || !ov.AllowsActivity(),
+			URL:        radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID),
+			Media:      pushward.MediaImage(posterURL(p.Movie.Images)),
+		}
+		meta := map[string]string{"quality": p.Release.Quality}
+		if p.Release.Indexer != "" {
+			meta["indexer"] = p.Release.Indexer
+		}
+		if p.Release.ReleaseGroup != "" {
+			meta["release_group"] = p.Release.ReleaseGroup
+		}
+		if p.Release.Size > 0 {
+			meta["size"] = text.FormatBytes(p.Release.Size)
+		}
+		if p.Movie.Title != "" {
+			meta["media_title"] = movieTitle(p.Movie)
+		}
+		if p.Movie.TmdbID > 0 {
+			meta["tmdb_id"] = strconv.Itoa(p.Movie.TmdbID)
+		}
+		grabReq.Metadata = meta
+		if err := cl.SendNotification(ctx, grabReq); err != nil {
+			log.Error("failed to send notification", "slug", slug, "error", err)
+			// Non-fatal: continue to activity creation if applicable
+		}
 	}
 
 	// In notify/smart mode for Grab, skip Live Activity
 	if h.shouldNotify("Grab") {
 		log.Info("grab notification sent", "slug", slug, "title", title, "mode", h.config.Mode)
+		return nil
+	}
+
+	// channels=notification: the notification above already delivered the grab.
+	if !ov.AllowsActivity() {
 		return nil
 	}
 
@@ -207,7 +217,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 	if !alreadyTracked {
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := cl.CreateActivity(ctx, slug, title, h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := cl.CreateActivity(ctx, slug, title, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
 			return err
@@ -252,43 +262,52 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 	h.ender.StopTimer(userKey, mapKey)
 
 	cl := h.clients.Get(userKey)
+	ov := overrides.FromContext(ctx)
 
 	state := "Imported"
 	if p.IsUpgrade {
 		state = "Upgraded"
 	}
 
-	// Always send notification record
-	dlReq := pushward.SendNotificationRequest{
-		Title:      "Radarr",
-		Subtitle:   title,
-		Body:       state,
-		ThreadID:   radarrMediaThreadID(p.Movie),
-		CollapseID: "radarr-download",
-		Level:      pushward.LevelActive,
-		Source:     "radarr",
-		Push:       h.shouldNotify("Download"),
-		URL:        radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID),
-		Media:      pushward.MediaImage(posterURL(p.Movie.Images)),
-	}
-	dlMeta := map[string]string{"quality": p.MovieFile.Quality}
-	if p.MovieFile.Size > 0 {
-		dlMeta["size"] = text.FormatBytes(p.MovieFile.Size)
-	}
-	if p.Movie.Title != "" {
-		dlMeta["media_title"] = title
-	}
-	if p.Movie.TmdbID > 0 {
-		dlMeta["tmdb_id"] = strconv.Itoa(p.Movie.TmdbID)
-	}
-	dlReq.Metadata = dlMeta
-	if err := cl.SendNotification(ctx, dlReq); err != nil {
-		log.Error("failed to send notification", "error", err)
+	// Always send notification record. When channels=notification suppresses the
+	// Live Activity, force a push so the import still reaches the user.
+	if ov.AllowsNotification() {
+		dlReq := pushward.SendNotificationRequest{
+			Title:      "Radarr",
+			Subtitle:   title,
+			Body:       state,
+			ThreadID:   radarrMediaThreadID(p.Movie),
+			CollapseID: "radarr-download",
+			Level:      ov.LevelOr(pushward.LevelActive),
+			Source:     "radarr",
+			Push:       h.shouldNotify("Download") || !ov.AllowsActivity(),
+			URL:        radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID),
+			Media:      pushward.MediaImage(posterURL(p.Movie.Images)),
+		}
+		dlMeta := map[string]string{"quality": p.MovieFile.Quality}
+		if p.MovieFile.Size > 0 {
+			dlMeta["size"] = text.FormatBytes(p.MovieFile.Size)
+		}
+		if p.Movie.Title != "" {
+			dlMeta["media_title"] = title
+		}
+		if p.Movie.TmdbID > 0 {
+			dlMeta["tmdb_id"] = strconv.Itoa(p.Movie.TmdbID)
+		}
+		dlReq.Metadata = dlMeta
+		if err := cl.SendNotification(ctx, dlReq); err != nil {
+			log.Error("failed to send notification", "error", err)
+		}
 	}
 
 	// In notify/smart mode for Download, skip Live Activity
 	if h.shouldNotify("Download") {
 		log.Info("download notification sent", "slug", slug, "title", title, "mode", h.config.Mode)
+		return nil
+	}
+
+	// channels=notification: the notification above already delivered the import.
+	if !ov.AllowsActivity() {
 		return nil
 	}
 
@@ -305,7 +324,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := cl.CreateActivity(ctx, slug, title, h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := cl.CreateActivity(ctx, slug, title, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
 			return err
@@ -342,7 +361,9 @@ func (h *Handler) handleRadarrManualInteraction(ctx context.Context, userKey str
 		log.Error("manual interaction notify failed", "error", err)
 	}
 
-	if p.Movie == nil || h.shouldNotify("ManualInteractionRequired") {
+	// channels=notification suppresses the "Needs attention" activity flip; the
+	// notify above already reached the user.
+	if p.Movie == nil || h.shouldNotify("ManualInteractionRequired") || !overrides.FromContext(ctx).AllowsActivity() {
 		return nil
 	}
 

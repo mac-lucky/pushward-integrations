@@ -14,6 +14,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -79,6 +80,12 @@ func parseMessage(msg string) *subtitleEvent {
 }
 
 func (h *Handler) handleSubtitle(ctx context.Context, userKey string, log *slog.Logger, ev *subtitleEvent) error {
+	// Bazarr is notification-only, so channels=activity leaves nothing to send.
+	ov := overrides.FromContext(ctx)
+	if !ov.AllowsNotification() {
+		return nil
+	}
+
 	action := "Downloaded"
 	if ev.action == "upgraded" {
 		action = "Upgraded"
@@ -90,7 +97,7 @@ func (h *Handler) handleSubtitle(ctx context.Context, userKey string, log *slog.
 		Body:       ev.media + " · " + action + " · " + ev.language + " · " + ev.score + "%",
 		ThreadID:   text.Slug("bazarr-", ev.media),
 		CollapseID: text.SlugHash("bazarr", ev.media, 4),
-		Level:      pushward.LevelActive,
+		Level:      ov.LevelOr(pushward.LevelActive),
 		Source:     "bazarr",
 		Push:       true,
 	}

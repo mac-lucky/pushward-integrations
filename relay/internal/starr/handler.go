@@ -18,6 +18,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -345,6 +346,11 @@ func manualInteractionUpdate(subtitle string) pushward.UpdateRequest {
 }
 
 func (h *Handler) sendNotification(ctx context.Context, userKey string, log *slog.Logger, req pushward.SendNotificationRequest) error {
+	ov := overrides.FromContext(ctx)
+	if !ov.AllowsNotification() {
+		return nil
+	}
+	req.Level = ov.LevelOr(req.Level)
 	return h.clients.SendNotification(ctx, userKey, log, req)
 }
 

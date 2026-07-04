@@ -157,6 +157,7 @@ func main() {
 	api := humago.New(mux, humaConfig)
 	api.UseMiddleware(humautil.IPRateLimitMiddleware(api))
 	api.UseMiddleware(humautil.AuthMiddleware(api))
+	api.UseMiddleware(humautil.OverridesMiddleware(api))
 	api.UseMiddleware(humautil.KeyRateLimitMiddleware(api))
 
 	// Provider handlers

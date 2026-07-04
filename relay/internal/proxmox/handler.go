@@ -16,6 +16,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -94,6 +95,12 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 }
 
 func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Logger, p *proxmoxPayload) error {
+	ov := overrides.FromContext(ctx)
+	// Proxmox is Live-Activity-only with no notification path, so
+	// channels=notification has nothing to fall back to.
+	if !ov.AllowsActivity() {
+		return nil
+	}
 	vmid := "unknown"
 	if m := vmidRe.FindStringSubmatch(p.Message); len(m) > 1 {
 		vmid = m[1]
@@ -117,7 +124,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 		// new backup within the end window isn't clobbered and prematurely ended.
 		h.ender.StopTimer(userKey, mapKey)
 		// Backup starting — create activity + ONGOING
-		if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create proxmox backup activity", "slug", slug, "error", err)
 			return err
 		}
@@ -212,6 +219,10 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 var replicationJobRe = regexp.MustCompile(`(?:job|Job)\s+'?([\d/-]+)'?`)
 
 func (h *Handler) handleReplication(ctx context.Context, userKey string, log *slog.Logger, p *proxmoxPayload) error {
+	ov := overrides.FromContext(ctx)
+	if !ov.AllowsActivity() {
+		return nil
+	}
 	// Extract job ID from message — titles differ between start/finish phases.
 	jobID := "unknown"
 	if m := replicationJobRe.FindStringSubmatch(p.Message); len(m) > 1 {
@@ -235,7 +246,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, log *sl
 		// Cancel any pending end from a prior cycle so a new replication within
 		// the end window isn't clobbered and prematurely ended.
 		h.ender.StopTimer(userKey, mapKey)
-		if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+		if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create proxmox replication activity", "slug", slug, "error", err)
 			return err
 		}
@@ -321,6 +332,10 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, log *sl
 }
 
 func (h *Handler) handleFencing(ctx context.Context, userKey string, log *slog.Logger, p *proxmoxPayload) error {
+	ov := overrides.FromContext(ctx)
+	if !ov.AllowsActivity() {
+		return nil
+	}
 	slug := text.SlugHash("proxmox-fence", p.Hostname, 4)
 	mapKey := fmt.Sprintf("fencing:%s", p.Hostname)
 	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
@@ -329,7 +344,7 @@ func (h *Handler) handleFencing(ctx context.Context, userKey string, log *slog.L
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
-	if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 		log.Error("failed to create proxmox fencing activity", "slug", slug, "error", err)
 		return err
 	}
@@ -361,6 +376,10 @@ func (h *Handler) handleFencing(ctx context.Context, userKey string, log *slog.L
 }
 
 func (h *Handler) handleUpdates(ctx context.Context, userKey string, log *slog.Logger, p *proxmoxPayload) error {
+	ov := overrides.FromContext(ctx)
+	if !ov.AllowsActivity() {
+		return nil
+	}
 	slug := text.SlugHash("proxmox-updates", p.Hostname, 4)
 	mapKey := fmt.Sprintf("updates:%s", p.Hostname)
 	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
@@ -369,7 +388,7 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey string, log *slog.L
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
-	if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 		log.Error("failed to create proxmox updates activity", "slug", slug, "error", err)
 		return err
 	}
@@ -410,6 +429,10 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey string, log *slog.L
 // vzdump/replication it persists no state (the ender's cleanup Delete is a
 // harmless no-op).
 func (h *Handler) handleSystemMail(ctx context.Context, userKey string, log *slog.Logger, p *proxmoxPayload) error {
+	ov := overrides.FromContext(ctx)
+	if !ov.AllowsActivity() {
+		return nil
+	}
 	hostname := p.Hostname
 	if hostname == "" {
 		hostname = "system"
@@ -429,7 +452,7 @@ func (h *Handler) handleSystemMail(ctx context.Context, userKey string, log *slo
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
-	if err := cl.CreateActivity(ctx, slug, text.TruncateHard(title, 100), h.config.Priority, endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, text.TruncateHard(title, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 		log.Error("failed to create proxmox system activity", "slug", slug, "error", err)
 		return err
 	}
