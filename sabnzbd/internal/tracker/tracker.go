@@ -232,6 +232,23 @@ func positiveRemaining(p *int) *int {
 	return p
 }
 
+// liveProgress derives the generic template's live_progress + end_date pair from
+// the current ETA. When there is a genuine positive remaining time, iOS
+// interpolates the bar toward end_date and shows a counting-down ETA between
+// pushes. It returns (false, nil) for a generic frame without a positive ETA so
+// a prior live_progress=true is explicitly cleared (the server preserves omitted
+// fields under merge-patch), and (nil, nil) off the generic template where the
+// field is invalid.
+func liveProgress(template string, remainingSeconds *int) (*bool, *int64) {
+	if template != pushward.TemplateGeneric {
+		return nil, nil
+	}
+	if rem := positiveRemaining(remainingSeconds); rem != nil {
+		return pushward.BoolPtr(true), pushward.Int64Ptr(time.Now().Unix() + int64(*rem))
+	}
+	return pushward.BoolPtr(false), nil
+}
+
 func (t *Tracker) sendSeed(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string, value *float64) error {
 	template := t.cfg.SABnzbd.Template
 	content := pushward.Content{
@@ -252,6 +269,7 @@ func (t *Tracker) sendSeed(ctx context.Context, progress float64, state, icon, a
 			seeded = true
 		}
 	}
+	content.LiveProgress, content.EndDate = liveProgress(template, remainingSeconds)
 
 	if err := t.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 		State:   activityState,
@@ -291,6 +309,7 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 			seeded = true
 		}
 	}
+	contentPatch.LiveProgress, contentPatch.EndDate = liveProgress(template, remainingSeconds)
 
 	if err := t.pw.PatchActivity(ctx, slug, pushward.PatchRequest{
 		State:   activityState,
@@ -406,6 +425,9 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	if t.cfg.SABnzbd.Template == pushward.TemplateTimeline {
 		t.applyTimelineSpeed(&finalContent, 0)
 	}
+	// Download is done: clear any live_progress carried over from the last
+	// downloading tick so the completed frame renders a static full bar.
+	finalContent.LiveProgress, finalContent.EndDate = liveProgress(t.cfg.SABnzbd.Template, nil)
 
 	// Two-phase end: ONGOING with final content → short display → ENDED
 	if resumed {

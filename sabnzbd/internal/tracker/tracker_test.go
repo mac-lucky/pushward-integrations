@@ -326,6 +326,38 @@ func TestParseTimeLeft(t *testing.T) {
 
 // --- formatDuration tests ---
 
+func TestLiveProgress(t *testing.T) {
+	sec := 600
+
+	// Generic + a genuine positive ETA opts into live progress with a future end.
+	lp, end := liveProgress(pushward.TemplateGeneric, &sec)
+	if lp == nil || !*lp {
+		t.Fatalf("generic+positive: expected live_progress=true, got %v", lp)
+	}
+	if end == nil || *end <= time.Now().Unix() {
+		t.Fatalf("generic+positive: expected a future end_date, got %v", end)
+	}
+
+	// Generic without an ETA explicitly clears live progress (merge-patch would
+	// otherwise preserve a prior true) and sends no end_date.
+	for _, rem := range []*int{nil, ptrInt(0), ptrInt(-5)} {
+		lp, end := liveProgress(pushward.TemplateGeneric, rem)
+		if lp == nil || *lp {
+			t.Errorf("generic+%v: expected live_progress=false, got %v", rem, lp)
+		}
+		if end != nil {
+			t.Errorf("generic+%v: expected nil end_date, got %v", rem, *end)
+		}
+	}
+
+	// Off the generic template the field is invalid, so leave both unset.
+	if lp, end := liveProgress(pushward.TemplateTimeline, &sec); lp != nil || end != nil {
+		t.Errorf("timeline: expected (nil, nil), got (%v, %v)", lp, end)
+	}
+}
+
+func ptrInt(v int) *int { return &v }
+
 func TestFormatDuration(t *testing.T) {
 	tests := []struct {
 		seconds int
