@@ -57,12 +57,13 @@ var providers = map[string]providerTest{
 	"jellyfin": {
 		name: "Jellyfin Test",
 		content: pushward.Content{
-			Template:    "generic",
-			Progress:    0.45,
-			State:       "Playing on Test Device",
-			Icon:        "play.circle.fill",
-			Subtitle:    "Jellyfin \u00b7 Test Movie",
-			AccentColor: pushward.ColorBlue,
+			Template:     "generic",
+			Progress:     0.45,
+			State:        "Playing on Test Device",
+			Icon:         "play.circle.fill",
+			Subtitle:     "Jellyfin \u00b7 Test Movie",
+			AccentColor:  pushward.ColorBlue,
+			LiveProgress: pushward.BoolPtr(true), // end_date stamped at send time
 		},
 	},
 	"paperless": {
@@ -134,6 +135,10 @@ var providers = map[string]providerTest{
 			AccentColor: pushward.ColorOrange,
 			CurrentStep: pushward.IntPtr(1),
 			TotalSteps:  pushward.IntPtr(4),
+			// Showcase the segmented weighted/colored steps: the download phase
+			// dominates the width, each phase carries its own color.
+			StepWeights: []float64{1, 1, 6, 2},
+			StepColors:  []string{"indigo", "blue", "orange", "green"},
 		},
 	},
 	"uptimekuma": {
@@ -210,6 +215,12 @@ func SendTest(ctx context.Context, cl *pushward.Client, provider string) error {
 	if content.Template == "alert" {
 		now := time.Now().Unix()
 		content.FiredAt = pushward.Int64Ptr(now)
+	}
+	// For generic live-progress providers, stamp end_date at send time. The
+	// providers map is built once at process start, so a static end_date would
+	// already be in the past by the time /selftest runs.
+	if content.Template == "generic" && content.LiveProgress != nil && *content.LiveProgress {
+		content.EndDate = pushward.Int64Ptr(time.Now().Unix() + 3960)
 	}
 
 	if err := cl.UpdateActivity(ctx, slug, pushward.UpdateRequest{

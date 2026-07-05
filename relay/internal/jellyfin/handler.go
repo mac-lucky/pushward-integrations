@@ -257,6 +257,13 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *
 			RemainingTime: &remaining,
 		},
 	}
+	// Playback advances in wall-clock lockstep at 1x, so end_date = now +
+	// remaining lets iOS interpolate the bar and count the ETA down between
+	// the throttled progress webhooks.
+	if remaining > 0 {
+		req.Content.LiveProgress = pushward.BoolPtr(true)
+		req.Content.EndDate = pushward.Int64Ptr(time.Now().Unix() + int64(remaining))
+	}
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
@@ -389,6 +396,14 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 			RemainingTime: &remaining,
 		},
 	}
+	// Interpolate the bar while playing; a paused frame must explicitly clear
+	// live_progress (merge-patch preserves the prior true) so it stops counting.
+	if !p.IsPaused && remaining > 0 {
+		req.Content.LiveProgress = pushward.BoolPtr(true)
+		req.Content.EndDate = pushward.Int64Ptr(time.Now().Unix() + int64(remaining))
+	} else {
+		req.Content.LiveProgress = pushward.BoolPtr(false)
+	}
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
@@ -431,6 +446,10 @@ func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *s
 		Icon:        "checkmark.circle.fill",
 		Subtitle:    playbackSubtitle(p),
 		AccentColor: pushward.ColorGreen,
+		// Stop interpolation on the terminal frame: a prior playing frame set
+		// live_progress=true, and merge-patch would otherwise keep the bar
+		// counting toward a stale end_date on this "Watched" content.
+		LiveProgress: pushward.BoolPtr(false),
 	}
 
 	h.scheduleEnd(userKey, mapKey, slug, content)
@@ -588,6 +607,9 @@ func (h *Handler) endPaused(userKey, mapKey, slug, deviceName, userName, subtitl
 		Icon:        "pause.circle.fill",
 		Subtitle:    subtitle,
 		AccentColor: pushward.ColorBlue,
+		// Keep interpolation off on the auto-end frame even if the pause frame
+		// that should have cleared it never landed (failed UpdateActivity).
+		LiveProgress: pushward.BoolPtr(false),
 	}
 
 	h.scheduleEnd(userKey, mapKey, slug, content)
