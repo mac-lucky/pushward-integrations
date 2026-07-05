@@ -59,6 +59,49 @@ func TestComputeSteps_AllQueued(t *testing.T) {
 	}
 }
 
+func TestStepColor(t *testing.T) {
+	cases := map[string]string{
+		"Test":           "yellow",
+		"unit-tests":     "yellow",
+		"pytest":         "yellow",
+		"Lint":           "purple",
+		"golangci-lint":  "purple",
+		"Build":          "blue",
+		"Build (ubuntu)": "blue",
+		"Docker Build":   "blue", // build-family keyword wins over docker by switch order
+		"Push image":     "cyan",
+		"Deploy":         "green",
+		"release":        "green",
+		"CodeQL":         "orange",
+		"security-scan":  "orange",
+		"Something Else": "", // unmatched falls back to the accent color
+	}
+	for name, want := range cases {
+		if got := stepColor(name); got != want {
+			t.Errorf("stepColor(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestComputeSteps_StepColors(t *testing.T) {
+	jobs := []ghclient.Job{
+		{Name: "Test", Status: "in_progress"},
+		{Name: "Build", Status: "queued"},
+		{Name: "Deploy", Status: "queued"},
+	}
+	info := computeSteps(jobs)
+	// step_colors must be one-per-step so the server's length check passes.
+	if len(info.StepColors) != info.TotalSteps {
+		t.Fatalf("expected StepColors length %d, got %d (%v)", info.TotalSteps, len(info.StepColors), info.StepColors)
+	}
+	want := []string{"yellow", "blue", "green"}
+	for i, w := range want {
+		if info.StepColors[i] != w {
+			t.Errorf("StepColors[%d] = %q, want %q", i, info.StepColors[i], w)
+		}
+	}
+}
+
 func TestComputeSteps_MatrixJobs(t *testing.T) {
 	jobs := []ghclient.Job{
 		{Name: "Build (ubuntu, node-16)", Status: "completed", Conclusion: "success"},

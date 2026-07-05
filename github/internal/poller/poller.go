@@ -286,12 +286,14 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		initialTotalSteps := shape.TotalSteps
 		initialStepRows := shape.StepRows
 		initialStepLabels := shape.StepLabels
+		initialStepColors := shape.StepColors
 
 		p.mu.Lock()
 		if t, ok := p.tracked[repo]; ok {
 			t.maxTotalSteps = initialTotalSteps
 			t.maxStepRows = append([]int(nil), initialStepRows...)
 			t.maxStepLabels = append([]string(nil), initialStepLabels...)
+			t.maxStepColors = append([]string(nil), initialStepColors...)
 		}
 		p.mu.Unlock()
 
@@ -311,6 +313,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 				TotalSteps:   pushward.IntPtr(initialTotalSteps),
 				StepRows:     initialStepRows,
 				StepLabels:   initialStepLabels,
+				StepColors:   initialStepColors,
 				URL:          run.HTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", repo),
 			},
@@ -335,6 +338,7 @@ type stepInfo struct {
 	CurrentStepName string
 	StepRows        []int
 	StepLabels      []string
+	StepColors      []string
 	AllCompleted    bool
 	AnyFailed       bool
 	Progress        float64
@@ -385,12 +389,14 @@ func computeSteps(jobs []ghclient.Job) stepInfo {
 	totalSteps := len(steps)
 	stepRows := make([]int, totalSteps)
 	stepLabels := make([]string, totalSteps)
+	stepColors := make([]string, totalSteps)
 	currentStep := 0
 	var currentStepName string
 
 	for i, s := range steps {
 		stepRows[i] = s.count
 		stepLabels[i] = s.name
+		stepColors[i] = stepColor(s.name)
 		if s.active && currentStepName == "" {
 			currentStepName = s.name
 			currentStep = i + 1
@@ -418,10 +424,46 @@ func computeSteps(jobs []ghclient.Job) stepInfo {
 		CurrentStepName: currentStepName,
 		StepRows:        stepRows,
 		StepLabels:      stepLabels,
+		StepColors:      stepColors,
 		AllCompleted:    allCompleted,
 		AnyFailed:       anyFailed,
 		Progress:        progress,
 	}
+}
+
+// stepColor maps a job-group name to a Live Activity step color so the steps bar
+// reads at a glance: tests one hue, build another, deploy another. The match is
+// substring-based on the lowercased base job name; an unmatched group returns ""
+// and falls back to the activity accent color. Colors are named values the iOS
+// client and server both accept.
+func stepColor(name string) string {
+	n := strings.ToLower(name)
+	switch {
+	case containsAny(n, "test", "e2e", "pytest", "jest", "vitest"):
+		return "yellow"
+	case containsAny(n, "lint", "format", "typecheck", "golangci", "gofmt", "ruff"):
+		return "purple"
+	case containsAny(n, "build", "compile", "assemble"):
+		return "blue"
+	case containsAny(n, "docker", "image", "container", "buildx"):
+		return "cyan"
+	case containsAny(n, "deploy", "release", "publish"):
+		return "green"
+	case containsAny(n, "security", "scan", "codeql", "trivy", "grype", "sast"):
+		return "orange"
+	default:
+		return ""
+	}
+}
+
+// containsAny reports whether s contains any of the given substrings.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // baselineShape returns the step shape of a prior run of the same workflow on
@@ -553,11 +595,13 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				tt.maxTotalSteps = info.TotalSteps
 				tt.maxStepRows = append([]int(nil), info.StepRows...)
 				tt.maxStepLabels = append([]string(nil), info.StepLabels...)
+				tt.maxStepColors = append([]string(nil), info.StepColors...)
 			} else if info.TotalSteps < tt.maxTotalSteps {
 				// Fewer steps than our max (shouldn't happen) — use cached.
 				info.TotalSteps = tt.maxTotalSteps
 				info.StepRows = tt.maxStepRows
 				info.StepLabels = tt.maxStepLabels
+				info.StepColors = tt.maxStepColors
 			}
 		}
 		p.mu.Unlock()
@@ -599,6 +643,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				TotalSteps:   pushward.IntPtr(info.TotalSteps),
 				StepRows:     info.StepRows,
 				StepLabels:   info.StepLabels,
+				StepColors:   info.StepColors,
 				URL:          tHTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
 			})
@@ -641,6 +686,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		if shapeChanged {
 			contentPatch.StepRows = info.StepRows
 			contentPatch.StepLabels = info.StepLabels
+			contentPatch.StepColors = info.StepColors
 		}
 		if err := p.pw.PatchActivity(ctx, tSlug, pushward.PatchRequest{
 			State:   pushward.StateOngoing,
