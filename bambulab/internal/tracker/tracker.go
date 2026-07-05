@@ -317,6 +317,15 @@ func (t *Tracker) sendSeed(ctx context.Context, f frame, activityState string) e
 	if f.remaining > 0 {
 		rem := f.remaining
 		content.RemainingTime = &rem
+		// Opt the generic bar into client-side interpolation: iOS animates it
+		// toward end_date and shows a counting-down ETA between the (minute-
+		// granularity) pushes.
+		content.LiveProgress = pushward.BoolPtr(true)
+		content.EndDate = pushward.Int64Ptr(time.Now().Unix() + int64(f.remaining))
+	} else {
+		// PREPARE/PAUSE/terminal frames carry no ETA, so stop interpolation: a
+		// paused print must not keep counting down toward a stale end_date.
+		content.LiveProgress = pushward.BoolPtr(false)
 	}
 	if f.subtitle != "" {
 		content.Subtitle = f.subtitle
@@ -337,6 +346,10 @@ func (t *Tracker) send(ctx context.Context, f frame, activityState string) {
 	if f.remaining > 0 {
 		rem := f.remaining
 		contentPatch.RemainingTime = &rem
+		contentPatch.LiveProgress = pushward.BoolPtr(true)
+		contentPatch.EndDate = pushward.Int64Ptr(time.Now().Unix() + int64(f.remaining))
+	} else {
+		contentPatch.LiveProgress = pushward.BoolPtr(false)
 	}
 	if f.subtitle != "" {
 		contentPatch.Subtitle = pushward.StringPtr(f.subtitle)
