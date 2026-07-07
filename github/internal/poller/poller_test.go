@@ -1103,9 +1103,24 @@ func TestPollIdle_SeedsWeightsFromPriorRun(t *testing.T) {
 	if !reflect.DeepEqual(req.Content.StepWeights, want) {
 		t.Errorf("seed step_weights = %v, want %v", req.Content.StepWeights, want)
 	}
-	if req.Content.TotalSteps == nil || len(req.Content.StepWeights) != *req.Content.TotalSteps {
-		t.Errorf("step_weights length %d must equal total_steps %v",
-			len(req.Content.StepWeights), req.Content.TotalSteps)
+	if req.Content.TotalSteps == nil {
+		t.Fatal("seed must set total_steps")
+	}
+	total := *req.Content.TotalSteps
+	if len(req.Content.StepWeights) != total {
+		t.Errorf("step_weights length %d must equal total_steps %d", len(req.Content.StepWeights), total)
+	}
+	// Regression guard: the seed must carry step_rows (fan-out) ALONGSIDE
+	// step_weights (widths), not one instead of the other. The server accepts
+	// both together (weighted-matrix layout); older clients ignore weights and
+	// render the fan-out from step_rows. Re-splitting them here would silently
+	// drop the fan-out. Every per-step slice must match total_steps.
+	if wantRows := []int{1, 2, 1}; !reflect.DeepEqual(req.Content.StepRows, wantRows) {
+		t.Errorf("seed step_rows = %v, want %v (Build matrix fans out to 2)", req.Content.StepRows, wantRows)
+	}
+	if len(req.Content.StepRows) != total || len(req.Content.StepLabels) != total || len(req.Content.StepColors) != total {
+		t.Errorf("per-step slice lengths must all equal total_steps (%d): rows=%d labels=%d colors=%d",
+			total, len(req.Content.StepRows), len(req.Content.StepLabels), len(req.Content.StepColors))
 	}
 }
 
