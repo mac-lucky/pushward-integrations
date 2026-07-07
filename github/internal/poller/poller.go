@@ -280,13 +280,20 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		// the current scan (the prior full run, or a current run that has since
 		// grown). Choosing one coherent shape — not an element-wise merge — keeps
 		// step_labels consistent with current_step's index into them.
-		if base, ok := p.baselineShape(ctx, repo, run.WorkflowID, run.HeadBranch); ok && base.TotalSteps > shape.TotalSteps {
-			shape = base
+		var weightsByName map[string]float64
+		if base, ok := p.baselineShape(ctx, repo, run.WorkflowID, run.HeadBranch); ok {
+			// Pill durations are keyed by group name, so they attach correctly
+			// whether we adopt the prior shape wholesale or keep the live one.
+			weightsByName = base.WeightsByName
+			if base.TotalSteps > shape.TotalSteps {
+				shape = base
+			}
 		}
 		initialTotalSteps := shape.TotalSteps
 		initialStepRows := shape.StepRows
 		initialStepLabels := shape.StepLabels
 		initialStepColors := shape.StepColors
+		initialStepWeights := projectWeights(initialStepLabels, weightsByName)
 
 		p.mu.Lock()
 		if t, ok := p.tracked[repo]; ok {
@@ -294,6 +301,9 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			t.maxStepRows = append([]int(nil), initialStepRows...)
 			t.maxStepLabels = append([]string(nil), initialStepLabels...)
 			t.maxStepColors = append([]string(nil), initialStepColors...)
+			// The map is built fresh per baseline fetch and never mutated, so we
+			// store the reference; projectWeights re-derives the slice each send.
+			t.stepWeightByName = weightsByName
 		}
 		p.mu.Unlock()
 
@@ -314,6 +324,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 				StepRows:     initialStepRows,
 				StepLabels:   initialStepLabels,
 				StepColors:   initialStepColors,
+				StepWeights:  initialStepWeights,
 				URL:          run.HTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", repo),
 			},
@@ -339,9 +350,14 @@ type stepInfo struct {
 	StepRows        []int
 	StepLabels      []string
 	StepColors      []string
-	AllCompleted    bool
-	AnyFailed       bool
-	Progress        float64
+	// WeightsByName maps a step group's label to its pill weight (seconds of
+	// wall-clock in a prior run). Keyed by name, not index, so it survives the
+	// live scan revealing groups in a different order; projected to a per-step
+	// slice at send time. Only baselineShape populates it.
+	WeightsByName map[string]float64
+	AllCompleted  bool
+	AnyFailed     bool
+	Progress      float64
 }
 
 // computeSteps groups jobs by base name (supporting matrix strategies) and
@@ -466,6 +482,96 @@ func containsAny(s string, subs ...string) bool {
 	return false
 }
 
+// stepWeightFloor is the minimum weight any step group receives, so a step with
+// a near-zero or unmeasurable duration still renders as a thin pill instead of
+// vanishing, and clock skew (completed before started) can't yield a
+// zero/negative weight.
+const stepWeightFloor = 1.0
+
+// groupWeights maps each step group's label to a pill weight, sized by how long
+// that group ran in the given (finished) run. A group's weight is the MAX
+// member-job duration: matrix jobs run in parallel, so the longest one is the
+// group's wall-clock contribution, and step_rows already conveys the fan-out
+// count. Weights are in seconds; the client normalizes. Keyed by group name (not
+// index) so projectWeights can re-attach them to the current run's labels even
+// if GitHub reveals the groups in a different order. Returns nil when no group
+// has a measurable duration (the run never finished, or timestamps are missing)
+// so callers omit step_weights and fall back to equal-width pills.
+func groupWeights(jobs []ghclient.Job) map[string]float64 {
+	weights := make(map[string]float64)
+	measured := false
+
+	for _, job := range jobs {
+		base := baseJobName(job.Name)
+		if _, ok := weights[base]; !ok {
+			weights[base] = stepWeightFloor
+		}
+		d := jobDuration(job)
+		if d <= 0 {
+			continue
+		}
+		measured = true
+		if w := d.Seconds(); w > weights[base] {
+			weights[base] = w
+		}
+	}
+
+	if !measured {
+		return nil
+	}
+	return weights
+}
+
+// projectWeights builds a per-step weight slice aligned to labels, looking each
+// label up in the name-keyed historical weights. A label with no history (a job
+// GitHub added since the prior run) gets the mean of the known weights, a
+// neutral estimate. The result is always len(labels), so step_weights never
+// desyncs from total_steps, and each weight tracks its own label regardless of
+// group order. Returns nil when there is no history, so callers omit step_weights
+// and pills render equal-width.
+func projectWeights(labels []string, byName map[string]float64) []float64 {
+	if len(byName) == 0 {
+		return nil
+	}
+	sum := 0.0
+	for _, w := range byName {
+		sum += w
+	}
+	mean := sum / float64(len(byName))
+	if mean < stepWeightFloor {
+		mean = stepWeightFloor
+	}
+	out := make([]float64, len(labels))
+	for i, l := range labels {
+		if w, ok := byName[l]; ok {
+			out[i] = w
+		} else {
+			out[i] = mean
+		}
+	}
+	return out
+}
+
+// jobDuration returns a finished job's wall-clock duration, or 0 when either
+// timestamp is missing/unparseable or the span is non-positive (clock skew).
+func jobDuration(job ghclient.Job) time.Duration {
+	if job.StartedAt == "" || job.CompletedAt == "" {
+		return 0
+	}
+	start, err := time.Parse(time.RFC3339, job.StartedAt)
+	if err != nil {
+		return 0
+	}
+	end, err := time.Parse(time.RFC3339, job.CompletedAt)
+	if err != nil {
+		return 0
+	}
+	if d := end.Sub(start); d > 0 {
+		return d
+	}
+	return 0
+}
+
 // baselineShape returns the step shape of a prior run of the same workflow on
 // the same branch, used to seed a stable total-steps denominator. A finished run
 // has revealed its entire job DAG, so its group count is ground truth. Returns
@@ -498,8 +604,13 @@ func (p *Poller) baselineShape(ctx context.Context, repo string, workflowID int6
 		return stepInfo{}, false
 	}
 	info := computeSteps(jobs)
+	// Size the pills from how long each group ran in this finished run, keyed by
+	// group name so they attach to the right label even if the live run reveals
+	// its groups in a different order.
+	info.WeightsByName = groupWeights(jobs)
 	slog.Info("seeded steps from prior run",
-		"repo", repo, "prev_run_id", prev.ID, "steps", info.TotalSteps, "step_rows", info.StepRows)
+		"repo", repo, "prev_run_id", prev.ID, "steps", info.TotalSteps,
+		"step_rows", info.StepRows, "step_weights", info.WeightsByName)
 	return info, true
 }
 
@@ -579,6 +690,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		}
 
 		info := computeSteps(jobs)
+		var stepWeights []float64
 
 		p.mu.Lock()
 		if tt, ok := p.tracked[repo]; ok {
@@ -603,6 +715,12 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				info.StepLabels = tt.maxStepLabels
 				info.StepColors = tt.maxStepColors
 			}
+			// Size the pills from the prior run's durations, keyed by group name so
+			// each weight tracks its label regardless of the order GitHub reveals
+			// the groups in (jobs can be added/reordered between runs). The result
+			// is len(step_labels), so it never desyncs from total_steps; unknown
+			// groups get the mean; no history yields nil (equal-width pills).
+			stepWeights = projectWeights(info.StepLabels, tt.stepWeightByName)
 		}
 		p.mu.Unlock()
 
@@ -644,6 +762,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				StepRows:     info.StepRows,
 				StepLabels:   info.StepLabels,
 				StepColors:   info.StepColors,
+				StepWeights:  stepWeights,
 				URL:          tHTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
 			})
@@ -687,6 +806,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			contentPatch.StepRows = info.StepRows
 			contentPatch.StepLabels = info.StepLabels
 			contentPatch.StepColors = info.StepColors
+			contentPatch.StepWeights = stepWeights
 		}
 		if err := p.pw.PatchActivity(ctx, tSlug, pushward.PatchRequest{
 			State:   pushward.StateOngoing,

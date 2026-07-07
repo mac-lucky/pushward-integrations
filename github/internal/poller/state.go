@@ -27,9 +27,16 @@ type trackedRun struct {
 	maxStepRows   []int
 	maxStepLabels []string
 	maxStepColors []string
+	// stepWeightByName sizes the pills from the prior run's per-group durations,
+	// keyed by group label. Historical (never recomputed from the live,
+	// in-progress jobs) and read-only after seeding; projected onto the current
+	// step_labels at send time, so a weight always tracks its own label even if
+	// GitHub reveals the groups in a different order. Nil means no usable prior
+	// run — callers then omit step_weights and pills render equal-width.
+	stepWeightByName map[string]float64
 	// shapeSent is the maxTotalSteps value at the time we last included
-	// step_rows/step_labels in a merge-patch. When unchanged across polls
-	// we skip those slices to keep the tick payload minimal.
+	// step_rows/step_labels/step_weights in a merge-patch. When unchanged across
+	// polls we skip those slices to keep the tick payload minimal.
 	shapeSent int
 
 	// Change-detection state for pollActive: a PATCH (and the APNs push it

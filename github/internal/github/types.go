@@ -33,7 +33,11 @@ type Job struct {
 	Status     string `json:"status"`
 	Conclusion string `json:"conclusion"`
 	StartedAt  string `json:"started_at"`
-	Steps      []Step `json:"steps"`
+	// CompletedAt is set once the job finishes (empty while queued/in_progress).
+	// Paired with StartedAt it yields the job's wall-clock duration, used to size
+	// the step pills from a prior finished run.
+	CompletedAt string `json:"completed_at"`
+	Steps       []Step `json:"steps"`
 }
 
 type Step struct {

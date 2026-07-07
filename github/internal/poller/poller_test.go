@@ -127,6 +127,110 @@ func TestComputeSteps_MatrixJobs(t *testing.T) {
 	}
 }
 
+func TestGroupWeights(t *testing.T) {
+	// Lint 5s; Build matrix runs in parallel (120/300/60s) so the group weighs the
+	// longest = 300s; Deploy 40s. Keyed by group name, not position.
+	jobs := []ghclient.Job{
+		{
+			Name: "Lint", Status: "completed", Conclusion: "success",
+			StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:00:05Z",
+		},
+		{
+			Name: "Build (ubuntu)", Status: "completed", Conclusion: "success",
+			StartedAt: "2026-01-01T00:00:05Z", CompletedAt: "2026-01-01T00:02:05Z",
+		},
+		{
+			Name: "Build (macos)", Status: "completed", Conclusion: "success",
+			StartedAt: "2026-01-01T00:00:05Z", CompletedAt: "2026-01-01T00:05:05Z",
+		},
+		{
+			Name: "Build (windows)", Status: "completed", Conclusion: "success",
+			StartedAt: "2026-01-01T00:00:05Z", CompletedAt: "2026-01-01T00:01:05Z",
+		},
+		{
+			Name: "Deploy", Status: "completed", Conclusion: "success",
+			StartedAt: "2026-01-01T00:05:05Z", CompletedAt: "2026-01-01T00:05:45Z",
+		},
+	}
+	got := groupWeights(jobs)
+	want := map[string]float64{"Lint": 5, "Build": 300, "Deploy": 40}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("groupWeights = %v, want %v", got, want)
+	}
+	// One entry per group computeSteps produces, so projectWeights can size every
+	// label.
+	if n := computeSteps(jobs).TotalSteps; len(got) != n {
+		t.Errorf("len(weights)=%d, want groups=%d", len(got), n)
+	}
+}
+
+func TestGroupWeights_NoDurations(t *testing.T) {
+	// Queued/in-progress jobs have no completed_at, and a completed job missing a
+	// start is unmeasurable — with nothing to measure, return nil so callers omit
+	// step_weights and pills render equal-width.
+	jobs := []ghclient.Job{
+		{Name: "Lint", Status: "queued"},
+		{Name: "Build", Status: "in_progress", StartedAt: "2026-01-01T00:00:05Z"},
+		{
+			Name: "Deploy", Status: "completed", Conclusion: "success",
+			CompletedAt: "2026-01-01T00:05:45Z",
+		},
+	}
+	if got := groupWeights(jobs); got != nil {
+		t.Errorf("groupWeights = %v, want nil", got)
+	}
+}
+
+func TestGroupWeights_Floor(t *testing.T) {
+	// A present-but-unmeasurable group sits alongside a measured one: it keeps the
+	// floor (a thin pill) rather than collapsing, and the measured group wins its
+	// real duration.
+	jobs := []ghclient.Job{
+		{
+			Name: "Lint", Status: "completed", Conclusion: "success",
+			CompletedAt: "2026-01-01T00:00:05Z",
+		}, // no StartedAt -> unmeasurable
+		{
+			Name: "Build", Status: "completed", Conclusion: "success",
+			StartedAt: "2026-01-01T00:00:05Z", CompletedAt: "2026-01-01T00:00:10Z",
+		},
+	}
+	got := groupWeights(jobs)
+	want := map[string]float64{"Lint": stepWeightFloor, "Build": 5}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("groupWeights = %v, want %v", got, want)
+	}
+}
+
+func TestProjectWeights(t *testing.T) {
+	byName := map[string]float64{"Lint": 5, "Build": 300, "Deploy": 40}
+
+	// The core fix: weights follow their label by NAME, so a live scan that
+	// surfaces the groups in a different order than the prior run still sizes each
+	// pill correctly (positional alignment would have shifted them).
+	got := projectWeights([]string{"Deploy", "Lint", "Build"}, byName)
+	if want := []float64{40, 5, 300}; !reflect.DeepEqual(got, want) {
+		t.Errorf("reordered projection = %v, want %v", got, want)
+	}
+
+	// A label GitHub added since the prior run has no history -> mean (115) of the
+	// known weights; the length still equals len(labels).
+	got = projectWeights([]string{"Lint", "Format", "Build", "Deploy"}, byName)
+	if want := []float64{5, 115, 300, 40}; !reflect.DeepEqual(got, want) {
+		t.Errorf("unknown-label projection = %v, want %v", got, want)
+	}
+
+	// No history -> nil so the send omits step_weights (equal-width pills).
+	if got := projectWeights([]string{"Lint", "Build"}, nil); got != nil {
+		t.Errorf("projectWeights(nil map) = %v, want nil", got)
+	}
+
+	// A sub-floor mean is clamped up so a padded pill stays visible.
+	if got := projectWeights([]string{"Lint", "New"}, map[string]float64{"Lint": 0.5}); !reflect.DeepEqual(got, []float64{0.5, stepWeightFloor}) {
+		t.Errorf("clamp = %v, want [0.5 %v]", got, stepWeightFloor)
+	}
+}
+
 func TestComputeSteps_AllCompletedSuccess(t *testing.T) {
 	jobs := []ghclient.Job{
 		{Name: "Lint", Status: "completed", Conclusion: "success"},
@@ -918,6 +1022,90 @@ func TestPollIdle_SeedsStepsFromPreviousRun(t *testing.T) {
 	p.mu.Unlock()
 	if tracked == nil || tracked.maxTotalSteps != 6 {
 		t.Errorf("expected tracked.maxTotalSteps=6, got %v", tracked)
+	}
+}
+
+func TestPollIdle_SeedsWeightsFromPriorRun(t *testing.T) {
+	ghMux := http.NewServeMux()
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+			TotalCount: 1,
+			WorkflowRuns: []ghclient.WorkflowRun{
+				{ID: 42, Name: "CI", Status: "in_progress", HeadBranch: "main", WorkflowID: 99},
+			},
+		})
+	})
+	// Current run has only revealed its first wave, so the pill shape (and weights)
+	// come from the prior finished run below.
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 1,
+			Jobs:       []ghclient.Job{{ID: 1, Name: "Lint", Status: "in_progress"}},
+		})
+	})
+	ghMux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
+			TotalCount:   1,
+			WorkflowRuns: []ghclient.WorkflowRun{{ID: 41, WorkflowID: 99, HeadBranch: "main"}},
+		})
+	})
+	// Prior run: Lint 5s, a parallel Build matrix (300s / 120s -> group weighs the
+	// 300s longest), Test 40s.
+	ghMux.HandleFunc("/repos/owner/repo/actions/runs/41/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
+			TotalCount: 4,
+			Jobs: []ghclient.Job{
+				{
+					ID: 1, Name: "Lint", Status: "completed", Conclusion: "success",
+					StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:00:05Z",
+				},
+				{
+					ID: 2, Name: "Build (ubuntu)", Status: "completed", Conclusion: "success",
+					StartedAt: "2026-01-01T00:00:05Z", CompletedAt: "2026-01-01T00:05:05Z",
+				},
+				{
+					ID: 3, Name: "Build (macos)", Status: "completed", Conclusion: "success",
+					StartedAt: "2026-01-01T00:00:05Z", CompletedAt: "2026-01-01T00:02:05Z",
+				},
+				{
+					ID: 4, Name: "Test", Status: "completed", Conclusion: "success",
+					StartedAt: "2026-01-01T00:05:05Z", CompletedAt: "2026-01-01T00:05:45Z",
+				},
+			},
+		})
+	})
+	gh := mockGitHubClient(t, ghMux)
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+
+	p := &Poller{
+		cfg:     testConfig(),
+		gh:      gh,
+		pw:      pw,
+		tracked: make(map[string]*trackedRun),
+		repos:   []string{"owner/repo"},
+	}
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PushWard calls (create + update), got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &req)
+	// The seed frame must carry pill weights sized by the prior run's durations,
+	// one per step, matching total_steps so the server's length check passes.
+	want := []float64{5, 300, 40}
+	if !reflect.DeepEqual(req.Content.StepWeights, want) {
+		t.Errorf("seed step_weights = %v, want %v", req.Content.StepWeights, want)
+	}
+	if req.Content.TotalSteps == nil || len(req.Content.StepWeights) != *req.Content.TotalSteps {
+		t.Errorf("step_weights length %d must equal total_steps %v",
+			len(req.Content.StepWeights), req.Content.TotalSteps)
 	}
 }
 

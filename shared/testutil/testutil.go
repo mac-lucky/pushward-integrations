@@ -62,6 +62,8 @@ type apiContent struct {
 	TotalSteps         *int            `json:"total_steps,omitempty"`
 	StepRows           []int           `json:"step_rows,omitempty"`
 	StepLabels         []string        `json:"step_labels,omitempty"`
+	StepColors         []string        `json:"step_colors,omitempty"`
+	StepWeights        []float64       `json:"step_weights,omitempty"`
 	URL                string          `json:"url,omitempty"`
 	SecondaryURL       string          `json:"secondary_url,omitempty"`
 	Severity           string          `json:"severity,omitempty"`
@@ -475,6 +477,19 @@ func validateSteps(c *apiContent) error {
 		for i, label := range c.StepLabels {
 			if utf8.RuneCountInString(label) > 32 {
 				return fmt.Errorf("step_labels[%d] must be at most 32 runes", i)
+			}
+		}
+	}
+	if c.StepColors != nil && len(c.StepColors) != *c.TotalSteps {
+		return fmt.Errorf("step_colors length must equal total_steps")
+	}
+	if c.StepWeights != nil {
+		if len(c.StepWeights) != *c.TotalSteps {
+			return fmt.Errorf("step_weights length must equal total_steps")
+		}
+		for i, w := range c.StepWeights {
+			if w < 0 {
+				return fmt.Errorf("step_weights[%d] must not be negative", i)
 			}
 		}
 	}
