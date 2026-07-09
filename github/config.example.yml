@@ -15,3 +15,7 @@ pushward:
 
 polling:
   idle_interval: 60s  # or set PUSHWARD_POLL_IDLE
+
+render:
+  # step_colors: false   # or set PUSHWARD_GITHUB_STEP_COLORS - tint step pills by job type
+  # step_weights: false  # or set PUSHWARD_GITHUB_STEP_WEIGHTS - size step pills by prior-run duration

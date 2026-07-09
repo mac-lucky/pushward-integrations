@@ -271,7 +271,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			slog.Warn("failed to fetch jobs for initial step count, using default",
 				"repo", repo, "run_id", run.ID, "error", err)
 		} else if len(jobs) > 0 {
-			shape = computeSteps(jobs)
+			shape = p.shape(jobs)
 			slog.Info("initial job scan",
 				"repo", repo, "jobs", len(jobs),
 				"steps", shape.TotalSteps, "step_rows", shape.StepRows)
@@ -358,6 +358,17 @@ type stepInfo struct {
 	AllCompleted  bool
 	AnyFailed     bool
 	Progress      float64
+}
+
+// shape computes the step shape and drops the opt-in pill fields the config
+// disables. step_colors is omitempty, so a nil slice reproduces the payload the
+// bridge sent before the field existed.
+func (p *Poller) shape(jobs []ghclient.Job) stepInfo {
+	info := computeSteps(jobs)
+	if !p.cfg.Render.StepColors {
+		info.StepColors = nil
+	}
+	return info
 }
 
 // computeSteps groups jobs by base name (supporting matrix strategies) and
@@ -603,11 +614,13 @@ func (p *Poller) baselineShape(ctx context.Context, repo string, workflowID int6
 	if len(jobs) == 0 {
 		return stepInfo{}, false
 	}
-	info := computeSteps(jobs)
+	info := p.shape(jobs)
 	// Size the pills from how long each group ran in this finished run, keyed by
 	// group name so they attach to the right label even if the live run reveals
 	// its groups in a different order.
-	info.WeightsByName = groupWeights(jobs)
+	if p.cfg.Render.StepWeights {
+		info.WeightsByName = groupWeights(jobs)
+	}
 	slog.Info("seeded steps from prior run",
 		"repo", repo, "prev_run_id", prev.ID, "steps", info.TotalSteps,
 		"step_rows", info.StepRows, "step_weights", info.WeightsByName)
@@ -689,7 +702,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			continue
 		}
 
-		info := computeSteps(jobs)
+		info := p.shape(jobs)
 		var stepWeights []float64
 
 		p.mu.Lock()

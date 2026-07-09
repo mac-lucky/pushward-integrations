@@ -1,6 +1,7 @@
 package poller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -30,6 +31,13 @@ func testConfig() *config.Config {
 			IdleInterval: 60 * time.Second,
 		},
 	}
+}
+
+// testConfigRender returns a config with the opt-in pill fields switched on.
+func testConfigRender(colors, weights bool) *config.Config {
+	cfg := testConfig()
+	cfg.Render = config.RenderConfig{StepColors: colors, StepWeights: weights}
+	return cfg
 }
 
 func TestComputeSteps_AllQueued(t *testing.T) {
@@ -1025,7 +1033,11 @@ func TestPollIdle_SeedsStepsFromPreviousRun(t *testing.T) {
 	}
 }
 
-func TestPollIdle_SeedsWeightsFromPriorRun(t *testing.T) {
+// priorRunMux serves a repo whose in-progress run 42 has revealed only its first
+// wave of jobs, so the pill shape (and weights) must come from the prior finished
+// run 41: Lint 5s, a parallel Build matrix (300s / 120s -> the group weighs the
+// 300s longest), Test 40s.
+func priorRunMux() *http.ServeMux {
 	ghMux := http.NewServeMux()
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRunsResponse{
@@ -1035,8 +1047,6 @@ func TestPollIdle_SeedsWeightsFromPriorRun(t *testing.T) {
 			},
 		})
 	})
-	// Current run has only revealed its first wave, so the pill shape (and weights)
-	// come from the prior finished run below.
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
 			TotalCount: 1,
@@ -1049,8 +1059,6 @@ func TestPollIdle_SeedsWeightsFromPriorRun(t *testing.T) {
 			WorkflowRuns: []ghclient.WorkflowRun{{ID: 41, WorkflowID: 99, HeadBranch: "main"}},
 		})
 	})
-	// Prior run: Lint 5s, a parallel Build matrix (300s / 120s -> group weighs the
-	// 300s longest), Test 40s.
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs/41/jobs", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
 			TotalCount: 4,
@@ -1074,13 +1082,21 @@ func TestPollIdle_SeedsWeightsFromPriorRun(t *testing.T) {
 			},
 		})
 	})
-	gh := mockGitHubClient(t, ghMux)
+	return ghMux
+}
 
+// seedContent runs one pollIdle against priorRunMux with cfg and returns the
+// seed frame (the second PushWard call: create, then the seeding update),
+// alongside the raw request body so callers can assert on the JSON keys that
+// actually went over the wire.
+func seedContent(t *testing.T, cfg *config.Config) (pushward.Content, json.RawMessage) {
+	t.Helper()
+	gh := mockGitHubClient(t, priorRunMux())
 	pwSrv, calls, mu := testutil.MockPushWardServer(t)
 	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
 
 	p := &Poller{
-		cfg:     testConfig(),
+		cfg:     cfg,
 		gh:      gh,
 		pw:      pw,
 		tracked: make(map[string]*trackedRun),
@@ -1097,6 +1113,86 @@ func TestPollIdle_SeedsWeightsFromPriorRun(t *testing.T) {
 	}
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[1].Body, &req)
+	return req.Content, got[1].Body
+}
+
+// TestPollIdle_RenderFlags pins the opt-in contract: step_colors and step_weights
+// are sent only when their flag is on, and each toggles independently. step_rows
+// and step_labels are not gated and must survive every combination.
+func TestPollIdle_RenderFlags(t *testing.T) {
+	tests := []struct {
+		name        string
+		colors      bool
+		weights     bool
+		wantColors  []string
+		wantWeights []float64
+	}{
+		{name: "both off"},
+		{name: "colors only", colors: true, wantColors: []string{"purple", "blue", "yellow"}},
+		{name: "weights only", weights: true, wantWeights: []float64{5, 300, 40}},
+		{
+			name: "both on", colors: true, weights: true,
+			wantColors:  []string{"purple", "blue", "yellow"},
+			wantWeights: []float64{5, 300, 40},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			content, body := seedContent(t, testConfigRender(tc.colors, tc.weights))
+
+			if !reflect.DeepEqual(content.StepColors, tc.wantColors) {
+				t.Errorf("step_colors = %v, want %v", content.StepColors, tc.wantColors)
+			}
+			if !reflect.DeepEqual(content.StepWeights, tc.wantWeights) {
+				t.Errorf("step_weights = %v, want %v", content.StepWeights, tc.wantWeights)
+			}
+			// A disabled field must be absent from the JSON, not present as null:
+			// that is what makes the opt-out byte-identical to the payload the
+			// bridge sent before the field existed.
+			if got := bytes.Contains(body, []byte(`"step_colors"`)); got != tc.colors {
+				t.Errorf("step_colors key present = %v, want %v; body: %s", got, tc.colors, body)
+			}
+			if got := bytes.Contains(body, []byte(`"step_weights"`)); got != tc.weights {
+				t.Errorf("step_weights key present = %v, want %v; body: %s", got, tc.weights, body)
+			}
+			// Never gated: the fan-out layout and labels ship in every combination.
+			if wantRows := []int{1, 2, 1}; !reflect.DeepEqual(content.StepRows, wantRows) {
+				t.Errorf("step_rows = %v, want %v", content.StepRows, wantRows)
+			}
+			if content.TotalSteps == nil {
+				t.Fatal("seed must set total_steps")
+			}
+			if len(content.StepLabels) != *content.TotalSteps {
+				t.Errorf("step_labels length %d must equal total_steps %d",
+					len(content.StepLabels), *content.TotalSteps)
+			}
+		})
+	}
+}
+
+func TestShape_StepColorsDisabled(t *testing.T) {
+	jobs := []ghclient.Job{
+		{Name: "Lint", Status: "completed", Conclusion: "success"},
+		{Name: "Build", Status: "in_progress"},
+	}
+
+	off := (&Poller{cfg: testConfigRender(false, false)}).shape(jobs)
+	if off.StepColors != nil {
+		t.Errorf("step_colors must be nil when disabled, got %v", off.StepColors)
+	}
+	if len(off.StepRows) != off.TotalSteps || len(off.StepLabels) != off.TotalSteps {
+		t.Errorf("rows/labels must survive the flag: rows=%v labels=%v", off.StepRows, off.StepLabels)
+	}
+
+	on := (&Poller{cfg: testConfigRender(true, false)}).shape(jobs)
+	if want := []string{"purple", "blue"}; !reflect.DeepEqual(on.StepColors, want) {
+		t.Errorf("step_colors = %v, want %v", on.StepColors, want)
+	}
+}
+
+func TestPollIdle_SeedsWeightsFromPriorRun(t *testing.T) {
+	content, _ := seedContent(t, testConfigRender(true, true))
+	req := pushward.UpdateRequest{Content: content}
 	// The seed frame must carry pill weights sized by the prior run's durations,
 	// one per step, matching total_steps so the server's length check passes.
 	want := []float64{5, 300, 40}

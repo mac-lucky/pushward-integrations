@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -13,6 +14,14 @@ type Config struct {
 	GitHub   GitHubConfig                `yaml:"github"`
 	PushWard sharedconfig.PushWardConfig `yaml:"pushward"`
 	Polling  PollingConfig               `yaml:"polling"`
+	Render   RenderConfig                `yaml:"render"`
+}
+
+// RenderConfig gates the opt-in step-pill fields. Both default to off, which
+// reproduces the payload the bridge sent before these fields existed.
+type RenderConfig struct {
+	StepColors  bool `yaml:"step_colors"`
+	StepWeights bool `yaml:"step_weights"`
 }
 
 type GitHubConfig struct {
@@ -59,6 +68,20 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("parsing PUSHWARD_POLL_IDLE: %w", err)
 		}
 		cfg.Polling.IdleInterval = d
+	}
+	if v := os.Getenv("PUSHWARD_GITHUB_STEP_COLORS"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PUSHWARD_GITHUB_STEP_COLORS: %w", err)
+		}
+		cfg.Render.StepColors = b
+	}
+	if v := os.Getenv("PUSHWARD_GITHUB_STEP_WEIGHTS"); v != "" {
+		b, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PUSHWARD_GITHUB_STEP_WEIGHTS: %w", err)
+		}
+		cfg.Render.StepWeights = b
 	}
 
 	// Shared PushWard env overrides

@@ -28,7 +28,7 @@ GitHub Actions API ──poll──> pushward-github ──POST/PATCH /activitie
 - **Repo auto-discovery** — set `github.owner` and all of that account's non-archived, non-disabled repos are monitored automatically, refreshed every 5 minutes.
 - **Stable step total** — GitHub creates jobs lazily (behind `needs:`/`if:`), so a fresh scan can't know the final count. The `X/N` denominator is seeded from a prior finished run of the same workflow + branch (last success preferred), giving a steady total from the first frame; falls back to a live scan when there is no prior run.
 - **Matrix & reusable-workflow grouping** — parallel matrix jobs (`Build (ubuntu, node-16)`) collapse into one step with per-shard `step_rows`; reusable caller prefixes (`ci-cd / Build` → `Build`) are stripped for clean labels.
-- **Duration-sized, color-coded pills** — each step pill is sized (`step_weights`) by how long that group took in the previous run — the longest job for a matrix group — so a long build reads wider than a quick lint; pills fall back to equal widths when there is no prior run. Pills are also tinted (`step_colors`) by job type (tests, lint, build, docker, deploy, security).
+- **Duration-sized, color-coded pills (opt-in)** - both off by default, and independent of each other. `PUSHWARD_GITHUB_STEP_WEIGHTS=true` sizes each pill (`step_weights`) by how long that group took in the previous run (the longest job, for a matrix group), so a long build reads wider than a quick lint; widths stay equal when there is no prior run. `PUSHWARD_GITHUB_STEP_COLORS=true` tints pills (`step_colors`) by job type (tests, lint, build, docker, deploy, security). With both off, the bridge sends the plain `step_rows` / `step_labels` layout.
 - **Monotonic progress** — the total step count only ever clamps upward across polls; it never decreases mid-run.
 - **Two-phase end** — a final result frame is held for `end_display_time` before the activity is dismissed; the last frame forces `N/N` so an over-counted seed self-heals to a full bar.
 - **Accent colors & deep links** — green while running, red on failure; each update carries the workflow-run URL and a secondary link to the repository.
@@ -106,6 +106,10 @@ pushward:
 
 polling:
   idle_interval: 60s               # or PUSHWARD_POLL_IDLE
+
+render:
+  # step_colors: false             # PUSHWARD_GITHUB_STEP_COLORS  -> tint pills by job type
+  # step_weights: false            # PUSHWARD_GITHUB_STEP_WEIGHTS -> size pills by prior-run duration
 ```
 
 | Env Variable | Config Key | Description | Required | Default |
@@ -121,6 +125,8 @@ polling:
 | `PUSHWARD_END_DELAY` | `pushward.end_delay` | Wait after run completion before the final `ONGOING` frame (two-phase end, phase 1). | No | `5s` |
 | `PUSHWARD_END_DISPLAY_TIME` | `pushward.end_display_time` | How long the final frame shows before `ENDED` dismisses the activity (phase 2). | No | `4s` |
 | `PUSHWARD_POLL_IDLE` | `polling.idle_interval` | Interval between polling cycles for in-progress runs and active job updates. | No | `60s` |
+| `PUSHWARD_GITHUB_STEP_COLORS` | `render.step_colors` | Send `step_colors` so pills are tinted by job type. Off sends no colors and pills take the accent color. | No | `false` |
+| `PUSHWARD_GITHUB_STEP_WEIGHTS` | `render.step_weights` | Send `step_weights` so pills are sized by the previous run's per-group duration. Off sends no weights and pills render equal-width. | No | `false` |
 
 ¹ Required at the config layer; effectively optional when running the official image, which sets `PUSHWARD_URL` to the public API.
 
@@ -132,7 +138,7 @@ Each tracked run becomes one PushWard activity:
 
 - **Slug** — `gh-<8 hex chars>`, derived from `SHA-256(owner/repo)` (e.g. `gh-1a2b3c4d`), stable per repository across runs.
 - **Display name** — `GitHub: <repo-name>`.
-- **Template** — `steps`, with `progress`, `current_step`/`total_steps`, `step_rows`, `step_labels`, `step_colors`, and `step_weights`.
+- **Template** — `steps`, with `progress`, `current_step`/`total_steps`, `step_rows`, and `step_labels`. `step_colors` and `step_weights` are added only when their opt-in flags are set.
 - **Accent color** — green while running, red on failure/cancel.
 - **Links** — primary URL is the workflow run's `html_url`; secondary URL is `https://github.com/<owner>/<repo>`.
 
