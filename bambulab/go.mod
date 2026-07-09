@@ -1,6 +1,6 @@
 module github.com/mac-lucky/pushward-integrations/bambulab
 
-go 1.26.4
+go 1.26.5
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
