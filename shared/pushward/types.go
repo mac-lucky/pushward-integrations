@@ -158,8 +158,10 @@ type Content struct {
 	StepWeights []float64 `json:"step_weights,omitempty"`
 	StepColors  []string  `json:"step_colors,omitempty"`
 
-	// LiveProgress opts the generic template into client-side interpolation of
-	// the progress bar and ETA between pushes. Requires end_date.
+	// LiveProgress opts the generic and steps templates into client-side
+	// interpolation of the bar and ETA between pushes. Requires end_date.
+	// Generic fills the whole bar by end_date; steps fills only the current
+	// step, across start_date..end_date.
 	LiveProgress *bool `json:"live_progress,omitempty"`
 
 	// Countdown template
@@ -266,8 +268,6 @@ type ContentPatch struct {
 	StepWeights []float64 `json:"step_weights,omitempty"`
 	StepColors  []string  `json:"step_colors,omitempty"`
 
-	// LiveProgress opts the generic template into client-side interpolation of
-	// the progress bar and ETA between pushes. Requires end_date.
 	LiveProgress *bool `json:"live_progress,omitempty"`
 
 	// Countdown template

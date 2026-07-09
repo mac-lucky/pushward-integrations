@@ -237,8 +237,9 @@ func positiveRemaining(p *int) *int {
 // interpolates the bar toward end_date and shows a counting-down ETA between
 // pushes. It returns (false, nil) for a generic frame without a positive ETA so
 // a prior live_progress=true is explicitly cleared (the server preserves omitted
-// fields under merge-patch), and (nil, nil) off the generic template where the
-// field is invalid.
+// fields under merge-patch), and (nil, nil) off the generic template. The server
+// also accepts the field on steps, but there the window spans the current step
+// only, and this bridge has no per-step deadline to anchor it with.
 func liveProgress(template string, remainingSeconds *int) (*bool, *int64) {
 	if template != pushward.TemplateGeneric {
 		return nil, nil
