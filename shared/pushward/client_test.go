@@ -982,3 +982,208 @@ func TestUpdateWidget_TapActionSlots(t *testing.T) {
 		t.Errorf("widget tap_action wrong: %v", content["tap_action"])
 	}
 }
+
+// --- quota vs rate limit: two very different 429s ---
+
+// quota.exceeded is a sticky monthly cap. Retrying inside a single call can
+// never succeed, and honoring the (multi-week) Retry-After would park the
+// caller for maxRetryAfter on every remaining attempt. Regression guard: the
+// client must return after exactly one request, with the quota detail attached,
+// and must not trip the breaker.
+func TestDoWithRetry_QuotaExceeded_FailsFast(t *testing.T) {
+	var count atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count.Add(1)
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.Header().Set("Retry-After", "1209600") // 14 days
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"title":"Too Many Requests","status":429,` +
+			`"detail":"Monthly notification quota exceeded for the free tier.",` +
+			`"code":"quota.exceeded","kind":"notifications","used":501,"limit":500,` +
+			`"reset_at":"2026-08-01T00:00:00Z","retry_after_ms":1209600000}`))
+	}))
+	defer srv.Close()
+
+	cb := NewCircuitBreaker(1, time.Minute) // threshold 1: any RecordFailure opens it
+	c := NewClient(srv.URL, "key", WithCircuitBreaker(cb))
+
+	start := time.Now()
+	err := c.doWithRetry(context.Background(), "notify", http.MethodPost, srv.URL+"/notifications", "", nil, nil)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error on quota.exceeded")
+	}
+	if got := count.Load(); got != 1 {
+		t.Errorf("quota.exceeded must not be retried: expected 1 attempt, got %d", got)
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("quota.exceeded must fail fast, took %s", elapsed)
+	}
+	if cb.IsOpen() {
+		t.Error("quota.exceeded is a reachable backend and must not trip the circuit breaker")
+	}
+
+	var he *HTTPError
+	if !errors.As(err, &he) {
+		t.Fatalf("expected a typed *HTTPError, got %T: %v", err, err)
+	}
+	if he.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("expected status 429, got %d", he.StatusCode)
+	}
+	if he.Code != ErrCodeQuotaExceeded {
+		t.Errorf("expected code %q, got %q", ErrCodeQuotaExceeded, he.Code)
+	}
+	if he.Kind != "notifications" {
+		t.Errorf("expected kind notifications, got %q", he.Kind)
+	}
+	if he.Used != 501 || he.Limit != 500 {
+		t.Errorf("expected used/limit 501/500, got %d/%d", he.Used, he.Limit)
+	}
+	if he.ResetAt != "2026-08-01T00:00:00Z" {
+		t.Errorf("expected reset_at 2026-08-01T00:00:00Z, got %q", he.ResetAt)
+	}
+}
+
+// rate_limit.exceeded is transient IP backpressure: still retried, and still
+// classified as reachable rather than a breaker fault.
+func TestDoWithRetry_RateLimitExceeded_StillRetries(t *testing.T) {
+	var count atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count.Add(1)
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		// Tiny retry_after_ms keeps the 5-attempt retry loop fast.
+		_, _ = w.Write([]byte(`{"code":"rate_limit.exceeded","retry_after_ms":1}`))
+	}))
+	defer srv.Close()
+
+	cb := NewCircuitBreaker(1, time.Minute)
+	c := NewClient(srv.URL, "key", WithCircuitBreaker(cb))
+	err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", "", nil, nil)
+	if err == nil {
+		t.Fatal("expected error after 429 exhaustion")
+	}
+	if got := count.Load(); got != 5 {
+		t.Errorf("expected 5 attempts before exhaustion, got %d", got)
+	}
+	if cb.IsOpen() {
+		t.Error("rate limiting must not trip the circuit breaker")
+	}
+}
+
+// --- PatchActivity upsert opt-in ---
+
+func TestPatchActivity_UpsertQueryParam(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		opts      []PatchOption
+		wantQuery string
+	}{
+		{name: "default sends no query", opts: nil, wantQuery: ""},
+		{name: "WithUpsert sends upsert=true", opts: []PatchOption{WithUpsert()}, wantQuery: "upsert=true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotQuery string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotQuery = r.URL.RawQuery
+				w.WriteHeader(http.StatusOK)
+			}))
+			defer srv.Close()
+
+			c := NewClient(srv.URL, "hlk_test")
+			if err := c.PatchActivity(context.Background(), "deploy", PatchRequest{State: StateOngoing}, tc.opts...); err != nil {
+				t.Fatalf("expected nil, got %v", err)
+			}
+			if gotQuery != tc.wantQuery {
+				t.Errorf("expected query %q, got %q", tc.wantQuery, gotQuery)
+			}
+		})
+	}
+}
+
+// --- notification wire shape: activity_slug + silent-webhook actions ---
+
+func TestSendNotification_ActivitySlugAndSilentAction(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/notifications" {
+			t.Errorf("expected /notifications, got %s", r.URL.Path)
+		}
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	err := c.SendNotification(context.Background(), SendNotificationRequest{
+		Title:        "Deploy failed",
+		Body:         "rollout aborted",
+		ActivitySlug: "deploy-prod",
+		Actions: []NotificationAction{{
+			ID:      "ack",
+			Title:   "Acknowledge",
+			URL:     "https://hooks.example.com/ack",
+			Method:  "POST",
+			Headers: map[string]string{"Authorization": "Bearer tok"},
+			Body:    `{"acked":true}`,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+
+	if got["activity_slug"] != "deploy-prod" {
+		t.Errorf("expected activity_slug deploy-prod, got %v", got["activity_slug"])
+	}
+	actions, ok := got["actions"].([]any)
+	if !ok || len(actions) != 1 {
+		t.Fatalf("expected 1 action, got %v", got["actions"])
+	}
+	action, ok := actions[0].(map[string]any)
+	if !ok {
+		t.Fatalf("action is not an object: %v", actions[0])
+	}
+	if action["method"] != "POST" {
+		t.Errorf("expected method POST, got %v", action["method"])
+	}
+	if action["body"] != `{"acked":true}` {
+		t.Errorf("expected body to round-trip, got %v", action["body"])
+	}
+	headers, ok := action["headers"].(map[string]any)
+	if !ok || headers["Authorization"] != "Bearer tok" {
+		t.Errorf("expected headers to round-trip, got %v", action["headers"])
+	}
+}
+
+// A notification that sets none of the optional routing fields must not emit
+// them: activity_slug and the action's method/headers/body all carry omitempty,
+// so an unset action stays a plain button rather than a silent webhook.
+func TestSendNotification_OmitsUnsetOptionalFields(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	err := c.SendNotification(context.Background(), SendNotificationRequest{
+		Title:   "Plain",
+		Body:    "no routing",
+		Actions: []NotificationAction{{ID: "open", Title: "Open"}},
+	})
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+
+	if _, present := got["activity_slug"]; present {
+		t.Errorf("activity_slug must be omitted when unset, got %v", got["activity_slug"])
+	}
+	action := got["actions"].([]any)[0].(map[string]any)
+	for _, key := range []string{"method", "headers", "body", "url"} {
+		if _, present := action[key]; present {
+			t.Errorf("action key %q must be omitted when unset, got %v", key, action[key])
+		}
+	}
+}

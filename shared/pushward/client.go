@@ -206,6 +206,28 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 		problem := parseProblem(respBody)
 
 		if resp.StatusCode == http.StatusTooManyRequests {
+			// quota.exceeded is a sticky monthly cap, not transient
+			// backpressure: Retry-After can be weeks out and no retry inside
+			// this call can ever succeed. Fail fast instead of parking the
+			// goroutine for maxRetryAfter on every remaining attempt. The
+			// backend answered, so this is breakerReachable, not a fault:
+			// same classification as the 4xx branch below. A 429 carrying
+			// rate_limit.exceeded, or no code at all (older servers), falls
+			// through to the retry path.
+			if problem.Code == ErrCodeQuotaExceeded {
+				lastErr = newHTTPError(http.StatusTooManyRequests, problem)
+				slog.Warn("PushWard monthly quota exhausted",
+					"url", url,
+					"code", problem.Code,
+					"kind", problem.Kind,
+					"used", problem.Used,
+					"limit", problem.Limit,
+					"reset_at", problem.ResetAt,
+				)
+				c.recordResult(ctx, operation, attempts, start, lastErr, breakerReachable)
+				return lastErr
+			}
+
 			retryAfterOverride = parseRetryAfter(resp.Header.Get("Retry-After"))
 			if retryAfterOverride == 0 && problem.RetryAfterMs > 0 {
 				retryAfterOverride = time.Duration(problem.RetryAfterMs) * time.Millisecond
@@ -252,9 +274,23 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 
 // Stable programmatic error codes emitted by pushward-server on the Problem
 // body. Callers branch on HTTPError.Code instead of the human-readable Detail.
+//
+// The two 429 codes mean very different things. ErrCodeRateLimitExceeded is
+// transient IP backpressure and is retried automatically. ErrCodeQuotaExceeded
+// is the free-tier monthly cap: it stays exhausted until HTTPError.ResetAt or
+// until the user upgrades, so the client fails fast on it rather than retrying.
 const (
-	ErrCodeActivityLimitExceeded = "activity.limit_exceeded"
-	ErrCodeWidgetLimitExceeded   = "widget.limit_exceeded"
+	ErrCodeActivityLimitExceeded        = "activity.limit_exceeded"
+	ErrCodeWidgetLimitExceeded          = "widget.limit_exceeded"
+	ErrCodeQuotaExceeded                = "quota.exceeded"
+	ErrCodeRateLimitExceeded            = "rate_limit.exceeded"
+	ErrCodeActivityNotFound             = "activity.not_found"
+	ErrCodeActivityContentInvalid       = "activity.content_invalid"
+	ErrCodeActivityUpsertForbidden      = "activity.upsert_forbidden"
+	ErrCodeNotificationActivityNotFound = "notification.activity_not_found"
+	ErrCodeSubscriptionRequired         = "subscription.required"
+	ErrCodeSubscriptionOwnerInactive    = "subscription.owner_inactive"
+	ErrCodeWidgetTokenNotPermitted      = "widget.token_not_permitted"
 )
 
 // problem is the parsed RFC 9457 error body. It is an internal parsing
@@ -267,6 +303,12 @@ type problem struct {
 	Detail       string `json:"detail,omitempty"`
 	Code         string `json:"code,omitempty"`
 	RetryAfterMs int64  `json:"retry_after_ms,omitempty"`
+
+	// Quota extension members, present only on a quota.exceeded 429.
+	Kind    string `json:"kind,omitempty"`
+	Used    int    `json:"used,omitempty"`
+	Limit   int    `json:"limit,omitempty"`
+	ResetAt string `json:"reset_at,omitempty"`
 }
 
 // parseProblem decodes an RFC 9457 Problem Details body, tolerating legacy
@@ -307,6 +349,15 @@ type HTTPError struct {
 	Detail       string // Problem.detail
 	Code         string // Problem.code — stable programmatic identifier
 	RetryAfterMs int64  // Problem.retry_after_ms (populated on 409/429)
+
+	// Quota detail, populated only when Code == ErrCodeQuotaExceeded.
+	// Kind is one of "notifications", "live_activity_updates",
+	// "widget_updates", "emails". ResetAt is RFC 3339 UTC and marks the start
+	// of the next calendar month, when the quota refills.
+	Kind    string
+	Used    int
+	Limit   int
+	ResetAt string
 }
 
 func newHTTPError(status int, p problem) *HTTPError {
@@ -317,6 +368,10 @@ func newHTTPError(status int, p problem) *HTTPError {
 		Detail:       p.Detail,
 		Code:         p.Code,
 		RetryAfterMs: p.RetryAfterMs,
+		Kind:         p.Kind,
+		Used:         p.Used,
+		Limit:        p.Limit,
+		ResetAt:      p.ResetAt,
 	}
 }
 
@@ -418,13 +473,38 @@ func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequ
 	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activities/%s", c.baseURL, slug), "", req, nil)
 }
 
+// PatchOption tunes a single PatchActivity call.
+type PatchOption func(*patchOptions)
+
+type patchOptions struct {
+	upsert bool
+}
+
+// WithUpsert makes PatchActivity create the activity when the slug does not
+// exist, instead of failing with 404. The server names the new activity after
+// the slug and gives it no TTLs, so prefer CreateActivity whenever a
+// human-readable name, ended_ttl or stale_ttl matters, which is every bridge
+// in this repo today. Requires an activity:manage or full-access key;
+// activity:update keys get 403 activity.upsert_forbidden.
+func WithUpsert() PatchOption {
+	return func(o *patchOptions) { o.upsert = true }
+}
+
 // PatchActivity sends a typed RFC 7396 merge-patch body to
 // PATCH /activities/{slug}. Unset ContentPatch pointer fields are omitted and
 // preserved server-side; present fields overwrite. To arm the AlarmKit alarm,
 // set ContentPatch.Alarm to BoolPtr(true); the server clears alarm on any
 // transition to ENDED.
-func (c *Client) PatchActivity(ctx context.Context, slug string, req PatchRequest) error {
-	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activities/%s", c.baseURL, slug), "", req, nil)
+func (c *Client) PatchActivity(ctx context.Context, slug string, req PatchRequest, opts ...PatchOption) error {
+	var o patchOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	url := fmt.Sprintf("%s/activities/%s", c.baseURL, slug)
+	if o.upsert {
+		url += "?upsert=true"
+	}
+	return c.doWithRetry(ctx, "update", http.MethodPatch, url, "", req, nil)
 }
 
 // SendNotification creates a notification record and optionally pushes an APNs alert.

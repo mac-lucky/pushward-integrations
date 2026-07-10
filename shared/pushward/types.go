@@ -416,14 +416,27 @@ func MediaImage(url string) *MediaAttachment {
 // NotificationAction is one server-driven action button shown on a push
 // notification. Tapping the button surfaces the action's `id` to the iOS
 // app, which routes by ID and opens the action's `url` if set.
+//
+// Method, Headers and Body turn the button into a silent webhook, using the
+// same routing rules the iOS dispatcher applies to TapAction:
+//   - custom scheme (e.g. homeassistant://) -> opens that app; Method/Headers/
+//     Body are ignored
+//   - http(s) + Foreground=true -> opens the URL in Safari / the in-app browser
+//   - http(s) + Foreground=false -> fires Method/Headers/Body silently
+//
+// Headers must total 1KB or less and Body 1024 chars or less; the server
+// rejects Method/Headers/Body on custom-scheme URLs.
 type NotificationAction struct {
-	ID                     string `json:"id"`
-	Title                  string `json:"title"`
-	URL                    string `json:"url,omitempty"`
-	Foreground             bool   `json:"foreground,omitempty"`
-	Destructive            bool   `json:"destructive,omitempty"`
-	AuthenticationRequired bool   `json:"authentication_required,omitempty"`
-	Icon                   string `json:"icon,omitempty"` // SF Symbol name
+	ID                     string            `json:"id"`
+	Title                  string            `json:"title"`
+	URL                    string            `json:"url,omitempty"`
+	Foreground             bool              `json:"foreground,omitempty"`
+	Method                 string            `json:"method,omitempty"` // GET, POST, PUT, PATCH, DELETE, HEAD
+	Headers                map[string]string `json:"headers,omitempty"`
+	Body                   string            `json:"body,omitempty"`
+	Destructive            bool              `json:"destructive,omitempty"`
+	AuthenticationRequired bool              `json:"authentication_required,omitempty"`
+	Icon                   string            `json:"icon,omitempty"` // SF Symbol name
 }
 
 // SendNotificationRequest is the body for POST /notifications.
@@ -442,7 +455,12 @@ type SendNotificationRequest struct {
 	IconURL           string               `json:"icon_url,omitempty"`
 	Metadata          map[string]string    `json:"metadata,omitempty"`
 	Actions           []NotificationAction `json:"actions,omitempty"`
-	Push              bool                 `json:"push"`
+	// ActivitySlug links the notification to an existing activity, so tapping
+	// it deep-links into that Live Activity. A slug the caller does not own is
+	// rejected with 422 notification.activity_not_found before the
+	// notification is persisted.
+	ActivitySlug string `json:"activity_slug,omitempty"`
+	Push         bool   `json:"push"`
 }
 
 // sourceDisplayNames maps source identifiers to their human-readable display names.

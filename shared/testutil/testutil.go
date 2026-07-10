@@ -121,6 +121,19 @@ type testTapAction struct {
 	Icon    string            `json:"icon,omitempty"`
 }
 
+// testNotificationAction mirrors pushward.NotificationAction. Unlike a tap
+// action its URL is optional (an action may exist purely to surface its id to
+// the app), so it gets its own validator rather than reusing validateTapAction.
+type testNotificationAction struct {
+	ID      string            `json:"id"`
+	Title   string            `json:"title"`
+	URL     string            `json:"url,omitempty"`
+	Method  string            `json:"method,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    string            `json:"body,omitempty"`
+	Icon    string            `json:"icon,omitempty"`
+}
+
 // MockPushWardServer starts an httptest server that records all requests and
 // validates them against the PushWard public API contract.
 func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex) {
@@ -193,9 +206,13 @@ func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex
 		body := recordCall(&calls, &mu, r)
 
 		var req struct {
-			Title string `json:"title"`
-			Body  string `json:"body"`
-			Push  bool   `json:"push"`
+			Title        string                   `json:"title"`
+			Body         string                   `json:"body"`
+			ActivitySlug string                   `json:"activity_slug,omitempty"`
+			Actions      []testNotificationAction `json:"actions,omitempty"`
+			// Push is a pointer so an omitted key is distinguishable from an
+			// explicit false. The server defaults it to true.
+			Push *bool `json:"push,omitempty"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
@@ -209,9 +226,25 @@ func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex
 			respondError(w, http.StatusBadRequest, "body is required")
 			return
 		}
+		if req.ActivitySlug != "" && !slugPattern.MatchString(req.ActivitySlug) {
+			respondError(w, http.StatusBadRequest, "invalid activity_slug: "+req.ActivitySlug)
+			return
+		}
+		if len(req.Actions) > 10 {
+			respondError(w, http.StatusBadRequest, "actions must have at most 10 entries")
+			return
+		}
+		for i, a := range req.Actions {
+			if err := validateNotificationAction(a, fmt.Sprintf("actions[%d]", i)); err != nil {
+				respondError(w, http.StatusBadRequest, err.Error())
+				return
+			}
+		}
+
+		pushed := req.Push == nil || *req.Push
 
 		w.WriteHeader(http.StatusCreated)
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "pushed": req.Push})
+		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "pushed": pushed})
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -635,17 +668,59 @@ func validateTapAction(a *testTapAction, field string) error {
 	if a.URL == "" {
 		return fmt.Errorf("%s.url is required", field)
 	}
-	lower := strings.ToLower(a.URL)
-	for _, bad := range []string{"javascript:", "data:", "file:", "vbscript:"} {
-		if strings.HasPrefix(lower, bad) {
-			return fmt.Errorf("%s.url scheme is not allowed", field)
-		}
+	if blockedScheme(a.URL) {
+		return fmt.Errorf("%s.url scheme is not allowed", field)
 	}
 	if !validTapMethods[strings.ToUpper(a.Method)] {
 		return fmt.Errorf("%s.method must be one of GET, POST, PUT, PATCH, DELETE, HEAD", field)
 	}
 	if utf8.RuneCountInString(a.Title) > 64 {
 		return fmt.Errorf("%s.title must be at most 64 characters", field)
+	}
+	if utf8.RuneCountInString(a.Icon) > 64 {
+		return fmt.Errorf("%s.icon must be at most 64 characters", field)
+	}
+	if utf8.RuneCountInString(a.Body) > 1024 {
+		return fmt.Errorf("%s.body must be at most 1024 characters", field)
+	}
+	return nil
+}
+
+// blockedScheme reports whether a URL uses a scheme the server rejects outright
+// on any action object.
+func blockedScheme(rawURL string) bool {
+	lower := strings.ToLower(rawURL)
+	for _, bad := range []string{"javascript:", "data:", "file:", "vbscript:"} {
+		if strings.HasPrefix(lower, bad) {
+			return true
+		}
+	}
+	return false
+}
+
+// validateNotificationAction mirrors the server's NotificationAction validation
+// for the checks the mock cares about: id and title are required and capped,
+// the URL (when set) uses an allowed scheme, and the silent-webhook fields stay
+// within their caps. As with validateTapAction this is a contract sanity check,
+// not a reimplementation of the server's cross-field matrix.
+func validateNotificationAction(a testNotificationAction, field string) error {
+	if a.ID == "" {
+		return fmt.Errorf("%s.id is required", field)
+	}
+	if a.Title == "" {
+		return fmt.Errorf("%s.title is required", field)
+	}
+	if utf8.RuneCountInString(a.ID) > 64 {
+		return fmt.Errorf("%s.id must be at most 64 characters", field)
+	}
+	if utf8.RuneCountInString(a.Title) > 64 {
+		return fmt.Errorf("%s.title must be at most 64 characters", field)
+	}
+	if a.URL != "" && blockedScheme(a.URL) {
+		return fmt.Errorf("%s.url scheme is not allowed", field)
+	}
+	if !validTapMethods[strings.ToUpper(a.Method)] {
+		return fmt.Errorf("%s.method must be one of GET, POST, PUT, PATCH, DELETE, HEAD", field)
 	}
 	if utf8.RuneCountInString(a.Icon) > 64 {
 		return fmt.Errorf("%s.icon must be at most 64 characters", field)
