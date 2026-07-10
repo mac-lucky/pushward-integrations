@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1245,5 +1246,77 @@ func TestSendNotification_OmitsUnsetOptionalFields(t *testing.T) {
 		if _, present := action[key]; present {
 			t.Errorf("action key %q must be omitted when unset, got %v", key, action[key])
 		}
+	}
+}
+
+// --- retry budget ---
+
+// A server that keeps answering 429 with a large Retry-After would park the
+// caller for maxRetryAfter on each remaining attempt. A request-scoped caller
+// (the relay's webhook handler) sets a budget so the call gives up instead.
+func TestDoWithRetry_RetryBudget_StopsSleeping(t *testing.T) {
+	var count atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count.Add(1)
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		// A Retry-After under maxRetryAfter, so the clamp does not save us.
+		_, _ = w.Write([]byte(`{"code":"rate_limit.exceeded","retry_after_ms":200}`))
+	}))
+	defer srv.Close()
+
+	cb := NewCircuitBreaker(1, time.Minute)
+	// One 200ms sleep fits in the budget; the second would overshoot it.
+	c := NewClient(srv.URL, "key", WithCircuitBreaker(cb), WithRetryBudget(250*time.Millisecond))
+
+	start := time.Now()
+	err := c.doWithRetry(context.Background(), "notify", http.MethodPost, srv.URL+"/notifications", "", nil, nil)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error once the retry budget is exhausted")
+	}
+	if got := count.Load(); got != 2 {
+		t.Errorf("expected 2 attempts before the budget stopped retries, got %d", got)
+	}
+	// Without a budget this would sleep 4 x 200ms and make 5 attempts.
+	if elapsed > 600*time.Millisecond {
+		t.Errorf("retry budget did not bound the sleep, took %s", elapsed)
+	}
+	if !strings.Contains(err.Error(), "retry budget") {
+		t.Errorf("expected the error to name the retry budget, got %q", err.Error())
+	}
+	// Throttling is backpressure from a reachable backend, not a health fault.
+	if cb.IsOpen() {
+		t.Error("a budget bail on 429 must not trip the circuit breaker")
+	}
+	// The typed 429 stays reachable through the wrap.
+	var he *HTTPError
+	if !errors.As(err, &he) || he.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("expected the wrapped error to unwrap to a 429 *HTTPError, got %v", err)
+	}
+}
+
+// The default (zero) budget must not change behavior for background pollers.
+func TestDoWithRetry_NoRetryBudget_UsesFullSchedule(t *testing.T) {
+	var count atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count.Add(1)
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"code":"rate_limit.exceeded","retry_after_ms":1}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "key")
+	err := c.doWithRetry(context.Background(), "notify", http.MethodPost, srv.URL+"/notifications", "", nil, nil)
+	if err == nil {
+		t.Fatal("expected an error after exhausting attempts")
+	}
+	if got := count.Load(); got != 5 {
+		t.Errorf("an unset budget must not cut retries short: expected 5 attempts, got %d", got)
+	}
+	if strings.Contains(err.Error(), "retry budget") {
+		t.Errorf("unset budget must not report a budget bail, got %q", err.Error())
 	}
 }

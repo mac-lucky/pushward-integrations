@@ -59,12 +59,19 @@ type ResultInfo struct {
 }
 
 // Client is the PushWard API client used by all integrations.
+//
+// Logging policy: the client never logs an error it returns. Callers already
+// log the returned error, and every field they might want is on the typed
+// *HTTPError (status, code, and the quota detail) or on ResultInfo (attempts,
+// duration). It logs only conditions a caller cannot otherwise observe, such
+// as being throttled mid-retry.
 type Client struct {
-	httpClient *http.Client
-	baseURL    string
-	apiKey     string
-	onResult   func(context.Context, ResultInfo)
-	breaker    *CircuitBreaker
+	httpClient  *http.Client
+	baseURL     string
+	apiKey      string
+	onResult    func(context.Context, ResultInfo)
+	breaker     *CircuitBreaker
+	retryBudget time.Duration
 }
 
 // ClientOption configures a Client.
@@ -83,6 +90,24 @@ func WithOnResult(fn func(context.Context, ResultInfo)) ClientOption {
 // WithCircuitBreaker attaches a circuit breaker to the client.
 func WithCircuitBreaker(cb *CircuitBreaker) ClientOption {
 	return func(cl *Client) { cl.breaker = cb }
+}
+
+// WithRetryBudget caps the total wall-clock time a single call may spend
+// sleeping between retries. Once the next backoff would push the call past the
+// budget, it stops retrying and returns the last error instead of sleeping.
+//
+// Zero, the default, means unlimited: a background poller can afford to sit
+// through the full backoff schedule. Request-scoped callers cannot. A relay
+// serving webhooks from an HTTP handler must set this, because a server that
+// keeps answering 429 with a large Retry-After would otherwise park the
+// handler goroutine for maxRetryAfter on each of the remaining attempts. Note
+// that Go's http.Server WriteTimeout does not cancel the handler's context, so
+// nothing else bounds that park.
+//
+// The budget covers sleeping only. A call can still exceed it by up to one
+// http.Client timeout, since the final attempt is already in flight.
+func WithRetryBudget(d time.Duration) ClientOption {
+	return func(cl *Client) { cl.retryBudget = d }
 }
 
 // NewClient creates a new PushWard API client.
@@ -134,6 +159,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 
 	var lastErr error
 	var lastThrottled bool
+	var budgetExhausted bool
 	var retryAfterOverride time.Duration
 	attempts := 0
 	for attempt := 0; attempt < 5; attempt++ {
@@ -145,7 +171,13 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 				backoff = base/2 + rand.N(base/2) // #nosec G404 -- jitter for retry backoff, not security-sensitive
 			}
 			retryAfterOverride = 0
-			slog.Warn("retrying PushWard request", "method", method, "url", url, "attempt", attempt+1, "backoff", backoff)
+			// Stop rather than sleep past the budget: the sleep would be pure
+			// dead time for a request-scoped caller.
+			if c.retryBudget > 0 && time.Since(start)+backoff > c.retryBudget {
+				budgetExhausted = true
+				break
+			}
+			slog.Debug("retrying PushWard request", "method", method, "url", url, "attempt", attempt+1, "backoff", backoff)
 			retryTimer := time.NewTimer(backoff)
 			select {
 			case <-ctx.Done():
@@ -228,19 +260,14 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 			// same classification as the 4xx branch below.
 			if problem.Code == ErrCodeQuotaExceeded {
 				lastErr = newHTTPError(http.StatusTooManyRequests, problem)
-				slog.Warn("PushWard monthly quota exhausted",
-					"url", url,
-					"code", problem.Code,
-					"kind", problem.Kind,
-					"used", problem.Used,
-					"limit", problem.Limit,
-					"reset_at", problem.ResetAt,
-				)
 				c.recordResult(ctx, operation, attempts, start, lastErr, breakerReachable)
 				return lastErr
 			}
 
 			retryAfterOverride = throttleDelay(resp.Header.Get("Retry-After"), problem.RetryAfterMs)
+			// Warn, not Debug: being throttled is an operational condition the
+			// caller cannot see per attempt. Contrast the errors below, which
+			// are returned and so must not also be logged here.
 			slog.Warn("rate limited by PushWard", "url", url, "retry_after", retryAfterOverride, "code", problem.Code)
 			// Typed error so callers can errors.As the 429 (status + Retry-After).
 			lastErr = newHTTPError(http.StatusTooManyRequests, problem)
@@ -250,12 +277,6 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 		lastErr = newHTTPError(resp.StatusCode, problem)
 		lastThrottled = false
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-			slog.Warn("PushWard client error",
-				"status", resp.StatusCode,
-				"url", url,
-				"code", problem.Code,
-				"detail", problem.Detail,
-			)
 			// 4xx client errors are not retryable, and the backend is clearly
 			// reachable, so this must not trip the breaker — but it is not a
 			// success either, so it must not zero the closed-state streak.
@@ -264,6 +285,9 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 		}
 	}
 	err := fmt.Errorf("max retries exceeded: %w", lastErr)
+	if budgetExhausted {
+		err = fmt.Errorf("retry budget %s exhausted after %d attempts: %w", c.retryBudget, attempts, lastErr)
+	}
 	// Sustained 429 throttling is backpressure from a reachable backend, not a
 	// health fault — it must not open the (relay-wide shared) breaker. Only
 	// 5xx/network exhaustion counts as a fault. 429 is reachable-not-success, so
