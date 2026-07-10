@@ -1320,3 +1320,67 @@ func TestDoWithRetry_NoRetryBudget_UsesFullSchedule(t *testing.T) {
 		t.Errorf("unset budget must not report a budget bail, got %q", err.Error())
 	}
 }
+
+// breakerReachable has two halves. The quota test proves it does not OPEN a
+// closed breaker; this proves the other half, that it CLOSES a half-open probe
+// rather than leaving it wedged.
+func TestDoWithRetry_HalfOpenProbe_QuotaExceededClosesBreaker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"code":"quota.exceeded","kind":"notifications","used":501,"limit":500}`))
+	}))
+	defer srv.Close()
+
+	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	cb := NewCircuitBreaker(1, 5*time.Second)
+	cb.now = func() time.Time { return now }
+	cb.RecordFailure() // open
+	now = now.Add(6 * time.Second)
+
+	c := NewClient(srv.URL, "key", WithCircuitBreaker(cb))
+	err := c.doWithRetry(context.Background(), "notify", http.MethodPost, srv.URL+"/notifications", "", nil, nil)
+	if err == nil {
+		t.Fatal("expected a quota error")
+	}
+	if cb.IsOpen() {
+		t.Fatal("breaker wedged: a quota.exceeded probe should close the breaker")
+	}
+}
+
+// quota.exceeded is only special-cased under 429. Carried on any other status
+// it must still fail fast down the ordinary 4xx path, with the quota detail
+// intact on the typed error.
+func TestDoWithRetry_QuotaCodeOnNon429_FailsFastVia4xx(t *testing.T) {
+	var count atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count.Add(1)
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"code":"quota.exceeded","kind":"emails","used":10,"limit":10,"reset_at":"2026-08-01T00:00:00Z"}`))
+	}))
+	defer srv.Close()
+
+	cb := NewCircuitBreaker(1, time.Minute)
+	c := NewClient(srv.URL, "key", WithCircuitBreaker(cb))
+	err := c.doWithRetry(context.Background(), "notify", http.MethodPost, srv.URL+"/notifications", "", nil, nil)
+	if err == nil {
+		t.Fatal("expected an error on 403")
+	}
+	if got := count.Load(); got != 1 {
+		t.Errorf("a 4xx must not be retried: expected 1 attempt, got %d", got)
+	}
+	if cb.IsOpen() {
+		t.Error("a 4xx must not trip the circuit breaker")
+	}
+	var he *HTTPError
+	if !errors.As(err, &he) {
+		t.Fatalf("expected a typed *HTTPError, got %T", err)
+	}
+	if he.StatusCode != http.StatusForbidden || he.Code != ErrCodeQuotaExceeded {
+		t.Errorf("expected 403/%s, got %d/%s", ErrCodeQuotaExceeded, he.StatusCode, he.Code)
+	}
+	if he.Kind != "emails" || he.Used != 10 || he.Limit != 10 {
+		t.Errorf("quota detail must survive the 4xx path, got kind=%q used=%d limit=%d", he.Kind, he.Used, he.Limit)
+	}
+}
