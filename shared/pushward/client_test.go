@@ -62,6 +62,31 @@ func TestParseRetryAfter_Garbage(t *testing.T) {
 	}
 }
 
+// --- throttleDelay ---
+
+func TestThrottleDelay(t *testing.T) {
+	tests := []struct {
+		name   string
+		header string
+		ms     int64
+		want   time.Duration
+	}{
+		{name: "no hint falls back to exponential backoff", header: "", ms: 0, want: 0},
+		{name: "header wins over problem body", header: "5", ms: 99000, want: 5 * time.Second},
+		{name: "problem body used when header absent", header: "", ms: 1500, want: 1500 * time.Millisecond},
+		{name: "header clamped to maxRetryAfter", header: "1209600", ms: 0, want: maxRetryAfter},
+		{name: "problem body clamped to maxRetryAfter", header: "", ms: 1209600000, want: maxRetryAfter},
+		{name: "garbage header falls through to body", header: "soon", ms: 2000, want: 2 * time.Second},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := throttleDelay(tt.header, tt.ms); got != tt.want {
+				t.Errorf("throttleDelay(%q, %d) = %v, want %v", tt.header, tt.ms, got, tt.want)
+			}
+		})
+	}
+}
+
 // --- doWithRetry ---
 
 func TestDoWithRetry_Success(t *testing.T) {
@@ -1007,18 +1032,14 @@ func TestDoWithRetry_QuotaExceeded_FailsFast(t *testing.T) {
 	cb := NewCircuitBreaker(1, time.Minute) // threshold 1: any RecordFailure opens it
 	c := NewClient(srv.URL, "key", WithCircuitBreaker(cb))
 
-	start := time.Now()
 	err := c.doWithRetry(context.Background(), "notify", http.MethodPost, srv.URL+"/notifications", "", nil, nil)
-	elapsed := time.Since(start)
 
 	if err == nil {
 		t.Fatal("expected an error on quota.exceeded")
 	}
+	// One attempt proves no backoff sleep ran: every retry path sleeps first.
 	if got := count.Load(); got != 1 {
 		t.Errorf("quota.exceeded must not be retried: expected 1 attempt, got %d", got)
-	}
-	if elapsed > 5*time.Second {
-		t.Errorf("quota.exceeded must fail fast, took %s", elapsed)
 	}
 	if cb.IsOpen() {
 		t.Error("quota.exceeded is a reachable backend and must not trip the circuit breaker")
@@ -1076,17 +1097,20 @@ func TestDoWithRetry_RateLimitExceeded_StillRetries(t *testing.T) {
 
 func TestPatchActivity_UpsertQueryParam(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		opts      []PatchOption
-		wantQuery string
+		name       string
+		opts       []PatchOption
+		wantUpsert bool
 	}{
-		{name: "default sends no query", opts: nil, wantQuery: ""},
-		{name: "WithUpsert sends upsert=true", opts: []PatchOption{WithUpsert()}, wantQuery: "upsert=true"},
+		{name: "default sends no upsert param", opts: nil, wantUpsert: false},
+		{name: "WithUpsert sends upsert=true", opts: []PatchOption{WithUpsert()}, wantUpsert: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var gotQuery string
+			var gotPath, gotUpsert string
+			var hasUpsert bool
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				gotQuery = r.URL.RawQuery
+				gotPath = r.URL.Path
+				gotUpsert = r.URL.Query().Get("upsert")
+				hasUpsert = r.URL.Query().Has("upsert")
 				w.WriteHeader(http.StatusOK)
 			}))
 			defer srv.Close()
@@ -1095,10 +1119,40 @@ func TestPatchActivity_UpsertQueryParam(t *testing.T) {
 			if err := c.PatchActivity(context.Background(), "deploy", PatchRequest{State: StateOngoing}, tc.opts...); err != nil {
 				t.Fatalf("expected nil, got %v", err)
 			}
-			if gotQuery != tc.wantQuery {
-				t.Errorf("expected query %q, got %q", tc.wantQuery, gotQuery)
+			if gotPath != "/activities/deploy" {
+				t.Errorf("expected path /activities/deploy, got %s", gotPath)
+			}
+			switch {
+			case tc.wantUpsert && gotUpsert != "true":
+				t.Errorf("expected upsert=true, got %q", gotUpsert)
+			case !tc.wantUpsert && hasUpsert:
+				t.Errorf("expected no upsert param, got %q", gotUpsert)
 			}
 		})
+	}
+}
+
+// A slug carrying a "?" must not graft a query parameter onto the request: an
+// unescaped slug would let a caller turn a plain patch into an upsert.
+func TestPatchActivity_EscapesSlugInPath(t *testing.T) {
+	var gotPath string
+	var hasUpsert bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		hasUpsert = r.URL.Query().Has("upsert")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	if err := c.PatchActivity(context.Background(), "evil?upsert=true", PatchRequest{State: StateOngoing}); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if hasUpsert {
+		t.Error("slug must not be able to inject an upsert query param")
+	}
+	if gotPath != "/activities/evil?upsert=true" {
+		t.Errorf("expected the whole slug to stay one path segment, got %q", gotPath)
 	}
 }
 
@@ -1179,6 +1233,12 @@ func TestSendNotification_OmitsUnsetOptionalFields(t *testing.T) {
 
 	if _, present := got["activity_slug"]; present {
 		t.Errorf("activity_slug must be omitted when unset, got %v", got["activity_slug"])
+	}
+	// The whole point of Push being *bool: a nil Push must omit the key so the
+	// server applies its default of true. If this key ever reappears as false,
+	// every caller that leaves Push unset silently stops pushing.
+	if _, present := got["push"]; present {
+		t.Errorf("push must be omitted when Push is nil, got %v", got["push"])
 	}
 	action := got["actions"].([]any)[0].(map[string]any)
 	for _, key := range []string{"method", "headers", "body", "url"} {

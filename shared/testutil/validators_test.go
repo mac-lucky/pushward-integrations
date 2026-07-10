@@ -1,6 +1,7 @@
 package testutil_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -359,6 +360,135 @@ func TestValidateURLAnyTemplate(t *testing.T) {
 			createActivity(t, srv.URL, "url-app", "URL App")
 			if got := patchActivity(t, srv.URL, "url-app", tt.body); got != tt.wantStatus {
 				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func postNotification(t *testing.T, url, body string) int {
+	t.Helper()
+	resp, err := http.Post(url+"/notifications", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+func TestValidateNotificationAction(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "plain action",
+			body:       `{"title":"t","body":"b","actions":[{"id":"open","title":"Open"}]}`,
+			wantStatus: 201,
+		},
+		{
+			name:       "silent webhook action",
+			body:       `{"title":"t","body":"b","actions":[{"id":"ack","title":"Ack","url":"https://hooks.example.com/ack","method":"POST","headers":{"A":"b"},"body":"{}"}]}`,
+			wantStatus: 201,
+		},
+		{
+			name:       "custom scheme action",
+			body:       `{"title":"t","body":"b","actions":[{"id":"open","title":"Open","url":"homeassistant://navigate"}]}`,
+			wantStatus: 201,
+		},
+		{
+			name:       "missing id",
+			body:       `{"title":"t","body":"b","actions":[{"title":"Open"}]}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "missing title",
+			body:       `{"title":"t","body":"b","actions":[{"id":"open"}]}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "blocked javascript scheme",
+			body:       `{"title":"t","body":"b","actions":[{"id":"x","title":"X","url":"javascript:alert(1)"}]}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "blocked data scheme is case-insensitive",
+			body:       `{"title":"t","body":"b","actions":[{"id":"x","title":"X","url":"DATA:text/html,hi"}]}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "unknown method",
+			body:       `{"title":"t","body":"b","actions":[{"id":"x","title":"X","url":"https://h.example","method":"FETCH"}]}`,
+			wantStatus: 400,
+		},
+		{
+			name: "more than 10 actions",
+			body: `{"title":"t","body":"b","actions":[` +
+				`{"id":"1","title":"a"},{"id":"2","title":"a"},{"id":"3","title":"a"},{"id":"4","title":"a"},` +
+				`{"id":"5","title":"a"},{"id":"6","title":"a"},{"id":"7","title":"a"},{"id":"8","title":"a"},` +
+				`{"id":"9","title":"a"},{"id":"10","title":"a"},{"id":"11","title":"a"}]}`,
+			wantStatus: 400,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			if got := postNotification(t, srv.URL, tt.body); got != tt.wantStatus {
+				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+}
+
+func TestValidateNotificationActivitySlug(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{name: "valid slug", body: `{"title":"t","body":"b","activity_slug":"deploy-prod"}`, wantStatus: 201},
+		{name: "omitted slug", body: `{"title":"t","body":"b"}`, wantStatus: 201},
+		{name: "spaces and punctuation", body: `{"title":"t","body":"b","activity_slug":"Not A Slug!"}`, wantStatus: 400},
+		{name: "leading hyphen", body: `{"title":"t","body":"b","activity_slug":"-leading"}`, wantStatus: 400},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			if got := postNotification(t, srv.URL, tt.body); got != tt.wantStatus {
+				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// The mock must mirror the server's default: an omitted push key means push.
+func TestMockNotificationPushDefault(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantPushed bool
+	}{
+		{name: "omitted push defaults to true", body: `{"title":"t","body":"b"}`, wantPushed: true},
+		{name: "explicit true", body: `{"title":"t","body":"b","push":true}`, wantPushed: true},
+		{name: "explicit false", body: `{"title":"t","body":"b","push":false}`, wantPushed: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			resp, err := http.Post(srv.URL+"/notifications", "application/json", strings.NewReader(tt.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			var got struct {
+				Pushed bool `json:"pushed"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Pushed != tt.wantPushed {
+				t.Errorf("got pushed=%v, want %v", got.Pushed, tt.wantPushed)
 			}
 		})
 	}

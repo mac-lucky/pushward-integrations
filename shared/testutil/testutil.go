@@ -210,9 +210,7 @@ func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex
 			Body         string                   `json:"body"`
 			ActivitySlug string                   `json:"activity_slug,omitempty"`
 			Actions      []testNotificationAction `json:"actions,omitempty"`
-			// Push is a pointer so an omitted key is distinguishable from an
-			// explicit false. The server defaults it to true.
-			Push *bool `json:"push,omitempty"`
+			Push         *bool                    `json:"push,omitempty"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
@@ -656,11 +654,10 @@ func validateBoard(c *apiContent) error {
 }
 
 // validateTapAction mirrors the server's TapAction.Validate for the checks the
-// mock cares about: url is required, the scheme is not one of the blocked ones,
-// the HTTP method (when set) is in the allow list, and the button label/icon and
-// webhook body stay within their length caps. It does not reproduce the server's
-// full http-only cross-field matrix — the mock is a contract sanity check, not a
-// reimplementation. Custom schemes (e.g. homeassistant://) are allowed.
+// mock cares about, adding the url-is-required rule on top of the shared action
+// shape. It does not reproduce the server's full http-only cross-field matrix:
+// the mock is a contract sanity check, not a reimplementation. Custom schemes
+// (e.g. homeassistant://) are allowed.
 func validateTapAction(a *testTapAction, field string) error {
 	if a == nil {
 		return nil
@@ -668,7 +665,37 @@ func validateTapAction(a *testTapAction, field string) error {
 	if a.URL == "" {
 		return fmt.Errorf("%s.url is required", field)
 	}
-	if blockedScheme(a.URL) {
+	return validateActionShape(actionShape{URL: a.URL, Method: a.Method, Title: a.Title, Icon: a.Icon, Body: a.Body}, field)
+}
+
+// validateNotificationAction mirrors the server's NotificationAction validation
+// for the checks the mock cares about. As with validateTapAction this is a
+// contract sanity check, not a reimplementation of the server's cross-field
+// matrix. Unlike a tap action, url is optional: an action may exist only to
+// surface its id to the app.
+func validateNotificationAction(a testNotificationAction, field string) error {
+	if a.ID == "" {
+		return fmt.Errorf("%s.id is required", field)
+	}
+	if a.Title == "" {
+		return fmt.Errorf("%s.title is required", field)
+	}
+	if utf8.RuneCountInString(a.ID) > 64 {
+		return fmt.Errorf("%s.id must be at most 64 characters", field)
+	}
+	return validateActionShape(actionShape{URL: a.URL, Method: a.Method, Title: a.Title, Icon: a.Icon, Body: a.Body}, field)
+}
+
+// actionShape is the field set that tap actions and notification actions
+// validate identically. It mirrors the server's ActionFields/ValidateAction
+// split, where the shared URL/method/caps rules live in one place and each
+// action type layers on its own required-field rules.
+type actionShape struct {
+	URL, Method, Title, Icon, Body string
+}
+
+func validateActionShape(a actionShape, field string) error {
+	if a.URL != "" && blockedScheme(a.URL) {
 		return fmt.Errorf("%s.url scheme is not allowed", field)
 	}
 	if !validTapMethods[strings.ToUpper(a.Method)] {
@@ -696,39 +723,6 @@ func blockedScheme(rawURL string) bool {
 		}
 	}
 	return false
-}
-
-// validateNotificationAction mirrors the server's NotificationAction validation
-// for the checks the mock cares about: id and title are required and capped,
-// the URL (when set) uses an allowed scheme, and the silent-webhook fields stay
-// within their caps. As with validateTapAction this is a contract sanity check,
-// not a reimplementation of the server's cross-field matrix.
-func validateNotificationAction(a testNotificationAction, field string) error {
-	if a.ID == "" {
-		return fmt.Errorf("%s.id is required", field)
-	}
-	if a.Title == "" {
-		return fmt.Errorf("%s.title is required", field)
-	}
-	if utf8.RuneCountInString(a.ID) > 64 {
-		return fmt.Errorf("%s.id must be at most 64 characters", field)
-	}
-	if utf8.RuneCountInString(a.Title) > 64 {
-		return fmt.Errorf("%s.title must be at most 64 characters", field)
-	}
-	if a.URL != "" && blockedScheme(a.URL) {
-		return fmt.Errorf("%s.url scheme is not allowed", field)
-	}
-	if !validTapMethods[strings.ToUpper(a.Method)] {
-		return fmt.Errorf("%s.method must be one of GET, POST, PUT, PATCH, DELETE, HEAD", field)
-	}
-	if utf8.RuneCountInString(a.Icon) > 64 {
-		return fmt.Errorf("%s.icon must be at most 64 characters", field)
-	}
-	if utf8.RuneCountInString(a.Body) > 1024 {
-		return fmt.Errorf("%s.body must be at most 1024 characters", field)
-	}
-	return nil
 }
 
 func validateLog(c *apiContent) error {

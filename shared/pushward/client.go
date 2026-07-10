@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 )
@@ -34,6 +35,19 @@ func parseRetryAfter(header string) time.Duration {
 		}
 	}
 	return 0
+}
+
+// throttleDelay picks how long to wait before retrying a throttled request:
+// the Retry-After header first, else the Problem body's retry_after_ms. The
+// result is clamped to maxRetryAfter so a misbehaving or compromised server
+// cannot park the calling goroutine for hours. Zero means "no server hint",
+// leaving the caller on its exponential backoff.
+func throttleDelay(retryAfterHeader string, problemRetryAfterMs int64) time.Duration {
+	d := parseRetryAfter(retryAfterHeader)
+	if d == 0 && problemRetryAfterMs > 0 {
+		d = time.Duration(problemRetryAfterMs) * time.Millisecond
+	}
+	return min(d, maxRetryAfter)
 }
 
 // ResultInfo is passed to the onResult callback after each API call completes.
@@ -211,9 +225,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 			// this call can ever succeed. Fail fast instead of parking the
 			// goroutine for maxRetryAfter on every remaining attempt. The
 			// backend answered, so this is breakerReachable, not a fault:
-			// same classification as the 4xx branch below. A 429 carrying
-			// rate_limit.exceeded, or no code at all (older servers), falls
-			// through to the retry path.
+			// same classification as the 4xx branch below.
 			if problem.Code == ErrCodeQuotaExceeded {
 				lastErr = newHTTPError(http.StatusTooManyRequests, problem)
 				slog.Warn("PushWard monthly quota exhausted",
@@ -228,15 +240,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 				return lastErr
 			}
 
-			retryAfterOverride = parseRetryAfter(resp.Header.Get("Retry-After"))
-			if retryAfterOverride == 0 && problem.RetryAfterMs > 0 {
-				retryAfterOverride = time.Duration(problem.RetryAfterMs) * time.Millisecond
-			}
-			// Clamp a server-supplied Retry-After so a misbehaving or
-			// compromised server cannot park the calling goroutine for hours.
-			if retryAfterOverride > maxRetryAfter {
-				retryAfterOverride = maxRetryAfter
-			}
+			retryAfterOverride = throttleDelay(resp.Header.Get("Retry-After"), problem.RetryAfterMs)
 			slog.Warn("rate limited by PushWard", "url", url, "retry_after", retryAfterOverride, "code", problem.Code)
 			// Typed error so callers can errors.As the 429 (status + Retry-After).
 			lastErr = newHTTPError(http.StatusTooManyRequests, problem)
@@ -470,7 +474,20 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 // it for the seed (establishes template/icon/accent) and the final ENDED
 // frame; use PatchActivity for mid-sequence ticks.
 func (c *Client) UpdateActivity(ctx context.Context, slug string, req UpdateRequest) error {
-	return c.doWithRetry(ctx, "update", http.MethodPatch, fmt.Sprintf("%s/activities/%s", c.baseURL, slug), "", req, nil)
+	return c.doWithRetry(ctx, "update", http.MethodPatch, c.activityURL(slug), "", req, nil)
+}
+
+// activityURL escapes the slug into the path. net/http sends the request path
+// close to verbatim, so an unescaped slug carrying "?" or "/" would let a
+// caller graft a query parameter (e.g. upsert=true) or a path segment onto the
+// request. Every slug in this repo is already restricted to [a-zA-Z0-9_-], so
+// this is a no-op today and a guard against a future caller that is not.
+func (c *Client) activityURL(slug string) string {
+	return fmt.Sprintf("%s/activities/%s", c.baseURL, url.PathEscape(slug))
+}
+
+func (c *Client) widgetURL(slug string) string {
+	return fmt.Sprintf("%s/widgets/%s", c.baseURL, url.PathEscape(slug))
 }
 
 // PatchOption tunes a single PatchActivity call.
@@ -500,11 +517,11 @@ func (c *Client) PatchActivity(ctx context.Context, slug string, req PatchReques
 	for _, opt := range opts {
 		opt(&o)
 	}
-	url := fmt.Sprintf("%s/activities/%s", c.baseURL, slug)
+	endpoint := c.activityURL(slug)
 	if o.upsert {
-		url += "?upsert=true"
+		endpoint += "?upsert=true"
 	}
-	return c.doWithRetry(ctx, "update", http.MethodPatch, url, "", req, nil)
+	return c.doWithRetry(ctx, "update", http.MethodPatch, endpoint, "", req, nil)
 }
 
 // SendNotification creates a notification record and optionally pushes an APNs alert.
@@ -532,12 +549,12 @@ func (c *Client) CreateWidget(ctx context.Context, req CreateWidgetRequest) erro
 // fields are preserved, present fields overwrite, null clears.
 func (c *Client) UpdateWidget(ctx context.Context, slug string, req UpdateWidgetRequest) error {
 	return c.doWithRetry(ctx, "widget.update", http.MethodPatch,
-		fmt.Sprintf("%s/widgets/%s", c.baseURL, slug),
+		c.widgetURL(slug),
 		"application/merge-patch+json", req, nil)
 }
 
 // DeleteWidget removes a widget via DELETE /widgets/{slug}.
 func (c *Client) DeleteWidget(ctx context.Context, slug string) error {
 	return c.doWithRetry(ctx, "widget.delete", http.MethodDelete,
-		fmt.Sprintf("%s/widgets/%s", c.baseURL, slug), "", nil, nil)
+		c.widgetURL(slug), "", nil, nil)
 }
