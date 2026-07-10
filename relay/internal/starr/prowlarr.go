@@ -114,7 +114,7 @@ func (h *Handler) handleProwlarrGrab(ctx context.Context, userKey string, log *s
 		CollapseID: text.SlugHash("prowlarr-grab", p.Release.ReleaseTitle, 6),
 		Level:      pushward.LevelActive,
 		Source:     "prowlarr",
-		Push:       true,
+		Push:       pushward.BoolPtr(true),
 		Metadata:   meta,
 	})
 }

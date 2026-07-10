@@ -300,7 +300,7 @@ func (h *Handler) buildSingleNotification(g *alertGroup) pushward.SendNotificati
 		ThreadID:   "grafana",
 		CollapseID: text.SlugHash("grafana", g.alertname, 6),
 		Source:     "grafana",
-		Push:       true,
+		Push:       pushward.BoolPtr(true),
 	}
 
 	switch a.Status {
@@ -339,7 +339,7 @@ func (h *Handler) buildGroupedNotification(g *alertGroup) pushward.SendNotificat
 		ThreadID:   "grafana",
 		CollapseID: text.SlugHash("grafana", g.alertname, 6),
 		Source:     "grafana",
-		Push:       true,
+		Push:       pushward.BoolPtr(true),
 	}
 
 	if len(g.firing) > 0 {

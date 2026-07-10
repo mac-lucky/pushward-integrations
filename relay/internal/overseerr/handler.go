@@ -123,7 +123,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 			Level:      ov.LevelOr(pushward.LevelActive),
 			Source:     "overseerr",
 			Media:      pushward.MediaImage(p.Image),
-			Push:       true,
+			Push:       pushward.BoolPtr(true),
 		}
 		meta := map[string]string{"media_type": p.Media.MediaType, "tmdb_id": p.Media.TmdbID}
 		if p.Subject != "" {

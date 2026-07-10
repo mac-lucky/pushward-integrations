@@ -240,7 +240,7 @@ func notification(alias, title, slug string) pushward.SendNotificationRequest {
 		ThreadID:   "truenas",
 		CollapseID: slug,
 		Source:     "truenas",
-		Push:       true,
+		Push:       pushward.BoolPtr(true),
 		Metadata: map[string]string{
 			"alias":       alias,
 			"fingerprint": slug,

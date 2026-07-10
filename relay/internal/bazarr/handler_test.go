@@ -88,7 +88,7 @@ func TestEpisodeDownloaded(t *testing.T) {
 	if req.Source != "bazarr" {
 		t.Errorf("expected source bazarr, got %s", req.Source)
 	}
-	if !req.Push {
+	if req.Push == nil || !*req.Push {
 		t.Error("expected push=true")
 	}
 }

@@ -748,7 +748,7 @@ func TestRadarrHealth(t *testing.T) {
 	if req.Body != "Warning · Indexer NZBgeek is unavailable due to failures" {
 		t.Errorf("expected body with health message, got %s", req.Body)
 	}
-	if !req.Push {
+	if req.Push == nil || !*req.Push {
 		t.Error("expected push=true")
 	}
 }
@@ -1082,7 +1082,7 @@ func TestRadarrGrab_SmartMode_SendsNotification(t *testing.T) {
 	if req.Subtitle != "Inception (2010)" {
 		t.Errorf("expected subtitle 'Inception (2010)', got %s", req.Subtitle)
 	}
-	if !req.Push {
+	if req.Push == nil || !*req.Push {
 		t.Error("expected push=true in smart mode for Grab")
 	}
 	if req.ThreadID != "radarr" {
@@ -1119,7 +1119,7 @@ func TestRadarrGrab_ActivityMode_CreatesActivity(t *testing.T) {
 	// Verify notification has push=false in activity mode
 	var notifReq pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &notifReq)
-	if notifReq.Push {
+	if notifReq.Push == nil || *notifReq.Push {
 		t.Error("expected push=false in activity mode for Grab")
 	}
 }

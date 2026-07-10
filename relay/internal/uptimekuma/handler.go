@@ -102,7 +102,7 @@ func (h *Handler) buildNotification(p *uptimekumaPayload, subtitle string, monit
 		ThreadID:   "uptimekuma",
 		CollapseID: text.SlugHash("uptimekuma", monitorIDStr, 6),
 		Source:     "uptimekuma",
-		Push:       true,
+		Push:       pushward.BoolPtr(true),
 		Metadata: map[string]string{
 			"alert_name":  p.Monitor.Name,
 			"monitor_id":  monitorIDStr,

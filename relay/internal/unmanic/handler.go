@@ -116,7 +116,7 @@ func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Lo
 			CollapseID: slug,
 			Level:      ov.LevelOr(pushward.LevelActive),
 			Source:     "unmanic",
-			Push:       true,
+			Push:       pushward.BoolPtr(true),
 		}
 		if err := cl.SendNotification(ctx, req); err != nil {
 			log.Error("failed to send unmanic notification", "slug", slug, "error", err)

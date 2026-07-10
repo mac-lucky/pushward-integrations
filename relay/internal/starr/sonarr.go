@@ -143,7 +143,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 			CollapseID: "sonarr-grab" + episodeCollapseSuffix(p.Episodes),
 			Level:      ov.LevelOr(pushward.LevelActive),
 			Source:     "sonarr",
-			Push:       h.shouldNotify("Grab") || !ov.AllowsActivity(),
+			Push:       pushward.BoolPtr(h.shouldNotify("Grab") || !ov.AllowsActivity()),
 			URL:        sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug),
 			Media:      pushward.MediaImage(posterURL(p.Series.Images)),
 		}
@@ -258,7 +258,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 			CollapseID: "sonarr-download" + episodeCollapseSuffix(p.Episodes),
 			Level:      ov.LevelOr(pushward.LevelActive),
 			Source:     "sonarr",
-			Push:       h.shouldNotify("Download") || !ov.AllowsActivity(),
+			Push:       pushward.BoolPtr(h.shouldNotify("Download") || !ov.AllowsActivity()),
 			URL:        sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug),
 			Media:      pushward.MediaImage(posterURL(p.Series.Images)),
 		}
@@ -371,7 +371,7 @@ func (h *Handler) handleSonarrRename(ctx context.Context, userKey string, log *s
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Renamed",
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-rename",
-		Level: pushward.LevelPassive, Source: "sonarr", Push: true,
+		Level: pushward.LevelPassive, Source: "sonarr", Push: pushward.BoolPtr(true),
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), Media: pushward.MediaImage(posterURL(p.Series.Images)),
 		Metadata: sonarrSeriesMeta(p.Series),
 	})
@@ -381,7 +381,7 @@ func (h *Handler) handleSonarrSeriesAdd(ctx context.Context, userKey string, log
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Sonarr", Subtitle: p.Series.Title, Body: "Added",
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-series-add",
-		Level: pushward.LevelActive, Source: "sonarr", Push: true,
+		Level: pushward.LevelActive, Source: "sonarr", Push: pushward.BoolPtr(true),
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), Media: pushward.MediaImage(posterURL(p.Series.Images)),
 		Metadata: sonarrSeriesMeta(p.Series),
 	})
@@ -395,7 +395,7 @@ func (h *Handler) handleSonarrSeriesDelete(ctx context.Context, userKey string, 
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Sonarr", Subtitle: p.Series.Title, Body: body,
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-series-delete",
-		Level: pushward.LevelActive, Source: "sonarr", Push: true,
+		Level: pushward.LevelActive, Source: "sonarr", Push: pushward.BoolPtr(true),
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), Media: pushward.MediaImage(posterURL(p.Series.Images)),
 		Metadata: sonarrSeriesMeta(p.Series),
 	})
@@ -410,7 +410,7 @@ func (h *Handler) handleSonarrEpisodeFileDelete(ctx context.Context, userKey str
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Sonarr", Subtitle: text.Truncate(subtitle, 100), Body: body,
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-file-delete" + episodeCollapseSuffix(p.Episodes),
-		Level: pushward.LevelPassive, Source: "sonarr", Push: true,
+		Level: pushward.LevelPassive, Source: "sonarr", Push: pushward.BoolPtr(true),
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), Media: pushward.MediaImage(posterURL(p.Series.Images)),
 		Metadata: sonarrSeriesMeta(p.Series),
 	})
@@ -484,7 +484,7 @@ func (h *Handler) handleSonarrImportComplete(ctx context.Context, userKey string
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Sonarr", Subtitle: text.Truncate(subtitle, 100), Body: body,
 		ThreadID: sonarrMediaThreadID(p.Series), CollapseID: "sonarr-import-complete" + episodeCollapseSuffix(p.Episodes),
-		Level: pushward.LevelActive, Source: "sonarr", Push: true,
+		Level: pushward.LevelActive, Source: "sonarr", Push: pushward.BoolPtr(true),
 		URL: sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug), Media: pushward.MediaImage(posterURL(p.Series.Images)),
 		Metadata: sonarrSeriesMeta(p.Series),
 	})

@@ -460,7 +460,11 @@ type SendNotificationRequest struct {
 	// rejected with 422 notification.activity_not_found before the
 	// notification is persisted.
 	ActivitySlug string `json:"activity_slug,omitempty"`
-	Push         bool   `json:"push"`
+	// Push controls APNs delivery. Nil omits the key and the server applies
+	// its default of true; BoolPtr(false) stores the notification in the inbox
+	// without alerting any device. It is a pointer so that an unset field
+	// cannot silently mean "inbox only".
+	Push *bool `json:"push,omitempty"`
 }
 
 // sourceDisplayNames maps source identifiers to their human-readable display names.

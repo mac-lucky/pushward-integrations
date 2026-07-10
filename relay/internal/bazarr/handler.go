@@ -99,7 +99,7 @@ func (h *Handler) handleSubtitle(ctx context.Context, userKey string, log *slog.
 		CollapseID: text.SlugHash("bazarr", ev.media, 4),
 		Level:      ov.LevelOr(pushward.LevelActive),
 		Source:     "bazarr",
-		Push:       true,
+		Push:       pushward.BoolPtr(true),
 	}
 
 	if err := h.clients.SendNotification(ctx, userKey, log, req); err != nil {

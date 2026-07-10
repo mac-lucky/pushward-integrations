@@ -244,7 +244,7 @@ func (h *Handler) notification(p *komodoPayload, name, collapseID string) pushwa
 		ThreadID:   "komodo",
 		CollapseID: collapseID,
 		Source:     "komodo",
-		Push:       true,
+		Push:       pushward.BoolPtr(true),
 		Metadata: map[string]string{
 			"alert_type":  p.Data.Type,
 			"target_type": p.Target.Type,

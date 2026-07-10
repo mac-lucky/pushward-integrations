@@ -92,7 +92,7 @@ func (h *Handler) handleChange(ctx context.Context, payload *changedetectionPayl
 			Level:      ov.LevelOr(pushward.LevelActive),
 			Source:     "changedetection",
 			URL:        text.SanitizeURL(payload.DiffURL),
-			Push:       true,
+			Push:       pushward.BoolPtr(true),
 		}
 		if err := pwClient.SendNotification(ctx, req); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)

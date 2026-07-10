@@ -112,7 +112,7 @@ func (h *Handler) buildNotification(p *gatusPayload, slug, subtitle string) push
 		ThreadID:   "gatus",
 		CollapseID: slug,
 		Source:     "gatus",
-		Push:       true,
+		Push:       pushward.BoolPtr(true),
 		Metadata:   h.buildMetadata(p, slug),
 	}
 }

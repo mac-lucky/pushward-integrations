@@ -481,7 +481,7 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog
 		CollapseID: "jellyfin-item-" + p.ItemID,
 		Level:      pushward.LevelPassive,
 		Source:     "jellyfin",
-		Push:       true,
+		Push:       pushward.BoolPtr(true),
 		Metadata:   meta,
 	})
 }
@@ -513,7 +513,7 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *sl
 		CollapseID: "jellyfin-task-" + p.TaskName,
 		Level:      pushward.LevelPassive,
 		Source:     "jellyfin",
-		Push:       true,
+		Push:       pushward.BoolPtr(true),
 	})
 }
 
@@ -533,7 +533,7 @@ func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, log *
 		CollapseID: "jellyfin-task-" + p.TaskName,
 		Level:      level,
 		Source:     "jellyfin",
-		Push:       true,
+		Push:       pushward.BoolPtr(true),
 	})
 }
 
@@ -546,7 +546,7 @@ func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, log *sl
 		CollapseID: "jellyfin-auth",
 		Level:      pushward.LevelActive,
 		Source:     "jellyfin",
-		Push:       true,
+		Push:       pushward.BoolPtr(true),
 		Metadata:   map[string]string{"user": p.UserName, "remote": p.RemoteEndPoint},
 	})
 }

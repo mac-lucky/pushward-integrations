@@ -575,7 +575,7 @@ func TestItemAdded(t *testing.T) {
 	if req.Source != "jellyfin" {
 		t.Errorf("expected source 'jellyfin', got %s", req.Source)
 	}
-	if !req.Push {
+	if req.Push == nil || !*req.Push {
 		t.Error("expected push=true")
 	}
 }

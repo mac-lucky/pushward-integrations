@@ -110,7 +110,7 @@ func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.
 			CollapseID: slug,
 			Level:      ov.LevelOr(pushward.LevelActive),
 			Source:     "paperless",
-			Push:       true,
+			Push:       pushward.BoolPtr(true),
 		}
 		if err := cl.SendNotification(ctx, notifReq); err != nil {
 			log.Error("failed to send paperless notification", "slug", slug, "error", err)
