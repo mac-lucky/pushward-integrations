@@ -1046,9 +1046,11 @@ func TestDoWithRetry_QuotaExceeded_FailsFast(t *testing.T) {
 		t.Error("quota.exceeded is a reachable backend and must not trip the circuit breaker")
 	}
 
+	// A caller that only cares about status/code keeps its existing errors.As
+	// on *HTTPError: the quota error must stay reachable through Unwrap.
 	var he *HTTPError
 	if !errors.As(err, &he) {
-		t.Fatalf("expected a typed *HTTPError, got %T: %v", err, err)
+		t.Fatalf("expected the error to unwrap to *HTTPError, got %T: %v", err, err)
 	}
 	if he.StatusCode != http.StatusTooManyRequests {
 		t.Errorf("expected status 429, got %d", he.StatusCode)
@@ -1056,14 +1058,23 @@ func TestDoWithRetry_QuotaExceeded_FailsFast(t *testing.T) {
 	if he.Code != ErrCodeQuotaExceeded {
 		t.Errorf("expected code %q, got %q", ErrCodeQuotaExceeded, he.Code)
 	}
-	if he.Kind != "notifications" {
-		t.Errorf("expected kind notifications, got %q", he.Kind)
+
+	// A caller that wants the quota detail asks for it by type.
+	var qe *QuotaExceededError
+	if !errors.As(err, &qe) {
+		t.Fatalf("expected a typed *QuotaExceededError, got %T: %v", err, err)
 	}
-	if he.Used != 501 || he.Limit != 500 {
-		t.Errorf("expected used/limit 501/500, got %d/%d", he.Used, he.Limit)
+	if qe.Kind != "notifications" {
+		t.Errorf("expected kind notifications, got %q", qe.Kind)
 	}
-	if he.ResetAt != "2026-08-01T00:00:00Z" {
-		t.Errorf("expected reset_at 2026-08-01T00:00:00Z, got %q", he.ResetAt)
+	if qe.Used != 501 || qe.Limit != 500 {
+		t.Errorf("expected used/limit 501/500, got %d/%d", qe.Used, qe.Limit)
+	}
+	if qe.ResetAt != "2026-08-01T00:00:00Z" {
+		t.Errorf("expected reset_at 2026-08-01T00:00:00Z, got %q", qe.ResetAt)
+	}
+	if !strings.Contains(qe.Error(), "501/500") {
+		t.Errorf("expected the message to carry the quota usage, got %q", qe.Error())
 	}
 }
 
@@ -1375,12 +1386,58 @@ func TestDoWithRetry_QuotaCodeOnNon429_FailsFastVia4xx(t *testing.T) {
 	}
 	var he *HTTPError
 	if !errors.As(err, &he) {
-		t.Fatalf("expected a typed *HTTPError, got %T", err)
+		t.Fatalf("expected the error to unwrap to *HTTPError, got %T", err)
 	}
 	if he.StatusCode != http.StatusForbidden || he.Code != ErrCodeQuotaExceeded {
 		t.Errorf("expected 403/%s, got %d/%s", ErrCodeQuotaExceeded, he.StatusCode, he.Code)
 	}
-	if he.Kind != "emails" || he.Used != 10 || he.Limit != 10 {
-		t.Errorf("quota detail must survive the 4xx path, got kind=%q used=%d limit=%d", he.Kind, he.Used, he.Limit)
+	var qe *QuotaExceededError
+	if !errors.As(err, &qe) {
+		t.Fatalf("a quota code on any status must yield *QuotaExceededError, got %T", err)
 	}
+	if qe.Kind != "emails" || qe.Used != 10 || qe.Limit != 10 {
+		t.Errorf("quota detail must survive the 4xx path, got kind=%q used=%d limit=%d", qe.Kind, qe.Used, qe.Limit)
+	}
+	if qe.StatusCode != http.StatusForbidden {
+		t.Errorf("expected the embedded status 403, got %d", qe.StatusCode)
+	}
+}
+
+// QuotaExceededError must satisfy both errors.As targets, directly and through
+// the retry-budget fmt.Errorf wrap, while a non-quota error satisfies only the
+// *HTTPError one. Callers that predate the quota type keep working unchanged.
+func TestQuotaExceededError_UnwrapContract(t *testing.T) {
+	quota := newHTTPError(http.StatusTooManyRequests,
+		problem{Code: ErrCodeQuotaExceeded, Detail: "cap reached", Kind: "emails", Used: 3, Limit: 2})
+
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "direct", err: quota},
+		{name: "through the retry-budget wrap", err: fmt.Errorf("retry budget 20s exhausted: %w", quota)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var he *HTTPError
+			if !errors.As(tc.err, &he) || he.StatusCode != http.StatusTooManyRequests || he.Code != ErrCodeQuotaExceeded {
+				t.Errorf("expected errors.As to reach *HTTPError, got %v", tc.err)
+			}
+			var qe *QuotaExceededError
+			if !errors.As(tc.err, &qe) || qe.Kind != "emails" || qe.Used != 3 || qe.Limit != 2 {
+				t.Errorf("expected errors.As to reach *QuotaExceededError, got %v", tc.err)
+			}
+		})
+	}
+
+	t.Run("non-quota error matches only HTTPError", func(t *testing.T) {
+		plain := newHTTPError(http.StatusNotFound, problem{Code: ErrCodeActivityNotFound})
+		var qe *QuotaExceededError
+		if errors.As(plain, &qe) {
+			t.Error("a non-quota error must not match *QuotaExceededError")
+		}
+		var he *HTTPError
+		if !errors.As(plain, &he) || he.StatusCode != http.StatusNotFound {
+			t.Error("a non-quota error must still match *HTTPError")
+		}
+	})
 }

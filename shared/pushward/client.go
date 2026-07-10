@@ -62,9 +62,9 @@ type ResultInfo struct {
 //
 // Logging policy: the client never logs an error it returns. Callers already
 // log the returned error, and every field they might want is on the typed
-// *HTTPError (status, code, and the quota detail) or on ResultInfo (attempts,
-// duration). It logs only conditions a caller cannot otherwise observe, such
-// as being throttled mid-retry.
+// *HTTPError / *QuotaExceededError or on ResultInfo (attempts, duration). It
+// logs only conditions a caller cannot otherwise observe, such as being
+// throttled mid-retry.
 type Client struct {
 	httpClient  *http.Client
 	baseURL     string
@@ -305,8 +305,9 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 //
 // The two 429 codes mean very different things. ErrCodeRateLimitExceeded is
 // transient IP backpressure and is retried automatically. ErrCodeQuotaExceeded
-// is the free-tier monthly cap: it stays exhausted until HTTPError.ResetAt or
-// until the user upgrades, so the client fails fast on it rather than retrying.
+// is the free-tier monthly cap: it stays exhausted until the reset date on the
+// returned *QuotaExceededError, or until the user upgrades, so the client fails
+// fast rather than retrying.
 const (
 	ErrCodeActivityLimitExceeded        = "activity.limit_exceeded"
 	ErrCodeWidgetLimitExceeded          = "widget.limit_exceeded"
@@ -377,30 +378,52 @@ type HTTPError struct {
 	Detail       string // Problem.detail
 	Code         string // Problem.code — stable programmatic identifier
 	RetryAfterMs int64  // Problem.retry_after_ms (populated on 409/429)
+}
 
-	// Quota detail, populated only when Code == ErrCodeQuotaExceeded.
-	// Kind is one of "notifications", "live_activity_updates",
-	// "widget_updates", "emails". ResetAt is RFC 3339 UTC and marks the start
-	// of the next calendar month, when the quota refills.
+// QuotaExceededError is returned when the server reports Code
+// ErrCodeQuotaExceeded, whatever the status. It wraps the *HTTPError, so a
+// caller that only cares about the status or the code keeps using
+// errors.As(err, &httpErr); one that wants the quota detail reaches for
+// errors.As(err, &quotaErr) instead of zero-checking fields that are
+// meaningless on every other error.
+//
+// A quota is a monthly cap. It stays exhausted until ResetAt or until the user
+// upgrades, so retrying before then cannot succeed: surface an upgrade prompt
+// rather than a retry loop.
+type QuotaExceededError struct {
+	*HTTPError
+
+	// Kind names the exhausted counter: "notifications",
+	// "live_activity_updates", "widget_updates", or "emails".
 	Kind    string
 	Used    int
 	Limit   int
-	ResetAt string
+	ResetAt string // RFC 3339 UTC, the start of next calendar month
 }
 
-func newHTTPError(status int, p problem) *HTTPError {
-	return &HTTPError{
+func (e *QuotaExceededError) Error() string {
+	return fmt.Sprintf("%s (%s quota %d/%d, resets %s)", e.HTTPError.Error(), e.Kind, e.Used, e.Limit, e.ResetAt)
+}
+
+// Unwrap lets errors.As reach the embedded *HTTPError. Embedding alone would
+// not: a *QuotaExceededError is not assignable to a *HTTPError target.
+func (e *QuotaExceededError) Unwrap() error { return e.HTTPError }
+
+// newHTTPError builds the typed error for a Problem body, upgrading it to a
+// *QuotaExceededError when the server reports a quota cap.
+func newHTTPError(status int, p problem) error {
+	he := &HTTPError{
 		StatusCode:   status,
 		Type:         p.Type,
 		Title:        p.Title,
 		Detail:       p.Detail,
 		Code:         p.Code,
 		RetryAfterMs: p.RetryAfterMs,
-		Kind:         p.Kind,
-		Used:         p.Used,
-		Limit:        p.Limit,
-		ResetAt:      p.ResetAt,
 	}
+	if p.Code == ErrCodeQuotaExceeded {
+		return &QuotaExceededError{HTTPError: he, Kind: p.Kind, Used: p.Used, Limit: p.Limit, ResetAt: p.ResetAt}
+	}
+	return he
 }
 
 func (e *HTTPError) Error() string {
@@ -414,7 +437,10 @@ func (e *HTTPError) Error() string {
 	}
 }
 
-var _ error = (*HTTPError)(nil)
+var (
+	_ error = (*HTTPError)(nil)
+	_ error = (*QuotaExceededError)(nil)
+)
 
 // breakerSignal classifies a request outcome for the circuit breaker. The
 // breaker tracks backend *health*, which is distinct from request success: a
