@@ -30,12 +30,24 @@ const (
 	// which for downloads is "%.1f MB/s" and would defeat speed bucketing.
 	modeDownloading = "downloading"
 	modePaused      = "paused"
+	modePropagating = "propagating"
 
 	// Change-detection thresholds for the polling loops. Send when any
 	// threshold is crossed, otherwise skip until heartbeatInterval elapses so
 	// the server's stale_ttl doesn't auto-end the activity.
 	heartbeatInterval  = 30 * time.Second
 	progressChangeFrac = 0.02
+
+	// A propagation hold is static and can run for the user's whole configured
+	// delay, so the 30s heartbeat above would spend hundreds of pushes saying
+	// nothing. Resend just often enough to outrun stale_ttl instead.
+	propagationHeartbeatMax = 5 * time.Minute
+
+	// SABnzbd derives the release time from the NZB's average article date, so
+	// an NZB dated in the future never clears. Without a cap the tracker would
+	// poll it forever and, because it stays active, drop every later webhook
+	// until the process restarts.
+	maxPropagationHold = 2 * time.Hour
 )
 
 var ppStatuses = map[string]bool{
@@ -63,8 +75,8 @@ type Tracker struct {
 	mu     sync.Mutex // guards active
 	active bool
 	wg     sync.WaitGroup
-	// historySent, maxSlots and the last* fields are owned by the tracker
-	// goroutine; do not access from other goroutines.
+	// historySent, maxSlots, propagatingSince and the last* fields are owned by
+	// the tracker goroutine; do not access from other goroutines.
 	historySent  bool
 	maxSlots     int
 	lastProgress float64
@@ -72,7 +84,9 @@ type Tracker struct {
 	lastMode     string
 	lastSubtitle string
 	lastSendTime time.Time
-	shuttingDown atomic.Bool
+	// Zero whenever the queue is not held; otherwise when the hold started.
+	propagatingSince time.Time
+	shuttingDown     atomic.Bool
 }
 
 func New(cfg *config.Config, sab *sabnzbd.Client, pw *pushward.Client) *Tracker {
@@ -102,8 +116,9 @@ func (t *Tracker) ResumeIfActive(ctx context.Context) bool {
 	}
 
 	mb, _ := strconv.ParseFloat(queue.MB, 64)
-	if queue.Status != "Idle" && mb > 0 {
-		slog.Info("active download found on startup, resuming tracking", "status", queue.Status, "total_mb", mb)
+	propagating := queue.Propagating()
+	if (queue.Status != "Idle" && mb > 0) || propagating > 0 {
+		slog.Info("active download found on startup, resuming tracking", "status", queue.Status, "total_mb", mb, "propagating", propagating)
 		t.mu.Lock()
 		t.active = true
 		t.mu.Unlock()
@@ -333,12 +348,13 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	t.lastMode = ""
 	t.lastSubtitle = ""
 	t.lastSendTime = time.Time{}
+	t.propagatingSince = time.Time{}
 
 	sessionStart := time.Now()
 
-	// Ensure activity exists (no ended_ttl so the slug persists)
+	endedTTL := int(t.cfg.PushWard.CleanupDelay.Seconds())
 	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
-	if err := t.pw.CreateActivity(ctx, slug, "SABnzbd", t.cfg.PushWard.Priority, 0, staleTTL); err != nil {
+	if err := t.pw.CreateActivity(ctx, slug, "SABnzbd", t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
 		slog.Error("failed to create activity", "error", err)
 		return
 	}
@@ -495,7 +511,8 @@ func (t *Tracker) waitForQueueActive(ctx context.Context, maxPolls int) bool {
 		consecutiveErrs = 0
 
 		mb, _ := strconv.ParseFloat(queue.MB, 64)
-		if queue.Status != "Idle" && mb > 0 {
+		// A propagation hold reads "Idle" and can run 15 minutes, far past maxPolls.
+		if (queue.Status != "Idle" && mb > 0) || t.propagationActive(queue) {
 			return true
 		}
 		timer.Reset(interval)
@@ -587,7 +604,9 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 	speedKB, _ := strconv.ParseFloat(queue.KBPerSec, 64)
 	speedMB := speedKB / 1024
 
-	if status == "Idle" || (mbLeft <= 0 && mbTotal <= 0) {
+	propagating := t.propagationActive(queue)
+
+	if !propagating && (status == "Idle" || (mbLeft <= 0 && mbTotal <= 0)) {
 		return false
 	}
 
@@ -625,6 +644,22 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 		return true
 	}
 
+	// Gate on throughput, not on Status: that string is derived from throughput
+	// anyway, and it oscillates Idle/Downloading as articles land, which would
+	// flip the mode every poll and defeat the heartbeat below.
+	if propagating && speedMB == 0 {
+		// Nothing about a hold changes between polls, so shouldSend would fall
+		// through to its 30s heartbeat and spend a push a minute saying the same
+		// thing for the whole delay.
+		if t.lastMode == modePropagating && time.Since(t.lastSendTime) < t.propagationHeartbeat() {
+			return true
+		}
+		if err := t.send(ctx, progress, "Waiting for propagation", "clock.arrow.circlepath", pushward.ColorBlue, nil, subtitle, pushward.StateOngoing, pushward.Float64Ptr(0)); err == nil {
+			t.recordSent(progress, 0, modePropagating, subtitle)
+		}
+		return true
+	}
+
 	remainingSeconds := parseTimeLeft(queue.TimeLeft)
 	stateStr := fmt.Sprintf("%.1f MB/s", speedMB)
 
@@ -639,6 +674,38 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 		t.recordSent(progress, speedMB, modeDownloading, subtitle)
 	}
 	return true
+}
+
+// propagationActive reports whether the queue is held by the propagation delay
+// and the hold is still worth waiting out. It latches the start on first sight
+// and gives up past maxPropagationHold, so a delay that never clears ends the
+// session instead of pinning the tracker.
+func (t *Tracker) propagationActive(queue *sabnzbd.Queue) bool {
+	if queue.Propagating() == 0 {
+		t.propagatingSince = time.Time{}
+		return false
+	}
+	if t.propagatingSince.IsZero() {
+		t.propagatingSince = time.Now()
+	}
+	if held := time.Since(t.propagatingSince); held > maxPropagationHold {
+		slog.Warn("propagation hold exceeded cap, giving up", "held", held)
+		return false
+	}
+	return true
+}
+
+// propagationHeartbeat is how often a static hold reasserts itself, kept a third
+// of the way inside stale_ttl so the server never auto-ends mid-wait.
+func (t *Tracker) propagationHeartbeat() time.Duration {
+	hb := t.cfg.PushWard.StaleTimeout / 3
+	if hb > propagationHeartbeatMax {
+		hb = propagationHeartbeatMax
+	}
+	if hb < heartbeatInterval {
+		hb = heartbeatInterval
+	}
+	return hb
 }
 
 func (t *Tracker) shouldSend(progress, speedMB float64, mode, subtitle string) bool {

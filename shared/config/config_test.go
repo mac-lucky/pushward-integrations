@@ -252,6 +252,36 @@ func TestValidate_PriorityTooHigh(t *testing.T) {
 	}
 }
 
+// time.ParseDuration takes "-5m" happily, and omitempty only strips 0, so a
+// negative delay used to reach the server as a negative ended_ttl. The bridge
+// then started up clean and failed every create once the first webhook landed.
+func TestValidate_TTLsOutOfRange(t *testing.T) {
+	cases := map[string]PushWardConfig{
+		"negative cleanup_delay": {CleanupDelay: -5 * time.Minute},
+		"negative stale_timeout": {StaleTimeout: -1 * time.Second},
+		"cleanup_delay past 30d": {CleanupDelay: 721 * time.Hour},
+		"stale_timeout past 30d": {StaleTimeout: 721 * time.Hour},
+	}
+	for name, c := range cases {
+		cfg := c
+		cfg.URL, cfg.APIKey = "http://localhost", "hlk_test"
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("%s: expected an error", name)
+		}
+	}
+}
+
+// 0 stays legal: it omits the TTL and defers to the server. 720h is the exact
+// boundary the server accepts (2592000s).
+func TestValidate_TTLBoundaries(t *testing.T) {
+	for _, d := range []time.Duration{0, time.Second, 720 * time.Hour} {
+		cfg := PushWardConfig{URL: "http://localhost", APIKey: "hlk_test", CleanupDelay: d, StaleTimeout: d}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("%v should be valid, got %v", d, err)
+		}
+	}
+}
+
 func TestValidate_PriorityBoundaries(t *testing.T) {
 	for _, p := range []int{0, 10} {
 		cfg := PushWardConfig{URL: "http://localhost", APIKey: "hlk_test", Priority: p}

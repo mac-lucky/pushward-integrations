@@ -548,6 +548,11 @@ func TestTrackingLifecycle_Download_PP_Complete(t *testing.T) {
 	if got[0].Method != "POST" || got[0].Path != "/activities" {
 		t.Errorf("first call: expected POST /activities, got %s %s", got[0].Method, got[0].Path)
 	}
+	var createReq pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, got[0].Body, &createReq)
+	if createReq.EndedTTL != 900 {
+		t.Errorf("create ended_ttl: expected 900 (cleanup_delay 15m), got %d", createReq.EndedTTL)
+	}
 
 	// Last call should be PATCH with ENDED
 	last := got[len(got)-1]
@@ -577,7 +582,116 @@ func TestTrackingLifecycle_Download_PP_Complete(t *testing.T) {
 	}
 }
 
+func TestTrackingLifecycle_Propagating_ThenDownload(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+
+	sabMk.setQueue(sabnzbd.Queue{
+		Status:   "Idle",
+		MB:       "500",
+		MBLeft:   "500",
+		KBPerSec: "0",
+		TimeLeft: "0:00:00",
+		Slots:    []sabnzbd.QueueSlot{{Filename: "ubuntu-24.04.nzb", Status: "Propagating"}},
+	})
+	sabMk.setHistory(sabnzbd.History{})
+
+	cfg := testConfig()
+	cfg.SABnzbd.URL = sabSrv.URL
+	sab := sabnzbd.NewClient(sabSrv.URL, "test-key")
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tr := New(cfg, sab, pw)
+	handler := tr.WebhookHandler(ctx)
+	handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/webhook", nil))
+
+	time.Sleep(80 * time.Millisecond)
+
+	sawPropagating := false
+	for _, c := range testutil.GetCalls(calls, mu) {
+		if c.Method != "PATCH" {
+			continue
+		}
+		var r pushward.UpdateRequest
+		testutil.UnmarshalBody(t, c.Body, &r)
+		if r.State == pushward.StateEnded {
+			t.Fatal("activity ended while the queue was still propagating")
+		}
+		if r.Content.State == "Waiting for propagation" {
+			sawPropagating = true
+		}
+	}
+	if !sawPropagating {
+		t.Error("expected a propagation frame while the queue was held")
+	}
+
+	// Propagation clears, bytes start flowing.
+	sabMk.setQueue(sabnzbd.Queue{
+		Status:   "Downloading",
+		MB:       "500",
+		MBLeft:   "250",
+		KBPerSec: "51200",
+		TimeLeft: "0:00:05",
+		Slots:    []sabnzbd.QueueSlot{{Filename: "ubuntu-24.04.nzb"}},
+	})
+	time.Sleep(80 * time.Millisecond)
+
+	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
+	sabMk.setHistory(sabnzbd.History{
+		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "ubuntu-24.04", Bytes: 524288000, DownloadTime: 10, Completed: time.Now().Unix()}},
+	})
+
+	tr.Wait()
+
+	got := testutil.GetCalls(calls, mu)
+	last := got[len(got)-1]
+	var lastReq pushward.UpdateRequest
+	testutil.UnmarshalBody(t, last.Body, &lastReq)
+	if lastReq.State != pushward.StateEnded {
+		t.Errorf("last update state: expected ENDED, got %s", lastReq.State)
+	}
+	// The summary must report the real download, not an empty one.
+	if !strings.Contains(lastReq.Content.State, "500 MB") {
+		t.Errorf("expected the completion summary to report the download, got %q", lastReq.Content.State)
+	}
+}
+
 // --- ResumeIfActive tests ---
+
+func TestResumeIfActive_PropagatingQueue(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	pwSrv, _, _ := testutil.MockPushWardServer(t)
+
+	sabMk.setQueue(sabnzbd.Queue{
+		Status: "Idle",
+		MB:     "500",
+		MBLeft: "500",
+		Slots:  []sabnzbd.QueueSlot{{Filename: "held.nzb", Status: "Propagating"}},
+	})
+	sabMk.setHistory(sabnzbd.History{})
+
+	cfg := testConfig()
+	cfg.SABnzbd.URL = sabSrv.URL
+	sab := sabnzbd.NewClient(sabSrv.URL, "test-key")
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tr := New(cfg, sab, pw)
+	if !tr.ResumeIfActive(ctx) {
+		t.Fatal("expected ResumeIfActive to resume for a propagating queue")
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
+	sabMk.setHistory(sabnzbd.History{
+		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "held", Bytes: 104857600, DownloadTime: 5, Completed: time.Now().Unix()}},
+	})
+
+	tr.Wait()
+}
 
 func TestResumeIfActive_ActiveDownload(t *testing.T) {
 	sabSrv, sabMk := mockSABnzbd(t)
@@ -660,6 +774,41 @@ func TestResumeIfActive_NoActivity(t *testing.T) {
 	}
 }
 
+// --- waitForQueueActive tests ---
+
+// Without this the propagation hold would exhaust maxPolls in ~60s and log
+// "SABnzbd never started downloading, giving up", well inside a 15m delay.
+func TestWaitForQueueActive_PropagatingCountsAsActive(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	sabMk.setQueue(sabnzbd.Queue{
+		Status: "Idle",
+		MB:     "500",
+		MBLeft: "500",
+		Slots:  []sabnzbd.QueueSlot{{Filename: "held.nzb", Status: "Propagating"}},
+	})
+
+	cfg := testConfig()
+	cfg.SABnzbd.URL = sabSrv.URL
+	tr := New(cfg, sabnzbd.NewClient(sabSrv.URL, "test-key"), nil)
+
+	if !tr.waitForQueueActive(context.Background(), 2) {
+		t.Fatal("expected propagating slots to count as an active queue")
+	}
+}
+
+func TestWaitForQueueActive_EmptyQueueGivesUp(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
+
+	cfg := testConfig()
+	cfg.SABnzbd.URL = sabSrv.URL
+	tr := New(cfg, sabnzbd.NewClient(sabSrv.URL, "test-key"), nil)
+
+	if tr.waitForQueueActive(context.Background(), 2) {
+		t.Fatal("expected an empty idle queue to stay inactive")
+	}
+}
+
 // --- sendDownloadProgress tests ---
 
 func TestSendDownloadProgress_Paused(t *testing.T) {
@@ -711,6 +860,228 @@ func TestSendDownloadProgress_Idle_ReturnsFalse(t *testing.T) {
 	result := tr.sendDownloadProgress(ctx, queue)
 	if result {
 		t.Fatal("expected sendDownloadProgress to return false for Idle")
+	}
+}
+
+func TestSendDownloadProgress_Propagating_KeepsTracking(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(cfg, nil, pw)
+
+	queue := &sabnzbd.Queue{
+		Status:   "Idle",
+		MB:       "500",
+		MBLeft:   "500",
+		KBPerSec: "0",
+		TimeLeft: "0:00:00",
+		Slots:    []sabnzbd.QueueSlot{{Filename: "ubuntu-24.04.nzb", Status: "Propagating"}},
+	}
+
+	if !tr.sendDownloadProgress(ctx, queue) {
+		t.Fatal("expected sendDownloadProgress to keep tracking while propagating")
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+	if req.Content.State != "Waiting for propagation" {
+		t.Errorf("expected propagation state, got %q", req.Content.State)
+	}
+	if req.State != pushward.StateOngoing {
+		t.Errorf("expected ONGOING, got %s", req.State)
+	}
+}
+
+// countPatches returns how many of the recorded calls were activity updates.
+// The mock 404s a PATCH against a slug it never saw created, and a failed send
+// deliberately skips recordSent so the next poll retries, so a test that cares
+// about send throttling has to create the activity first.
+func countPatches(calls *[]testutil.APICall, mu *sync.Mutex) int {
+	n := 0
+	for _, c := range testutil.GetCalls(calls, mu) {
+		if c.Method == "PATCH" {
+			n++
+		}
+	}
+	return n
+}
+
+// A hold is static, so repeat polls must coalesce instead of spending a push
+// every 30s. At the default 30m stale_timeout that is one push per 5 minutes.
+func TestSendDownloadProgress_Propagating_ThrottlesRepeatPolls(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(cfg, nil, pw)
+
+	if err := pw.CreateActivity(ctx, slug, "SABnzbd", 1, 900, 1800); err != nil {
+		t.Fatalf("seeding the activity: %v", err)
+	}
+
+	queue := &sabnzbd.Queue{
+		Status:   "Idle",
+		MB:       "500",
+		MBLeft:   "500",
+		KBPerSec: "0",
+		TimeLeft: "0:00:00",
+		Slots:    []sabnzbd.QueueSlot{{Filename: "ubuntu-24.04.nzb", Status: "Propagating"}},
+	}
+
+	for range 5 {
+		if !tr.sendDownloadProgress(ctx, queue) {
+			t.Fatal("expected sendDownloadProgress to keep tracking while propagating")
+		}
+	}
+
+	if got := countPatches(calls, mu); got != 1 {
+		t.Errorf("expected the hold to send once and coalesce the rest, got %d pushes", got)
+	}
+
+	// Past the heartbeat the hold reasserts itself so stale_ttl cannot auto-end it.
+	tr.lastSendTime = time.Now().Add(-2 * tr.propagationHeartbeat())
+	if !tr.sendDownloadProgress(ctx, queue) {
+		t.Fatal("expected sendDownloadProgress to keep tracking while propagating")
+	}
+	if got := countPatches(calls, mu); got != 2 {
+		t.Errorf("expected a heartbeat past the interval, got %d pushes", got)
+	}
+}
+
+// cleanup_delay 0 means "let the server decide", not "dismiss immediately", and
+// omitempty is what carries that. A typed assertion cannot tell absent from 0,
+// so this reads the raw body.
+func TestCreateActivity_ZeroCleanupDelayOmitsEndedTTL(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+
+	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
+	sabMk.setHistory(sabnzbd.History{})
+
+	cfg := testConfig()
+	cfg.SABnzbd.URL = sabSrv.URL
+	cfg.PushWard.CleanupDelay = 0
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	tr := New(cfg, sabnzbd.NewClient(sabSrv.URL, "test-key"), pushward.NewClient(pwSrv.URL, "hlk_test"))
+	handler := tr.WebhookHandler(ctx)
+	handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/webhook", nil))
+	tr.Wait()
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) == 0 || got[0].Path != "/activities" {
+		t.Fatal("expected a create call")
+	}
+	var raw map[string]any
+	testutil.UnmarshalBody(t, got[0].Body, &raw)
+	if v, ok := raw["ended_ttl"]; ok {
+		t.Errorf("cleanup_delay 0 must omit ended_ttl, got %v", v)
+	}
+}
+
+// SABnzbd derives the release time from the NZB's average article date, so a
+// future-dated NZB never clears. Without the cap the tracker would poll it
+// forever and drop every later webhook as already-tracking.
+func TestSendDownloadProgress_PropagationHoldCapped(t *testing.T) {
+	cfg := testConfig()
+	ctx := context.Background()
+	tr := New(cfg, nil, nil)
+
+	queue := &sabnzbd.Queue{
+		Status: "Idle",
+		MB:     "500",
+		MBLeft: "500",
+		Slots:  []sabnzbd.QueueSlot{{Filename: "stuck.nzb", Status: "Propagating"}},
+	}
+
+	tr.propagatingSince = time.Now().Add(-maxPropagationHold - time.Minute)
+	if tr.sendDownloadProgress(ctx, queue) {
+		t.Fatal("expected the tracker to give up once the hold exceeded the cap")
+	}
+}
+
+// The hold latches on first sight and clears once the queue moves on, so a later
+// hold in the same session gets a fresh cap rather than the first one's clock.
+func TestPropagationActive_LatchesAndResets(t *testing.T) {
+	tr := New(testConfig(), nil, nil)
+
+	held := &sabnzbd.Queue{Slots: []sabnzbd.QueueSlot{{Filename: "a.nzb", Status: "Propagating"}}}
+	if !tr.propagationActive(held) {
+		t.Fatal("expected a propagating queue to be active")
+	}
+	first := tr.propagatingSince
+	if first.IsZero() {
+		t.Fatal("expected the hold start to latch")
+	}
+	if !tr.propagationActive(held) || !tr.propagatingSince.Equal(first) {
+		t.Error("expected the latched start to survive a second poll")
+	}
+
+	downloading := &sabnzbd.Queue{Slots: []sabnzbd.QueueSlot{{Filename: "a.nzb", Status: "Downloading"}}}
+	if tr.propagationActive(downloading) {
+		t.Error("expected a downloading queue not to be propagating")
+	}
+	if !tr.propagatingSince.IsZero() {
+		t.Error("expected the hold start to clear once the queue moved on")
+	}
+}
+
+// The counterpart to the test above. Bytes stay queued so the slot status is the
+// only thing deciding this, rather than the byte counters short-circuiting it.
+func TestSendDownloadProgress_IdleWithSlotsNotPropagating_ReturnsFalse(t *testing.T) {
+	cfg := testConfig()
+	ctx := context.Background()
+	tr := New(cfg, nil, nil)
+
+	queue := &sabnzbd.Queue{
+		Status: "Idle",
+		MB:     "500",
+		MBLeft: "500",
+		Slots:  []sabnzbd.QueueSlot{{Filename: "leftover.nzb", Status: "Queued"}},
+	}
+
+	if tr.sendDownloadProgress(ctx, queue) {
+		t.Fatal("expected false for an idle queue with no propagating slots")
+	}
+}
+
+func TestSendDownloadProgress_DownloadingWithPropagatingSibling_SendsSpeed(t *testing.T) {
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	ctx := context.Background()
+	tr := New(cfg, nil, pw)
+
+	queue := &sabnzbd.Queue{
+		Status:   "Downloading",
+		MB:       "1000",
+		MBLeft:   "400",
+		KBPerSec: "51200",
+		TimeLeft: "0:00:08",
+		Slots: []sabnzbd.QueueSlot{
+			{Filename: "first.nzb"},
+			{Filename: "second.nzb", Status: "Propagating"},
+		},
+	}
+
+	if !tr.sendDownloadProgress(ctx, queue) {
+		t.Fatal("expected true for active download")
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+	if req.Content.State != "50.0 MB/s" {
+		t.Errorf("expected speed state, got %q", req.Content.State)
 	}
 }
 

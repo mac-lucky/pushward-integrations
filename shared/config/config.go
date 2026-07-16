@@ -102,6 +102,16 @@ func (c *PushWardConfig) Validate() error {
 	if c.Priority < 0 || c.Priority > 10 {
 		return fmt.Errorf("pushward.priority must be 0-10 (got %d)", c.Priority)
 	}
+	// The server takes both TTLs as 1-2592000 seconds. Out-of-range values are
+	// only rejected once the first activity is created, which strands the bridge
+	// looking healthy while every push fails. Zero stays legal: it omits the
+	// field and lets the server default apply.
+	if c.CleanupDelay < 0 || c.CleanupDelay > 720*time.Hour {
+		return fmt.Errorf("pushward.cleanup_delay must be 0-720h (got %v)", c.CleanupDelay)
+	}
+	if c.StaleTimeout < 0 || c.StaleTimeout > 720*time.Hour {
+		return fmt.Errorf("pushward.stale_timeout must be 0-720h (got %v)", c.StaleTimeout)
+	}
 	return nil
 }
 

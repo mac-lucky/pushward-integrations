@@ -113,6 +113,7 @@ Settings come from a YAML file (`-config`) and/or environment variables. **Env v
 | `PUSHWARD_SABNZBD_TEMPLATE` | `sabnzbd.template` | Live Activity template: `generic` (default) or `timeline`. | No (`generic`) |
 | `PUSHWARD_SERVER_ADDRESS` | `server.address` | HTTP listen address for `/webhook`, `/health`, `/ready`. | No (`:8090`) |
 | `PUSHWARD_PRIORITY` | `pushward.priority` | Activity priority, validated 0–10. | No (`1`) |
+| `PUSHWARD_CLEANUP_DELAY` | `pushward.cleanup_delay` | Server `ended_ttl`: how long the finished activity lingers before the server deletes the row and iOS drops the Lock Screen card. Apple caps dismissal at 4h. `0` sends nothing and lets the server decide, so it does not mean "dismiss immediately". | No (`15m`) |
 | `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Server-side stale TTL (`staleTTL`) for the activity; 30s heartbeats keep it from auto-ending mid-download. | No (`30m`) |
 | `PUSHWARD_END_DELAY` | `pushward.end_delay` | Delay before phase 1 of the two-phase end (ONGOING with final content). | No (`5s`) |
 | `PUSHWARD_END_DISPLAY_TIME` | `pushward.end_display_time` | How long the completion frame shows before phase 2 (ENDED dismiss). | No (`4s`) |
@@ -137,7 +138,7 @@ sabnzbd:
 | `sabnzbd.timeline.scale` | Y-axis scale: `linear` or `logarithmic`. | `linear` |
 | `sabnzbd.timeline.decimals` | Value-label precision (0–10). | `0` |
 
-> **Accepted but unused by this bridge:** `pushward.cleanup_delay` (default `15m`) is read and logged at startup but never schedules a cleanup — leave it at the default. `server.metrics_address` exists in the shared config but this bridge starts no metrics server, so there is nothing to scrape.
+> **Accepted but unused by this bridge:** `server.metrics_address` exists in the shared config but this bridge starts no metrics server, so there is nothing to scrape.
 
 ### Security note on `sabnzbd.url`
 
@@ -155,8 +156,8 @@ SABnzbd accepts the API key only as a URL query parameter, so over plain `http:/
 
 The bridge maps one SABnzbd session to a single Live Activity (slug `sabnzbd`):
 
-1. **Seed** — creates the activity (`endedTTL=0` so the slug persists for reuse, `staleTTL` = `stale_timeout`) and shows `Starting…`.
-2. **Wait for start** — polls the queue a bounded number of times (12 polls ≈ 60s at the default 5s interval; scales with `polling.interval`). If the queue stays idle and nothing is post-processing, it ends with `No downloads`.
+1. **Seed** — creates the activity (`endedTTL` = `cleanup_delay`, `staleTTL` = `stale_timeout`) and shows `Starting…`.
+2. **Wait for start** — polls the queue a bounded number of times (12 polls ≈ 60s at the default 5s interval; scales with `polling.interval`). A job held by SABnzbd's propagation delay reports an idle queue, so the bridge reads the slot status instead and shows `Waiting for propagation` until bytes flow. If the queue is genuinely idle and nothing is post-processing, it ends with `No downloads`.
 3. **Download** — current filename + `X/Y` counter, progress, speed (MB/s), ETA, and a paused state.
 4. **Post-processing** — Verifying / Repairing / Extracting / Moving with phase-specific icons.
 5. **Continue** — if more downloads appear in the queue, loops back to the download phase.

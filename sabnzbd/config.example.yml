@@ -20,7 +20,10 @@ pushward:
   url: ""               # or set PUSHWARD_URL (e.g. https://api.pushward.app)
   api_key: ""           # or set PUSHWARD_API_KEY (hlk_ integration key)
   priority: 1
-  cleanup_delay: 15m
+  cleanup_delay: 15m    # ended_ttl: how long the finished activity lingers before the server deletes it
+  stale_timeout: 30m    # stale_ttl: server auto-ends the activity if no update arrives in this window
+  end_delay: 5s         # two-phase end: wait before the final ONGOING frame
+  end_display_time: 4s  # two-phase end: how long that frame shows before ENDED
 
 polling:
   interval: 5s          # or set PUSHWARD_POLL_INTERVAL
