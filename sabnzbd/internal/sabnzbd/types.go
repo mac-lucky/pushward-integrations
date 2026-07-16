@@ -24,6 +24,13 @@ type QueueSlot struct {
 // is translated.
 const statusPropagating = "Propagating"
 
+// Top-level queue statuses the tracker branches on. A separate namespace from
+// per-slot statuses like statusPropagating.
+const (
+	StatusIdle   = "Idle"
+	StatusPaused = "Paused"
+)
+
 // Propagating counts the slots held back by the propagation delay. The queue's
 // top-level status is derived from throughput alone, so a queue held entirely by
 // propagation reports "Idle" with jobs still in it; the per-slot status is the

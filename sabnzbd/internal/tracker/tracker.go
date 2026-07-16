@@ -116,8 +116,12 @@ func (t *Tracker) ResumeIfActive(ctx context.Context) bool {
 	}
 
 	mb, _ := strconv.ParseFloat(queue.MB, 64)
+	// Deliberately not queueHasWork: that would latch propagatingSince, which
+	// is owned by the tracker goroutine (see the field comment on Tracker).
+	// This runs on the main goroutine before that goroutine exists, and
+	// track() resets the latch anyway. A raw, stateless read is the right check.
 	propagating := queue.Propagating()
-	if (queue.Status != "Idle" && mb > 0) || propagating > 0 {
+	if (queue.Status != sabnzbd.StatusIdle && mb > 0) || propagating > 0 {
 		slog.Info("active download found on startup, resuming tracking", "status", queue.Status, "total_mb", mb, "propagating", propagating)
 		t.mu.Lock()
 		t.active = true
@@ -510,9 +514,8 @@ func (t *Tracker) waitForQueueActive(ctx context.Context, maxPolls int) bool {
 		}
 		consecutiveErrs = 0
 
-		mb, _ := strconv.ParseFloat(queue.MB, 64)
 		// A propagation hold reads "Idle" and can run 15 minutes, far past maxPolls.
-		if (queue.Status != "Idle" && mb > 0) || t.propagationActive(queue) {
+		if hasWork, _ := t.queueHasWork(queue); hasWork {
 			return true
 		}
 		timer.Reset(interval)
@@ -604,9 +607,8 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 	speedKB, _ := strconv.ParseFloat(queue.KBPerSec, 64)
 	speedMB := speedKB / 1024
 
-	propagating := t.propagationActive(queue)
-
-	if !propagating && (status == "Idle" || (mbLeft <= 0 && mbTotal <= 0)) {
+	hasWork, propagating := t.queueHasWork(queue)
+	if !hasWork {
 		return false
 	}
 
@@ -634,7 +636,7 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 		}
 	}
 
-	if status == "Paused" {
+	if status == sabnzbd.StatusPaused {
 		if !t.shouldSend(progress, 0, modePaused, subtitle) {
 			return true
 		}
@@ -674,6 +676,17 @@ func (t *Tracker) sendDownloadProgress(ctx context.Context, queue *sabnzbd.Queue
 		t.recordSent(progress, speedMB, modeDownloading, subtitle)
 	}
 	return true
+}
+
+// queueHasWork reports whether the queue still has anything worth tracking: an
+// active download or a live propagation hold. propagating is returned alongside
+// because sendDownloadProgress renders a hold differently from a download.
+// Tracker goroutine only: propagationActive latches/resets propagatingSince.
+func (t *Tracker) queueHasWork(queue *sabnzbd.Queue) (hasWork, propagating bool) {
+	propagating = t.propagationActive(queue)
+	mb, _ := strconv.ParseFloat(queue.MB, 64)
+	hasWork = (queue.Status != sabnzbd.StatusIdle && mb > 0) || propagating
+	return hasWork, propagating
 }
 
 // propagationActive reports whether the queue is held by the propagation delay

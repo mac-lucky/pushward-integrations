@@ -58,7 +58,11 @@ func mockSABnzbd(t *testing.T) (*httptest.Server, *sabMock) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(m.queueResp)
+			resp := m.queueResp
+			if m.queueFn != nil {
+				resp = sabnzbd.QueueResponse{Queue: m.queueFn()}
+			}
+			_ = json.NewEncoder(w).Encode(resp)
 		case "history":
 			if m.historyErr {
 				w.WriteHeader(http.StatusInternalServerError)
@@ -105,8 +109,15 @@ type sabMock struct {
 	historyResp sabnzbd.HistoryResponse
 	// historyFn, when set, supersedes historyResp and is invoked (while m.mu is
 	// held) on every history request. Lets a test return different history per
-	// read without sleeps — e.g. keep a PP status active for the first N reads.
-	historyFn  func() sabnzbd.History
+	// read without sleeps, e.g. keep a PP status active for the first N reads.
+	historyFn func() sabnzbd.History
+	// queueFn, when set, supersedes queueResp and is invoked (while m.mu is
+	// held) on every queue request. Lets a test drive phase transitions by
+	// queue-read count instead of sleeps, e.g. propagate for the first N
+	// reads, download for the next M, then go idle. Read counts map 1:1 to
+	// tracker polls only while the client sends one request per GetQueue;
+	// client-side retries would silently shift every phase boundary.
+	queueFn    func() sabnzbd.Queue
 	queueErr   bool
 	historyErr bool
 }
@@ -130,6 +141,41 @@ func (m *sabMock) setHistoryFn(fn func() sabnzbd.History) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.historyFn = fn
+}
+
+// setQueueFn installs a per-read queue provider, the queue-side mirror of
+// setHistoryFn. Same contract: fn runs under m.mu, so it must not re-lock it.
+func (m *sabMock) setQueueFn(fn func() sabnzbd.Queue) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.queueFn = fn
+}
+
+const oneMB = int64(1024 * 1024)
+
+// lifecycleDownloadQueue is the mid-download snapshot the lifecycle tests
+// share. MB "500" and KBPerSec "51200" are load-bearing: they must stay
+// coupled to the "50.0 MB/s" frame and "500 MB" summary assertions.
+func lifecycleDownloadQueue(filename string) sabnzbd.Queue {
+	return sabnzbd.Queue{
+		Status:   "Downloading",
+		MB:       "500",
+		MBLeft:   "250",
+		KBPerSec: "51200",
+		TimeLeft: "0:00:05",
+		Slots:    []sabnzbd.QueueSlot{{Filename: filename}},
+	}
+}
+
+// futureCompletedSlot is a finished 500 MB download for a test's history. The
+// far-future timestamp keeps it unconditionally past the session cutoff; a
+// time.Now() stamp taken before track() starts can truncate into an earlier
+// Unix second than the cutoff and vanish from the summary.
+func futureCompletedSlot(name string) sabnzbd.HistorySlot {
+	return sabnzbd.HistorySlot{
+		Status: "Completed", Name: name, Bytes: 500 * oneMB, DownloadTime: 10,
+		Completed: time.Now().Add(time.Hour).Unix(),
+	}
 }
 
 // queryInt parses an integer query parameter, returning def when absent or
@@ -496,16 +542,29 @@ func TestTrackingLifecycle_Download_PP_Complete(t *testing.T) {
 	sabSrv, sabMk := mockSABnzbd(t)
 	pwSrv, calls, mu := testutil.MockPushWardServer(t)
 
-	// Start with active download
-	sabMk.setQueue(sabnzbd.Queue{
-		Status:   "Downloading",
-		MB:       "500",
-		MBLeft:   "250",
-		KBPerSec: "51200",
-		TimeLeft: "0:00:05",
-		Slots:    []sabnzbd.QueueSlot{{Filename: "ubuntu-24.04.nzb"}},
+	// Download for the first few queue reads, then idle so tracking moves on
+	// to post-processing. Read 1 is waitForQueueActive; reads 2+ are
+	// trackDownloads polls.
+	var queueReads int
+	sabMk.setQueueFn(func() sabnzbd.Queue {
+		queueReads++
+		if queueReads <= 4 {
+			return lifecycleDownloadQueue("ubuntu-24.04.nzb")
+		}
+		return sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"}
 	})
-	sabMk.setHistory(sabnzbd.History{})
+	// History reads only start once the queue has gone idle: post-processing
+	// for the first two, then the completed slot.
+	var historyReads int
+	sabMk.setHistoryFn(func() sabnzbd.History {
+		historyReads++
+		if historyReads <= 2 {
+			return sabnzbd.History{
+				Slots: []sabnzbd.HistorySlot{{Status: "Extracting", Name: "ubuntu-24.04"}},
+			}
+		}
+		return sabnzbd.History{Slots: []sabnzbd.HistorySlot{futureCompletedSlot("ubuntu-24.04")}}
+	})
 
 	cfg := testConfig()
 	cfg.SABnzbd.URL = sabSrv.URL
@@ -520,22 +579,6 @@ func TestTrackingLifecycle_Download_PP_Complete(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	w := httptest.NewRecorder()
 	handler(w, req)
-
-	// Let download tracking run for a bit
-	time.Sleep(80 * time.Millisecond)
-
-	// Transition: download done → post-processing
-	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
-	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Extracting", Name: "ubuntu-24.04"}},
-	})
-
-	time.Sleep(80 * time.Millisecond)
-
-	// Transition: PP done → completed
-	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "ubuntu-24.04", Bytes: 524288000, DownloadTime: 10, Completed: time.Now().Unix()}},
-	})
 
 	tr.Wait()
 
@@ -586,15 +629,36 @@ func TestTrackingLifecycle_Propagating_ThenDownload(t *testing.T) {
 	sabSrv, sabMk := mockSABnzbd(t)
 	pwSrv, calls, mu := testutil.MockPushWardServer(t)
 
-	sabMk.setQueue(sabnzbd.Queue{
+	propagating := sabnzbd.Queue{
 		Status:   "Idle",
 		MB:       "500",
 		MBLeft:   "500",
 		KBPerSec: "0",
 		TimeLeft: "0:00:00",
 		Slots:    []sabnzbd.QueueSlot{{Filename: "ubuntu-24.04.nzb", Status: "Propagating"}},
+	}
+	idle := sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"}
+
+	// Queue reads are deterministic: read 1 is waitForQueueActive (returns true
+	// on the first propagating read), reads 2+ are trackDownloads polls, and
+	// the post-PP waitForQueueActive drains the idle tail. Thresholds carry
+	// margin, so an extra read in either loop shifts a phase boundary instead
+	// of skipping a phase.
+	var queueReads int
+	sabMk.setQueueFn(func() sabnzbd.Queue {
+		queueReads++
+		switch {
+		case queueReads <= 4:
+			return propagating
+		case queueReads <= 8:
+			return lifecycleDownloadQueue("ubuntu-24.04.nzb")
+		default:
+			return idle
+		}
 	})
-	sabMk.setHistory(sabnzbd.History{})
+	// History is only read after the download phase (trackPostProcessing, then
+	// getCompletedSummary), so the Completed slot can be present from the start.
+	sabMk.setHistory(sabnzbd.History{Slots: []sabnzbd.HistorySlot{futureCompletedSlot("ubuntu-24.04")}})
 
 	cfg := testConfig()
 	cfg.SABnzbd.URL = sabSrv.URL
@@ -606,46 +670,45 @@ func TestTrackingLifecycle_Propagating_ThenDownload(t *testing.T) {
 	tr := New(cfg, sab, pw)
 	handler := tr.WebhookHandler(ctx)
 	handler(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/webhook", nil))
+	tr.Wait()
 
-	time.Sleep(80 * time.Millisecond)
+	got := testutil.GetCalls(calls, mu)
+	if len(got) == 0 {
+		t.Fatal("expected PushWard calls")
+	}
 
-	sawPropagating := false
-	for _, c := range testutil.GetCalls(calls, mu) {
+	// Ordered walk: the hold must render, the download frame must follow it,
+	// and nothing may end the activity before bytes have flowed.
+	propIdx, speedIdx, firstEndedIdx := -1, -1, -1
+	for i, c := range got {
 		if c.Method != "PATCH" {
 			continue
 		}
 		var r pushward.UpdateRequest
 		testutil.UnmarshalBody(t, c.Body, &r)
-		if r.State == pushward.StateEnded {
-			t.Fatal("activity ended while the queue was still propagating")
+		if propIdx == -1 && r.Content.State == "Waiting for propagation" {
+			propIdx = i
 		}
-		if r.Content.State == "Waiting for propagation" {
-			sawPropagating = true
+		if speedIdx == -1 && r.Content.State == "50.0 MB/s" {
+			speedIdx = i
+		}
+		if firstEndedIdx == -1 && r.State == pushward.StateEnded {
+			firstEndedIdx = i
 		}
 	}
-	if !sawPropagating {
-		t.Error("expected a propagation frame while the queue was held")
+	if propIdx == -1 {
+		t.Fatal("expected a propagation frame while the queue was held")
+	}
+	if speedIdx == -1 {
+		t.Fatal("expected a download-speed frame after propagation cleared")
+	}
+	if speedIdx < propIdx {
+		t.Errorf("download frame (call %d) must come after the propagation frame (call %d)", speedIdx, propIdx)
+	}
+	if firstEndedIdx != -1 && firstEndedIdx < speedIdx {
+		t.Errorf("activity ended (call %d) before the download frame (call %d)", firstEndedIdx, speedIdx)
 	}
 
-	// Propagation clears, bytes start flowing.
-	sabMk.setQueue(sabnzbd.Queue{
-		Status:   "Downloading",
-		MB:       "500",
-		MBLeft:   "250",
-		KBPerSec: "51200",
-		TimeLeft: "0:00:05",
-		Slots:    []sabnzbd.QueueSlot{{Filename: "ubuntu-24.04.nzb"}},
-	})
-	time.Sleep(80 * time.Millisecond)
-
-	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
-	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "ubuntu-24.04", Bytes: 524288000, DownloadTime: 10, Completed: time.Now().Unix()}},
-	})
-
-	tr.Wait()
-
-	got := testutil.GetCalls(calls, mu)
 	last := got[len(got)-1]
 	var lastReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, last.Body, &lastReq)
@@ -664,13 +727,23 @@ func TestResumeIfActive_PropagatingQueue(t *testing.T) {
 	sabSrv, sabMk := mockSABnzbd(t)
 	pwSrv, _, _ := testutil.MockPushWardServer(t)
 
-	sabMk.setQueue(sabnzbd.Queue{
-		Status: "Idle",
-		MB:     "500",
-		MBLeft: "500",
-		Slots:  []sabnzbd.QueueSlot{{Filename: "held.nzb", Status: "Propagating"}},
+	// Read 1 is ResumeIfActive itself; the margin covers the resumed tracker's
+	// own waitForQueueActive and first trackDownloads polls before the queue
+	// clears.
+	var queueReads int
+	sabMk.setQueueFn(func() sabnzbd.Queue {
+		queueReads++
+		if queueReads <= 4 {
+			return sabnzbd.Queue{
+				Status: "Idle",
+				MB:     "500",
+				MBLeft: "500",
+				Slots:  []sabnzbd.QueueSlot{{Filename: "held.nzb", Status: "Propagating"}},
+			}
+		}
+		return sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"}
 	})
-	sabMk.setHistory(sabnzbd.History{})
+	sabMk.setHistory(sabnzbd.History{Slots: []sabnzbd.HistorySlot{futureCompletedSlot("held")}})
 
 	cfg := testConfig()
 	cfg.SABnzbd.URL = sabSrv.URL
@@ -683,13 +756,6 @@ func TestResumeIfActive_PropagatingQueue(t *testing.T) {
 	if !tr.ResumeIfActive(ctx) {
 		t.Fatal("expected ResumeIfActive to resume for a propagating queue")
 	}
-
-	time.Sleep(50 * time.Millisecond)
-	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
-	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "held", Bytes: 104857600, DownloadTime: 5, Completed: time.Now().Unix()}},
-	})
-
 	tr.Wait()
 }
 
@@ -697,8 +763,17 @@ func TestResumeIfActive_ActiveDownload(t *testing.T) {
 	sabSrv, sabMk := mockSABnzbd(t)
 	pwSrv, _, _ := testutil.MockPushWardServer(t)
 
-	sabMk.setQueue(sabnzbd.Queue{Status: "Downloading", MB: "100", MBLeft: "50"})
-	sabMk.setHistory(sabnzbd.History{})
+	// Read 1 is ResumeIfActive itself; the margin covers the resumed tracker's
+	// waitForQueueActive and first trackDownloads polls before the queue clears.
+	var queueReads int
+	sabMk.setQueueFn(func() sabnzbd.Queue {
+		queueReads++
+		if queueReads <= 4 {
+			return sabnzbd.Queue{Status: "Downloading", MB: "100", MBLeft: "50"}
+		}
+		return sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"}
+	})
+	sabMk.setHistory(sabnzbd.History{Slots: []sabnzbd.HistorySlot{futureCompletedSlot("test-file")}})
 
 	cfg := testConfig()
 	cfg.SABnzbd.URL = sabSrv.URL
@@ -712,14 +787,6 @@ func TestResumeIfActive_ActiveDownload(t *testing.T) {
 	if !resumed {
 		t.Fatal("expected ResumeIfActive to return true")
 	}
-
-	// Let it settle, then stop by making queue idle
-	time.Sleep(50 * time.Millisecond)
-	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
-	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 104857600, DownloadTime: 5, Completed: time.Now().Unix()}},
-	})
-
 	tr.Wait()
 }
 
@@ -728,8 +795,17 @@ func TestResumeIfActive_ActivePostProcessing(t *testing.T) {
 	pwSrv, _, _ := testutil.MockPushWardServer(t)
 
 	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
-	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Verifying", Name: "test-file"}},
+	// Read 1 is ResumeIfActive's getPPStatus; the margin keeps PP active through
+	// the tracker's fall-through check and first PP poll, then completes.
+	var historyReads int
+	sabMk.setHistoryFn(func() sabnzbd.History {
+		historyReads++
+		if historyReads <= 3 {
+			return sabnzbd.History{
+				Slots: []sabnzbd.HistorySlot{{Status: "Verifying", Name: "test-file"}},
+			}
+		}
+		return sabnzbd.History{Slots: []sabnzbd.HistorySlot{futureCompletedSlot("test-file")}}
 	})
 
 	cfg := testConfig()
@@ -744,13 +820,6 @@ func TestResumeIfActive_ActivePostProcessing(t *testing.T) {
 	if !resumed {
 		t.Fatal("expected ResumeIfActive to return true for active PP")
 	}
-
-	// Transition: PP done
-	time.Sleep(50 * time.Millisecond)
-	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 104857600, DownloadTime: 5, Completed: time.Now().Unix()}},
-	})
-
 	tr.Wait()
 }
 
@@ -1034,6 +1103,34 @@ func TestPropagationActive_LatchesAndResets(t *testing.T) {
 
 // The counterpart to the test above. Bytes stay queued so the slot status is the
 // only thing deciding this, rather than the byte counters short-circuiting it.
+func TestQueueHasWork(t *testing.T) {
+	cases := []struct {
+		name     string
+		q        sabnzbd.Queue
+		wantWork bool
+		wantProp bool
+	}{
+		{"downloading", sabnzbd.Queue{Status: "Downloading", MB: "500"}, true, false},
+		{"hold only", sabnzbd.Queue{Status: "Idle", MB: "500", Slots: []sabnzbd.QueueSlot{{Status: "Propagating"}}}, true, true},
+		{"downloading with propagating sibling", sabnzbd.Queue{Status: "Downloading", MB: "500", Slots: []sabnzbd.QueueSlot{{}, {Status: "Propagating"}}}, true, true},
+		{"idle empty", sabnzbd.Queue{Status: "Idle", MB: "0"}, false, false},
+		{"paused counts as work", sabnzbd.Queue{Status: "Paused", MB: "500"}, true, false},
+		// ParseFloat failure reads as zero bytes: a garbled queue ends the
+		// session early rather than crashing or pinning the tracker.
+		{"unparseable MB reads as no bytes", sabnzbd.Queue{Status: "Downloading", MB: "garbage"}, false, false},
+		{"unparseable MB but hold still counts", sabnzbd.Queue{Status: "Idle", MB: "", Slots: []sabnzbd.QueueSlot{{Status: "Propagating"}}}, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tr := New(testConfig(), nil, nil) // fresh per case: propagationActive latches state
+			work, prop := tr.queueHasWork(&tc.q)
+			if work != tc.wantWork || prop != tc.wantProp {
+				t.Errorf("queueHasWork = (%v, %v), want (%v, %v)", work, prop, tc.wantWork, tc.wantProp)
+			}
+		})
+	}
+}
+
 func TestSendDownloadProgress_IdleWithSlotsNotPropagating_ReturnsFalse(t *testing.T) {
 	cfg := testConfig()
 	ctx := context.Background()
@@ -1131,11 +1228,18 @@ func TestResumedTracking_SkipsTwoPhaseEnd(t *testing.T) {
 	sabSrv, sabMk := mockSABnzbd(t)
 	pwSrv, calls, mu := testutil.MockPushWardServer(t)
 
-	// Queue idle from start so tracking ends immediately
-	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
-	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 104857600, DownloadTime: 5, Completed: time.Now().Unix()}},
+	// Downloading long enough for the resumed tracker to observe the download
+	// (read 1 is ResumeIfActive, read 2 its waitForQueueActive, read 3 the
+	// first trackDownloads poll), then idle so the session ends.
+	var queueReads int
+	sabMk.setQueueFn(func() sabnzbd.Queue {
+		queueReads++
+		if queueReads <= 3 {
+			return sabnzbd.Queue{Status: "Downloading", MB: "100", MBLeft: "50"}
+		}
+		return sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"}
 	})
+	sabMk.setHistory(sabnzbd.History{Slots: []sabnzbd.HistorySlot{futureCompletedSlot("test-file")}})
 
 	cfg := testConfig()
 	cfg.SABnzbd.URL = sabSrv.URL
@@ -1144,19 +1248,10 @@ func TestResumedTracking_SkipsTwoPhaseEnd(t *testing.T) {
 	ctx := context.Background()
 
 	tr := New(cfg, sab, pw)
-
-	// Simulate resumed tracking (directly call track with resumed=true)
-	// We can't easily call track directly, so we use ResumeIfActive with pre-active queue
-	// Instead, set queue active, resume, then immediately go idle
-	sabMk.setQueue(sabnzbd.Queue{Status: "Downloading", MB: "100", MBLeft: "50"})
 	resumed := tr.ResumeIfActive(ctx)
 	if !resumed {
 		t.Fatal("expected resume")
 	}
-
-	// Immediately make queue idle
-	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
-
 	tr.Wait()
 
 	// For resumed sessions, the final update should be a single ENDED (no two-phase)
@@ -1336,15 +1431,18 @@ func TestTimeline_FullLifecycle(t *testing.T) {
 	sabSrv, sabMk := mockSABnzbd(t)
 	pwSrv, calls, mu := testutil.MockPushWardServer(t)
 
-	sabMk.setQueue(sabnzbd.Queue{
-		Status:   "Downloading",
-		MB:       "500",
-		MBLeft:   "250",
-		KBPerSec: "51200",
-		TimeLeft: "0:00:05",
-		Slots:    []sabnzbd.QueueSlot{{Filename: "test.nzb"}},
+	// Download for the first few queue reads, then idle. Read 1 is
+	// waitForQueueActive; reads 2+ are trackDownloads polls. History is only
+	// read after the download phase.
+	var queueReads int
+	sabMk.setQueueFn(func() sabnzbd.Queue {
+		queueReads++
+		if queueReads <= 4 {
+			return lifecycleDownloadQueue("test.nzb")
+		}
+		return sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"}
 	})
-	sabMk.setHistory(sabnzbd.History{})
+	sabMk.setHistory(sabnzbd.History{Slots: []sabnzbd.HistorySlot{futureCompletedSlot("test-file")}})
 
 	cfg := testConfig()
 	cfg.SABnzbd.URL = sabSrv.URL
@@ -1359,15 +1457,6 @@ func TestTimeline_FullLifecycle(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	w := httptest.NewRecorder()
 	tr.WebhookHandler(ctx)(w, req)
-
-	// Let download tracking run briefly
-	time.Sleep(80 * time.Millisecond)
-
-	// Transition: download done → completed
-	sabMk.setQueue(sabnzbd.Queue{Status: "Idle", MB: "0", MBLeft: "0"})
-	sabMk.setHistory(sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{Status: "Completed", Name: "test-file", Bytes: 524288000, DownloadTime: 10, Completed: time.Now().Unix()}},
-	})
 
 	tr.Wait()
 
@@ -1817,8 +1906,6 @@ func TestGetCompletedSummary_SumsAcrossPagesAndStopsAtCutoff(t *testing.T) {
 	inSession := int64(20_000) // >= cutoff
 	older := int64(5_000)      // < cutoff (a previous session)
 
-	const oneMB = int64(1024 * 1024)
-
 	var slots []sabnzbd.HistorySlot
 	// Page 1: a full page of in-session Completed slots, 1 MB / 1s each.
 	for i := 0; i < historyPageSize; i++ {
@@ -1873,8 +1960,6 @@ func TestGetCompletedSummary_FailedSlotBeforeCutoffStops(t *testing.T) {
 	inSession := int64(20_000)
 	older := int64(5_000)
 
-	const oneMB = int64(1024 * 1024)
-
 	slots := []sabnzbd.HistorySlot{
 		{Status: "Completed", Name: "recent", Bytes: 3 * oneMB, DownloadTime: 3, Completed: inSession},
 		// A Failed slot from a PREVIOUS session. Its non-Completed status must not
@@ -1916,14 +2001,7 @@ func TestTrack_QueueIdleButPostProcessingActive_DoesNotGiveUp(t *testing.T) {
 	extracting := sabnzbd.History{
 		Slots: []sabnzbd.HistorySlot{{Status: "Extracting", Name: "test-file"}},
 	}
-	completed := sabnzbd.History{
-		Slots: []sabnzbd.HistorySlot{{
-			Status: "Completed", Name: "test-file",
-			Bytes: 524288000, DownloadTime: 10,
-			// Far-future timestamp so it is unconditionally >= the session cutoff.
-			Completed: time.Now().Add(time.Hour).Unix(),
-		}},
-	}
+	completed := sabnzbd.History{Slots: []sabnzbd.HistorySlot{futureCompletedSlot("test-file")}}
 
 	// History reads happen in a deterministic order: #1 ResumeIfActive, #2 the
 	// fall-through give-up check, #3 the first post-processing poll, then the
