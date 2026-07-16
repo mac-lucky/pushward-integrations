@@ -213,17 +213,30 @@ type CreateActivityRequest struct {
 	Priority int    `json:"priority"`
 	EndedTTL int    `json:"ended_ttl,omitempty"`
 	StaleTTL int    `json:"stale_ttl,omitempty"`
+	// DismissalTTL is seconds after ENDED before the Live Activity leaves the
+	// iOS Lock Screen: 0 removes it immediately, max 14400 (4h). Unset (nil)
+	// keeps the server default (removal follows ended_ttl, capped at 4h). A
+	// pointer, unlike the TTLs above, because 0 is meaningful and must not be
+	// collapsed by omitempty.
+	DismissalTTL *int `json:"dismissal_ttl,omitempty"`
 }
 
 // UpdateRequest is the body for the full-content PATCH /activities/{slug}
 // used to seed a session or close it out with a final ENDED frame. For
 // partial updates mid-session, prefer Client.PatchActivity with a
 // ContentPatch.
+//
+// The three TTLs are top-level merge-patch fields on the server (omit = keep,
+// null = clear, number = set). With omitempty a nil pointer means "keep" —
+// this client cannot express the null-clear form, same as ContentPatch.
 type UpdateRequest struct {
-	State    string        `json:"state,omitempty"`
-	Content  Content       `json:"content"`
-	Sound    ActivitySound `json:"sound,omitempty"`
-	Priority *int          `json:"priority,omitempty"`
+	State        string        `json:"state,omitempty"`
+	Content      Content       `json:"content"`
+	Sound        ActivitySound `json:"sound,omitempty"`
+	Priority     *int          `json:"priority,omitempty"`
+	EndedTTL     *int          `json:"ended_ttl,omitempty"`
+	StaleTTL     *int          `json:"stale_ttl,omitempty"`
+	DismissalTTL *int          `json:"dismissal_ttl,omitempty"`
 }
 
 // ContentPatch is the typed body for partial content updates. Unset pointer
@@ -426,6 +439,11 @@ func MediaImage(url string) *MediaAttachment {
 //
 // Headers must total 1KB or less and Body 1024 chars or less; the server
 // rejects Method/Headers/Body on custom-scheme URLs.
+//
+// TextInput turns the button into a reply-with-text action: tapping it shows an
+// inline text field, and the typed text replaces {{input}} in Body (or is sent
+// as {"text": ...} when Body has no placeholder). It requires a silent
+// (Foreground=false) http(s) action; the server rejects it otherwise.
 type NotificationAction struct {
 	ID                     string            `json:"id"`
 	Title                  string            `json:"title"`
@@ -437,6 +455,9 @@ type NotificationAction struct {
 	Destructive            bool              `json:"destructive,omitempty"`
 	AuthenticationRequired bool              `json:"authentication_required,omitempty"`
 	Icon                   string            `json:"icon,omitempty"` // SF Symbol name
+	TextInput              bool              `json:"text_input,omitempty"`
+	TextInputPlaceholder   string            `json:"text_input_placeholder,omitempty"`
+	TextInputButtonTitle   string            `json:"text_input_button_title,omitempty"`
 }
 
 // SendNotificationRequest is the body for POST /notifications.
