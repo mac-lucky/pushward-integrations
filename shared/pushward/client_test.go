@@ -1253,10 +1253,54 @@ func TestSendNotification_OmitsUnsetOptionalFields(t *testing.T) {
 		t.Errorf("push must be omitted when Push is nil, got %v", got["push"])
 	}
 	action := got["actions"].([]any)[0].(map[string]any)
-	for _, key := range []string{"method", "headers", "body", "url"} {
+	for _, key := range []string{
+		"method", "headers", "body", "url",
+		"text_input", "text_input_placeholder", "text_input_button_title",
+	} {
 		if _, present := action[key]; present {
 			t.Errorf("action key %q must be omitted when unset, got %v", key, action[key])
 		}
+	}
+}
+
+// A reply-with-text action must round-trip its text_input fields to the server so
+// the iOS client renders the inline reply field. text_input carries omitempty, so
+// it only appears here because it is explicitly true.
+func TestSendNotification_ReplyWithTextRoundTrips(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	err := c.SendNotification(context.Background(), SendNotificationRequest{
+		Title: "New message",
+		Body:  "Alex sent you a message",
+		Actions: []NotificationAction{{
+			ID:                   "reply",
+			Title:                "Reply",
+			URL:                  "https://hooks.example.com/reply",
+			Method:               "POST",
+			TextInput:            true,
+			TextInputPlaceholder: "Type a reply",
+			TextInputButtonTitle: "Send",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+
+	action := got["actions"].([]any)[0].(map[string]any)
+	if action["text_input"] != true {
+		t.Errorf("expected text_input true, got %v", action["text_input"])
+	}
+	if action["text_input_placeholder"] != "Type a reply" {
+		t.Errorf("expected text_input_placeholder to round-trip, got %v", action["text_input_placeholder"])
+	}
+	if action["text_input_button_title"] != "Send" {
+		t.Errorf("expected text_input_button_title to round-trip, got %v", action["text_input_button_title"])
 	}
 }
 
