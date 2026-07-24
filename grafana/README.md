@@ -79,7 +79,7 @@ A starting `config.yml` lives in [`config.example.yml`](./config.example.yml).
 
 ## Grafana webhook setup
 
-In Grafana, go to **Alerting → Contact points → New contact point**:
+In Grafana, go to **Alerting → Notification configuration → Contact points**, then add a new contact point:
 
 - **Integration:** Webhook
 - **URL:** `http://<pushward-grafana-host>:8090/webhook`
@@ -230,10 +230,10 @@ golangci-lint run
 docker build -f grafana/Dockerfile -t pushward-grafana .
 
 # Override the Go toolchain at build time if needed
-docker build -f grafana/Dockerfile --build-arg GO_VERSION=1.26.4 -t pushward-grafana .
+docker build -f grafana/Dockerfile --build-arg GO_VERSION=1.26.5 -t pushward-grafana .
 ```
 
-> The module targets `go 1.26.4` (`go.mod`), matching the Dockerfile's default `GO_VERSION` build arg (`1.26.4`); override it with `--build-arg GO_VERSION=<x.y.z>` only if you need a different toolchain.
+> The module targets `go 1.26.5` (`go.mod`), matching the Dockerfile's default `GO_VERSION` build arg (`1.26.5`); override it with `--build-arg GO_VERSION=<x.y.z>` only if you need a different toolchain.
 
 ## CI/CD & Releases
 

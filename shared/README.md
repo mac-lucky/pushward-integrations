@@ -37,7 +37,7 @@ The client speaks the public pushward-server REST surface (`/activities`, `/noti
 
 ## Install / Import
 
-The module path is `github.com/mac-lucky/pushward-integrations/shared` (Go 1.26.4). It is a member of the repo-root Go workspace (`go.work` declares `use ./shared`), so the bridges import it directly — **no `replace` directive needed**.
+The module path is `github.com/mac-lucky/pushward-integrations/shared` (Go 1.26.5). It is a member of the repo-root Go workspace (`go.work` declares `use ./shared`), so the bridges import it directly — **no `replace` directive needed**.
 
 ```go
 import "github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -258,7 +258,7 @@ This module logs via the standard library `log/slog`; the consuming bridge confi
 
 ## Requirements
 
-- **Go 1.26.4** (see `go.mod`); part of the repo-root `go.work` workspace.
+- **Go 1.26.5** (see `go.mod`); part of the repo-root `go.work` workspace.
 - A running [pushward-server](https://pushward.app) and an app API key (the consuming bridge supplies these).
 
 ## License

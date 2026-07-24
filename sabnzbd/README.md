@@ -84,7 +84,7 @@ Images are published to GHCR only: `ghcr.io/mac-lucky/pushward-sabnzbd`.
 
 ### Point SABnzbd at the webhook
 
-In SABnzbd, go to **Config → Notifications → Notification Script / URL** and POST to the bridge on the **NZB added** event:
+In SABnzbd, go to **Config → Notifications → Notification Script / URL** and POST to the bridge on the **Added NZB** event:
 
 ```
 http://<pushward-sabnzbd-host>:8090/webhook
@@ -188,8 +188,8 @@ Docker builds use the **repo root as the build context** with `-f sabnzbd/Docker
 # Build the image (note the trailing "." = repo root, not the sabnzbd dir)
 docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd .
 
-# Optional: override the Go toolchain (Dockerfile default ARG GO_VERSION=1.26.4, matching go.mod)
-docker build -f sabnzbd/Dockerfile --build-arg GO_VERSION=1.26.4 -t pushward-sabnzbd .
+# Optional: override the Go toolchain (Dockerfile default ARG GO_VERSION=1.26.5, matching go.mod)
+docker build -f sabnzbd/Dockerfile --build-arg GO_VERSION=1.26.5 -t pushward-sabnzbd .
 ```
 
 ## CI/CD & Releases

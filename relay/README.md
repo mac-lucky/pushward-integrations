@@ -39,8 +39,8 @@ A service POSTs its native webhook to a per-provider route (e.g. `POST /grafana`
 ## Features
 
 - **Multi-tenant by design** — tenants are identified by their `hlk_` integration key, extracted from every request by shared auth middleware. No per-service key configuration; one relay serves many users.
-- **15 webhook routes** across **13 configurable provider blocks** (the `starr` block serves Radarr, Sonarr, and Prowlarr). See [Providers](#providers).
-- **Two-phase end lifecycle** — completion events send a final `ONGOING` update (so the result shows on the Dynamic Island), then `ENDED` after a short display delay. Used by ArgoCD, Starr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, and Backrest. Grafana, Changedetection, and Bazarr are fire-and-forget.
+- **20 webhook routes** across **16 configurable provider blocks** (the `starr` block serves Radarr, Sonarr, and Prowlarr; the `gitea` block serves Gitea and Forgejo). See [Providers](#providers).
+- **Two-phase end lifecycle** — completion events send a final `ONGOING` update (so the result shows on the Dynamic Island), then `ENDED` after a short display delay. Used by ArgoCD, Radarr, Sonarr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest, Gitea, Forgejo, Komodo, and TrueNAS. Grafana, Prowlarr, Bazarr, and Changedetection are fire-and-forget.
 - **Push notifications** — one-shot APNs alerts for events that don't fit a Live Activity (Grafana alerts, Bazarr subtitle downloads, Prowlarr grabs).
 - **Cross-provider notification threads** — Radarr/Sonarr/Overseerr/Jellyfin notifications about the same movie (TMDB id) or show (TVDB id) collapse into one iOS notification thread.
 - **PostgreSQL state store** — persistent alert grouping, sync tracking, and download dedup with a background TTL sweep every 30s.
@@ -126,13 +126,14 @@ Tracing is fully disabled when `telemetry.endpoint` is empty.
 
 ### Provider toggles
 
-All 13 provider blocks default to `enabled: true`. Env toggles exist **only** for `grafana`, `argocd`, and `starr`; every other provider can be disabled via YAML (`enabled: false`).
+All 16 provider blocks default to `enabled: true`. Env toggles exist **only** for `grafana`, `argocd`, `starr`, and `gitea`; every other provider can be disabled via YAML (`enabled: false`).
 
 | Env Variable | Config Key | Description | Default |
 |---|---|---|---|
 | `PUSHWARD_GRAFANA_ENABLED` | `providers.grafana.enabled` | Enable/disable the Grafana provider. | `true` |
 | `PUSHWARD_ARGOCD_ENABLED` | `providers.argocd.enabled` | Enable/disable the ArgoCD provider. | `true` |
 | `PUSHWARD_STARR_ENABLED` | `providers.starr.enabled` | Enable/disable Radarr/Sonarr/Prowlarr. | `true` |
+| `PUSHWARD_GITEA_ENABLED` | `providers.gitea.enabled` | Enable/disable the Gitea/Forgejo provider. | `true` |
 | `PUSHWARD_STARR_MODE` | `providers.starr.mode` | Radarr/Sonarr routing: `activity` (default), `notify`, or `smart`. | `activity` |
 | `PUSHWARD_ARGOCD_URL` | `providers.argocd.url` | ArgoCD UI base URL used to build deep links in activities. | _(empty)_ |
 | `PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD` | `providers.argocd.sync_grace_period` | Defers activity creation for fast syncs that complete within this window. `PUSHWARD_SYNC_GRACE_PERIOD` is a legacy fallback. | `10s` |
@@ -270,7 +271,7 @@ Receives Grafana alert webhooks. Groups alerts by `alertname` into one push noti
 
 **Events:** `firing` → active push, `resolved` → passive push (notification `Level`). Fire-and-forget (no two-phase end). Severity is recorded only in the notification metadata — no color or icon mapping is applied.
 
-**Setup:** In Grafana, go to **Alerts & IRM > Alerting > Contact points**. Add a contact point with integration type **Webhook**. Set the URL to `https://relay.pushward.app/grafana`. Under *Optional settings*, set the Authorization header scheme to `Bearer` and credentials to your `hlk_` key. Adding a `severity` label (`critical`/`warning`/`info`) to alert rules records the severity in the notification metadata.
+**Setup:** In Grafana, go to **Alerts & IRM > Alerting > Notification configuration** and open the **Contact points** tab. Add a contact point with integration type **Webhook**. Set the URL to `https://relay.pushward.app/grafana`. Under *Optional settings*, set the Authorization header scheme to `Bearer` and credentials to your `hlk_` key. Adding a `severity` label (`critical`/`warning`/`info`) to alert rules records the severity in the notification metadata.
 
 ### ArgoCD
 
@@ -729,7 +730,7 @@ golangci-lint run
 
 # Docker (context is the repo root so the Dockerfile can COPY shared/)
 docker build -f relay/Dockerfile -t pushward-relay .
-docker build -f relay/Dockerfile --build-arg GO_VERSION=1.26.4 -t pushward-relay .
+docker build -f relay/Dockerfile --build-arg GO_VERSION=1.26.5 -t pushward-relay .
 ```
 
 > DB state tests (`relay/internal/state/...`) use testcontainers-go and require a running Docker daemon.
@@ -775,7 +776,7 @@ Logs are structured JSON on stdout (`slog`). View them with `docker logs <contai
 
 ## Requirements & License
 
-- **Go** `1.26.x` (toolchain `1.26.4`; Docker builds default to `golang:1.26.4-alpine`, final image `alpine:3.23`).
+- **Go** `1.26.x` (toolchain `1.26.5`; Docker builds default to `golang:1.26.5-alpine`, final image `alpine:3.23`).
 - **PostgreSQL** for the state store.
 - A running **PushWard server** and a per-tenant `hlk_` integration key.
 

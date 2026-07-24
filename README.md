@@ -10,7 +10,7 @@
 [![CI/CD Relay](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml)
 [![golangci-lint](https://github.com/mac-lucky/pushward-integrations/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/golangci-lint.yml)
 
-Turn events from the services you already run — GitHub Actions, SABnzbd, a Bambu Lab printer, Grafana, and ~14 self-hosted apps behind the relay — into real-time **PushWard Live Activities, widgets, and push notifications** on your iPhone (Dynamic Island + Lock Screen). This is a Go [workspace](https://go.dev/ref/mod#workspaces) of small "bridge" programs, each shipped as its own Docker image.
+Turn events from the services you already run — GitHub Actions, SABnzbd, a Bambu Lab printer, Grafana, and ~19 self-hosted apps behind the relay — into real-time **PushWard Live Activities, widgets, and push notifications** on your iPhone (Dynamic Island + Lock Screen). This is a Go [workspace](https://go.dev/ref/mod#workspaces) of small "bridge" programs, each shipped as its own Docker image.
 
 > **New to PushWard?** PushWard is a push-notification platform whose iOS app renders live, updating Live Activities and widgets from any source. Learn more at **[pushward.app](https://pushward.app)** and get the iOS app on the **[App Store](https://apps.apple.com/app/id6759689999)**.
 
@@ -40,13 +40,13 @@ Each bridge has its own README with full configuration and per-event behavior.
 | [github](./github/) | GitHub Actions workflow-run CI/CD progress (poller) | — (outbound only) | `ghcr.io/mac-lucky/pushward-github` |
 | [grafana](./grafana/) | Grafana alert timelines with Prometheus/VictoriaMetrics history + PromQL-polled iOS widgets | 8090 | `ghcr.io/mac-lucky/pushward-grafana` |
 | [sabnzbd](./sabnzbd/) | SABnzbd download + post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
-| [relay](./relay/) | Multi-tenant webhook gateway (15 routes / 13 providers) | 8090 (+ 9090 metrics) | `ghcr.io/mac-lucky/pushward-relay` |
+| [relay](./relay/) | Multi-tenant webhook gateway (20 routes / 16 provider modules) | 8090 (+ 9090 metrics) | `ghcr.io/mac-lucky/pushward-relay` |
 
 Images are published to **GitHub Container Registry only** (`ghcr.io/mac-lucky/pushward-<bridge>`). A Docker Hub name is configured in CI but `push_to_dockerhub` is `false`, so no Docker Hub images are pushed.
 
 ### Relay providers
 
-The relay registers 15 webhook routes across 13 provider modules (`starr` serves Radarr, Sonarr, and Prowlarr). Every route returns `200 {"status":"ok"}` and is wrapped by the middleware chain (per-IP rate limit → `hlk_` auth → per-key rate limit). Most providers create Live Activities; the exceptions are noted.
+The relay registers 20 webhook routes across 16 provider modules (`starr` serves Radarr, Sonarr, and Prowlarr; `gitea` serves Gitea and Forgejo). Every route returns `200 {"status":"ok"}` and is wrapped by the middleware chain (per-IP rate limit → `hlk_` auth → per-key rate limit). Most providers create Live Activities; the exceptions are noted.
 
 | Provider | Route | Notes |
 |---|---|---|
@@ -65,8 +65,12 @@ The relay registers 15 webhook routes across 13 provider modules (`starr` serves
 | Uptime Kuma | `POST /uptimekuma` | Monitor up/down/maintenance changes (alert) |
 | Gatus | `POST /gatus` | Endpoint health status changes (alert) |
 | Backrest | `POST /backrest` | Backup/prune/check/forget operations |
+| Gitea | `POST /gitea` | Gitea Actions workflow-run build progress (steps) |
+| Forgejo | `POST /forgejo` | Forgejo Actions run result (generic) |
+| Komodo | `POST /komodo` | Resolvable conditions (server + swarm health) as Live Activities, other alerts as push notifications (HTTP Basic auth via URL userinfo) |
+| TrueNAS | `POST /truenas/v2/alerts`, `DELETE /truenas/v2/alerts/{id}` | OpsGenie-compatible alert open/clear (GenieKey auth) |
 
-Auth styles differ by what each service's webhook UI allows: most providers accept `Authorization: Bearer hlk_...`; Radarr, Sonarr, Prowlarr, and Bazarr use HTTP Basic Auth with the `hlk_` key as the **password** (username ignored). See the [relay README](./relay/) for per-provider setup snippets.
+Auth styles differ by what each service's webhook UI allows: most providers accept `Authorization: Bearer hlk_...`; Radarr, Sonarr, Prowlarr, Bazarr, and Komodo use HTTP Basic Auth with the `hlk_` key as the **password** (username ignored); TrueNAS uses the OpsGenie `GenieKey` scheme. See the [relay README](./relay/) for per-provider setup snippets.
 
 ## Prerequisites
 
@@ -147,7 +151,7 @@ Per-provider knobs (`providers.<name>.enabled`, `priority`, `cleanup_delay`, `st
 | `bambulab` | None — connects **out** to the printer over MQTT (TLS `:8883`) |
 | `sabnzbd` | `POST /webhook` (optional `X-Webhook-Secret`), `GET /health`, `GET /ready` |
 | `grafana` | `POST /webhook` (optional `Authorization: Bearer <webhook_token>`), `GET /health`, `GET /ready` |
-| `relay` | 15 `POST` provider routes (above), `GET /health`, `GET /ready`, `GET /openapi.json`, `GET /docs`; `GET /metrics` on the separate `:9090` listener |
+| `relay` | 19 `POST` provider routes plus the TrueNAS `DELETE` (above), `GET /health`, `GET /ready`, `GET /openapi.json`, `GET /docs`; `GET /metrics` on the separate `:9090` listener |
 
 The relay's OpenAPI 3.1 spec and interactive docs are auto-generated by [huma](https://huma.rocks/) at `/openapi.json` and `/docs`. Webhook receivers with an unset secret/token are **unauthenticated** and log a warning at startup.
 
@@ -170,7 +174,7 @@ The `pushward.Client` retries up to 5 attempts with exponential backoff + jitter
 
 ## Project structure
 
-This is a Go workspace (`go.work`, Go 1.26.4) with one shared module plus five independently-versioned bridge modules under `github.com/mac-lucky/pushward-integrations/<module>`:
+This is a Go workspace (`go.work`, Go 1.26.5) with one shared module plus five independently-versioned bridge modules under `github.com/mac-lucky/pushward-integrations/<module>`:
 
 ```
 pushward-integrations/
@@ -180,11 +184,11 @@ pushward-integrations/
   github/          # GitHub Actions poller — standalone bridge
   grafana/         # Grafana alert timelines + widgets — standalone bridge
   sabnzbd/         # SABnzbd webhook + download tracker — standalone bridge
-  relay/           # Multi-tenant webhook gateway (PostgreSQL) — 13 providers, 15 routes
+  relay/           # Multi-tenant webhook gateway (PostgreSQL) — 16 provider modules, 20 routes
   .github/workflows/   # Per-bridge CI/CD + shared lint + release orchestrator
 ```
 
-> Note: a few stale compiled binaries (`pushward-github`, `pushward-sabnzbd`, `pushward-bambulab`, `pushward-grafana`, `pushward-mqtt`) are checked in at the repo root. They are build artifacts, **not** modules — there is no `mqtt/` source module and no `mqtt` entry in `go.work`. MQTT support is the `bambulab` bridge.
+> Note: a few stale compiled binaries (`pushward-github`, `pushward-sabnzbd`, `pushward-bambulab`, `pushward-grafana`, `pushward-mqtt`) are gitignored build artifacts that can show up at the repo root after a local build; they are not committed. They are artifacts, **not** modules — there is no `mqtt/` source module and no `mqtt` entry in `go.work`. MQTT support is the `bambulab` bridge.
 
 ## Development
 
@@ -220,8 +224,8 @@ The build context is the **repo root** (not the bridge directory) so the Dockerf
 docker build -f relay/Dockerfile -t pushward-relay .
 docker build -f grafana/Dockerfile -t pushward-grafana .
 
-# Pin the Go toolchain (Dockerfile ARG default is 1.26.4)
-docker build --build-arg GO_VERSION=1.26.4 -f github/Dockerfile -t pushward-github .
+# Pin the Go toolchain (Dockerfile ARG default is 1.26.5)
+docker build --build-arg GO_VERSION=1.26.5 -f github/Dockerfile -t pushward-github .
 ```
 
 Each image builds from a `golang:<ver>-alpine` builder into an `alpine:3.23` runtime, statically (`CGO_ENABLED=0`), and runs as non-root UID 1000.
@@ -289,5 +293,5 @@ Bridges log structured JSON to stdout — `docker logs -f <container>` (or `kube
 
 ## Requirements
 
-- Go 1.26.4 (workspace toolchain) and Docker for builds.
+- Go 1.26.5 (workspace toolchain) and Docker for builds.
 - A running PushWard server, an `hlk_` integration key, the PushWard iOS app, and the backend each bridge integrates with (see [Prerequisites](#prerequisites)).

@@ -37,9 +37,9 @@ One Live Activity is maintained per printer, keyed by the constant slug `bambu-<
 - A running **PushWard server** (public production base: `https://api.pushward.app`).
 - A PushWard **integration key** (`hlk_` prefix) with the `activity:manage` scope.
 - The **PushWard iOS app** (from the [App Store](https://apps.apple.com/app/id6759689999)), subscribed to the activity.
-- A **Bambu Lab printer** with **Developer Mode / LAN Mode** enabled, reachable on your local network. You will need:
+- A **Bambu Lab printer** with **LAN-only Mode** and its **Developer Mode** option enabled (Developer Mode is what opens the local MQTT channel), reachable on your local network. You will need:
   - The printer's local **IP address** (or hostname).
-  - The **Access Code** (printer Settings → WLAN) — used as the MQTT password.
+  - The **Access Code**, read from the printer's screen — the exact path is model-dependent (Settings → WLAN on P1P/P1S, the General tab in Settings on X1/H2, the LAN Only Mode screen on A1/A1 mini). Used as the MQTT password.
   - The printer's **serial number** — used in MQTT topics, the MQTT client ID, and the activity slug.
 
 > The access code (typically 8 characters) and serial (typically 15 characters) are Bambu hardware values. The bridge only checks they are non-empty — it does not validate their length or format.
@@ -95,7 +95,7 @@ All settings come from a YAML config file and/or environment variables. **Enviro
 | Env Variable | Config Key | Description | Required |
 |---|---|---|---|
 | `PUSHWARD_BAMBULAB_HOST` | `bambulab.host` | Printer IP address or hostname on the local network. | Yes |
-| `PUSHWARD_BAMBULAB_ACCESS_CODE` | `bambulab.access_code` | Printer LAN access code (Settings → WLAN); used as the MQTT password (username `bblp`). | Yes |
+| `PUSHWARD_BAMBULAB_ACCESS_CODE` | `bambulab.access_code` | Printer LAN access code (on the printer's LAN settings screen; path varies by model); used as the MQTT password (username `bblp`). | Yes |
 | `PUSHWARD_BAMBULAB_SERIAL` | `bambulab.serial` | Printer serial number; used in MQTT topics, client ID, and the activity slug `bambu-<serial>`. | Yes |
 | `PUSHWARD_BAMBULAB_CERT_FINGERPRINT` | `bambulab.tls.cert_fingerprint_sha256` | SHA-256 fingerprint of the printer's cert to pin (hex, optional `:` separators). See [TLS verification](#tls-verification). | No (default: empty → auto-pin) |
 | _(no env override)_ | `bambulab.tls.insecure_skip_verify` | When `true`, accept any printer TLS cert (logs a startup warning). Only consulted when no fingerprint is set. | No (default: `false`) |
@@ -194,11 +194,11 @@ golangci-lint run
 The Docker build context is the **repository root** (not the bridge directory) so the Dockerfile can `COPY shared/`:
 
 ```bash
-# Build (default Go toolchain ARG is 1.26.4)
+# Build (default Go toolchain ARG is 1.26.5)
 docker build -f bambulab/Dockerfile -t pushward-bambulab .
 
 # Pin the Go toolchain to match go.mod
-docker build --build-arg GO_VERSION=1.26.4 -f bambulab/Dockerfile -t pushward-bambulab .
+docker build --build-arg GO_VERSION=1.26.5 -f bambulab/Dockerfile -t pushward-bambulab .
 ```
 
 ## CI/CD & Releases
@@ -226,7 +226,7 @@ Logs are structured JSON on stdout at `Info` level. With Docker: `docker logs -f
 | Symptom | Likely cause / fix |
 |---|---|
 | `failed to connect to printer, retrying` (every 30s) | Printer is off, unreachable, or LAN/Developer Mode is disabled. The bridge retries until it appears — power on the printer or fix the network. |
-| `MQTT connect` auth errors | Wrong `access_code`. Re-read it from printer Settings → WLAN. |
+| `MQTT connect` auth errors | Wrong `access_code`. Re-read it from the printer's LAN settings screen (path varies by model). |
 | `peer cert fingerprint mismatch` | The pinned `cert_fingerprint_sha256` no longer matches (printer regenerated its cert). Re-extract the fingerprint, or clear it to fall back to auto-pin. |
 | `BambuLab TLS verification disabled via insecure_skip_verify` (warning) | Expected only if you set `insecure_skip_verify: true`. Prefer fingerprint pinning. |
 | No activity appears on iPhone | Check `PUSHWARD_URL`/`PUSHWARD_API_KEY`, that the key has `activity:manage` scope, and that the iOS app is installed and subscribed. |
@@ -235,7 +235,7 @@ Logs are structured JSON on stdout at `Info` level. With Docker: `docker logs -f
 
 ## Requirements
 
-- Go **1.26+** (the module declares `go 1.26.4`).
+- Go **1.26+** (the module declares `go 1.26.5`).
 - A reachable Bambu Lab printer (MQTT/TLS on port `8883`) and a running PushWard server.
 
 ## License

@@ -144,7 +144,7 @@ Each tracked run becomes one PushWard activity:
 
 ## Development
 
-This bridge is part of the `pushward-integrations` Go workspace (`go.work`), with a `replace` directive pointing `shared` at `../shared`. `go.mod` requires Go `1.26.4`.
+This bridge is part of the `pushward-integrations` Go workspace (`go.work`), with a `replace` directive pointing `shared` at `../shared`. `go.mod` requires Go `1.26.5`.
 
 ```bash
 # Build from source (from the pushward-integrations workspace root)
@@ -170,8 +170,8 @@ The build context is the **repository root** (so the Dockerfile can `COPY shared
 ```bash
 docker build -f github/Dockerfile -t pushward-github .
 
-# Optionally pin the build-time Go version (Dockerfile default: 1.26.4)
-docker build -f github/Dockerfile --build-arg GO_VERSION=1.26.4 -t pushward-github .
+# Optionally pin the build-time Go version (Dockerfile default: 1.26.5)
+docker build -f github/Dockerfile --build-arg GO_VERSION=1.26.5 -t pushward-github .
 ```
 
 ## CI/CD & Releases
