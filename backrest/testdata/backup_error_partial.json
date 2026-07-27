@@ -1,0 +1,28 @@
+{
+  "id": "11162",
+  "flowId": "11162",
+  "modno": "9063190002730450256",
+  "instanceId": "laptop",
+  "repoId": "nas",
+  "repoGuid": "0f4c2c6b7f1d4a9e8c3b5d2a1e7f9c40",
+  "planId": "appdata",
+  "status": "STATUS_ERROR",
+  "unixTimeStartMs": "1782724420436",
+  "unixTimeEndMs": "1782793827912",
+  "logref": "t-4e0aa569-d3ca-4f04-a627-e6920b674ad2",
+  "displayMessage": "failed to backup: command \"/bin/restic backup --json /data --exclude-caches --tag plan:app...\" failed: exit code 1: backup failed\noutput processing: Fatal: unable to save snapshot: Post \"http://user:***@backup.example.com:8000/laptop/data/a8e0bb1c\": request timeout\nOutput:\nSave(<data/300eff343a>) returned error, retrying after 1.237665194s: read: connection reset by peer\n",
+  "operationBackup": {
+    "lastStatus": {
+      "status": {
+        "percentDone": 0.9465682465982743,
+        "totalFiles": "604",
+        "totalBytes": "846209740490",
+        "filesDone": "597",
+        "bytesDone": "800995270310",
+        "currentFile": [
+          "/data/archive/2026-06-28/metrics.tar.zst"
+        ]
+      }
+    }
+  }
+}

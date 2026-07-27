@@ -1,0 +1,40 @@
+{
+  "id": "12300",
+  "flowId": "12300",
+  "modno": "9063190002730450500",
+  "instanceId": "laptop",
+  "repoId": "nas",
+  "repoGuid": "0f4c2c6b7f1d4a9e8c3b5d2a1e7f9c40",
+  "planId": "appdata",
+  "snapshotId": "b21f5c9e4a7d3068fa15c2e9d4b7086135ac9f2e6d180b4c7395ea0f8d62c714",
+  "status": "STATUS_WARNING",
+  "unixTimeStartMs": "1785051000000",
+  "unixTimeEndMs": "1785051120000",
+  "logref": "t-9d1c7f22-6b48-4d0a-91e3-72c4f8ab5e10",
+  "operationBackup": {
+    "lastStatus": {
+      "summary": {
+        "filesNew": "12",
+        "filesChanged": "40",
+        "filesUnmodified": "980",
+        "dataAdded": "5242880",
+        "totalFilesProcessed": "1032",
+        "totalBytesProcessed": "10737418240",
+        "totalDuration": 63.5,
+        "snapshotId": "b21f5c9e4a7d3068fa15c2e9d4b7086135ac9f2e6d180b4c7395ea0f8d62c714"
+      }
+    },
+    "errors": [
+      {
+        "item": "/data/live/session.db",
+        "during": "archival",
+        "message": "read /data/live/session.db: permission denied"
+      },
+      {
+        "item": "/data/live/cache.sock",
+        "during": "archival",
+        "message": "unsupported file type: socket"
+      }
+    ]
+  }
+}

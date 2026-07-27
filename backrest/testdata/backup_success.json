@@ -1,0 +1,30 @@
+{
+  "id": "12208",
+  "flowId": "12208",
+  "modno": "9063190002730450472",
+  "instanceId": "laptop",
+  "repoId": "nas",
+  "repoGuid": "0f4c2c6b7f1d4a9e8c3b5d2a1e7f9c40",
+  "planId": "media",
+  "snapshotId": "f5ec9d803c282d4926c0de15f040ad7cce12257663dd3039dbee3b14fdcd4d1a",
+  "status": "STATUS_SUCCESS",
+  "unixTimeStartMs": "1785050751065",
+  "unixTimeEndMs": "1785050763389",
+  "logref": "t-15a63de5-d262-47a6-8c1a-a4254a59f233",
+  "operationBackup": {
+    "lastStatus": {
+      "summary": {
+        "filesChanged": "785",
+        "filesUnmodified": "2619",
+        "dirsChanged": "364",
+        "dataBlobs": "785",
+        "treeBlobs": "362",
+        "dataAdded": "82814089",
+        "totalFilesProcessed": "3404",
+        "totalBytesProcessed": "1665323014503",
+        "totalDuration": 10.016478984,
+        "snapshotId": "f5ec9d803c282d4926c0de15f040ad7cce12257663dd3039dbee3b14fdcd4d1a"
+      }
+    }
+  }
+}

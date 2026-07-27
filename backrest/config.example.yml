@@ -1,0 +1,64 @@
+# pushward-backrest - Backrest backup progress bridge
+#
+# Every setting can also come from an environment variable, and the environment
+# wins over this file. The bridge only reads from Backrest; it never schedules,
+# cancels, or modifies anything.
+
+backrest:
+  # Base URL of the Backrest web UI / API.  (PUSHWARD_BACKREST_URL)
+  url: http://backrest:9898
+
+  # Credentials. Backrest accepts HTTP Basic or a bearer JWT, and lets every
+  # request through when auth is disabled - so leaving all three empty is a
+  # valid setup, not an incomplete one. Set either username+password or token.
+  # (PUSHWARD_BACKREST_USERNAME / _PASSWORD / _TOKEN)
+  username: ""
+  password: ""
+  token: ""
+
+  # Per-request timeout.  (PUSHWARD_BACKREST_TIMEOUT)
+  timeout: 15s
+
+pushward:
+  # PushWard server base URL.  (PUSHWARD_URL)
+  url: https://api.pushward.app
+
+  # Integration key from the PushWard app.  (PUSHWARD_API_KEY)
+  api_key: hlk_your_key_here
+
+  # Activity priority, 0-10.  (PUSHWARD_PRIORITY)
+  priority: 2
+
+  # How long an ended activity lingers before the server drops it.
+  cleanup_delay: 15m
+
+  # How long the server waits on silence before ending the activity itself.
+  # Must stay comfortably above the 30s heartbeat the bridge sends.
+  stale_timeout: 30m
+
+  # Two-phase end: the final ONGOING frame lands after end_delay so the outcome
+  # shows on the Dynamic Island, then ENDED follows end_display_time later.
+  end_delay: 5s
+  end_display_time: 4s
+
+polling:
+  # Poll interval while an operation is running.  (PUSHWARD_POLL_INTERVAL)
+  interval: 5s
+
+  # Poll interval while Backrest is idle.  (PUSHWARD_POLL_IDLE)
+  idle_interval: 30s
+
+  # How many recent operations to request per poll. Wide enough that a running
+  # backup is still in the window after the hook and stats rows it generates
+  # land on top of it.  (PUSHWARD_BACKREST_LAST_N)
+  last_n: 50
+
+render:
+  # Let iOS animate the bar and count the ETA down between polls instead of
+  # stepping once per tick.  (PUSHWARD_BACKREST_LIVE_PROGRESS)
+  live_progress: true
+
+  # Render prune and check as a log view of their restic output. Turning this
+  # off falls back to a plain state line and skips the log fetch entirely.
+  # (PUSHWARD_BACKREST_LOGS)
+  logs: true

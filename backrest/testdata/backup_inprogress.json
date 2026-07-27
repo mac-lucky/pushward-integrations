@@ -1,0 +1,27 @@
+{
+  "id": "11162",
+  "flowId": "11162",
+  "modno": "9063190002730450256",
+  "instanceId": "laptop",
+  "repoId": "nas",
+  "repoGuid": "0f4c2c6b7f1d4a9e8c3b5d2a1e7f9c40",
+  "planId": "appdata",
+  "status": "STATUS_INPROGRESS",
+  "unixTimeStartMs": "1782724420436",
+  "logref": "t-4e0aa569-d3ca-4f04-a627-e6920b674ad2",
+  "operationBackup": {
+    "lastStatus": {
+      "status": {
+        "percentDone": 0.9465682465982743,
+        "totalFiles": "604",
+        "totalBytes": "846209740490",
+        "filesDone": "597",
+        "bytesDone": "800995270310",
+        "currentFile": [
+          "/data/archive/2026-06-28/metrics.tar.zst",
+          "/data/archive/2026-06-29/metrics.tar.zst"
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "10710",
+  "flowId": "10710",
+  "modno": "9063190002730450199",
+  "instanceId": "laptop",
+  "repoId": "nas",
+  "repoGuid": "0f4c2c6b7f1d4a9e8c3b5d2a1e7f9c40",
+  "planId": "_system_",
+  "status": "STATUS_ERROR",
+  "unixTimeStartMs": "1782006087379",
+  "unixTimeEndMs": "1782006954468",
+  "logref": "t-3734ed7e-50b9-4a04-a981-96f6f77e7e0d",
+  "displayMessage": "check: check repo nas: command \"/bin/restic check\" failed: exit status 1\nOutput:\nusing temporary cache in /tmp/restic-check-cache-2491528959\ncreate exclusive lock for repository\nSave(<lock/fd22e5f7f4>) returned error, retrying after 1.37906496s: unexpected HTTP response (500): 500 Internal Server Error\n",
+  "operationCheck": {
+    "outputLogref": "c-00bfa525-65ad-42da-b040-7e538d178771"
+  }
+}

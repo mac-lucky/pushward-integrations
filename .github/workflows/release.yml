@@ -3,6 +3,7 @@ name: Release
 on:
   push:
     tags:
+      - 'backrest/v*'
       - 'bambulab/v*'
       - 'github/v*'
       - 'grafana/v*'
@@ -34,6 +35,32 @@ jobs:
           echo "bridge=$BRIDGE" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "Parsed bridge=$BRIDGE version=$VERSION"
+
+  backrest:
+    needs: parse
+    if: needs.parse.outputs.bridge == 'backrest'
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      actions: read
+    with:
+      app_name: "pushward-backrest"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-backrest"
+      dockerhub_image: "maclucky/pushward-backrest"
+      push_to_dockerhub: false
+      release_on_tag: true
+      enable_auto_version: false
+      main_branch: "main"
+      build_context: "."
+      dockerfile_path: "./backrest/Dockerfile"
+      go_module_path: "./backrest"
+      enable_go_tests: true
+      go_test_args: "-race -count=1 -v"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit
 
   bambulab:
     needs: parse

@@ -1,0 +1,15 @@
+{
+  "id": "11301",
+  "flowId": "11301",
+  "modno": "9063190002730450274",
+  "instanceId": "laptop",
+  "repoId": "nas",
+  "repoGuid": "0f4c2c6b7f1d4a9e8c3b5d2a1e7f9c40",
+  "planId": "media",
+  "status": "STATUS_ERROR",
+  "unixTimeStartMs": "1782989700322",
+  "unixTimeEndMs": "1782990562226",
+  "logref": "t-b564878e-ee36-40b0-b9db-0acec155ebd4",
+  "displayMessage": "auto unlock repo \"nas\": command \"/bin/restic unlock\" failed: exit status 1\nOutput:\nStat(<config/>) returned error, retrying after 740.629645ms: Head \"http://user:***@backup.example.com:8000/laptop/config\": dial tcp: i/o timeout\n",
+  "operationBackup": {}
+}

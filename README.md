@@ -27,7 +27,7 @@ external service ─▶ bridge ─▶ pushward-server REST API ─▶ APNs ─�
 
 Two shapes of bridge live here:
 
-- **Standalone (single-tenant)** — `bambulab`, `github`, `grafana`, `sabnzbd`. Each container holds **one** PushWard integration key (`hlk_...`) and serves one account.
+- **Standalone (single-tenant)** — `backrest`, `bambulab`, `github`, `grafana`, `sabnzbd`. Each container holds **one** PushWard integration key (`hlk_...`) and serves one account.
 - **Relay (multi-tenant)** — `relay` is a single binary backed by PostgreSQL that fans out to many providers. It carries **no** key in config; instead it reads a per-request `hlk_` key from each webhook's `Authorization` header, so one deployment serves many tenants.
 
 ## Bridges
@@ -36,6 +36,7 @@ Each bridge has its own README with full configuration and per-event behavior.
 
 | Bridge | What it pushes | Inbound port | Docker image (GHCR) |
 |---|---|---|---|
+| [backrest](./backrest/) | Backrest backup progress with transfer rate and live ETA (poller) | — (outbound only) | `ghcr.io/mac-lucky/pushward-backrest` |
 | [bambulab](./bambulab/) | Bambu Lab 3D-print progress via local MQTT (TLS) | — (outbound only) | `ghcr.io/mac-lucky/pushward-bambulab` |
 | [github](./github/) | GitHub Actions workflow-run CI/CD progress (poller) | — (outbound only) | `ghcr.io/mac-lucky/pushward-github` |
 | [grafana](./grafana/) | Grafana alert timelines with Prometheus/VictoriaMetrics history + PromQL-polled iOS widgets | 8090 | `ghcr.io/mac-lucky/pushward-grafana` |
@@ -147,6 +148,7 @@ Per-provider knobs (`providers.<name>.enabled`, `priority`, `cleanup_delay`, `st
 
 | Bridge | Endpoints |
 |---|---|
+| `backrest` | None — outbound poller, no HTTP server |
 | `github` | None — outbound poller, no HTTP server |
 | `bambulab` | None — connects **out** to the printer over MQTT (TLS `:8883`) |
 | `sabnzbd` | `POST /webhook` (optional `X-Webhook-Secret`), `GET /health`, `GET /ready` |

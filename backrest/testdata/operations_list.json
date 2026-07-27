@@ -1,0 +1,64 @@
+{
+  "operations": [
+    {
+      "id": "12208",
+      "flowId": "12208",
+      "modno": "9063190002730450472",
+      "instanceId": "laptop",
+      "repoId": "nas",
+      "planId": "media",
+      "snapshotId": "f5ec9d803c282d4926c0de15f040ad7cce12257663dd3039dbee3b14fdcd4d1a",
+      "status": "STATUS_SUCCESS",
+      "unixTimeStartMs": "1785050751065",
+      "unixTimeEndMs": "1785050763389",
+      "operationBackup": {
+        "lastStatus": {
+          "summary": {
+            "filesChanged": "785",
+            "dataAdded": "82814089",
+            "totalFilesProcessed": "3404",
+            "totalBytesProcessed": "1665323014503",
+            "totalDuration": 10.016478984,
+            "snapshotId": "f5ec9d803c282d4926c0de15f040ad7cce12257663dd3039dbee3b14fdcd4d1a"
+          }
+        }
+      }
+    },
+    {
+      "id": "12209",
+      "flowId": "12209",
+      "modno": "9063190002730450473",
+      "instanceId": "laptop",
+      "repoId": "nas",
+      "planId": "_system_",
+      "status": "STATUS_SUCCESS",
+      "unixTimeStartMs": "1785050800000",
+      "unixTimeEndMs": "1785050860000",
+      "operationStats": {}
+    },
+    {
+      "id": "12210",
+      "flowId": "12210",
+      "modno": "9063190002730450474",
+      "instanceId": "laptop",
+      "repoId": "nas",
+      "planId": "appdata",
+      "status": "STATUS_INPROGRESS",
+      "unixTimeStartMs": "1785050900000",
+      "operationBackup": {
+        "lastStatus": {
+          "status": {
+            "percentDone": 0.42,
+            "totalFiles": "604",
+            "totalBytes": "846209740490",
+            "filesDone": "250",
+            "bytesDone": "355408090000",
+            "currentFile": [
+              "/data/archive/2026-06-28/metrics.tar.zst"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

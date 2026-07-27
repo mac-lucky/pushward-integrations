@@ -1,0 +1,16 @@
+{
+  "id": "8685",
+  "flowId": "8685",
+  "modno": "9063190002730450174",
+  "instanceId": "laptop",
+  "repoId": "cloud",
+  "repoGuid": "6a1e0b4d9c7f2358ae04d1c6b3f9782e",
+  "planId": "_system_",
+  "status": "STATUS_SUCCESS",
+  "unixTimeStartMs": "1778976000028",
+  "unixTimeEndMs": "1778978803675",
+  "logref": "t-424be88d-2f59-4a29-99ac-a2ccda694098",
+  "operationPrune": {
+    "outputLogref": "c-1e03d4bb-9fbc-42ca-bba3-6a99d951cf5f"
+  }
+}
