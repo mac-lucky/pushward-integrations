@@ -1298,12 +1298,6 @@ func TestPollActive_LiveProgressAnchorsCurrentStep(t *testing.T) {
 	if want := buildStart.Unix() + 300; req.Content.EndDate == nil || *req.Content.EndDate != want {
 		t.Errorf("end_date = %v, want started_at + the prior run's 300s (%d)", req.Content.EndDate, want)
 	}
-	// The server rejects live_progress without end_date, and iOS falls back to
-	// the generic progress-derived synthesis without start_date, which is wrong
-	// here, because this bridge's progress is an overall job fraction.
-	if req.Content.StartDate == nil || req.Content.EndDate == nil {
-		t.Error("live_progress must always ship with both anchors")
-	}
 }
 
 // TestPollActive_LiveProgressAnchorsOncePerStep guards the rule the anchors
@@ -1374,6 +1368,9 @@ func TestPollActive_LiveProgressStepChangeReanchors(t *testing.T) {
 	}
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[1].Body, &req)
+	if req.Content.LiveProgress == nil || !*req.Content.LiveProgress {
+		t.Errorf("the re-anchor must carry live_progress=true, got %v", req.Content.LiveProgress)
+	}
 	if req.Content.StartDate == nil || *req.Content.StartDate != testStart.Unix() {
 		t.Errorf("start_date = %v, want the new step's started_at %d", req.Content.StartDate, testStart.Unix())
 	}
@@ -1441,21 +1438,15 @@ func TestPollActive_LiveProgressSkipped(t *testing.T) {
 func TestPollActive_OverrunKeepsAnchor(t *testing.T) {
 	// Started well beyond Build's 300s estimate, so liveAnchor now declines.
 	buildStart := time.Now().Add(-40 * time.Minute).UTC().Truncate(time.Second)
-	tick := 0
 	gh := mockGitHubClient(t, liveJobsMux(func() []ghclient.Job {
-		tick++
-		jobs := []ghclient.Job{
+		return []ghclient.Job{
 			{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
 			{ID: 2, Name: "Build", Status: "in_progress", StartedAt: buildStart.Format(time.RFC3339)},
 		}
-		if tick > 1 {
-			jobs = append(jobs, ghclient.Job{ID: 3, Name: "Test", Status: "queued"})
-		}
-		return jobs
 	}))
 	// The run is mid-step with an anchor already out on the wire for that step.
 	tracked := liveTrackedRun(priorDurations())
-	tracked.liveStep = 2
+	tracked.liveStepName = "Build"
 	tracked.liveSent = true
 	p, patches := livePoller(t, testConfig(), gh, tracked)
 
@@ -1467,6 +1458,17 @@ func TestPollActive_OverrunKeepsAnchor(t *testing.T) {
 		t.Fatalf("expected 1 PATCH call, got %d", len(got))
 	}
 	assertNoLiveWindow(t, got[0].Body, "a step still running past its estimate")
+
+	// The claim is that the overrun costs no push, so it has to survive a tick
+	// with nothing else moving. The first tick patches because lastPatchAt is
+	// zero; this one has no scalar change, no shape change and no heartbeat due,
+	// so the anchor logic is the only thing that could manufacture a frame.
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got = patches(1); len(got) != 1 {
+		t.Fatalf("an overrun must not push again, got %d PATCH calls", len(got))
+	}
 }
 
 // TestPollActive_ClearsStaleLiveProgress covers advancing onto a step with no
@@ -1480,7 +1482,7 @@ func TestPollActive_ClearsStaleLiveProgress(t *testing.T) {
 		}
 	}))
 	tracked := liveTrackedRun(map[string]float64{"Lint": 5})
-	tracked.liveStep = 1
+	tracked.liveStepName = "Lint"
 	tracked.liveSent = true
 	p, patches := livePoller(t, testConfig(), gh, tracked)
 
@@ -1496,6 +1498,12 @@ func TestPollActive_ClearsStaleLiveProgress(t *testing.T) {
 	testutil.UnmarshalBody(t, got[0].Body, &req)
 	if req.Content.LiveProgress == nil || *req.Content.LiveProgress {
 		t.Errorf("expected live_progress=false to stop the stale window, got %v", req.Content.LiveProgress)
+	}
+	// Clearing must not also restamp the window: that is the carry-forward the
+	// switch-off exists to stop, and it would leave the new step counting.
+	if req.Content.StartDate != nil || req.Content.EndDate != nil {
+		t.Errorf("clearing must not restamp the window: start=%v end=%v",
+			req.Content.StartDate, req.Content.EndDate)
 	}
 }
 
@@ -1541,6 +1549,45 @@ func TestPollActive_EndFramesStopLiveProgress(t *testing.T) {
 	}
 }
 
+// TestPollIdle_AssumesAnimationUntilProven pins the pessimistic start. The seed
+// frame is what clears an animation carried over from the last run on this
+// repo's slug, but the seed can fail, and the tracked entry is inserted before
+// it is sent. Starting liveSent=true means the first tick that has nothing to
+// animate sends the clear itself rather than trusting a frame that may never
+// have landed; without it a run whose current step has no measurement would
+// count toward the previous run's deadline for its whole life.
+func TestPollIdle_AssumesAnimationUntilProven(t *testing.T) {
+	for _, live := range []bool{true, false} {
+		name := "enabled"
+		if !live {
+			name = "disabled"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Render.LiveProgress = live
+			pwSrv, _, _ := testutil.MockPushWardServer(t)
+			p := &Poller{
+				cfg:     cfg,
+				gh:      mockGitHubClient(t, priorRunMux()),
+				pw:      pushward.NewClient(pwSrv.URL, "hlk_test"),
+				tracked: make(map[string]*trackedRun),
+				repos:   []string{"owner/repo"},
+			}
+			if err := p.pollIdle(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			tracked, ok := p.tracked["owner/repo"]
+			if !ok {
+				t.Fatal("pollIdle must track the run")
+			}
+			if tracked.liveSent != live {
+				t.Errorf("liveSent = %v, want %v: the clear has to be owed whenever the feature can animate",
+					tracked.liveSent, live)
+			}
+		})
+	}
+}
+
 // TestPollIdle_SeedStopsCarriedLiveProgress covers the shared slug. A run
 // superseded before its end frames fire leaves live_progress on in stored
 // content, and the seed merge-patches over it, so a card showing 0/N would
@@ -1583,13 +1630,13 @@ func TestLiveAnchor(t *testing.T) {
 			end:     startedAt.Unix() + 300,
 		},
 		{
-			name:    "falls back to now when GitHub has not stamped a start",
+			// Anchoring from poll time would animate a step that has not begun,
+			// and would stay offset by up to a poll interval once the real start
+			// appears, since the group has not changed and nothing re-anchors.
+			name:    "no start stamped yet",
 			live:    true,
 			info:    stepInfo{CurrentStep: 2, CurrentStepName: "Build"},
 			weights: weights,
-			wantOK:  true,
-			start:   now.Unix(),
-			end:     now.Unix() + 300,
 		},
 		{
 			name:    "flag off",

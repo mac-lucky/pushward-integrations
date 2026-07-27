@@ -23,7 +23,11 @@ func writeConfig(t *testing.T, render string) string {
 // pill flags stay off, so an existing deployment sees the same pills it always
 // did and gains only the self-filling step.
 func TestLoad_LiveProgressDefault(t *testing.T) {
+	// Clear all three: an exported pill flag in the developer's shell would
+	// otherwise fail this for an unrelated reason.
 	t.Setenv("PUSHWARD_GITHUB_LIVE_PROGRESS", "")
+	t.Setenv("PUSHWARD_GITHUB_STEP_COLORS", "")
+	t.Setenv("PUSHWARD_GITHUB_STEP_WEIGHTS", "")
 	cfg, err := Load(writeConfig(t, ""))
 	if err != nil {
 		t.Fatal(err)
@@ -49,6 +53,9 @@ func TestLoad_LiveProgressOverrides(t *testing.T) {
 	}{
 		{name: "yaml turns it off", yaml: "render:\n  live_progress: false\n"},
 		{name: "yaml restates the default", yaml: "render:\n  live_progress: true\n", want: true},
+		// The upgrade path: a deployment that already configures the pill flags
+		// must keep the new default rather than have it decoded away.
+		{name: "render block without the key keeps the default", yaml: "render:\n  step_colors: true\n", want: true},
 		{name: "env turns it off", env: "false"},
 		{name: "env wins over yaml", yaml: "render:\n  live_progress: false\n", env: "true", want: true},
 		// t.Setenv cannot unset, and os.Getenv cannot tell empty from absent, so

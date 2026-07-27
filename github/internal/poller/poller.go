@@ -259,6 +259,13 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			HTMLURL:    run.HTMLURL,
 			LastUpdate: time.Now(),
 			trackedAt:  time.Now(),
+			// Assume an animation is running until proven otherwise. The slug is
+			// per-repo, so the card may still hold the previous run's window, and
+			// the seed below is what clears it - but the seed can fail. Starting
+			// pessimistic means the first tick that has nothing to animate sends
+			// the clear itself instead of trusting a frame that may never have
+			// landed.
+			liveSent: p.cfg.Render.LiveProgress,
 		}
 		p.mu.Unlock()
 
@@ -628,9 +635,10 @@ const minLiveWindow = 5 * time.Second
 // a poll landing mid-step picks the bar up where it already is instead of
 // restarting it.
 //
-// ok is false when there is nothing trustworthy to animate toward. iOS renders
-// the static bar in exactly those cases anyway, so a window sent regardless
-// would buy nothing and cost a high-priority push.
+// ok is false when there is nothing trustworthy to animate toward: no step
+// running, no start stamped, no measurement for the group, or an estimate
+// already spent. iOS renders the static bar in exactly those cases anyway, so a
+// window sent regardless would buy nothing and cost a high-priority push.
 func (p *Poller) liveAnchor(info stepInfo, byName map[string]float64, now time.Time) (start, end int64, ok bool) {
 	if !p.cfg.Render.LiveProgress || info.CurrentStep < 1 {
 		return 0, 0, false
@@ -647,10 +655,18 @@ func (p *Poller) liveAnchor(info stepInfo, byName map[string]float64, now time.T
 	// fails fast on 4xx, every later patch for this repo would 422 and the card
 	// would freeze. The bridge already refuses to track a run past this age.
 	secs = math.Min(secs, maxRunLifetime.Seconds())
+	// No start means nothing is running yet: the queued placeholder, or a job
+	// GitHub has not stamped. Anchoring from poll time would animate a step that
+	// has not begun, and would sit permanently offset by up to one poll interval
+	// once the real start appears, since the step index has not changed and
+	// nothing re-anchors.
 	startAt := info.CurrentStepStartedAt
-	if startAt.IsZero() || startAt.After(now) {
-		// A start in the future means the runner's clock is ahead of ours; anchor
-		// from now rather than rendering an empty bar until it catches up.
+	if startAt.IsZero() {
+		return 0, 0, false
+	}
+	if startAt.After(now) {
+		// The runner's clock reads ahead of ours; anchoring forward would render
+		// an empty bar until local time caught up.
 		startAt = now
 	}
 	endAt := startAt.Add(time.Duration(math.Round(secs)) * time.Second)
@@ -802,10 +818,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		}
 
 		info := p.shape(jobs)
-		var (
-			stepWeights   []float64
-			weightsByName map[string]float64
-		)
+		var weightsByName map[string]float64
 
 		p.mu.Lock()
 		if tt, ok := p.tracked[repo]; ok {
@@ -830,15 +843,18 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				info.StepLabels = tt.maxStepLabels
 				info.StepColors = tt.maxStepColors
 			}
-			// Size the pills from the prior run's durations, keyed by group name so
-			// each weight tracks its label regardless of the order GitHub reveals
-			// the groups in (jobs can be added/reordered between runs). The result
-			// is len(step_labels), so it never desyncs from total_steps; unknown
-			// groups get the mean; no history yields nil (equal-width pills).
-			stepWeights = p.payloadWeights(info.StepLabels, tt.stepWeightByName)
 			weightsByName = tt.stepWeightByName
 		}
 		p.mu.Unlock()
+
+		// Size the pills from the prior run's durations, keyed by group name so
+		// each weight tracks its label regardless of the order GitHub reveals the
+		// groups in (jobs can be added/reordered between runs). The result is
+		// len(step_labels), so it never desyncs from total_steps; unknown groups
+		// get the mean; no history yields nil (equal-width pills). Derived out
+		// here rather than under p.mu: the map is immutable once published, and
+		// p.mu serialises every repo, so the projection has no business holding it.
+		stepWeights := p.payloadWeights(info.StepLabels, weightsByName)
 
 		repoShort := repoName(tRepo)
 
@@ -897,6 +913,10 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		// (shape grew), or a heartbeat is due to keep the activity off the
 		// server's stale-dismissal path.
 		heartbeat := p.cfg.PushWard.StaleTimeout / 2
+		// Resolved before taking the lock: it reads only the scan, the immutable
+		// published weights and the config.
+		liveStart, liveEnd, wantLive := p.liveAnchor(info, weightsByName, time.Now())
+
 		p.mu.Lock()
 		tt, ok := p.tracked[repo]
 		if !ok {
@@ -910,18 +930,17 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			info.CurrentStep != tt.lastCurrentStep ||
 			info.TotalSteps != tt.lastTotalSteps
 		heartbeatDue := !tt.lastPatchAt.IsZero() && time.Since(tt.lastPatchAt) >= heartbeat
-		// Anchor the live window on the step it belongs to, and only there:
-		// restamping it on a later tick of the same step would snap the pill back
+		// Anchor the live window on the group it belongs to, and only there:
+		// restamping it on a later tick of the same group would snap the pill back
 		// to empty. Dropping a stale anchor matters just as much: under
 		// merge-patch an earlier live_progress:true would otherwise leave the new
 		// step animating toward the old step's deadline.
-		liveStart, liveEnd, wantLive := p.liveAnchor(info, weightsByName, time.Now())
-		anchorChanged := wantLive && (!tt.liveSent || info.CurrentStep != tt.liveStep)
+		anchorChanged := wantLive && (!tt.liveSent || info.CurrentStepName != tt.liveStepName)
 		// Only a step change can strand a window. A step that simply outruns its
 		// estimate needs no push: iOS drops a window whose end has passed and
 		// falls back to the static bar on its own, so switching live_progress off
 		// would broadcast to every device to change nothing.
-		clearLive := tt.liveSent && !wantLive && info.CurrentStep != tt.liveStep
+		clearLive := tt.liveSent && !wantLive && info.CurrentStepName != tt.liveStepName
 		p.mu.Unlock()
 		if !shapeChanged && !scalarChanged && !heartbeatDue && !anchorChanged && !clearLive {
 			continue
@@ -974,9 +993,10 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			tt.lastPatchAt = time.Now()
 			switch {
 			case anchorChanged:
-				tt.liveStep = info.CurrentStep
+				tt.liveStepName = info.CurrentStepName
 				tt.liveSent = true
 			case clearLive:
+				tt.liveStepName = ""
 				tt.liveSent = false
 			}
 		}
