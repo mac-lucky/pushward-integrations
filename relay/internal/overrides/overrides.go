@@ -44,6 +44,17 @@ func (o *Overrides) AllowsNotification() bool {
 	return o == nil || o.channels == nil || o.channels[ChannelNotification]
 }
 
+// NotifyFallback reports whether an event should also raise a push
+// notification. worthIt is the provider's own judgement that the event is worth
+// interrupting for; on top of that, anything notifies once the activity surface
+// is suppressed, because the push is then the only delivery left.
+//
+// This is only about the notification surface. Gating an activity update on it
+// inverts the second term.
+func (o *Overrides) NotifyFallback(worthIt bool) bool {
+	return o.AllowsNotification() && (worthIt || !o.AllowsActivity())
+}
+
 // PriorityOr returns the priority override when set, otherwise def.
 func (o *Overrides) PriorityOr(def int) int {
 	if o != nil && o.Priority != nil {

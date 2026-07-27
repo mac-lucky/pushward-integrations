@@ -143,7 +143,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 			CollapseID: "sonarr-grab" + episodeCollapseSuffix(p.Episodes),
 			Level:      ov.LevelOr(pushward.LevelActive),
 			Source:     "sonarr",
-			Push:       pushward.BoolPtr(h.shouldNotify("Grab") || !ov.AllowsActivity()),
+			Push:       pushward.BoolPtr(ov.NotifyFallback(h.shouldNotify("Grab"))),
 			URL:        sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug),
 			Media:      pushward.MediaImage(posterURL(p.Series.Images)),
 		}
@@ -258,7 +258,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 			CollapseID: "sonarr-download" + episodeCollapseSuffix(p.Episodes),
 			Level:      ov.LevelOr(pushward.LevelActive),
 			Source:     "sonarr",
-			Push:       pushward.BoolPtr(h.shouldNotify("Download") || !ov.AllowsActivity()),
+			Push:       pushward.BoolPtr(ov.NotifyFallback(h.shouldNotify("Download"))),
 			URL:        sonarrSeriesURL(p.ApplicationURL, p.Series.TitleSlug),
 			Media:      pushward.MediaImage(posterURL(p.Series.Images)),
 		}

@@ -167,7 +167,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 			CollapseID: "radarr-grab",
 			Level:      ov.LevelOr(pushward.LevelActive),
 			Source:     "radarr",
-			Push:       pushward.BoolPtr(h.shouldNotify("Grab") || !ov.AllowsActivity()),
+			Push:       pushward.BoolPtr(ov.NotifyFallback(h.shouldNotify("Grab"))),
 			URL:        radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID),
 			Media:      pushward.MediaImage(posterURL(p.Movie.Images)),
 		}
@@ -280,7 +280,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 			CollapseID: "radarr-download",
 			Level:      ov.LevelOr(pushward.LevelActive),
 			Source:     "radarr",
-			Push:       pushward.BoolPtr(h.shouldNotify("Download") || !ov.AllowsActivity()),
+			Push:       pushward.BoolPtr(ov.NotifyFallback(h.shouldNotify("Download"))),
 			URL:        radarrMovieURL(p.ApplicationURL, p.Movie.TmdbID),
 			Media:      pushward.MediaImage(posterURL(p.Movie.Images)),
 		}

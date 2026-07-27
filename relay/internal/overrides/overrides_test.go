@@ -89,6 +89,44 @@ func TestNilReceiverIsDefault(t *testing.T) {
 	if o.LevelOr("active") != "active" {
 		t.Error("nil Overrides should return the default level")
 	}
+	if !o.NotifyFallback(true) {
+		t.Error("nil Overrides should notify for a worth-it event")
+	}
+	if o.NotifyFallback(false) {
+		t.Error("nil Overrides allows the activity, so a routine event should not also push")
+	}
+}
+
+func TestNotifyFallback(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		worthIt bool
+		want    bool
+	}{
+		// No override: both surfaces allowed, so only worth-it events push and a
+		// routine event stays activity-only.
+		{"default, worth it", "", true, true},
+		{"default, routine", "", false, false},
+		// Activity suppressed: the notification is the only delivery left, so
+		// even a routine event has to push.
+		{"notification only, worth it", "channels=notification", true, true},
+		{"notification only, routine", "channels=notification", false, true},
+		// Notification suppressed: never push, however worth it.
+		{"activity only, worth it", "channels=activity", true, false},
+		{"activity only, routine", "channels=activity", false, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			o, err := Parse(mustQuery(t, tc.query))
+			if err != nil {
+				t.Fatalf("Parse(%q): %v", tc.query, err)
+			}
+			if got := o.NotifyFallback(tc.worthIt); got != tc.want {
+				t.Errorf("NotifyFallback(%v) = %v, want %v", tc.worthIt, got, tc.want)
+			}
+		})
+	}
 }
 
 func TestFromContextDefault(t *testing.T) {

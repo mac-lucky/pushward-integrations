@@ -274,17 +274,10 @@ func endState(spec eventSpec, p *backrestPayload) string {
 }
 
 // shouldNotify decides whether an event also warrants a push notification.
-//
-// With no channels override both surfaces are permitted, so notifying on every
-// event would bolt a push onto every routine backup. Default to outcomes worth
-// interrupting for. When the caller has explicitly suppressed the activity
-// surface the notification is the only delivery left, so send it for successes
-// too rather than deliver nothing at all.
+// spec.problem is backrest's worth-interrupting-for judgement; the fallback when
+// the activity surface is suppressed is the shared relay policy.
 func shouldNotify(ov *overrides.Overrides, spec eventSpec) bool {
-	if !ov.AllowsNotification() {
-		return false
-	}
-	return spec.problem || !ov.AllowsActivity()
+	return ov.NotifyFallback(spec.problem)
 }
 
 func (h *Handler) notify(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, spec eventSpec, slug, stateText string) error {
