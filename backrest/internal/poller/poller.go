@@ -296,6 +296,12 @@ func (p *Poller) reapVanished(ctx context.Context, seen map[int64]bool) {
 	p.mu.Unlock()
 
 	for _, t := range orphans {
+		// An activity that was never created has nothing to close; patching it
+		// would be two guaranteed 404s.
+		if !t.seeded {
+			p.abandon(t)
+			continue
+		}
 		slog.Warn("operation left the query window, closing activity", "slug", t.slug, "op", t.opID)
 		p.scheduleEnd(ctx, t, orphanContent(t.subtitle, t.lastProgress))
 	}
@@ -310,10 +316,28 @@ func (p *Poller) track(op *backrest.Operation) *tracked {
 		return nil
 	}
 
+	slug := slugFor(op)
+
 	p.mu.Lock()
 	t, ok := p.tracked[id]
 	if !ok {
-		t = &tracked{opID: id, slug: slugFor(op), subtitle: subtitle(op)}
+		// Records are keyed by operation id, but the slug is keyed by plan and
+		// repo, so a re-run started while the previous one is still closing
+		// shares an activity with it. Left alone, the old record's phase 2
+		// would send ENDED to the new run's card and the rest of that backup
+		// would go unreported. Close, not Stop: Stop is not terminal and loses
+		// the re-arm race with phase 1.
+		for otherID, other := range p.tracked {
+			if other.slug == slug && other.ending {
+				if other.endTimers != nil {
+					other.endTimers.Close()
+				}
+				delete(p.tracked, otherID)
+				slog.Info("superseded a closing activity for the same slug",
+					"slug", slug, "previous_op", otherID, "op", id)
+			}
+		}
+		t = &tracked{opID: id, slug: slug, subtitle: subtitle(op)}
 		p.tracked[id] = t
 	}
 	p.mu.Unlock()
@@ -391,7 +415,12 @@ func (p *Poller) frameFor(ctx context.Context, t *tracked, op *backrest.Operatio
 		return c, c.State
 	}
 
-	t.sample(op.BytesDone(), now)
+	// Only sample when restic actually reported a counter. BytesDone() answers
+	// 0 for a status-less tick, which would reset lastBytes and make the next
+	// real reading look like the whole backup arrived in one interval.
+	if op.BackupStatus() != nil {
+		t.sample(op.BytesDone(), now)
+	}
 
 	liveStart, liveEnd := t.liveStart, t.liveEnd
 	switch {

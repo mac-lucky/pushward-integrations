@@ -1027,3 +1027,170 @@ func TestSampleIgnoresRewind(t *testing.T) {
 		t.Errorf("speed = %v, want non-negative", tr.speed)
 	}
 }
+
+// A re-run that starts while the previous run is still closing shares its slug.
+// Without superseding the old record, its phase 2 sends ENDED to the new run's
+// card and the rest of that backup goes unreported.
+func TestReRunSupersedesAClosingActivity(t *testing.T) {
+	done := loadOp(t, "backup_success.json")
+	done.ID, done.PlanID, done.RepoID = 1, "appdata", "nas"
+	rerun := runningBackup(2, 100, 1000)
+
+	br := &fakeBackrest{windows: [][]backrest.Operation{
+		{runningBackup(1, 500, 1000)},
+		{done},        // op 1 finishes, two-phase end is armed
+		{done, rerun}, // op 2 starts on the same plan, same slug
+		{done, rerun},
+	}}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t)
+	h.poll(t)
+	h.poll(t)
+	h.poll(t)
+
+	// Give the superseded timers every chance to fire if they were not closed.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	slug := slugFor(&rerun)
+	for _, c := range h.recorded() {
+		if c.Method != "PATCH" || !strings.HasSuffix(c.Path, slug) {
+			continue
+		}
+		if activityState(t, c) == pushward.StateEnded {
+			t.Fatalf("the running re-run's activity was ENDED by the previous run's close-out")
+		}
+	}
+}
+
+// A status-less tick reports zero bytes. Folding that into the rate estimate
+// would reset the counter and make the next real reading look like the whole
+// backup arrived in one interval.
+func TestStatuslessTickDoesNotCorruptTheRate(t *testing.T) {
+	blank := runningBackup(1, 2_000_000, 10_000_000)
+	blank.Backup.LastStatus = nil
+
+	br := &fakeBackrest{windows: [][]backrest.Operation{
+		{runningBackup(1, 0, 10_000_000)},
+		{runningBackup(1, 1_000_000, 10_000_000)},
+		{runningBackup(1, 2_000_000, 10_000_000)},
+		{blank},
+		{runningBackup(1, 3_000_000, 10_000_000)},
+	}}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t)
+	h.poll(t)
+	h.advance(10 * time.Second)
+	h.poll(t)
+	rate := h.p.tracked[1].speed
+
+	h.advance(10 * time.Second)
+	h.poll(t) // status-less
+	h.advance(10 * time.Second)
+	h.poll(t)
+
+	after := h.p.tracked[1].speed
+	// The true rate never changed, so the estimate must not jump.
+	if after > rate*1.25 {
+		t.Errorf("rate went %.0f -> %.0f B/s across a status-less tick, want it steady", rate, after)
+	}
+}
+
+// restic quotes the repository URL in its retry lines. A REST/S3/B2 repo can
+// carry credentials there, and those must not reach the Lock Screen.
+func TestLogLinesRedactCredentials(t *testing.T) {
+	// #nosec G101 -- a synthetic line whose whole purpose is to carry the
+	// credentials this test asserts are stripped.
+	in := `Save(<data/abc>) returned error, retrying after 1.2s: Post "http://someuser:hunter2@backup.example.com:8000/host/data/abc": timeout`
+	got := truncateLine(in)
+
+	for _, secret := range []string{"someuser", "hunter2", "someuser:hunter2@"} {
+		if strings.Contains(got, secret) {
+			t.Errorf("line still carries %q: %s", secret, got)
+		}
+	}
+	// The useful part has to survive.
+	if !strings.Contains(got, "backup.example.com:8000") {
+		t.Errorf("host was lost in redaction: %s", got)
+	}
+	if !strings.Contains(got, "timeout") {
+		t.Errorf("error text was lost in redaction: %s", got)
+	}
+}
+
+// Turning live_progress off has to actually stop the anchor being sent, not
+// merely stop it being honored.
+func TestLiveProgressDisabledSendsNoAnchor(t *testing.T) {
+	cfg := testConfig()
+	cfg.Render.LiveProgress = false
+	br := &fakeBackrest{windows: [][]backrest.Operation{
+		{runningBackup(1, 0, 1000)},
+		{runningBackup(1, 100, 1000)},
+		{runningBackup(1, 300, 1000)},
+	}}
+	h := newHarness(t, cfg, br)
+
+	h.poll(t)
+	h.poll(t)
+	h.advance(10 * time.Second)
+	h.poll(t)
+
+	for i, c := range h.recorded() {
+		if c.Method == "POST" {
+			continue
+		}
+		if got := content(t, c); got.EndDate != nil {
+			t.Errorf("call %d carried end_date %d with live_progress disabled", i, *got.EndDate)
+		}
+	}
+}
+
+// shouldPush's clauses have to work independently: with only one trigger
+// exercised at a time, each must fire on its own.
+func TestShouldPushTriggersIndependently(t *testing.T) {
+	now := time.Unix(1785050000, 0)
+	base := func() *tracked {
+		return &tracked{
+			lastPhase: phaseRunning, lastTemplate: pushward.TemplateGeneric,
+			lastProgress: 0.50, lastPushAt: now, liveEnd: 900,
+		}
+	}
+	same := pushward.Content{
+		Template: pushward.TemplateGeneric, Progress: 0.50,
+		EndDate: pushward.Int64Ptr(900),
+	}
+
+	if base().shouldPush(same, phaseRunning, now, time.Minute) {
+		t.Error("an identical frame was pushed")
+	}
+
+	bigger := same
+	bigger.Progress = 0.50 + progressChangeFrac
+	if !base().shouldPush(bigger, phaseRunning, now, time.Minute) {
+		t.Error("a full progress step did not push")
+	}
+
+	tiny := same
+	tiny.Progress = 0.50 + progressChangeFrac/2
+	if base().shouldPush(tiny, phaseRunning, now, time.Minute) {
+		t.Error("a half progress step pushed; the throttle is not holding")
+	}
+
+	if !base().shouldPush(same, phaseScanning, now, time.Minute) {
+		t.Error("a phase change did not push")
+	}
+
+	moved := same
+	moved.EndDate = pushward.Int64Ptr(901)
+	if !base().shouldPush(moved, phaseRunning, now, time.Minute) {
+		t.Error("a moved anchor did not push")
+	}
+
+	if !base().shouldPush(same, phaseRunning, now.Add(2*time.Minute), time.Minute) {
+		t.Error("the heartbeat did not push")
+	}
+}

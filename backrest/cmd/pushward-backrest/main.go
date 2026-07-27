@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"log/slog"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +14,18 @@ import (
 	"github.com/mac-lucky/pushward-integrations/backrest/internal/poller"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
+
+// safeURL strips any userinfo before the address reaches the log. Credentials
+// belong in the dedicated username/password fields, but nothing stops someone
+// embedding them in the URL instead.
+func safeURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "<unparseable>"
+	}
+	u.User = nil
+	return u.String()
+}
 
 func main() {
 	configPath := flag.String("config", "config.yml", "path to config file")
@@ -41,7 +54,7 @@ func main() {
 	defer cancel()
 
 	slog.Info("starting pushward-backrest",
-		"backrest_url", cfg.Backrest.URL,
+		"backrest_url", safeURL(cfg.Backrest.URL),
 		"interval", cfg.Polling.Interval,
 		"idle_interval", cfg.Polling.IdleInterval,
 		"live_progress", cfg.Render.LiveProgress,

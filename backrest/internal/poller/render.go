@@ -2,6 +2,7 @@ package poller
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/mac-lucky/pushward-integrations/backrest/internal/backrest"
@@ -346,6 +347,19 @@ func lineLevel(s string) string {
 	return pushward.LogInfo
 }
 
+// credentialInURL matches the userinfo section of a URL. restic's retry lines
+// quote the repository URL verbatim, and a REST/S3/B2 repo can carry
+// credentials there - which would otherwise be published to the activity and
+// shown on the Lock Screen.
+var credentialInURL = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.-]*://)[^/@\s]+@`)
+
 func truncateLine(s string) string {
-	return text.TruncateHard(s, maxLogLineLen)
+	return text.TruncateHard(redactCredentials(s), maxLogLineLen)
+}
+
+// redactCredentials strips userinfo from any URL in a log line. restic already
+// masks the password itself, but the username survives and the whole userinfo
+// section is worth removing before it leaves the machine.
+func redactCredentials(s string) string {
+	return credentialInURL.ReplaceAllString(s, "$1")
 }
