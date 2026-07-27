@@ -138,7 +138,29 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 		}
 	}
 
+	total := 4
+	content := pushward.Content{
+		Template:    "steps",
+		State:       text.TruncateHard(stateText, 100),
+		Icon:        icon,
+		Subtitle:    subtitle,
+		AccentColor: accentColor,
+		CurrentStep: &step,
+		TotalSteps:  &total,
+	}
+
+	if step > 0 {
+		content.Progress = float64(step) / float64(total)
+	}
+
 	if !ov.AllowsActivity() {
+		// A terminal event still has to close an activity that an earlier,
+		// non-suppressed event opened for this media, or it hangs on the lock
+		// screen until the stale TTL. Non-terminal events must not: the activity
+		// is meant to stay open for the rest of the request's lifecycle.
+		if terminal {
+			h.ender.EndIfTracked(ctx, log, userKey, mapKey, slug, content)
+		}
 		log.Info("overseerr event", "slug", slug, "type", stateText)
 		return nil
 	}
@@ -158,21 +180,6 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 	if err := cl.CreateActivity(ctx, slug, name, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 		log.Error("failed to create overseerr activity", "slug", slug, "error", err)
 		return err
-	}
-
-	total := 4
-	content := pushward.Content{
-		Template:    "steps",
-		State:       text.TruncateHard(stateText, 100),
-		Icon:        icon,
-		Subtitle:    subtitle,
-		AccentColor: accentColor,
-		CurrentStep: &step,
-		TotalSteps:  &total,
-	}
-
-	if step > 0 {
-		content.Progress = float64(step) / float64(total)
 	}
 
 	req := pushward.UpdateRequest{

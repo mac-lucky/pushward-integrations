@@ -106,7 +106,12 @@ func NewEnder(clients *client.Pool, store state.Store, provider string, cfg EndC
 // (channels=notification) but an earlier one, on a different hook URL, already
 // opened an activity that would otherwise hang on the lock screen until its
 // stale TTL expires. A nil store means no state at all.
-func (e *Ender) EndIfTracked(ctx context.Context, log *slog.Logger, userKey, mapKey, slug string, content pushward.Content) {
+//
+// Only sound where the provider writes its state row below its own
+// AllowsActivity gate, so a row implies the activity exists. Where the row
+// doubles as a notification-dedup marker written above the gate, this would end
+// an activity the server never created.
+func (e *Ender) EndIfTracked(ctx context.Context, log *slog.Logger, userKey, mapKey, slug string, content pushward.Content, onComplete ...func()) {
 	if e.store == nil {
 		return
 	}
@@ -118,7 +123,7 @@ func (e *Ender) EndIfTracked(ctx context.Context, log *slog.Logger, userKey, map
 	if !tracked {
 		return
 	}
-	e.ScheduleEnd(userKey, mapKey, slug, content)
+	e.ScheduleEnd(userKey, mapKey, slug, content, onComplete...)
 }
 
 // ScheduleEnd schedules a two-phase end for an activity:

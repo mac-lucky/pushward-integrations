@@ -516,3 +516,99 @@ func TestTestNotification(t *testing.T) {
 		t.Errorf("expected slug relay-test-overseerr, got %s", create.Slug)
 	}
 }
+
+// sendQuery posts with query-parameter overrides on the webhook URL.
+func sendQuery(t *testing.T, h http.Handler, query, payload string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/overseerr?"+query, strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer hlk_test")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+const availableBody = `{
+	"notification_type": "MEDIA_AVAILABLE",
+	"event": "media.available",
+	"subject": "Inception (2010)",
+	"message": "",
+	"image": "",
+	"media": {"media_type": "movie", "tmdbId": "27205", "tvdbId": "", "status": "AVAILABLE", "status4k": "UNKNOWN"},
+	"request": {"request_id": "1", "requestedBy_username": "admin"}
+}`
+
+// TestSuppressedTerminalEndsPriorActivity: Overseerr can be configured with more
+// than one webhook URL, so the request that opens the activity and the one that
+// completes it need not carry the same channels override. A terminal event with
+// the activity surface suppressed must still close an activity an earlier event
+// opened, or it hangs on the lock screen until the stale TTL.
+func TestSuppressedTerminalEndsPriorActivity(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	send(t, h, `{
+		"notification_type": "MEDIA_PENDING",
+		"event": "media.requested",
+		"subject": "Inception (2010)",
+		"message": "",
+		"image": "",
+		"media": {"media_type": "movie", "tmdbId": "27205", "tvdbId": "", "status": "PENDING", "status4k": "UNKNOWN"},
+		"request": {"request_id": "1", "requestedBy_username": "admin"}
+	}`)
+
+	if w := sendQuery(t, h, "channels=notification", availableBody); w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+
+	// notification + create + ONGOING for PENDING, then notification + the
+	// ender's two phases for AVAILABLE.
+	recorded := testutil.WaitForCalls(t, calls, mu, 6, 2*time.Second)
+	var ended bool
+	for _, c := range recorded {
+		if !strings.HasPrefix(c.Path, "/activities/") {
+			continue
+		}
+		var req pushward.UpdateRequest
+		testutil.UnmarshalBody(t, c.Body, &req)
+		if req.State == pushward.StateEnded {
+			ended = true
+		}
+	}
+	if !ended {
+		t.Error("the activity opened by MEDIA_PENDING was never ended")
+	}
+}
+
+// A non-terminal event must not end anything: the activity is meant to stay open
+// for the rest of the request's lifecycle.
+func TestSuppressedNonTerminalEndsNothing(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	send(t, h, `{
+		"notification_type": "MEDIA_PENDING",
+		"event": "media.requested",
+		"subject": "Inception (2010)",
+		"message": "",
+		"image": "",
+		"media": {"media_type": "movie", "tmdbId": "27205", "tvdbId": "", "status": "PENDING", "status4k": "UNKNOWN"},
+		"request": {"request_id": "1", "requestedBy_username": "admin"}
+	}`)
+	before := len(testutil.GetCalls(calls, mu))
+
+	sendQuery(t, h, "channels=notification", `{
+		"notification_type": "MEDIA_APPROVED",
+		"event": "media.approved",
+		"subject": "Inception (2010)",
+		"message": "",
+		"image": "",
+		"media": {"media_type": "movie", "tmdbId": "27205", "tvdbId": "", "status": "APPROVED", "status4k": "UNKNOWN"},
+		"request": {"request_id": "1", "requestedBy_username": "admin"}
+	}`)
+	time.Sleep(100 * time.Millisecond)
+
+	for _, c := range testutil.GetCalls(calls, mu)[before:] {
+		if strings.HasPrefix(c.Path, "/activities") {
+			t.Errorf("a suppressed non-terminal event touched the activity: %s %s", c.Method, c.Path)
+		}
+	}
+}

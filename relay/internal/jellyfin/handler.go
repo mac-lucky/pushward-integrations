@@ -414,9 +414,6 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 }
 
 func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) {
-	if !overrides.FromContext(ctx).AllowsActivity() {
-		return
-	}
 	slug := playbackSlug(p.ItemID, p.UserName)
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
@@ -450,6 +447,14 @@ func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *s
 		// live_progress=true, and merge-patch would otherwise keep the bar
 		// counting toward a stale end_date on this "Watched" content.
 		LiveProgress: pushward.BoolPtr(false),
+	}
+
+	// The pause-timer and progress bookkeeping above runs either way: it is local
+	// state, and the debounce entries are cleaned up by the end callback, which
+	// only fires if something is actually ended.
+	if !overrides.FromContext(ctx).AllowsActivity() {
+		h.endIfTracked(ctx, log, userKey, mapKey, slug, content)
+		return
 	}
 
 	h.scheduleEnd(userKey, mapKey, slug, content)
@@ -554,9 +559,22 @@ func (h *Handler) handleAuthFailure(ctx context.Context, userKey string, log *sl
 // scheduleEnd schedules a two-phase end for an activity via lifecycle.Ender,
 // with an onComplete callback that cleans up debounce state.
 func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Content) {
+	h.ender.ScheduleEnd(userKey, mapKey, slug, content, h.cleanupDebounce(userKey, slug))
+}
+
+// endIfTracked is scheduleEnd for a request that may not touch the activity
+// surface: it ends the activity only if an earlier, non-suppressed request
+// opened one. It carries the same cleanup callback, so the debounce entries are
+// released on whichever path actually ends the activity.
+func (h *Handler) endIfTracked(ctx context.Context, log *slog.Logger, userKey, mapKey, slug string, content pushward.Content) {
+	h.ender.EndIfTracked(ctx, log, userKey, mapKey, slug, content, h.cleanupDebounce(userKey, slug))
+}
+
+// cleanupDebounce returns the callback that releases the per-slug playback
+// debounce state once the activity has been ended.
+func (h *Handler) cleanupDebounce(userKey, slug string) func() {
 	debounceKey := auth.MapKeyPrefix(userKey) + ":" + slug
-	h.ender.ScheduleEnd(userKey, mapKey, slug, content, func() {
-		// Clean up debounce entries for playback slugs
+	return func() {
 		h.mu.Lock()
 		delete(h.lastUpdate, debounceKey)
 		delete(h.lastPaused, debounceKey)
@@ -566,7 +584,7 @@ func (h *Handler) scheduleEnd(userKey, mapKey, slug string, content pushward.Con
 			delete(h.pauseTimers, debounceKey)
 		}
 		h.mu.Unlock()
-	})
+	}
 }
 
 // armPauseTimer stops any existing pause timer for debounceKey and arms a fresh

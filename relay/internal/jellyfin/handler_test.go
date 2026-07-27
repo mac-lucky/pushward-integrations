@@ -849,3 +849,77 @@ func TestTaskFailed(t *testing.T) {
 		t.Errorf("expected level 'active' for failure, got %s", req.Level)
 	}
 }
+
+// sendQueryJF posts with query-parameter overrides on the webhook URL.
+func sendQueryJF(t *testing.T, h http.Handler, query, payload string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/jellyfin?"+query, strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer hlk_test")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+// TestSuppressedStopEndsPriorPlayback: Jellyfin can be pointed at more than one
+// webhook URL, so PlaybackStart and PlaybackStop need not carry the same
+// channels override. A suppressed stop must still close the activity the start
+// opened, or "playing" stays on the lock screen until the stale TTL.
+func TestSuppressedStopEndsPriorPlayback(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	send(t, h, `{
+		"NotificationType": "PlaybackStart",
+		"ItemId": "abc123",
+		"ItemType": "Episode",
+		"Name": "Pilot",
+		"SeriesName": "Breaking Bad",
+		"SeasonNumber": 1,
+		"EpisodeNumber": 1,
+		"ProductionYear": 2008,
+		"RunTimeTicks": 27630000000,
+		"PlaybackPositionTicks": 0,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": false
+	}`)
+
+	w := sendQueryJF(t, h, "channels=notification", `{
+		"NotificationType": "PlaybackStop",
+		"ItemId": "abc123",
+		"ItemType": "Episode",
+		"Name": "Pilot",
+		"SeriesName": "Breaking Bad",
+		"SeasonNumber": 1,
+		"EpisodeNumber": 1,
+		"ProductionYear": 2008,
+		"RunTimeTicks": 27630000000,
+		"PlaybackPositionTicks": 25870000000,
+		"PlayedToCompletion": true,
+		"NotificationUsername": "john",
+		"DeviceName": "Apple TV",
+		"ClientName": "Infuse",
+		"IsPaused": false
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+
+	// create + ONGOING from the start, then the ender's two phases.
+	recorded := testutil.WaitForCalls(t, calls, mu, 4, 2*time.Second)
+	var ended bool
+	for _, c := range recorded {
+		if !strings.HasPrefix(c.Path, "/activities/") {
+			continue
+		}
+		var req pushward.UpdateRequest
+		testutil.UnmarshalBody(t, c.Body, &req)
+		if req.State == pushward.StateEnded {
+			ended = true
+		}
+	}
+	if !ended {
+		t.Error("the activity opened by PlaybackStart was never ended")
+	}
+}
