@@ -60,10 +60,8 @@ const (
 	stateSnapshotSkipped   = "Snapshot Skipped"
 )
 
-const (
-	sepDetail = text.SepDot
-	sepError  = ": "
-)
+// planSystem is Backrest's stand-in plan id on a repo-scoped task.
+const planSystem = "_system_"
 
 const (
 	iconRunning = "arrow.triangle.2.circlepath"
@@ -223,13 +221,13 @@ func (h *Handler) slugAndKey(p *backrestPayload) (string, string) {
 func (h *Handler) subtitle(p *backrestPayload) string {
 	parts := make([]string, 0, 3)
 	parts = append(parts, "Backrest")
-	if p.Plan != "" {
-		parts = append(parts, text.TruncateHard(p.Plan, 50))
+	if plan := p.planName(); plan != "" {
+		parts = append(parts, text.TruncateHard(plan, 50))
 	}
 	if p.Repo != "" {
 		parts = append(parts, text.TruncateHard(p.Repo, 50))
 	}
-	return strings.Join(parts, sepDetail)
+	return strings.Join(parts, text.SepDot)
 }
 
 // summaryDetail renders whatever the template chose to send about the snapshot,
@@ -245,7 +243,7 @@ func summaryDetail(p *backrestPayload) string {
 	if d, ok := p.elapsed(); ok {
 		parts = append(parts, text.FormatDuration(d))
 	}
-	return strings.Join(parts, sepDetail)
+	return strings.Join(parts, text.SepDot)
 }
 
 // scanDetail renders the totals restic scanned rather than stored. Too long for
@@ -258,31 +256,27 @@ func scanDetail(p *backrestPayload) string {
 	if p.FilesUnmodified != nil && *p.FilesUnmodified > 0 {
 		parts = append(parts, fmt.Sprintf("%d unchanged", *p.FilesUnmodified))
 	}
-	return strings.Join(parts, sepDetail)
+	return strings.Join(parts, text.SepDot)
 }
 
 // endState composes the final state line. On a failure the error wins over the
 // summary: it is the actionable half, and there is room for one.
 func endState(spec eventSpec, p *backrestPayload) string {
 	if spec.problem && p.Error != "" {
-		return spec.state + sepError + text.TruncateHard(p.Error, 50)
+		return spec.state + ": " + text.TruncateHard(p.Error, 50)
 	}
 	if d := summaryDetail(p); d != "" {
-		return spec.state + sepDetail + d
+		return spec.state + text.SepDot + d
 	}
 	return spec.state
 }
 
-// shouldNotify decides whether an event also warrants a push notification.
-// spec.problem is backrest's worth-interrupting-for judgement; the fallback when
-// the activity surface is suppressed is the shared relay policy.
-func shouldNotify(ov *overrides.Overrides, spec eventSpec) bool {
-	return ov.NotifyFallback(spec.problem)
-}
-
-func (h *Handler) notify(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, spec eventSpec, slug, stateText string) error {
+// notify sends the push. hasActivity says whether an activity is open for slug,
+// which is not the same question as whether this request may touch the activity
+// surface: a suppressed outcome can still be closing one an earlier hook opened.
+func (h *Handler) notify(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, spec eventSpec, slug, stateText string, hasActivity bool) error {
 	ov := overrides.FromContext(ctx)
-	title := text.TruncateHard(p.Plan, 100)
+	title := text.TruncateHard(p.planName(), 100)
 	if title == "" {
 		title = "Backrest"
 	}
@@ -308,7 +302,7 @@ func (h *Handler) notify(ctx context.Context, userKey string, log *slog.Logger, 
 	}
 	// Deep-link only when an activity exists: a slug the tenant does not own is
 	// rejected with 422 notification.activity_not_found, dropping the push too.
-	if ov.AllowsActivity() {
+	if hasActivity {
 		req.ActivitySlug = slug
 	}
 	return h.clients.SendNotification(ctx, userKey, log, req)
@@ -317,8 +311,8 @@ func (h *Handler) notify(ctx context.Context, userKey string, log *slog.Logger, 
 // notificationMetadata bounds every value: all of them are attacker-controlled.
 func notificationMetadata(p *backrestPayload) map[string]string {
 	md := map[string]string{"event": p.Event}
-	if p.Plan != "" {
-		md["plan"] = text.TruncateHard(p.Plan, 100)
+	if plan := p.planName(); plan != "" {
+		md["plan"] = text.TruncateHard(plan, 100)
 	}
 	if p.Repo != "" {
 		md["repo"] = text.TruncateHard(p.Repo, 100)
@@ -346,7 +340,7 @@ func (h *Handler) createActivity(ctx context.Context, userKey string, log *slog.
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
-	name := text.TruncateHard(p.Plan, 100)
+	name := text.TruncateHard(p.planName(), 100)
 	if name == "" {
 		name = "Backup"
 	}
@@ -360,9 +354,13 @@ func (h *Handler) createActivity(ctx context.Context, userKey string, log *slog.
 
 func (h *Handler) stepsContent(p *backrestPayload, spec eventSpec, stateText string, step int) pushward.Content {
 	total := len(stepLabels)
+	progress := 0.0
+	if total > 1 {
+		progress = float64(step-1) / float64(total-1)
+	}
 	return pushward.Content{
 		Template:    pushward.TemplateSteps,
-		Progress:    float64(step-1) / float64(total-1),
+		Progress:    progress,
 		State:       stateText,
 		Icon:        spec.icon,
 		Subtitle:    h.subtitle(p),
@@ -406,11 +404,11 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 	if !ov.AllowsActivity() {
 		// Backrest allows several hooks with different URLs, so a start can
 		// arrive on /backrest while the outcome arrives with channels=notification.
-		h.ender.EndIfTracked(ctx, log, userKey, mapKey, slug, content)
-		if shouldNotify(ov, spec) {
+		tracked := h.ender.EndIfTracked(ctx, log, userKey, mapKey, slug, content)
+		if ov.NotifyFallback(spec.problem) {
 			// The push is the only delivery left, so its failure is the
 			// request's failure and the sender gets a 502 to retry on.
-			return h.notify(ctx, userKey, log, p, spec, slug, stateText)
+			return h.notify(ctx, userKey, log, p, spec, slug, stateText, tracked)
 		}
 		return nil
 	}
@@ -433,10 +431,10 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
-	if shouldNotify(ov, spec) {
+	if ov.NotifyFallback(spec.problem) {
 		// The activity already carries the outcome, so a failed push is logged
 		// and swallowed rather than failing the webhook.
-		_ = h.notify(ctx, userKey, log, p, spec, slug, stateText)
+		_ = h.notify(ctx, userKey, log, p, spec, slug, stateText, true)
 	}
 
 	log.Info("backrest end scheduled", "slug", slug, "event", p.Event, "state", stateText)
@@ -469,8 +467,8 @@ func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Log
 	// schedules its end in the same request, so there is never one left open by
 	// an earlier request for a later one to close.
 	if !ov.AllowsActivity() {
-		if shouldNotify(ov, spec) {
-			return h.notify(ctx, userKey, log, p, spec, slug, stateText)
+		if ov.NotifyFallback(spec.problem) {
+			return h.notify(ctx, userKey, log, p, spec, slug, stateText, false)
 		}
 		return nil
 	}
@@ -487,8 +485,8 @@ func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Log
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
-	if shouldNotify(ov, spec) {
-		_ = h.notify(ctx, userKey, log, p, spec, slug, stateText)
+	if ov.NotifyFallback(spec.problem) {
+		_ = h.notify(ctx, userKey, log, p, spec, slug, stateText, true)
 	}
 
 	log.Info("backrest alert", "slug", slug, "event", p.Event, "state", stateText)

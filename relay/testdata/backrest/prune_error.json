@@ -1,7 +1,7 @@
 {
   "event": "CONDITION_PRUNE_ERROR",
   "task": "prune repo \"local-repo\"",
-  "plan": "",
+  "plan": "_system_",
   "repo": "local-repo",
   "error": "repository is already locked exclusively",
   "duration_ms": 3000

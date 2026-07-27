@@ -58,11 +58,11 @@ func send(t *testing.T, h http.Handler, payload string) *httptest.ResponseRecord
 // files, 45000 ms).
 const wantSuccessDetail = "2.3 GB · 198 files · 45s"
 
-// endState composes these; the tests mirror the composition rather than sharing
-// a constant with production, so a change to either side shows up here.
+// Spelled out rather than composed from the production constants, so a change
+// to either the state text or the separator has to be made here too.
 const (
-	stateCompletePrefix = stateComplete + sepDetail
-	stateFailedPrefix   = stateFailed + sepError
+	stateCompletePrefix = "Complete · "
+	stateFailedPrefix   = "Failed: "
 )
 
 // notifications decodes the recorded notification bodies, for the sites that
@@ -366,7 +366,7 @@ func TestSnapshotWarning(t *testing.T) {
 	// Phase 1: orange/warning
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
-	if want := stateCompleteWarnings + sepDetail + "1.0 MB"; phase1.Content.State != want {
+	if want := stateCompleteWarnings + " · " + "1.0 MB"; phase1.Content.State != want {
 		t.Errorf("expected state %q, got %s", want, phase1.Content.State)
 	}
 	if phase1.Content.Template != "steps" {
@@ -410,16 +410,29 @@ func TestSummaryDetail(t *testing.T) {
 		{
 			name: "full stats",
 			p: backrestPayload{
-				DataAdded:           i(2468421632),
-				TotalFilesProcessed: i(198),
-				TotalDuration:       f(45),
+				DataAdded:     i(2468421632),
+				FilesNew:      i(42),
+				FilesChanged:  i(156),
+				TotalDuration: f(45),
 			},
 			want: "2.3 GB · 198 files · 45s",
 		},
 		{
-			// total_files_processed absent, so new+changed stands in for it.
-			name: "files fall back to new + changed",
-			p:    backrestPayload{FilesNew: i(42), FilesChanged: i(156)},
+			// The one that matters on a real tree: 65k files walked, 348 backed
+			// up. Reporting the walk count next to 79 GB added is meaningless.
+			name: "new + changed wins over the files restic walked",
+			p: backrestPayload{
+				FilesNew:            i(334),
+				FilesChanged:        i(14),
+				FilesUnmodified:     i(65007),
+				TotalFilesProcessed: i(65355),
+			},
+			want: "348 files",
+		},
+		{
+			// A template that sends only the totals still has something to say.
+			name: "total_files_processed stands in when nothing finer is sent",
+			p:    backrestPayload{TotalFilesProcessed: i(198)},
 			want: "198 files",
 		},
 		{
@@ -593,7 +606,7 @@ func TestForgetError(t *testing.T) {
 	// Phase 1: red/failed
 	var phase1fe pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1fe)
-	if want := stateRetentionFailed + sepError + "permission denied"; phase1fe.Content.State != want {
+	if want := stateRetentionFailed + ": " + "permission denied"; phase1fe.Content.State != want {
 		t.Errorf("expected state %q, got %s", want, phase1fe.Content.State)
 	}
 	if phase1fe.Content.Template != "steps" {
@@ -977,12 +990,26 @@ func TestUnmappedEventIsAccepted(t *testing.T) {
 	}
 }
 
-// TestRepoOnlyPayloadFallbacks covers repo-scoped operations (prune/check),
-// where Backrest sends no plan at all.
+// Prune, check and forget run against a repo, and Backrest fills .Plan.Id with
+// the "_system_" sentinel rather than leaving it empty. Neither that nor a
+// genuinely absent plan may reach the user.
 func TestRepoOnlyPayloadFallbacks(t *testing.T) {
+	cases := map[string]string{
+		"system sentinel": `"plan":"_system_",`,
+		"plan omitted":    ``,
+	}
+	for name, planField := range cases {
+		t.Run(name, func(t *testing.T) {
+			assertRepoOnlyFallbacks(t, planField)
+		})
+	}
+}
+
+func assertRepoOnlyFallbacks(t *testing.T, planField string) {
+	t.Helper()
 	h, calls, mu := newHandler(t, testConfig())
 
-	w := send(t, h, `{"event":"CONDITION_CHECK_START","repo":"local-repo"}`)
+	w := send(t, h, `{"event":"CONDITION_CHECK_START",`+planField+`"repo":"local-repo"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
 	}
@@ -1057,7 +1084,7 @@ func TestEndStatePrefersErrorOverSummary(t *testing.T) {
 		TotalFilesProcessed: i(198),
 	}
 	got := endState(eventSpecs[condSnapshotWarning], p)
-	if !strings.HasPrefix(got, stateCompleteWarnings+sepError) {
+	if !strings.HasPrefix(got, stateCompleteWarnings+": ") {
 		t.Errorf("expected the error to win, got %q", got)
 	}
 	if strings.Contains(got, "2.3 GB") {
@@ -1099,6 +1126,16 @@ func TestSuppressedEndClosesPriorActivity(t *testing.T) {
 	}
 	if !ended {
 		t.Error("the activity opened by START was never ended, so it would hang until the stale TTL")
+	}
+
+	// The push is about an activity that does exist, so it has to deep-link into
+	// it. channels=notification says nothing about whether one is open.
+	notifs := notifications(t, recorded)
+	if len(notifs) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(notifs))
+	}
+	if notifs[0].ActivitySlug == "" {
+		t.Error("notification dropped the deep link to the activity it is reporting on")
 	}
 }
 

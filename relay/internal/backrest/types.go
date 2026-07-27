@@ -28,24 +28,36 @@ type backrestPayload struct {
 	TotalDuration       *float64 `json:"total_duration"`
 }
 
-// filesTouched returns how many files the snapshot processed. Backrest's
-// total_files_processed is authoritative when present; otherwise fall back to
-// new + changed, which is all a template limited to those two fields can say.
+// filesTouched returns how many files the snapshot actually backed up: new plus
+// changed. total_files_processed is not that number: restic counts every file
+// it walked, so on a mostly-unchanged tree it reads in the tens of thousands
+// next to a few MB added. It stands in only for a template that sends nothing
+// else.
 func (p *backrestPayload) filesTouched() (int64, bool) {
+	if p.FilesNew != nil || p.FilesChanged != nil {
+		var n int64
+		if p.FilesNew != nil {
+			n += *p.FilesNew
+		}
+		if p.FilesChanged != nil {
+			n += *p.FilesChanged
+		}
+		return n, true
+	}
 	if p.TotalFilesProcessed != nil {
 		return *p.TotalFilesProcessed, true
 	}
-	if p.FilesNew == nil && p.FilesChanged == nil {
-		return 0, false
+	return 0, false
+}
+
+// planName is the plan id, or "" for a repo-scoped operation. Prune, check and
+// forget run against a repo with no plan of their own, and Backrest fills the
+// hook's .Plan.Id with its "_system_" sentinel rather than leaving it empty.
+func (p *backrestPayload) planName() string {
+	if p.Plan == planSystem {
+		return ""
 	}
-	var n int64
-	if p.FilesNew != nil {
-		n += *p.FilesNew
-	}
-	if p.FilesChanged != nil {
-		n += *p.FilesChanged
-	}
-	return n, true
+	return p.Plan
 }
 
 // elapsed returns how long the operation took. restic's own total_duration

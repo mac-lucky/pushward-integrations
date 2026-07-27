@@ -1,7 +1,7 @@
 {
   "event": "CONDITION_CHECK_ERROR",
   "task": "check for repo \"local-repo\"",
-  "plan": "",
+  "plan": "_system_",
   "repo": "local-repo",
   "error": "pack 8a01915818713ab7 contains 1 errors",
   "duration_ms": 12000
