@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -697,6 +698,24 @@ func (p *Poller) payloadWeights(labels []string, byName map[string]float64) []fl
 	return projectWeights(labels, byName)
 }
 
+// realignStep moves a 1-based step index from one label list onto another by
+// group name. The live scan numbers groups in the order GitHub revealed them, so
+// a run that skips an if-gated job leaves the seeded list with an extra entry
+// ahead of the running one and the raw index lands on the wrong label. iOS draws
+// both the caption and the highlighted pill from step_labels[i-1], so a stale
+// index makes the card name one group while its state text names another.
+// Falls back to the original index when the group is not in the target list,
+// which is no worse than not remapping at all.
+func realignStep(current int, from, to []string) int {
+	if current < 1 || current > len(from) {
+		return current
+	}
+	if i := slices.Index(to, from[current-1]); i >= 0 {
+		return i + 1
+	}
+	return current
+}
+
 // baselineShape returns the step shape of a prior run of the same workflow on
 // the same branch, used to seed a stable total-steps denominator. A finished run
 // has revealed its entire job DAG, so its group count is ground truth. Returns
@@ -837,7 +856,12 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				tt.maxStepLabels = append([]string(nil), info.StepLabels...)
 				tt.maxStepColors = append([]string(nil), info.StepColors...)
 			} else if info.TotalSteps < tt.maxTotalSteps {
-				// Fewer steps than our max (shouldn't happen) — use cached.
+				// Fewer groups than the seeded maximum: a wave GitHub has not
+				// revealed yet, or an if-gated job this run skipped. Keep the
+				// cached shape so the denominator holds, and carry current_step
+				// across by name first, while info.StepLabels still describes the
+				// list that index was numbered against.
+				info.CurrentStep = realignStep(info.CurrentStep, info.StepLabels, tt.maxStepLabels)
 				info.TotalSteps = tt.maxTotalSteps
 				info.StepRows = tt.maxStepRows
 				info.StepLabels = tt.maxStepLabels

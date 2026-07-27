@@ -1606,6 +1606,154 @@ func TestPollIdle_SeedStopsCarriedLiveProgress(t *testing.T) {
 	assertNoLiveWindow(t, offBody, "the disabled seed")
 }
 
+// stepValue dereferences an optional step index for readable assertion
+// failures. A nil pointer reports -1, which no valid current_step can be.
+func stepValue(p *int) int {
+	if p == nil {
+		return -1
+	}
+	return *p
+}
+
+// skippedGroupRun is a run seeded from a prior run that included an if-gated
+// Deploy this run skips, so the live scan's group order is not a prefix of the
+// seeded labels and a raw live index lands on the wrong one.
+func skippedGroupRun() *trackedRun {
+	return &trackedRun{
+		Repo:          "owner/repo",
+		RunID:         42,
+		Slug:          "gh-repo",
+		Name:          "CI",
+		HTMLURL:       "https://github.com/owner/repo/actions/runs/42",
+		maxTotalSteps: 4,
+		maxStepRows:   []int{1, 1, 1, 1},
+		maxStepLabels: []string{"Lint", "Deploy", "Build", "Test"},
+	}
+}
+
+// TestPollActive_CurrentStepFollowsTheRunningGroup pins the wire-visible half of
+// the clamp. Substituting the seeded labels without moving current_step leaves
+// the index addressing whichever group happens to sit at that position, and iOS
+// draws the caption and the highlighted pill from step_labels[current-1], so the
+// card ends up naming one group beside a state string naming another.
+func TestPollActive_CurrentStepFollowsTheRunningGroup(t *testing.T) {
+	gh := mockGitHubClient(t, liveJobsMux(func() []ghclient.Job {
+		// Deploy never runs, so Build is second live but third as seeded.
+		return []ghclient.Job{
+			{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "Build", Status: "in_progress"},
+		}
+	}))
+	p, patches := livePoller(t, testConfig(), gh, skippedGroupRun())
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := patches(1)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH call, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+
+	if got := stepValue(req.Content.CurrentStep); got != 3 {
+		t.Errorf("current_step = %d, want 3 (Build's position in the seeded labels)", got)
+	}
+	// The state text and the pill the index selects have to agree.
+	if req.Content.State != "Build" {
+		t.Errorf("state = %q, want Build", req.Content.State)
+	}
+	if got := stepValue(req.Content.TotalSteps); got != 4 {
+		t.Errorf("total_steps = %d, want the seeded 4", got)
+	}
+}
+
+// TestPollActive_CurrentStepFollowsQueuedGroup covers the fallback path, where
+// CurrentStepName is the literal "Queued" while the index still points at a real
+// group. It is the case that proves the remap keys off the live label rather
+// than off the state string, which would miss and leave the index stale.
+func TestPollActive_CurrentStepFollowsQueuedGroup(t *testing.T) {
+	gh := mockGitHubClient(t, liveJobsMux(func() []ghclient.Job {
+		// Nothing running: Build is queued, so computeSteps reports "Queued".
+		return []ghclient.Job{
+			{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "Build", Status: "queued"},
+		}
+	}))
+	p, patches := livePoller(t, testConfig(), gh, skippedGroupRun())
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := patches(1)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH call, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+
+	if req.Content.State != "Queued" {
+		t.Fatalf("state = %q, want Queued: the fixture must exercise the fallback", req.Content.State)
+	}
+	if got := stepValue(req.Content.CurrentStep); got != 3 {
+		t.Errorf("current_step = %d, want 3 (Build's position in the seeded labels)", got)
+	}
+}
+
+func TestRealignStep(t *testing.T) {
+	seeded := []string{"Lint", "Deploy", "Build", "Test"}
+
+	tests := []struct {
+		name    string
+		current int
+		from    []string
+		to      []string
+		want    int
+	}{
+		{
+			// The common case: GitHub reveals groups in the seeded order, so the
+			// index already addresses the right label and must not move.
+			name:    "live order is a prefix of the seeded list",
+			current: 2, from: []string{"Lint", "Deploy"}, to: seeded, want: 2,
+		},
+		{
+			// The bug: this run skipped the if-gated Deploy, so Build is second
+			// live but third in the seeded list.
+			name:    "a skipped group shifts the index",
+			current: 2, from: []string{"Lint", "Build"}, to: seeded, want: 3,
+		},
+		{
+			name: "trailing group", current: 2,
+			from: []string{"Lint", "Test"}, to: seeded, want: 4,
+		},
+		{
+			// A group the prior run never had: the seeded labels cannot describe
+			// it, so leave the index alone rather than inventing a position.
+			name: "group missing from the seeded list", current: 2,
+			from: []string{"Lint", "Fuzz"}, to: seeded, want: 2,
+		},
+		{
+			// A tracked run seeded without labels still reaches the clamp.
+			name: "no seeded labels", current: 2,
+			from: []string{"Lint", "Build"}, to: nil, want: 2,
+		},
+		{name: "nothing running", current: 0, from: []string{"Lint"}, to: seeded, want: 0},
+		{
+			name: "index past the live list", current: 3,
+			from: []string{"Lint"}, to: seeded, want: 3,
+		},
+		{name: "no live labels", current: 1, from: nil, to: seeded, want: 1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := realignStep(tc.current, tc.from, tc.to); got != tc.want {
+				t.Errorf("realignStep(%d, %v, %v) = %d, want %d",
+					tc.current, tc.from, tc.to, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestLiveAnchor(t *testing.T) {
 	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	startedAt := now.Add(-30 * time.Second)
