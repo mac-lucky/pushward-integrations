@@ -19,3 +19,4 @@ polling:
 render:
   # step_colors: false   # or set PUSHWARD_GITHUB_STEP_COLORS - tint step pills by job type
   # step_weights: false  # or set PUSHWARD_GITHUB_STEP_WEIGHTS - size step pills by prior-run duration
+  # live_progress: true  # or set PUSHWARD_GITHUB_LIVE_PROGRESS - fill the running step and count its ETA down

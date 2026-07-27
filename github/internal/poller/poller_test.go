@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -30,13 +31,17 @@ func testConfig() *config.Config {
 		Polling: config.PollingConfig{
 			IdleInterval: 60 * time.Second,
 		},
+		// Mirrors the production default so tests exercise the shipped behavior.
+		Render: config.RenderConfig{LiveProgress: true},
 	}
 }
 
-// testConfigRender returns a config with the opt-in pill fields switched on.
+// testConfigRender returns a config with the opt-in pill fields switched on,
+// leaving live progress at its default.
 func testConfigRender(colors, weights bool) *config.Config {
 	cfg := testConfig()
-	cfg.Render = config.RenderConfig{StepColors: colors, StepWeights: weights}
+	cfg.Render.StepColors = colors
+	cfg.Render.StepWeights = weights
 	return cfg
 }
 
@@ -1060,29 +1065,33 @@ func priorRunMux() *http.ServeMux {
 		})
 	})
 	ghMux.HandleFunc("/repos/owner/repo/actions/runs/41/jobs", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{
-			TotalCount: 4,
-			Jobs: []ghclient.Job{
-				{
-					ID: 1, Name: "Lint", Status: "completed", Conclusion: "success",
-					StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:00:05Z",
-				},
-				{
-					ID: 2, Name: "Build (ubuntu)", Status: "completed", Conclusion: "success",
-					StartedAt: "2026-01-01T00:00:05Z", CompletedAt: "2026-01-01T00:05:05Z",
-				},
-				{
-					ID: 3, Name: "Build (macos)", Status: "completed", Conclusion: "success",
-					StartedAt: "2026-01-01T00:00:05Z", CompletedAt: "2026-01-01T00:02:05Z",
-				},
-				{
-					ID: 4, Name: "Test", Status: "completed", Conclusion: "success",
-					StartedAt: "2026-01-01T00:05:05Z", CompletedAt: "2026-01-01T00:05:45Z",
-				},
-			},
-		})
+		jobs := priorRunJobs()
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{TotalCount: len(jobs), Jobs: jobs})
 	})
 	return ghMux
+}
+
+// priorRunJobs is the finished run 41 that priorRunMux serves: Lint 5s, a
+// parallel Build matrix (300s / 120s), Test 40s.
+func priorRunJobs() []ghclient.Job {
+	return []ghclient.Job{
+		{
+			ID: 1, Name: "Lint", Status: "completed", Conclusion: "success",
+			StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:00:05Z",
+		},
+		{
+			ID: 2, Name: "Build (ubuntu)", Status: "completed", Conclusion: "success",
+			StartedAt: "2026-01-01T00:00:05Z", CompletedAt: "2026-01-01T00:05:05Z",
+		},
+		{
+			ID: 3, Name: "Build (macos)", Status: "completed", Conclusion: "success",
+			StartedAt: "2026-01-01T00:00:05Z", CompletedAt: "2026-01-01T00:02:05Z",
+		},
+		{
+			ID: 4, Name: "Test", Status: "completed", Conclusion: "success",
+			StartedAt: "2026-01-01T00:05:05Z", CompletedAt: "2026-01-01T00:05:45Z",
+		},
+	}
 }
 
 // seedContent runs one pollIdle against priorRunMux with cfg and returns the
@@ -1167,6 +1176,533 @@ func TestPollIdle_RenderFlags(t *testing.T) {
 					len(content.StepLabels), *content.TotalSteps)
 			}
 		})
+	}
+}
+
+// assertNoLiveWindow fails when any of the three animation fields reached the
+// wire. All three matter together: a frame that drops live_progress but leaves
+// start_date/end_date behind is the merge-patch carry-forward this feature has
+// to defend against.
+func assertNoLiveWindow(t *testing.T, body json.RawMessage, what string) {
+	t.Helper()
+	for _, key := range []string{`"live_progress"`, `"start_date"`, `"end_date"`} {
+		if bytes.Contains(body, []byte(key)) {
+			t.Errorf("%s must omit %s; body: %s", what, key, body)
+		}
+	}
+}
+
+// liveJobsMux serves run 42's jobs from next(), letting a test advance the
+// workflow between pollActive ticks, plus the run endpoint the completion path
+// consults.
+func liveJobsMux(next func() []ghclient.Job) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		jobs := next()
+		_ = json.NewEncoder(w).Encode(ghclient.JobsResponse{TotalCount: len(jobs), Jobs: jobs})
+	})
+	mux.HandleFunc("/repos/owner/repo/actions/runs/42", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRun{ID: 42, Status: "completed", Conclusion: "success"})
+	})
+	return mux
+}
+
+// liveTrackedRun is a run already seeded with the three-step shape and the prior
+// run's per-group durations, which is the state pollActive needs to anchor a
+// live step window.
+func liveTrackedRun(weights map[string]float64) *trackedRun {
+	return &trackedRun{
+		Repo:             "owner/repo",
+		RunID:            42,
+		Slug:             "gh-repo",
+		Name:             "CI",
+		HTMLURL:          "https://github.com/owner/repo/actions/runs/42",
+		maxTotalSteps:    3,
+		maxStepRows:      []int{1, 1, 1},
+		maxStepLabels:    []string{"Lint", "Build", "Test"},
+		stepWeightByName: weights,
+	}
+}
+
+// priorDurations is what the bridge measures from the run priorRunMux serves.
+// Derived rather than transcribed, so retuning the fixture timestamps cannot
+// leave the live-progress tests asserting against numbers nothing serves.
+func priorDurations() map[string]float64 {
+	return groupWeights(priorRunJobs())
+}
+
+// livePoller wires a poller to a mock PushWard server and creates the activity
+// up front. The creation matters: the mock 404s a PATCH to an unknown slug, and
+// the anchor state only promotes after a patch lands, so without it every tick
+// would look like the first one.
+func livePoller(t *testing.T, cfg *config.Config, gh *ghclient.Client, tracked *trackedRun) (*Poller, func(int) []testutil.APICall) {
+	t.Helper()
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	pw := pushward.NewClient(pwSrv.URL, "hlk_test")
+	if err := pw.CreateActivity(context.Background(), tracked.Slug, "GitHub: repo", 1, 900, 1800); err != nil {
+		t.Fatal(err)
+	}
+	p := &Poller{
+		cfg:     cfg,
+		gh:      gh,
+		pw:      pw,
+		tracked: map[string]*trackedRun{tracked.Repo: tracked},
+	}
+	// Waits for n frames and drops the setup POST, so callers index only what the
+	// bridge sent. WaitForCalls settles before returning, which matters for the
+	// two-phase end: its frames arrive from timer goroutines.
+	patches := func(n int) []testutil.APICall {
+		t.Helper()
+		var out []testutil.APICall
+		for _, c := range testutil.WaitForCalls(t, calls, mu, n+1, 2*time.Second) {
+			if c.Method == "PATCH" {
+				out = append(out, c)
+			}
+		}
+		return out
+	}
+	return p, patches
+}
+
+// TestPollActive_LiveProgressAnchorsCurrentStep pins the anchor: the window runs
+// from when the step actually started to that plus the prior run's duration for
+// the group, so a poll landing mid-step picks the bar up where it already is
+// instead of restarting it at zero.
+func TestPollActive_LiveProgressAnchorsCurrentStep(t *testing.T) {
+	buildStart := time.Now().Add(-30 * time.Second).UTC().Truncate(time.Second)
+	gh := mockGitHubClient(t, liveJobsMux(func() []ghclient.Job {
+		return []ghclient.Job{
+			{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "Build", Status: "in_progress", StartedAt: buildStart.Format(time.RFC3339)},
+		}
+	}))
+	p, patches := livePoller(t, testConfig(), gh, liveTrackedRun(priorDurations()))
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := patches(1)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH call, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+
+	if req.Content.LiveProgress == nil || !*req.Content.LiveProgress {
+		t.Fatalf("expected live_progress=true, got %v", req.Content.LiveProgress)
+	}
+	if req.Content.StartDate == nil || *req.Content.StartDate != buildStart.Unix() {
+		t.Errorf("start_date = %v, want the job's started_at %d", req.Content.StartDate, buildStart.Unix())
+	}
+	if want := buildStart.Unix() + 300; req.Content.EndDate == nil || *req.Content.EndDate != want {
+		t.Errorf("end_date = %v, want started_at + the prior run's 300s (%d)", req.Content.EndDate, want)
+	}
+	// The server rejects live_progress without end_date, and iOS falls back to
+	// the generic progress-derived synthesis without start_date, which is wrong
+	// here, because this bridge's progress is an overall job fraction.
+	if req.Content.StartDate == nil || req.Content.EndDate == nil {
+		t.Error("live_progress must always ship with both anchors")
+	}
+}
+
+// TestPollActive_LiveProgressAnchorsOncePerStep guards the rule the anchors
+// exist under: restamping the window on a later tick of the same step would snap
+// the pill back to empty and burn a high-priority push.
+func TestPollActive_LiveProgressAnchorsOncePerStep(t *testing.T) {
+	buildStart := time.Now().Add(-30 * time.Second).UTC().Truncate(time.Second)
+	tick := 0
+	gh := mockGitHubClient(t, liveJobsMux(func() []ghclient.Job {
+		tick++
+		jobs := []ghclient.Job{
+			{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "Build", Status: "in_progress", StartedAt: buildStart.Format(time.RFC3339)},
+		}
+		if tick > 1 {
+			// A queued job appears, so progress moves and the second tick patches.
+			jobs = append(jobs, ghclient.Job{ID: 3, Name: "Test", Status: "queued"})
+		}
+		return jobs
+	}))
+	p, patches := livePoller(t, testConfig(), gh, liveTrackedRun(priorDurations()))
+
+	for i := 0; i < 2; i++ {
+		if err := p.pollActive(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := patches(2)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PATCH calls, got %d", len(got))
+	}
+	assertNoLiveWindow(t, got[1].Body, "a second tick on the same step")
+}
+
+// TestPollActive_LiveProgressStepChangeReanchors covers the other half: advancing
+// current_step must move the window onto the new step, or merge-patch would
+// leave it counting toward the previous step's deadline.
+func TestPollActive_LiveProgressStepChangeReanchors(t *testing.T) {
+	buildStart := time.Now().Add(-30 * time.Second).UTC().Truncate(time.Second)
+	testStart := time.Now().Add(-5 * time.Second).UTC().Truncate(time.Second)
+	tick := 0
+	gh := mockGitHubClient(t, liveJobsMux(func() []ghclient.Job {
+		tick++
+		if tick == 1 {
+			return []ghclient.Job{
+				{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+				{ID: 2, Name: "Build", Status: "in_progress", StartedAt: buildStart.Format(time.RFC3339)},
+			}
+		}
+		return []ghclient.Job{
+			{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "Build", Status: "completed", Conclusion: "success"},
+			{ID: 3, Name: "Test", Status: "in_progress", StartedAt: testStart.Format(time.RFC3339)},
+		}
+	}))
+	p, patches := livePoller(t, testConfig(), gh, liveTrackedRun(priorDurations()))
+
+	for i := 0; i < 2; i++ {
+		if err := p.pollActive(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := patches(2)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PATCH calls, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &req)
+	if req.Content.StartDate == nil || *req.Content.StartDate != testStart.Unix() {
+		t.Errorf("start_date = %v, want the new step's started_at %d", req.Content.StartDate, testStart.Unix())
+	}
+	if want := testStart.Unix() + 40; req.Content.EndDate == nil || *req.Content.EndDate != want {
+		t.Errorf("end_date = %v, want the new step's 40s window (%d)", req.Content.EndDate, want)
+	}
+}
+
+// TestPollActive_LiveProgressSkipped is the wiring claim: when liveAnchor
+// declines, none of the three fields reach the JSON. TestLiveAnchor is the
+// exhaustive table of WHY it declines, so this covers only the two cases that
+// differ in wiring rather than in the decision: the feature switched off, and
+// the decision itself coming back negative.
+func TestPollActive_LiveProgressSkipped(t *testing.T) {
+	tests := []struct {
+		name      string
+		liveFlag  bool
+		weights   map[string]float64
+		startedAt time.Time
+	}{
+		{
+			name:      "flag off",
+			weights:   priorDurations(),
+			startedAt: time.Now().Add(-30 * time.Second),
+		},
+		{
+			name:      "group absent from the prior run",
+			liveFlag:  true,
+			weights:   map[string]float64{"Lint": 5},
+			startedAt: time.Now().Add(-30 * time.Second),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			started := tc.startedAt.UTC().Truncate(time.Second)
+			gh := mockGitHubClient(t, liveJobsMux(func() []ghclient.Job {
+				return []ghclient.Job{
+					{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+					{ID: 2, Name: "Build", Status: "in_progress", StartedAt: started.Format(time.RFC3339)},
+				}
+			}))
+			cfg := testConfig()
+			cfg.Render.LiveProgress = tc.liveFlag
+			p, patches := livePoller(t, cfg, gh, liveTrackedRun(tc.weights))
+
+			if err := p.pollActive(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			got := patches(1)
+			if len(got) != 1 {
+				t.Fatalf("expected 1 PATCH call, got %d", len(got))
+			}
+			// Absent, not false: that is what keeps the payload byte-identical to
+			// the one the bridge sent before the anchors existed.
+			assertNoLiveWindow(t, got[0].Body, "an unanchorable step")
+		})
+	}
+}
+
+// TestPollActive_OverrunKeepsAnchor pins that a step outrunning its estimate
+// costs no push. iOS drops a window whose end has passed and falls back to the
+// static bar by itself, so switching live_progress off would broadcast to every
+// subscribed device to change nothing a viewer can see.
+func TestPollActive_OverrunKeepsAnchor(t *testing.T) {
+	// Started well beyond Build's 300s estimate, so liveAnchor now declines.
+	buildStart := time.Now().Add(-40 * time.Minute).UTC().Truncate(time.Second)
+	tick := 0
+	gh := mockGitHubClient(t, liveJobsMux(func() []ghclient.Job {
+		tick++
+		jobs := []ghclient.Job{
+			{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "Build", Status: "in_progress", StartedAt: buildStart.Format(time.RFC3339)},
+		}
+		if tick > 1 {
+			jobs = append(jobs, ghclient.Job{ID: 3, Name: "Test", Status: "queued"})
+		}
+		return jobs
+	}))
+	// The run is mid-step with an anchor already out on the wire for that step.
+	tracked := liveTrackedRun(priorDurations())
+	tracked.liveStep = 2
+	tracked.liveSent = true
+	p, patches := livePoller(t, testConfig(), gh, tracked)
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := patches(1)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH call, got %d", len(got))
+	}
+	assertNoLiveWindow(t, got[0].Body, "a step still running past its estimate")
+}
+
+// TestPollActive_ClearsStaleLiveProgress covers advancing onto a step with no
+// measurement. Merge-patch preserves the previous live_progress:true, so the new
+// step would animate toward the old step's deadline unless it is switched off.
+func TestPollActive_ClearsStaleLiveProgress(t *testing.T) {
+	gh := mockGitHubClient(t, liveJobsMux(func() []ghclient.Job {
+		return []ghclient.Job{
+			{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "Build", Status: "in_progress"},
+		}
+	}))
+	tracked := liveTrackedRun(map[string]float64{"Lint": 5})
+	tracked.liveStep = 1
+	tracked.liveSent = true
+	p, patches := livePoller(t, testConfig(), gh, tracked)
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := patches(1)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH call, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+	if req.Content.LiveProgress == nil || *req.Content.LiveProgress {
+		t.Errorf("expected live_progress=false to stop the stale window, got %v", req.Content.LiveProgress)
+	}
+}
+
+// TestPollActive_EndFramesStopLiveProgress pins both halves of the two-phase end.
+// The server only strips the anchors from an END push, so phase 1 (an ONGOING
+// frame held for end_display_time) would otherwise sit there counting toward a
+// deadline the run has already passed.
+func TestPollActive_EndFramesStopLiveProgress(t *testing.T) {
+	gh := mockGitHubClient(t, liveJobsMux(func() []ghclient.Job {
+		return []ghclient.Job{
+			{ID: 1, Name: "Lint", Status: "completed", Conclusion: "success"},
+			{ID: 2, Name: "Build", Status: "completed", Conclusion: "success"},
+		}
+	}))
+	p, patches := livePoller(t, testConfig(), gh, liveTrackedRun(priorDurations()))
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := patches(2)
+	if len(got) != 2 {
+		t.Fatalf("expected both end frames, got %d PATCH calls", len(got))
+	}
+
+	for i, call := range got {
+		var req pushward.UpdateRequest
+		testutil.UnmarshalBody(t, call.Body, &req)
+		if req.Content.LiveProgress == nil || *req.Content.LiveProgress {
+			t.Errorf("end frame %d (%s) must send live_progress=false, got %v", i, req.State, req.Content.LiveProgress)
+		}
+	}
+
+	// Switched off, the result frames stay byte-identical to the ones the bridge
+	// sent before the anchors existed.
+	cfg := testConfig()
+	cfg.Render.LiveProgress = false
+	off, offPatches := livePoller(t, cfg, gh, liveTrackedRun(priorDurations()))
+	if err := off.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for i, call := range offPatches(2) {
+		assertNoLiveWindow(t, call.Body, fmt.Sprintf("disabled end frame %d", i))
+	}
+}
+
+// TestPollIdle_SeedStopsCarriedLiveProgress covers the shared slug. A run
+// superseded before its end frames fire leaves live_progress on in stored
+// content, and the seed merge-patches over it, so a card showing 0/N would
+// otherwise inherit a countdown to the previous run's step.
+func TestPollIdle_SeedStopsCarriedLiveProgress(t *testing.T) {
+	on, onBody := seedContent(t, testConfig())
+	if on.LiveProgress == nil || *on.LiveProgress {
+		t.Errorf("seed live_progress = %v, want false; body: %s", on.LiveProgress, onBody)
+	}
+
+	// Switched off, the seed must stay byte-identical to the one the bridge sent
+	// before the anchors existed: absent, not an explicit false.
+	cfg := testConfig()
+	cfg.Render.LiveProgress = false
+	_, offBody := seedContent(t, cfg)
+	assertNoLiveWindow(t, offBody, "the disabled seed")
+}
+
+func TestLiveAnchor(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	startedAt := now.Add(-30 * time.Second)
+	weights := map[string]float64{"Build": 300}
+
+	tests := []struct {
+		name    string
+		live    bool
+		info    stepInfo
+		weights map[string]float64
+		wantOK  bool
+		start   int64
+		end     int64
+	}{
+		{
+			name:    "anchors from the step's own start",
+			live:    true,
+			info:    stepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: startedAt},
+			weights: weights,
+			wantOK:  true,
+			start:   startedAt.Unix(),
+			end:     startedAt.Unix() + 300,
+		},
+		{
+			name:    "falls back to now when GitHub has not stamped a start",
+			live:    true,
+			info:    stepInfo{CurrentStep: 2, CurrentStepName: "Build"},
+			weights: weights,
+			wantOK:  true,
+			start:   now.Unix(),
+			end:     now.Unix() + 300,
+		},
+		{
+			name:    "flag off",
+			info:    stepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: startedAt},
+			weights: weights,
+		},
+		{
+			name:    "nothing running",
+			live:    true,
+			info:    stepInfo{CurrentStep: 0},
+			weights: weights,
+		},
+		{
+			name:    "queued placeholder never matches a measured group",
+			live:    true,
+			info:    stepInfo{CurrentStep: 2, CurrentStepName: "Queued", CurrentStepStartedAt: startedAt},
+			weights: weights,
+		},
+		{
+			name:   "no prior run",
+			live:   true,
+			info:   stepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: startedAt},
+			wantOK: false,
+		},
+		{
+			name:    "estimate already spent",
+			live:    true,
+			info:    stepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: now.Add(-10 * time.Minute)},
+			weights: weights,
+		},
+		{
+			// groupWeights seeds unmeasurable groups to the floor, so a floor
+			// value is a pill width, not a duration. Anchoring on it would
+			// fabricate a countdown out of a number nothing measured.
+			name:    "floor weight is not a measurement",
+			live:    true,
+			info:    stepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: startedAt},
+			weights: map[string]float64{"Build": stepWeightFloor},
+		},
+		{
+			// A duration long enough to push end_date past the server's 5-year
+			// ceiling would 422 every later patch and freeze the card.
+			name:    "absurd duration is clamped to the tracking ceiling",
+			live:    true,
+			info:    stepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: startedAt},
+			weights: map[string]float64{"Build": 100 * 365 * 24 * 3600},
+			wantOK:  true,
+			start:   startedAt.Unix(),
+			end:     startedAt.Unix() + int64(maxRunLifetime.Seconds()),
+		},
+		{
+			// The runner's clock reading ahead of ours would otherwise render an
+			// empty bar until local time caught up.
+			name:    "start in the future anchors from now",
+			live:    true,
+			info:    stepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: now.Add(2 * time.Minute)},
+			weights: weights,
+			wantOK:  true,
+			start:   now.Unix(),
+			end:     now.Unix() + 300,
+		},
+		{
+			name:    "window too short to be worth animating",
+			live:    true,
+			info:    stepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: now.Add(-298 * time.Second)},
+			weights: weights,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := testConfig()
+			cfg.Render.LiveProgress = tc.live
+			start, end, ok := (&Poller{cfg: cfg}).liveAnchor(tc.info, tc.weights, now)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if start != tc.start || end != tc.end {
+				t.Errorf("window = (%d, %d), want (%d, %d)", start, end, tc.start, tc.end)
+			}
+		})
+	}
+}
+
+func TestComputeSteps_CurrentStepStartedAt(t *testing.T) {
+	first := time.Date(2026, 1, 1, 0, 0, 10, 0, time.UTC)
+	second := time.Date(2026, 1, 1, 0, 0, 25, 0, time.UTC)
+
+	// A fan-out group's shards share one step deadline, so the step started when
+	// its first shard did.
+	info := computeSteps([]ghclient.Job{
+		{Name: "Lint", Status: "completed", Conclusion: "success"},
+		{Name: "Build (macos)", Status: "in_progress", StartedAt: second.Format(time.RFC3339)},
+		{Name: "Build (ubuntu)", Status: "in_progress", StartedAt: first.Format(time.RFC3339)},
+	})
+	if !info.CurrentStepStartedAt.Equal(first) {
+		t.Errorf("CurrentStepStartedAt = %v, want the earliest shard start %v", info.CurrentStepStartedAt, first)
+	}
+
+	// A malformed timestamp must not fabricate an anchor.
+	info = computeSteps([]ghclient.Job{
+		{Name: "Build", Status: "in_progress", StartedAt: "not-a-timestamp"},
+	})
+	if !info.CurrentStepStartedAt.IsZero() {
+		t.Errorf("CurrentStepStartedAt = %v, want zero for an unparseable start", info.CurrentStepStartedAt)
+	}
+
+	// Nothing running: the queued fallback picks a step but not a start.
+	info = computeSteps([]ghclient.Job{{Name: "Build", Status: "queued"}})
+	if !info.CurrentStepStartedAt.IsZero() {
+		t.Errorf("CurrentStepStartedAt = %v, want zero while queued", info.CurrentStepStartedAt)
 	}
 }
 

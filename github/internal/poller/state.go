@@ -49,4 +49,13 @@ type trackedRun struct {
 	lastCurrentStep int
 	lastTotalSteps  int
 	lastPatchAt     time.Time
+
+	// Which step the live-progress window last sent belongs to. Re-anchoring
+	// only when it changes is what keeps the bar from snapping back to empty
+	// mid-step, and keeps the anchors off the heartbeat patches (moving
+	// start_date/end_date makes a push high-priority and skips server-side
+	// coalescing). liveSent stays false until a patch lands, so a failed send
+	// re-anchors on the next tick.
+	liveStep int
+	liveSent bool
 }

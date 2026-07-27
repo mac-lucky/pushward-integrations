@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -293,7 +294,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		initialStepRows := shape.StepRows
 		initialStepLabels := shape.StepLabels
 		initialStepColors := shape.StepColors
-		initialStepWeights := projectWeights(initialStepLabels, weightsByName)
+		initialStepWeights := p.payloadWeights(initialStepLabels, weightsByName)
 
 		p.mu.Lock()
 		if t, ok := p.tracked[repo]; ok {
@@ -301,8 +302,9 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			t.maxStepRows = append([]int(nil), initialStepRows...)
 			t.maxStepLabels = append([]string(nil), initialStepLabels...)
 			t.maxStepColors = append([]string(nil), initialStepColors...)
-			// The map is built fresh per baseline fetch and never mutated, so we
-			// store the reference; projectWeights re-derives the slice each send.
+			// Always assign a whole fresh map, never mutate one already stored:
+			// readers copy this reference out and then read the contents after
+			// releasing the lock, so an in-place write here is a data race.
 			t.stepWeightByName = weightsByName
 		}
 		p.mu.Unlock()
@@ -313,18 +315,24 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		if err := p.pw.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 			State: pushward.StateOngoing,
 			Content: pushward.Content{
-				Template:     pushward.TemplateSteps,
-				Progress:     0.0,
-				State:        "Starting...",
-				Icon:         "arrow.triangle.branch",
-				Subtitle:     fmt.Sprintf("%s / %s", repoShort, run.Name),
-				AccentColor:  pushward.ColorGreen,
-				CurrentStep:  pushward.IntPtr(0),
-				TotalSteps:   pushward.IntPtr(initialTotalSteps),
-				StepRows:     initialStepRows,
-				StepLabels:   initialStepLabels,
-				StepColors:   initialStepColors,
-				StepWeights:  initialStepWeights,
+				Template:    pushward.TemplateSteps,
+				Progress:    0.0,
+				State:       "Starting...",
+				Icon:        "arrow.triangle.branch",
+				Subtitle:    fmt.Sprintf("%s / %s", repoShort, run.Name),
+				AccentColor: pushward.ColorGreen,
+				CurrentStep: pushward.IntPtr(0),
+				TotalSteps:  pushward.IntPtr(initialTotalSteps),
+				StepRows:    initialStepRows,
+				StepLabels:  initialStepLabels,
+				StepColors:  initialStepColors,
+				StepWeights: initialStepWeights,
+				// The slug is per-repo, so this content merge-patches over
+				// whatever the last run left behind. A run superseded before its
+				// end frames fired leaves live_progress on, which would put a
+				// countdown to the old run's step in the header of a card that
+				// has not started a step yet.
+				LiveProgress: p.liveProgressOff(),
 				URL:          run.HTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", repo),
 			},
@@ -355,9 +363,13 @@ type stepInfo struct {
 	// live scan revealing groups in a different order; projected to a per-step
 	// slice at send time. Only baselineShape populates it.
 	WeightsByName map[string]float64
-	AllCompleted  bool
-	AnyFailed     bool
-	Progress      float64
+	// CurrentStepStartedAt is when the current group's earliest running job
+	// began, the anchor the live-progress window is measured from. Zero when no
+	// group is running or GitHub has not stamped a start yet.
+	CurrentStepStartedAt time.Time
+	AllCompleted         bool
+	AnyFailed            bool
+	Progress             float64
 }
 
 // shape computes the step shape and drops the opt-in pill fields the config
@@ -380,6 +392,10 @@ func computeSteps(jobs []ghclient.Job) stepInfo {
 		completed int
 		active    bool
 		failed    bool
+		// startedAt is the earliest start among the group's running jobs. A
+		// fan-out group's shards run in parallel against one step deadline, so
+		// the first shard to start is when the step started.
+		startedAt time.Time
 	}
 	var steps []step
 	stepIdx := make(map[string]int)
@@ -408,6 +424,10 @@ func computeSteps(jobs []ghclient.Job) stepInfo {
 		case jobStatusInProgress:
 			steps[si].active = true
 			allCompleted = false
+			if ts := parseJobTime(job.StartedAt); !ts.IsZero() &&
+				(steps[si].startedAt.IsZero() || ts.Before(steps[si].startedAt)) {
+				steps[si].startedAt = ts
+			}
 		default: // queued
 			allCompleted = false
 		}
@@ -445,16 +465,22 @@ func computeSteps(jobs []ghclient.Job) stepInfo {
 		progress = float64(completedJobs) / float64(len(jobs))
 	}
 
+	var currentStartedAt time.Time
+	if currentStep >= 1 {
+		currentStartedAt = steps[currentStep-1].startedAt
+	}
+
 	return stepInfo{
-		TotalSteps:      totalSteps,
-		CurrentStep:     currentStep,
-		CurrentStepName: currentStepName,
-		StepRows:        stepRows,
-		StepLabels:      stepLabels,
-		StepColors:      stepColors,
-		AllCompleted:    allCompleted,
-		AnyFailed:       anyFailed,
-		Progress:        progress,
+		TotalSteps:           totalSteps,
+		CurrentStep:          currentStep,
+		CurrentStepName:      currentStepName,
+		StepRows:             stepRows,
+		StepLabels:           stepLabels,
+		StepColors:           stepColors,
+		CurrentStepStartedAt: currentStartedAt,
+		AllCompleted:         allCompleted,
+		AnyFailed:            anyFailed,
+		Progress:             progress,
 	}
 }
 
@@ -563,24 +589,96 @@ func projectWeights(labels []string, byName map[string]float64) []float64 {
 	return out
 }
 
+// parseJobTime parses one of GitHub's RFC3339 job timestamps, returning the
+// zero time when it is absent or malformed.
+func parseJobTime(ts string) time.Time {
+	if ts == "" {
+		return time.Time{}
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
 // jobDuration returns a finished job's wall-clock duration, or 0 when either
 // timestamp is missing/unparseable or the span is non-positive (clock skew).
 func jobDuration(job ghclient.Job) time.Duration {
-	if job.StartedAt == "" || job.CompletedAt == "" {
-		return 0
-	}
-	start, err := time.Parse(time.RFC3339, job.StartedAt)
-	if err != nil {
-		return 0
-	}
-	end, err := time.Parse(time.RFC3339, job.CompletedAt)
-	if err != nil {
+	start := parseJobTime(job.StartedAt)
+	end := parseJobTime(job.CompletedAt)
+	if start.IsZero() || end.IsZero() {
 		return 0
 	}
 	if d := end.Sub(start); d > 0 {
 		return d
 	}
 	return 0
+}
+
+// minLiveWindow is how much of the estimate must still be ahead of us for an
+// anchor to be worth sending. iOS drops any window whose end has passed, and one
+// about to pass would flash the animated bar for an instant before reverting to
+// the static one, so a step already at (or past) its estimate keeps the static
+// bar and the X/N counter instead.
+const minLiveWindow = 5 * time.Second
+
+// liveAnchor returns the unix window iOS animates the current step's pill
+// across, measured from when the step actually started rather than from now, so
+// a poll landing mid-step picks the bar up where it already is instead of
+// restarting it.
+//
+// ok is false when there is nothing trustworthy to animate toward. iOS renders
+// the static bar in exactly those cases anyway, so a window sent regardless
+// would buy nothing and cost a high-priority push.
+func (p *Poller) liveAnchor(info stepInfo, byName map[string]float64, now time.Time) (start, end int64, ok bool) {
+	if !p.cfg.Render.LiveProgress || info.CurrentStep < 1 {
+		return 0, 0, false
+	}
+	// groupWeights seeds every group it saw to stepWeightFloor, measured or not,
+	// so a floor value carries no duration information: it means "draw a thin
+	// pill", not "this took a second". Anything at or below it is unmeasured.
+	secs, known := byName[info.CurrentStepName]
+	if !known || secs <= stepWeightFloor {
+		return 0, 0, false
+	}
+	// A corrupt prior-run timestamp can yield a duration of years. Left alone it
+	// would put end_date past the server's 5-year ceiling, and since the client
+	// fails fast on 4xx, every later patch for this repo would 422 and the card
+	// would freeze. The bridge already refuses to track a run past this age.
+	secs = math.Min(secs, maxRunLifetime.Seconds())
+	startAt := info.CurrentStepStartedAt
+	if startAt.IsZero() || startAt.After(now) {
+		// A start in the future means the runner's clock is ahead of ours; anchor
+		// from now rather than rendering an empty bar until it catches up.
+		startAt = now
+	}
+	endAt := startAt.Add(time.Duration(math.Round(secs)) * time.Second)
+	if !endAt.After(now.Add(minLiveWindow)) {
+		return 0, 0, false
+	}
+	return startAt.Unix(), endAt.Unix(), true
+}
+
+// liveProgressOff is the explicit false that stops an animation carried forward
+// by merge-patch, or nil when the feature is disabled so the payload stays
+// exactly what the bridge sent before the anchors existed.
+func (p *Poller) liveProgressOff() *bool {
+	if !p.cfg.Render.LiveProgress {
+		return nil
+	}
+	return pushward.BoolPtr(false)
+}
+
+// payloadWeights returns the step_weights slice to send, or nil when the
+// duration-sized pills are switched off. The durations behind them are gathered
+// whenever either consumer needs them, so this gates the wire field alone and
+// leaves the live-progress anchors their measurements.
+func (p *Poller) payloadWeights(labels []string, byName map[string]float64) []float64 {
+	if !p.cfg.Render.StepWeights {
+		return nil
+	}
+	return projectWeights(labels, byName)
 }
 
 // baselineShape returns the step shape of a prior run of the same workflow on
@@ -615,10 +713,11 @@ func (p *Poller) baselineShape(ctx context.Context, repo string, workflowID int6
 		return stepInfo{}, false
 	}
 	info := p.shape(jobs)
-	// Size the pills from how long each group ran in this finished run, keyed by
-	// group name so they attach to the right label even if the live run reveals
-	// its groups in a different order.
-	if p.cfg.Render.StepWeights {
+	// Measure how long each group ran in this finished run, keyed by group name
+	// so the numbers attach to the right label even if the live run reveals its
+	// groups in a different order. They size the pills and anchor the live
+	// window, so collect them when either consumer is switched on.
+	if p.cfg.Render.StepWeights || p.cfg.Render.LiveProgress {
 		info.WeightsByName = groupWeights(jobs)
 	}
 	slog.Info("seeded steps from prior run",
@@ -703,7 +802,10 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		}
 
 		info := p.shape(jobs)
-		var stepWeights []float64
+		var (
+			stepWeights   []float64
+			weightsByName map[string]float64
+		)
 
 		p.mu.Lock()
 		if tt, ok := p.tracked[repo]; ok {
@@ -733,7 +835,8 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			// the groups in (jobs can be added/reordered between runs). The result
 			// is len(step_labels), so it never desyncs from total_steps; unknown
 			// groups get the mean; no history yields nil (equal-width pills).
-			stepWeights = projectWeights(info.StepLabels, tt.stepWeightByName)
+			stepWeights = p.payloadWeights(info.StepLabels, tt.stepWeightByName)
+			weightsByName = tt.stepWeightByName
 		}
 		p.mu.Unlock()
 
@@ -764,18 +867,24 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			}
 			slog.Info("workflow completed", "run_id", tRunID, "slug", tSlug, "conclusion", conclusion)
 			p.scheduleEnd(ctx, repo, pushward.Content{
-				Template:     pushward.TemplateSteps,
-				Progress:     1.0,
-				State:        conclusion,
-				Icon:         "arrow.triangle.branch",
-				Subtitle:     fmt.Sprintf("%s / %s", repoShort, tName),
-				AccentColor:  color,
-				CurrentStep:  pushward.IntPtr(info.TotalSteps),
-				TotalSteps:   pushward.IntPtr(info.TotalSteps),
-				StepRows:     info.StepRows,
-				StepLabels:   info.StepLabels,
-				StepColors:   info.StepColors,
-				StepWeights:  stepWeights,
+				Template:    pushward.TemplateSteps,
+				Progress:    1.0,
+				State:       conclusion,
+				Icon:        "arrow.triangle.branch",
+				Subtitle:    fmt.Sprintf("%s / %s", repoShort, tName),
+				AccentColor: color,
+				CurrentStep: pushward.IntPtr(info.TotalSteps),
+				TotalSteps:  pushward.IntPtr(info.TotalSteps),
+				StepRows:    info.StepRows,
+				StepLabels:  info.StepLabels,
+				StepColors:  info.StepColors,
+				StepWeights: stepWeights,
+				// Stop the animation on the result frames. Content updates are
+				// merge-patches, so the last step's window survives otherwise, and
+				// the server only strips the anchors from an END push: phase 1 is
+				// ONGOING and would spend end_display_time counting toward a
+				// deadline the run has already passed.
+				LiveProgress: p.liveProgressOff(),
 				URL:          tHTMLURL,
 				SecondaryURL: fmt.Sprintf("https://github.com/%s", tRepo),
 			})
@@ -801,8 +910,20 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			info.CurrentStep != tt.lastCurrentStep ||
 			info.TotalSteps != tt.lastTotalSteps
 		heartbeatDue := !tt.lastPatchAt.IsZero() && time.Since(tt.lastPatchAt) >= heartbeat
+		// Anchor the live window on the step it belongs to, and only there:
+		// restamping it on a later tick of the same step would snap the pill back
+		// to empty. Dropping a stale anchor matters just as much: under
+		// merge-patch an earlier live_progress:true would otherwise leave the new
+		// step animating toward the old step's deadline.
+		liveStart, liveEnd, wantLive := p.liveAnchor(info, weightsByName, time.Now())
+		anchorChanged := wantLive && (!tt.liveSent || info.CurrentStep != tt.liveStep)
+		// Only a step change can strand a window. A step that simply outruns its
+		// estimate needs no push: iOS drops a window whose end has passed and
+		// falls back to the static bar on its own, so switching live_progress off
+		// would broadcast to every device to change nothing.
+		clearLive := tt.liveSent && !wantLive && info.CurrentStep != tt.liveStep
 		p.mu.Unlock()
-		if !shapeChanged && !scalarChanged && !heartbeatDue {
+		if !shapeChanged && !scalarChanged && !heartbeatDue && !anchorChanged && !clearLive {
 			continue
 		}
 
@@ -820,6 +941,17 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			contentPatch.StepLabels = info.StepLabels
 			contentPatch.StepColors = info.StepColors
 			contentPatch.StepWeights = stepWeights
+		}
+		switch {
+		case anchorChanged:
+			contentPatch.LiveProgress = pushward.BoolPtr(true)
+			contentPatch.StartDate = pushward.Int64Ptr(liveStart)
+			contentPatch.EndDate = pushward.Int64Ptr(liveEnd)
+			slog.Debug("anchored live step window",
+				"repo", repo, "step", info.CurrentStep, "name", info.CurrentStepName,
+				"seconds", liveEnd-liveStart)
+		case clearLive:
+			contentPatch.LiveProgress = pushward.BoolPtr(false)
 		}
 		if err := p.pw.PatchActivity(ctx, tSlug, pushward.PatchRequest{
 			State:   pushward.StateOngoing,
@@ -840,6 +972,13 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			tt.lastCurrentStep = info.CurrentStep
 			tt.lastTotalSteps = info.TotalSteps
 			tt.lastPatchAt = time.Now()
+			switch {
+			case anchorChanged:
+				tt.liveStep = info.CurrentStep
+				tt.liveSent = true
+			case clearLive:
+				tt.liveSent = false
+			}
 		}
 		p.mu.Unlock()
 	}
