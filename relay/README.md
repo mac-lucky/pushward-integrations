@@ -643,8 +643,8 @@ not also push every morning. With `?channels=notification` the activity is suppr
 outcome notifies instead, successes included.
 
 **Setup:** In Backrest, on the Plan or Repo, under *Hooks* click **+ Add Hook** and select
-**Shoutrrr**. Tick the conditions you want and set *On Error* to "Ignore" so a relay hiccup can
-never cancel a backup. Set the **Shoutrrr URL** (the `@authorization` param adds the header):
+**Shoutrrr**. Set *On Error* to "Ignore" so a relay hiccup can never cancel a backup, and tick the
+conditions per the split below. Set the **Shoutrrr URL** (the `@authorization` param adds the header):
 
 ```
 generic+https://relay.pushward.app/backrest?@authorization=Bearer+hlk_YOUR_KEY&contenttype=application/json
@@ -653,6 +653,30 @@ generic+https://relay.pushward.app/backrest?@authorization=Bearer+hlk_YOUR_KEY&c
 Shoutrrr's `generic://` transport is the one to use. Backrest also lists a plain "Webhook"
 action, but it has no way to set an `Authorization` header, and as of v1.14.1 it has no backend
 handler at all, so it never sends anything.
+
+**Which conditions go where.** Hooks live on plans and repos, and Backrest runs a repo's hooks for
+that repo's plans too, so a condition ticked in both places arrives twice. Split them:
+
+| Hook on | Conditions |
+|---|---|
+| each Plan | `CONDITION_SNAPSHOT_START`, `CONDITION_SNAPSHOT_SUCCESS`, `CONDITION_SNAPSHOT_WARNING`, `CONDITION_SNAPSHOT_ERROR` |
+| each Repo | `CONDITION_PRUNE_START`, `CONDITION_PRUNE_SUCCESS`, `CONDITION_PRUNE_ERROR`, `CONDITION_CHECK_START`, `CONDITION_CHECK_SUCCESS`, `CONDITION_CHECK_ERROR`, `CONDITION_ANY_ERROR` |
+
+Prune and check never reach a plan hook, since Backrest runs them against the repo under its
+`_system_` plan. That leaves the plan hook as a clean start-to-outcome channel for one backup.
+
+Leave `CONDITION_FORGET_*` off both. Unless a repo has a scheduled forget policy, retention runs
+right after each backup carrying the real plan id, which hashes to that plan's slug, so
+`CONDITION_FORGET_START` would reset the just-finished backup activity to "Applying retention..."
+and overwrite its summary. Forget failures still reach you through `CONDITION_ANY_ERROR`, which
+the relay puts on its own alert slug.
+
+Keep `CONDITION_ANY_ERROR` on the repo hook only. It is the one path for failures that fire it
+alone (index-snapshots, stats, per-plan forget), and on a plan hook it would shadow
+`CONDITION_SNAPSHOT_ERROR` on a setup-phase failure, leaving "Backing up..." open until the stale
+timeout. The cost is that a failed backup notifies twice, once as the red activity and once as the
+alert. `CONDITION_SNAPSHOT_SKIPPED` is left out for the same shadowing reason; give it its own
+hook if you enable *skip if unchanged*.
 
 Set the **Template** (a Go template that renders the JSON body):
 
