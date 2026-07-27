@@ -223,7 +223,7 @@ func (h *Handler) clear(ctx context.Context, userKey string, log *slog.Logger, p
 
 	if ov.AllowsNotification() {
 		notif := notification(alias, rec.Title, rec.Slug)
-		notif.Body = "Resolved \u00b7 " + rec.Title
+		notif.Body = "Resolved" + text.SepDot + rec.Title
 		notif.Level = ov.LevelOr(pushward.LevelPassive)
 		if err := pwClient.SendNotification(ctx, notif); err != nil {
 			log.Error("failed to send notification", "slug", rec.Slug, "error", err)

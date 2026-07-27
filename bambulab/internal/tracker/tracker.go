@@ -373,5 +373,5 @@ func buildSubtitle(state *bambulab.MergedState) string {
 		parts = append(parts, fmt.Sprintf("%.0f/%.0f\u00b0C", state.NozzleTemper, state.NozzleTarget))
 	}
 
-	return strings.Join(parts, " · ")
+	return strings.Join(parts, text.SepDot)
 }

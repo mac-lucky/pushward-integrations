@@ -156,7 +156,7 @@ func (h *Handler) handleResolvable(ctx context.Context, userKey string, log *slo
 
 	if isNew && ov.AllowsNotification() {
 		notif := h.notification(p, name, slug)
-		notif.Body = name + " \u00b7 " + stateText
+		notif.Body = name + text.SepDot + stateText
 		notif.Level = ov.LevelOr(pushward.LevelActive)
 		if err := pwClient.SendNotification(ctx, notif); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
@@ -205,7 +205,7 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 
 	if ov.AllowsNotification() {
 		notif := h.notification(p, name, slug)
-		notif.Body = "Resolved \u00b7 " + name
+		notif.Body = "Resolved" + text.SepDot + name
 		notif.Level = ov.LevelOr(pushward.LevelPassive)
 		if err := pwClient.SendNotification(ctx, notif); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
@@ -283,7 +283,7 @@ func resourceName(p *komodoPayload) string {
 }
 
 func subtitle(name string) string {
-	return "Komodo \u00b7 " + text.TruncateHard(name, 50)
+	return "Komodo" + text.SepDot + text.TruncateHard(name, 50)
 }
 
 func firedAt(tsMillis int64) *int64 {

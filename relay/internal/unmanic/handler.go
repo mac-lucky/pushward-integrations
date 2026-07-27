@@ -110,7 +110,7 @@ func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Lo
 		}
 		req := pushward.SendNotificationRequest{
 			Title:      filename,
-			Subtitle:   "Unmanic \u00b7 " + filename,
+			Subtitle:   "Unmanic" + text.SepDot + filename,
 			Body:       body,
 			ThreadID:   "unmanic",
 			CollapseID: slug,
@@ -141,7 +141,7 @@ func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Lo
 			Progress:    1.0,
 			State:       "Complete",
 			Icon:        "checkmark.circle.fill",
-			Subtitle:    "Unmanic \u00b7 " + filename,
+			Subtitle:    "Unmanic" + text.SepDot + filename,
 			AccentColor: pushward.ColorGreen,
 		}
 	} else {
@@ -150,7 +150,7 @@ func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Lo
 			Progress:    1.0,
 			State:       "Failed",
 			Icon:        "xmark.circle.fill",
-			Subtitle:    "Unmanic \u00b7 " + filename,
+			Subtitle:    "Unmanic" + text.SepDot + filename,
 			AccentColor: pushward.ColorRed,
 		}
 	}

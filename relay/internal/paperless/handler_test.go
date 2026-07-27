@@ -113,8 +113,8 @@ func TestDocumentAdded(t *testing.T) {
 	if update.Content.Progress != 1.0 {
 		t.Errorf("expected progress 1.0, got %f", update.Content.Progress)
 	}
-	if update.Content.Subtitle != "Paperless \u00b7 Invoice \u00b7 Acme Corp" {
-		t.Errorf("expected subtitle 'Paperless \u00b7 Invoice \u00b7 Acme Corp', got %q", update.Content.Subtitle)
+	if update.Content.Subtitle != "Paperless · Invoice · Acme Corp" {
+		t.Errorf("expected subtitle 'Paperless · Invoice · Acme Corp', got %q", update.Content.Subtitle)
 	}
 	if update.Content.URL != "" {
 		t.Errorf("expected empty URL for generic template, got %s", update.Content.URL)

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // FormatSubtitle produces the display subtitle for a Sonarr download.
@@ -17,7 +19,7 @@ import (
 func FormatSubtitle(series SonarrSeries, episodes []SonarrEpisode, quality string) string {
 	if len(episodes) == 0 {
 		if quality != "" {
-			return series.Title + " · " + quality
+			return series.Title + text.SepDot + quality
 		}
 		return series.Title
 	}
@@ -53,7 +55,7 @@ func FormatSubtitle(series SonarrSeries, episodes []SonarrEpisode, quality strin
 
 	subtitle := series.Title + " - " + epPart
 	if quality != "" {
-		subtitle += " · " + quality
+		subtitle += text.SepDot + quality
 	}
 	return subtitle
 }

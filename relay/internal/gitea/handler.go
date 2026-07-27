@@ -479,14 +479,14 @@ func repoShort(fullName string) string {
 	return fullName
 }
 
-// subtitle renders the "<Brand> \u00b7 <repo> / <workflow>" activity subtitle,
+// subtitle renders the "<Brand> · <repo> / <workflow>" activity subtitle,
 // bounded to keep the whole string comfortably under the server's 256-rune cap.
 func subtitle(brand, repoFull, workflow string) string {
 	label := repoShort(repoFull)
 	if workflow != "" {
 		label = label + " / " + workflow
 	}
-	return brand + " \u00b7 " + text.TruncateHard(label, 60)
+	return brand + text.SepDot + text.TruncateHard(label, 60)
 }
 
 // conclusionState maps a Gitea run conclusion to a display state and color.

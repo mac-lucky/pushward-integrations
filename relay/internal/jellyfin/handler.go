@@ -122,12 +122,12 @@ func mediaName(p *jellyfinPayload) string {
 
 func playbackSubtitle(p *jellyfinPayload) string {
 	if p.SeriesName != "" {
-		return fmt.Sprintf("Jellyfin \u00b7 S%02dE%02d \u00b7 %s", p.SeasonNumber, p.EpisodeNumber, p.Name)
+		return fmt.Sprintf("Jellyfin · S%02dE%02d · %s", p.SeasonNumber, p.EpisodeNumber, p.Name)
 	}
 	if p.ProductionYear > 0 {
-		return fmt.Sprintf("Jellyfin \u00b7 %d \u00b7 %s", p.ProductionYear, p.UserName)
+		return fmt.Sprintf("Jellyfin · %d · %s", p.ProductionYear, p.UserName)
 	}
-	return fmt.Sprintf("Jellyfin \u00b7 %s", p.UserName)
+	return fmt.Sprintf("Jellyfin · %s", p.UserName)
 }
 
 func playbackProgress(p *jellyfinPayload) float64 {
@@ -464,7 +464,7 @@ func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *s
 func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
 	subtitle := "Jellyfin"
 	if p.ProductionYear > 0 {
-		subtitle = fmt.Sprintf("Jellyfin \u00b7 %d", p.ProductionYear)
+		subtitle = fmt.Sprintf("Jellyfin · %d", p.ProductionYear)
 	}
 
 	var meta map[string]string
@@ -481,7 +481,7 @@ func (h *Handler) handleItemAdded(ctx context.Context, userKey string, log *slog
 	return h.notify(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      mediaName(p),
 		Subtitle:   subtitle,
-		Body:       "Added · " + mediaName(p),
+		Body:       "Added" + text.SepDot + mediaName(p),
 		ThreadID:   jellyfinMediaThreadID(p),
 		CollapseID: "jellyfin-item-" + p.ItemID,
 		Level:      pushward.LevelPassive,
@@ -513,7 +513,7 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *sl
 	return h.notify(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      p.TaskName,
 		Subtitle:   "Jellyfin",
-		Body:       "Started · " + p.TaskName,
+		Body:       "Started" + text.SepDot + p.TaskName,
 		ThreadID:   "jellyfin-tasks",
 		CollapseID: "jellyfin-task-" + p.TaskName,
 		Level:      pushward.LevelPassive,
@@ -523,10 +523,10 @@ func (h *Handler) handleTaskStarted(ctx context.Context, userKey string, log *sl
 }
 
 func (h *Handler) handleTaskCompleted(ctx context.Context, userKey string, log *slog.Logger, p *jellyfinPayload) error {
-	body := "Complete · " + p.TaskName
+	body := "Complete" + text.SepDot + p.TaskName
 	level := pushward.LevelPassive
 	if p.TaskResult != "Completed" {
-		body = "Failed · " + p.TaskName
+		body = "Failed" + text.SepDot + p.TaskName
 		level = pushward.LevelActive
 	}
 

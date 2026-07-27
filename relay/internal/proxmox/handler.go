@@ -110,7 +110,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 	// (node1,23) and (node12,3) don't both hash "node123" to one slug.
 	slug := text.SlugHash("proxmox-backup", p.Hostname+":"+vmid, 4)
 	mapKey := fmt.Sprintf("vzdump:%s:%s", p.Hostname, vmid)
-	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
+	subtitle := fmt.Sprintf("Proxmox · %s", text.TruncateHard(p.Hostname, 50))
 
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
@@ -233,7 +233,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, log *sl
 
 	slug := text.SlugHash("proxmox-repl", p.Hostname+":"+jobID, 4)
 	mapKey := fmt.Sprintf("replication:%s:%s", p.Hostname, jobID)
-	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
+	subtitle := fmt.Sprintf("Proxmox · %s", text.TruncateHard(p.Hostname, 50))
 
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
@@ -338,7 +338,7 @@ func (h *Handler) handleFencing(ctx context.Context, userKey string, log *slog.L
 	}
 	slug := text.SlugHash("proxmox-fence", p.Hostname, 4)
 	mapKey := fmt.Sprintf("fencing:%s", p.Hostname)
-	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
+	subtitle := fmt.Sprintf("Proxmox · %s", text.TruncateHard(p.Hostname, 50))
 
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
@@ -382,7 +382,7 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey string, log *slog.L
 	}
 	slug := text.SlugHash("proxmox-updates", p.Hostname, 4)
 	mapKey := fmt.Sprintf("updates:%s", p.Hostname)
-	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(p.Hostname, 50))
+	subtitle := fmt.Sprintf("Proxmox · %s", text.TruncateHard(p.Hostname, 50))
 
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())
@@ -446,7 +446,7 @@ func (h *Handler) handleSystemMail(ctx context.Context, userKey string, log *slo
 	}
 	slug := text.SlugHash("proxmox-system", hostname, 4)
 	mapKey := fmt.Sprintf("system-mail:%s", hostname)
-	subtitle := fmt.Sprintf("Proxmox \u00b7 %s", text.TruncateHard(hostname, 50))
+	subtitle := fmt.Sprintf("Proxmox · %s", text.TruncateHard(hostname, 50))
 
 	cl := h.clients.Get(userKey)
 	endedTTL := int(h.config.CleanupDelay.Seconds())

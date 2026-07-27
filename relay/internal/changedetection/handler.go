@@ -68,7 +68,7 @@ func (h *Handler) handleChange(ctx context.Context, payload *changedetectionPayl
 
 	subtitle := "Changedetection"
 	if payload.Tag != "" {
-		subtitle = "Changedetection \u00b7 " + payload.Tag
+		subtitle = "Changedetection" + text.SepDot + payload.Tag
 	}
 
 	var firedAtPtr *int64

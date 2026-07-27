@@ -110,8 +110,8 @@ func TestMonitorDown(t *testing.T) {
 	if update.Content.Severity != "critical" {
 		t.Errorf("expected severity critical, got %s", update.Content.Severity)
 	}
-	if update.Content.Subtitle != "Uptime Kuma \u00b7 My Website" {
-		t.Errorf("expected subtitle 'Uptime Kuma \u00b7 My Website', got %q", update.Content.Subtitle)
+	if update.Content.Subtitle != "Uptime Kuma · My Website" {
+		t.Errorf("expected subtitle 'Uptime Kuma · My Website', got %q", update.Content.Subtitle)
 	}
 	if update.Content.URL != "https://example.com" {
 		t.Errorf("expected URL https://example.com, got %s", update.Content.URL)
@@ -182,8 +182,8 @@ func TestMonitorDownThenUp(t *testing.T) {
 	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
-	if phase1.Content.State != "Resolved \u00b7 42ms" {
-		t.Errorf("expected state 'Resolved \u00b7 42ms', got %q", phase1.Content.State)
+	if phase1.Content.State != "Resolved · 42ms" {
+		t.Errorf("expected state 'Resolved · 42ms', got %q", phase1.Content.State)
 	}
 	if phase1.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
@@ -201,8 +201,8 @@ func TestMonitorDownThenUp(t *testing.T) {
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
-	if phase2.Content.State != "Resolved \u00b7 42ms" {
-		t.Errorf("expected state 'Resolved \u00b7 42ms', got %q", phase2.Content.State)
+	if phase2.Content.State != "Resolved · 42ms" {
+		t.Errorf("expected state 'Resolved · 42ms', got %q", phase2.Content.State)
 	}
 }
 

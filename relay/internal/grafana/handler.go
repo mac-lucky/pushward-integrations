@@ -127,7 +127,7 @@ func formatGroupSubtitle(firing, resolved int) string {
 	if len(parts) == 0 {
 		return "Grafana"
 	}
-	return "Grafana · " + strings.Join(parts, ", ")
+	return "Grafana" + text.SepDot + strings.Join(parts, ", ")
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, input *struct {
@@ -291,7 +291,7 @@ func (h *Handler) buildSingleNotification(g *alertGroup) pushward.SendNotificati
 
 	subtitle := "Grafana"
 	if instance := a.Labels["instance"]; instance != "" {
-		subtitle = "Grafana · " + instance
+		subtitle = "Grafana" + text.SepDot + instance
 	}
 
 	req := pushward.SendNotificationRequest{
@@ -308,9 +308,9 @@ func (h *Handler) buildSingleNotification(g *alertGroup) pushward.SendNotificati
 		req.Body = text.Truncate(summary, 120)
 		req.Level = pushward.LevelActive
 	case "resolved":
-		req.Body = "Resolved · " + g.alertname
+		req.Body = "Resolved" + text.SepDot + g.alertname
 		if summary != "" {
-			req.Body = "Resolved · " + g.alertname + " · " + text.Truncate(summary, 80)
+			req.Body = "Resolved" + text.SepDot + g.alertname + text.SepDot + text.Truncate(summary, 80)
 		}
 		req.Level = pushward.LevelPassive
 	}
@@ -344,10 +344,10 @@ func (h *Handler) buildGroupedNotification(g *alertGroup) pushward.SendNotificat
 
 	if len(g.firing) > 0 {
 		req.Level = pushward.LevelActive
-		req.Body = formatGroupedBody(g.firing, g.alertname+" · ", "firing", 120)
+		req.Body = formatGroupedBody(g.firing, g.alertname+text.SepDot, "firing", 120)
 	} else {
 		req.Level = pushward.LevelPassive
-		req.Body = formatGroupedBody(g.resolved, "Resolved · "+g.alertname+" · ", "resolved", 100)
+		req.Body = formatGroupedBody(g.resolved, "Resolved"+text.SepDot+g.alertname+text.SepDot, "resolved", 100)
 	}
 
 	h.setURL(&req, representative)
@@ -532,7 +532,7 @@ func formatAlertDetail(a alert) string {
 	}
 
 	if s := a.Annotations["summary"]; s != "" {
-		b.WriteString(" · ")
+		b.WriteString(text.SepDot)
 		b.WriteString(s)
 	}
 

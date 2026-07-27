@@ -90,7 +90,7 @@ func (h *Handler) subtitle(p *gatusPayload) string {
 	if p.EndpointGroup != "" {
 		name = p.EndpointGroup + "/" + p.EndpointName
 	}
-	return "Gatus \u00b7 " + text.TruncateHard(name, 50)
+	return "Gatus" + text.SepDot + text.TruncateHard(name, 50)
 }
 
 func (h *Handler) buildMetadata(p *gatusPayload, slug string) map[string]string {
@@ -197,7 +197,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 
 	if isNew && ov.AllowsNotification() {
 		notifReq := h.buildNotification(p, slug, subtitle)
-		notifReq.Body = p.EndpointName + " · " + stateText
+		notifReq.Body = p.EndpointName + text.SepDot + stateText
 		notifReq.Level = ov.LevelOr(pushward.LevelActive)
 		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
@@ -244,7 +244,7 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 
 	if ov.AllowsNotification() {
 		notifReq := h.buildNotification(p, slug, subtitle)
-		notifReq.Body = "Resolved · " + p.EndpointName
+		notifReq.Body = "Resolved" + text.SepDot + p.EndpointName
 		notifReq.Level = ov.LevelOr(pushward.LevelPassive)
 		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)

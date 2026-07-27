@@ -260,7 +260,7 @@ func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Lo
 	if p.Level == "error" {
 		level = "Critical"
 	}
-	body := level + " · " + text.Truncate(p.Message, 100)
+	body := level + text.SepDot + text.Truncate(p.Message, 100)
 
 	req := pushward.SendNotificationRequest{
 		Title:      titleCase(provider) + " Health",
@@ -286,7 +286,7 @@ func (h *Handler) handleHealthRestored(ctx context.Context, userKey string, log 
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      titleCase(provider) + " Health",
 		Subtitle:   text.Truncate(p.Message, 80),
-		Body:       "Resolved · " + text.Truncate(p.Message, 100),
+		Body:       "Resolved" + text.SepDot + text.Truncate(p.Message, 100),
 		ThreadID:   provider + "-health",
 		CollapseID: provider + "-health-restored",
 		Level:      pushward.LevelPassive,
@@ -362,7 +362,7 @@ func (h *Handler) handleApplicationUpdate(ctx context.Context, userKey string, l
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      titleCase(provider),
 		Subtitle:   p.PreviousVersion + " → " + p.NewVersion,
-		Body:       "Updated · " + p.PreviousVersion + " → " + p.NewVersion,
+		Body:       "Updated" + text.SepDot + p.PreviousVersion + " → " + p.NewVersion,
 		ThreadID:   provider,
 		CollapseID: provider + "-update",
 		Level:      pushward.LevelPassive,

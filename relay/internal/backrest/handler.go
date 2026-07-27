@@ -61,7 +61,7 @@ const (
 )
 
 const (
-	sepDetail = " · "
+	sepDetail = text.SepDot
 	sepError  = ": "
 )
 

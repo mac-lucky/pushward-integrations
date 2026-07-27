@@ -425,7 +425,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	if ppSecs > 0 {
 		stateParts = append(stateParts, fmt.Sprintf("unpack %s", formatDuration(ppSecs)))
 	}
-	stateStr := strings.Join(stateParts, " · ")
+	stateStr := strings.Join(stateParts, text.SepDot)
 
 	subtitle := text.Truncate(latestName, 30)
 

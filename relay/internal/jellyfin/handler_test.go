@@ -569,7 +569,7 @@ func TestItemAdded(t *testing.T) {
 	if req.Body != "Added · Dune: Part Two" {
 		t.Errorf("expected body 'Added · Dune: Part Two', got %s", req.Body)
 	}
-	if req.Subtitle != "Jellyfin \u00b7 2024" {
+	if req.Subtitle != "Jellyfin · 2024" {
 		t.Errorf("expected subtitle 'Jellyfin · 2024', got %s", req.Subtitle)
 	}
 	if req.Source != "jellyfin" {

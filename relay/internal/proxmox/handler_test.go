@@ -254,8 +254,8 @@ func TestFencingAlert(t *testing.T) {
 	if update.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red accent, got %s", update.Content.AccentColor)
 	}
-	if update.Content.Subtitle != "Proxmox \u00b7 pve2" {
-		t.Errorf("expected subtitle 'Proxmox \u00b7 pve2', got %q", update.Content.Subtitle)
+	if update.Content.Subtitle != "Proxmox · pve2" {
+		t.Errorf("expected subtitle 'Proxmox · pve2', got %q", update.Content.Subtitle)
 	}
 
 	// Phase 2: ENDED
@@ -421,8 +421,8 @@ func TestSystemMailAlert(t *testing.T) {
 	if update.Content.State != "Certificate renewal failed" {
 		t.Errorf("expected state 'Certificate renewal failed', got %s", update.Content.State)
 	}
-	if update.Content.Subtitle != "Proxmox \u00b7 pve1" {
-		t.Errorf("expected subtitle 'Proxmox \u00b7 pve1', got %q", update.Content.Subtitle)
+	if update.Content.Subtitle != "Proxmox · pve1" {
+		t.Errorf("expected subtitle 'Proxmox · pve1', got %q", update.Content.Subtitle)
 	}
 
 	// Phase 2: ENDED

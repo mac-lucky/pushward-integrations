@@ -110,8 +110,8 @@ func TestTriggered(t *testing.T) {
 	if update.Content.Severity != "critical" {
 		t.Errorf("expected severity critical, got %s", update.Content.Severity)
 	}
-	if update.Content.Subtitle != "Gatus \u00b7 My API" {
-		t.Errorf("expected subtitle 'Gatus \u00b7 My API', got %q", update.Content.Subtitle)
+	if update.Content.Subtitle != "Gatus · My API" {
+		t.Errorf("expected subtitle 'Gatus · My API', got %q", update.Content.Subtitle)
 	}
 	if update.Content.URL != "https://api.example.com/health" {
 		t.Errorf("expected URL https://api.example.com/health, got %s", update.Content.URL)
@@ -253,8 +253,8 @@ func TestTriggeredWithGroup(t *testing.T) {
 
 	var update pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.Content.Subtitle != "Gatus \u00b7 production/My API" {
-		t.Errorf("expected subtitle 'Gatus \u00b7 production/My API', got %q", update.Content.Subtitle)
+	if update.Content.Subtitle != "Gatus · production/My API" {
+		t.Errorf("expected subtitle 'Gatus · production/My API', got %q", update.Content.Subtitle)
 	}
 
 	// Verify notification includes endpoint_group

@@ -92,7 +92,7 @@ func (h *Handler) slugAndKey(p *uptimekumaPayload) (slug, mapKey, monitorIDStr s
 }
 
 func (h *Handler) subtitle(p *uptimekumaPayload) string {
-	return "Uptime Kuma \u00b7 " + text.TruncateHard(p.Monitor.Name, 50)
+	return "Uptime Kuma" + text.SepDot + text.TruncateHard(p.Monitor.Name, 50)
 }
 
 func (h *Handler) buildNotification(p *uptimekumaPayload, subtitle string, monitorIDStr string) pushward.SendNotificationRequest {
@@ -191,7 +191,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 
 	if isNew && ov.AllowsNotification() {
 		notifReq := h.buildNotification(p, subtitle, monitorIDStr)
-		notifReq.Body = p.Monitor.Name + " · " + stateText
+		notifReq.Body = p.Monitor.Name + text.SepDot + stateText
 		notifReq.Level = ov.LevelOr(pushward.LevelActive)
 		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
@@ -217,10 +217,10 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 	subtitle := h.subtitle(p)
 
 	activityState := "Resolved"
-	notifBody := "Resolved · " + p.Monitor.Name
+	notifBody := "Resolved" + text.SepDot + p.Monitor.Name
 	if p.Heartbeat.Ping != nil {
-		activityState = fmt.Sprintf("Resolved \u00b7 %dms", *p.Heartbeat.Ping)
-		notifBody = fmt.Sprintf("Resolved \u00b7 %s \u00b7 %dms", p.Monitor.Name, *p.Heartbeat.Ping)
+		activityState = fmt.Sprintf("Resolved · %dms", *p.Heartbeat.Ping)
+		notifBody = fmt.Sprintf("Resolved · %s · %dms", p.Monitor.Name, *p.Heartbeat.Ping)
 	}
 
 	if ov.AllowsActivity() {

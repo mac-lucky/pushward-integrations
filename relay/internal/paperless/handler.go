@@ -224,7 +224,7 @@ func buildSubtitle(docType, correspondent string) string {
 	}
 	result := parts[0]
 	for _, p := range parts[1:] {
-		result += " \u00b7 " + p
+		result += text.SepDot + p
 	}
 	return result
 }

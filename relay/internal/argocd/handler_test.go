@@ -129,7 +129,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	if update1.Content.AccentColor != pushward.ColorBlue {
 		t.Errorf("expected blue color, got %s", update1.Content.AccentColor)
 	}
-	if update1.Content.Subtitle != "ArgoCD \u00b7 pushward-server" {
+	if update1.Content.Subtitle != "ArgoCD · pushward-server" {
 		t.Errorf("expected subtitle 'ArgoCD · pushward-server', got %s", update1.Content.Subtitle)
 	}
 	if update1.Content.CurrentStep == nil || *update1.Content.CurrentStep != 1 {

@@ -405,7 +405,7 @@ func (h *Handler) handleSonarrEpisodeFileDelete(ctx context.Context, userKey str
 	subtitle := FormatSubtitle(p.Series, p.Episodes, "")
 	body := "File deleted"
 	if p.DeleteReason != "" {
-		body = "File deleted · " + deleteReasonText(p.DeleteReason)
+		body = "File deleted" + text.SepDot + deleteReasonText(p.DeleteReason)
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Sonarr", Subtitle: text.Truncate(subtitle, 100), Body: body,

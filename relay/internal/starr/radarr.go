@@ -111,9 +111,9 @@ func movieTitle(m RadarrMovie) string {
 }
 
 func radarrSubtitle(title, quality string) string {
-	subtitle := "Radarr · " + text.Truncate(title, 40)
+	subtitle := "Radarr" + text.SepDot + text.Truncate(title, 40)
 	if quality != "" {
-		subtitle += " · " + quality
+		subtitle += text.SepDot + quality
 	}
 	return subtitle
 }
@@ -153,7 +153,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 
 	body := "Grabbed"
 	if p.Release.Quality != "" {
-		body = "Grabbed · " + p.Release.Quality
+		body = "Grabbed" + text.SepDot + p.Release.Quality
 	}
 
 	// Always send notification record. When channels=notification suppresses the
@@ -429,7 +429,7 @@ func (h *Handler) handleRadarrMovieFileDelete(ctx context.Context, userKey strin
 	title := movieTitle(p.Movie)
 	body := "File deleted"
 	if p.DeleteReason != "" {
-		body = "File deleted · " + deleteReasonText(p.DeleteReason)
+		body = "File deleted" + text.SepDot + deleteReasonText(p.DeleteReason)
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title: "Radarr", Subtitle: title, Body: body,

@@ -104,7 +104,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 
 	slug := fmt.Sprintf("overseerr-%s-%s", p.Media.MediaType, p.Media.TmdbID)
 	mapKey := fmt.Sprintf("overseerr:%s:%s", p.Media.MediaType, p.Media.TmdbID)
-	subtitle := "Overseerr · " + text.TruncateHard(p.Subject, 50)
+	subtitle := "Overseerr" + text.SepDot + text.TruncateHard(p.Subject, 50)
 	ov := overrides.FromContext(ctx)
 
 	cl := h.clients.Get(userKey)

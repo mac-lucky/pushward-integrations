@@ -103,8 +103,8 @@ func TestPageChanged(t *testing.T) {
 	if ongoing.Content.AccentColor != pushward.ColorOrange {
 		t.Errorf("expected accent color #FF9500, got %s", ongoing.Content.AccentColor)
 	}
-	if ongoing.Content.Subtitle != "Changedetection \u00b7 prices" {
-		t.Errorf("expected subtitle 'Changedetection \u00b7 prices', got %s", ongoing.Content.Subtitle)
+	if ongoing.Content.Subtitle != "Changedetection · prices" {
+		t.Errorf("expected subtitle 'Changedetection · prices', got %s", ongoing.Content.Subtitle)
 	}
 	if ongoing.Content.Severity != "info" {
 		t.Errorf("expected severity info, got %s", ongoing.Content.Severity)
