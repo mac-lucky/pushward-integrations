@@ -54,6 +54,12 @@ type RenderConfig struct {
 	// Defaults on; turning it off falls back to a plain state line and skips
 	// the GetLogs call entirely.
 	Logs bool `yaml:"logs"`
+	// MaxETA is the longest estimate still worth anchoring the bar to. Past it
+	// the number is treated as noise, because a backup that stalls in its first
+	// minutes produces an arbitrarily large one. The default is a week rather
+	// than a working day: a multi-terabyte first run over a slow link is a real
+	// case, and its countdown is worth reading even though the bar barely moves.
+	MaxETA time.Duration `yaml:"max_eta"`
 }
 
 // envBool applies a boolean environment override to dst, leaving it untouched
@@ -106,6 +112,7 @@ func Load(path string) (*Config, error) {
 		Render: RenderConfig{
 			LiveProgress: true,
 			Logs:         true,
+			MaxETA:       7 * 24 * time.Hour,
 		},
 	}
 
@@ -148,6 +155,9 @@ func Load(path string) (*Config, error) {
 	if err := envBool("PUSHWARD_BACKREST_LOGS", &cfg.Render.Logs); err != nil {
 		return nil, err
 	}
+	if err := envDuration("PUSHWARD_BACKREST_MAX_ETA", &cfg.Render.MaxETA); err != nil {
+		return nil, err
+	}
 
 	// Shared PushWard env overrides
 	if err := cfg.PushWard.ApplyEnvOverrides(); err != nil {
@@ -166,6 +176,11 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Polling.LastN <= 0 {
 		return nil, fmt.Errorf("polling.last_n must be positive")
+	}
+	// Zero would reject every estimate, which looks exactly like live_progress
+	// having been turned off and is not what anyone means by setting a ceiling.
+	if cfg.Render.MaxETA <= 0 {
+		return nil, fmt.Errorf("render.max_eta must be positive")
 	}
 
 	// Shared validation

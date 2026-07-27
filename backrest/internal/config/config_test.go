@@ -63,6 +63,11 @@ func TestDefaults(t *testing.T) {
 	if !cfg.Render.Logs {
 		t.Error("render.logs defaulted off, want on")
 	}
+	// A week, not a working day: a multi-terabyte first run over a slow link is
+	// two days out and still deserves its countdown.
+	if cfg.Render.MaxETA != 7*24*time.Hour {
+		t.Errorf("render.max_eta = %v, want 168h", cfg.Render.MaxETA)
+	}
 }
 
 func TestURLIsRequired(t *testing.T) {
@@ -85,6 +90,7 @@ polling:
   interval: 99s
 render:
   live_progress: true
+  max_eta: 90h
 `
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
 		t.Fatal(err)
@@ -108,9 +114,12 @@ render:
 	if cfg.Polling.Interval != 7*time.Second {
 		t.Errorf("interval = %v, want the environment to win", cfg.Polling.Interval)
 	}
-	// A flag the environment does not mention keeps the file's value.
+	// A setting the environment does not mention keeps the file's value.
 	if cfg.Backrest.Username != "fileuser" {
 		t.Errorf("username = %q, want the file value preserved", cfg.Backrest.Username)
+	}
+	if cfg.Render.MaxETA != 90*time.Hour {
+		t.Errorf("max_eta = %v, want the file value preserved", cfg.Render.MaxETA)
 	}
 	if cfg.Render.LiveProgress {
 		t.Error("live_progress stayed on, want the environment to turn it off")
@@ -143,6 +152,29 @@ func TestNonPositiveIntervalsAreRejected(t *testing.T) {
 		if _, err := Load(filepath.Join(t.TempDir(), "absent.yml")); err == nil {
 			t.Errorf("Load accepted polling.interval = %s", v)
 		}
+	}
+}
+
+// Zero would reject every estimate, which is not what a ceiling means.
+func TestNonPositiveMaxETAIsRejected(t *testing.T) {
+	for _, v := range []string{"0s", "-1h"} {
+		baseEnv(t)
+		t.Setenv("PUSHWARD_BACKREST_MAX_ETA", v)
+		if _, err := Load(filepath.Join(t.TempDir(), "absent.yml")); err == nil {
+			t.Errorf("Load accepted render.max_eta = %s", v)
+		}
+	}
+}
+
+func TestMaxETAEnvOverride(t *testing.T) {
+	baseEnv(t)
+	t.Setenv("PUSHWARD_BACKREST_MAX_ETA", "36h")
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Render.MaxETA != 36*time.Hour {
+		t.Errorf("render.max_eta = %v, want 36h", cfg.Render.MaxETA)
 	}
 }
 
@@ -180,5 +212,8 @@ func TestExampleConfigLoads(t *testing.T) {
 	}
 	if !cfg.Render.Logs || !cfg.Render.LiveProgress {
 		t.Error("example disables a render flag that ships on")
+	}
+	if cfg.Render.MaxETA != 7*24*time.Hour {
+		t.Errorf("example render.max_eta = %v, want the documented 168h default", cfg.Render.MaxETA)
 	}
 }

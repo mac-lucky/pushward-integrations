@@ -26,7 +26,6 @@ const (
 // as two different events.
 const (
 	stateScanning        = "Scanning..."
-	stateBackingUp       = "Backing up..."
 	stateComplete        = "Complete"
 	stateCompleteWarning = "Complete (warnings)"
 	stateFailed          = "Failed"

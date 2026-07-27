@@ -3,6 +3,11 @@ package poller
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +20,7 @@ import (
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // fakeBackrest returns a scripted sequence of operation windows, one per poll,
@@ -25,6 +31,7 @@ type fakeBackrest struct {
 	call     int
 	logs     map[string]string
 	logCalls int
+	logErr   error
 	err      error
 }
 
@@ -49,6 +56,9 @@ func (f *fakeBackrest) GetLogs(_ context.Context, ref string) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.logCalls++
+	if f.logErr != nil {
+		return "", f.logErr
+	}
 	return f.logs[ref], nil
 }
 
@@ -56,6 +66,13 @@ func (f *fakeBackrest) logCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.logCalls
+}
+
+// A prune rewrites its own output as it works, so tests need to as well.
+func (f *fakeBackrest) setLog(ref, body string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.logs[ref] = body
 }
 
 func testConfig() *config.Config {
@@ -73,9 +90,13 @@ func testConfig() *config.Config {
 			LastN:        50,
 		},
 		// Mirrors the shipped defaults so tests exercise real behavior.
-		Render: config.RenderConfig{LiveProgress: true, Logs: true},
+		Render: config.RenderConfig{LiveProgress: true, Logs: true, MaxETA: 7 * 24 * time.Hour},
 	}
 }
+
+// testClock is where every harness starts. Tests that care how old an operation
+// is date it from here rather than from the fixture's own timestamps.
+var testClock = time.Unix(1785050000, 0)
 
 // harness wires a poller to the contract-validating mock server and a fake
 // Backrest, with a clock the test drives.
@@ -91,11 +112,64 @@ func newHarness(t *testing.T, cfg *config.Config, br *fakeBackrest) *harness {
 	t.Helper()
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	t.Cleanup(srv.Close)
+	return wire(t, cfg, br, srv, calls, mu)
+}
 
+// newRejectingHarness is newHarness against a server that turns down the first
+// n frames, which is how a PushWard outage looks from here. The rejection is a
+// 400, so the client fails fast instead of spending its own retry budget and
+// the test's wall clock on each one.
+func newRejectingHarness(t *testing.T, cfg *config.Config, br *fakeBackrest, n int) *harness {
+	t.Helper()
+	srv, calls, mu := testutil.MockPushWardServerFailingPatches(t, n)
+	return wire(t, cfg, br, srv, calls, mu)
+}
+
+// gatedServer records every PushWard call and hands each PATCH to gate, which
+// answers with the status to send and may block first.
+//
+// testutil's failing mock turns down a fixed prefix of PATCHes, and the seed is
+// always the first of them, so it cannot express either of the two cases below:
+// an activity that is up and has a later frame refused, and a frame held open
+// while shutdown runs.
+func gatedServer(t *testing.T, gate func(n int) int) (*httptest.Server, *[]testutil.APICall, *sync.Mutex) {
+	t.Helper()
+	var calls []testutil.APICall
+	var mu sync.Mutex
+	patches := 0
+
+	record := func(r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		calls = append(calls, testutil.APICall{Method: r.Method, Path: r.URL.Path, Body: body})
+		mu.Unlock()
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /activities", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("PATCH /activities/", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		mu.Lock()
+		patches++
+		n := patches
+		mu.Unlock()
+		w.WriteHeader(gate(n))
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, &calls, &mu
+}
+
+func wire(t *testing.T, cfg *config.Config, br *fakeBackrest, srv *httptest.Server, calls *[]testutil.APICall, mu *sync.Mutex) *harness {
+	t.Helper()
 	pw := pushward.NewClient(srv.URL, "hlk_test")
 	p := New(cfg, br, pw)
 
-	h := &harness{p: p, br: br, calls: calls, mu: mu, clock: time.Unix(1785050000, 0)}
+	h := &harness{p: p, br: br, calls: calls, mu: mu, clock: testClock}
 	p.now = func() time.Time { return h.clock }
 	return h
 }
@@ -111,6 +185,18 @@ func (h *harness) poll(t *testing.T) {
 
 func (h *harness) recorded() []testutil.APICall {
 	return testutil.GetCalls(h.calls, h.mu)
+}
+
+// pushCount is how many frames reached the API. One push is one PATCH: the POST
+// that precedes the seed creates the activity and carries no frame.
+func (h *harness) pushCount() int {
+	n := 0
+	for _, c := range h.recorded() {
+		if c.Method == "PATCH" {
+			n++
+		}
+	}
+	return n
 }
 
 // content unmarshals the content object of a recorded call.
@@ -182,19 +268,133 @@ func runningBackup(id int64, bytesDone, totalBytes int64) backrest.Operation {
 	}
 }
 
+// finishedBackup is a completed backup stamped with an end time, which is what
+// decides whether the first poll announces it.
+func finishedBackup(t *testing.T, id int64, endedAgo time.Duration) backrest.Operation {
+	t.Helper()
+	op := loadOp(t, "backup_success.json")
+	op.ID = backrest.Int64(id)
+	op.UnixTimeEnd = backrest.Int64(testClock.Add(-endedAgo).UnixMilli())
+	// Moving only the end would date it before the fixture's own start, which
+	// Operation.Elapsed would refuse to render for a kind that has no restic
+	// summary to fall back on.
+	op.UnixTimeStart = backrest.Int64(testClock.Add(-endedAgo - time.Minute).UnixMilli())
+	return op
+}
+
 // The first window a freshly started bridge sees is a wall of finished
 // operations from previous days. Announcing those would push an activity for
 // every one of them.
 func TestFirstPollDoesNotAnnounceHistory(t *testing.T) {
-	done := loadOp(t, "backup_success.json")
+	done := finishedBackup(t, 12208, 24*time.Hour)
 	prune := loadOp(t, "prune_success.json")
 	br := &fakeBackrest{windows: [][]backrest.Operation{{done, prune}}}
 	h := newHarness(t, testConfig(), br)
 
 	h.poll(t)
+	// The priming pass announces nothing whatever it decides. Suppression only
+	// shows up on the tick after it, where a row it did not record as done
+	// falls through and is treated as an outcome that just landed.
+	h.poll(t)
 
 	if calls := h.recorded(); len(calls) != 0 {
-		t.Fatalf("first poll made %d API calls, want 0: %+v", len(calls), calls)
+		t.Fatalf("two polls made %d API calls, want 0: %+v", len(calls), calls)
+	}
+}
+
+// A rollout or a node drain restarts this process while a backup is running,
+// and the backup finishes in the gap. Suppressing that outcome as history
+// strands the activity the previous process opened: it sits on the Lock Screen
+// showing the progress it stopped at until the server's stale timeout expires.
+func TestFirstPollClosesAJustFinishedOperation(t *testing.T) {
+	done := finishedBackup(t, 777, time.Minute)
+	br := &fakeBackrest{windows: [][]backrest.Operation{{done}, {done}}}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t)
+
+	calls := waitForEnded(t, h, 0)
+	if calls[0].Method != "POST" || calls[0].Path != "/activities" {
+		t.Fatalf("first call = %s %s, want the activity re-adopted", calls[0].Method, calls[0].Path)
+	}
+	final := content(t, calls[len(calls)-1])
+	if !strings.HasPrefix(final.State, stateComplete) {
+		t.Errorf("state = %q, want the completion line", final.State)
+	}
+}
+
+// Past the stale timeout there is no activity left for the outcome to land on,
+// so an older row is history like any other.
+func TestFirstPollSuppressesAnOperationEndedLongAgo(t *testing.T) {
+	done := finishedBackup(t, 777, 2*time.Hour)
+	br := &fakeBackrest{windows: [][]backrest.Operation{{done}, {done}}}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t)
+	h.poll(t) // the tick where a row priming failed to record as done surfaces
+
+	if calls := h.recorded(); len(calls) != 0 {
+		t.Fatalf("announced an operation that ended 2h ago in %d calls: %+v", len(calls), calls)
+	}
+}
+
+// The adoption window is the server's stale timeout because that is exactly how
+// long the stranded activity survives; any other duration either misses cards
+// that are still on screen or reopens ones the server already aged out.
+func TestFirstPollAdoptionWindowIsTheStaleTimeout(t *testing.T) {
+	cfg := testConfig()
+	cfg.PushWard.StaleTimeout = 5 * time.Minute
+
+	done := finishedBackup(t, 777, 10*time.Minute)
+	br := &fakeBackrest{windows: [][]backrest.Operation{{done}, {done}}}
+	h := newHarness(t, cfg, br)
+
+	h.poll(t)
+	h.poll(t)
+
+	// The same operation is adopted under testConfig's 30m stale timeout, and
+	// still would be under any of the other durations in that config.
+	if calls := h.recorded(); len(calls) != 0 {
+		t.Fatalf("adopted an operation twice as old as the stale timeout in %d calls: %+v", len(calls), calls)
+	}
+}
+
+// An operation Backrest never stamped with an end time cannot be shown to be
+// recent, and guessing would announce the whole window on every restart.
+func TestFirstPollSuppressesAnOperationWithNoEndTime(t *testing.T) {
+	done := finishedBackup(t, 777, time.Minute)
+	done.UnixTimeEnd = 0
+	br := &fakeBackrest{windows: [][]backrest.Operation{{done}, {done}}}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t)
+	h.poll(t)
+
+	if calls := h.recorded(); len(calls) != 0 {
+		t.Fatalf("announced an operation with no end time in %d calls: %+v", len(calls), calls)
+	}
+}
+
+// endedWithin is asserted directly for the two inputs no plausible window makes
+// visible through poll: an unstamped row, which arithmetic alone would read as
+// a 1970 finish and only reject because 1970 is far away, and a stamp from the
+// future, which a window bounded only above reads as maximally recent.
+func TestEndedWithinRejectsUnstampedAndFutureRows(t *testing.T) {
+	h := newHarness(t, testConfig(), &fakeBackrest{})
+
+	// A century, so "decades old" cannot stand in for "never stamped".
+	if h.p.endedWithin(&backrest.Operation{UnixTimeEnd: 0}, 100*365*24*time.Hour) {
+		t.Error("an unstamped row was read as a finish at the epoch")
+	}
+	future := &backrest.Operation{UnixTimeEnd: backrest.Int64(testClock.Add(6 * time.Hour).UnixMilli())}
+	if h.p.endedWithin(future, 30*time.Minute) {
+		t.Error("a stamp 6h ahead of this clock was read as recent")
+	}
+	// Skew small enough to be routine still has to count, or a restart during a
+	// backup that has just finished loses the outcome it exists to deliver.
+	fresh := &backrest.Operation{UnixTimeEnd: backrest.Int64(testClock.Add(2 * time.Second).UnixMilli())}
+	if !h.p.endedWithin(fresh, 30*time.Minute) {
+		t.Error("a stamp 2s ahead of this clock was rejected as skew")
 	}
 }
 
@@ -512,6 +712,82 @@ func TestRealSlowdownMovesTheAnchor(t *testing.T) {
 	}
 }
 
+// slowSampleGap is how far the clock moves between the two samples. The frame
+// carrying a rejected estimate has no anchor to push on, so it only goes out
+// once the heartbeat is due - half of the 30m stale_timeout in testConfig.
+const slowSampleGap = time.Hour
+
+// slowTerabyteBackup is the case that made the ceiling configurable: 1.5 TB
+// moving at ~9 MB/s, which estimates out to roughly two days.
+func slowTerabyteBackup() *fakeBackrest {
+	const total = 1_500_000_000_000
+	const rate = 9_000_000 // bytes per second
+	moved := rate * int64(slowSampleGap/time.Second)
+	return &fakeBackrest{windows: [][]backrest.Operation{
+		{runningBackup(1, 0, total)},
+		{runningBackup(1, 0, total)},
+		{runningBackup(1, moved, total)},
+	}}
+}
+
+// A two-day estimate has to reach the phone. The 12h ceiling this replaced
+// rejected it outright, so the user's real backup showed a static bar and no
+// countdown for its whole run - on exactly the backups where the remaining time
+// is worth the most.
+func TestLongBackupStillGetsACountdown(t *testing.T) {
+	cfg := testConfig()
+	h := newHarness(t, cfg, slowTerabyteBackup())
+
+	h.poll(t) // priming
+	h.poll(t) // create + seed, first sample
+	h.advance(slowSampleGap)
+	h.poll(t)
+
+	end := endDateOfLast(t, h)
+	if end == 0 {
+		t.Fatal("no end_date on a two-day estimate, so iOS has nothing to count down")
+	}
+	eta := time.Duration(end-h.clock.Unix()) * time.Second
+	// Guards the fixture as much as the code: an estimate that happened to land
+	// under 12h would pass this test against the old constant too.
+	if eta <= 12*time.Hour {
+		t.Fatalf("eta = %v, want a fixture that sits past the old 12h ceiling", eta)
+	}
+	if eta > cfg.Render.MaxETA {
+		t.Errorf("eta = %v, beyond the configured max of %v", eta, cfg.Render.MaxETA)
+	}
+}
+
+// The ceiling still has to bite. Past it the estimate is noise - a backup that
+// stalls in its first minutes produces one of any size - and an end date that
+// far out is worse than none.
+func TestETAPastMaxIsNotAnchored(t *testing.T) {
+	cfg := testConfig()
+	cfg.Render.MaxETA = time.Hour
+	h := newHarness(t, cfg, slowTerabyteBackup())
+
+	h.poll(t)
+	h.poll(t)
+	h.advance(slowSampleGap)
+	h.poll(t)
+
+	frames := 0
+	for i, c := range h.recorded() {
+		if c.Method == "POST" {
+			continue
+		}
+		frames++
+		if got := content(t, c); got.EndDate != nil {
+			t.Errorf("call %d carried end_date %d for an estimate past max_eta", i, *got.EndDate)
+		}
+	}
+	// Without a frame after the second sample there was never an estimate to
+	// reject and the assertion above proves nothing.
+	if frames < 2 {
+		t.Fatalf("got %d frames, want the seed plus the tick that had a rate to work from", frames)
+	}
+}
+
 func endDateOfLast(t *testing.T, h *harness) int64 {
 	t.Helper()
 	calls := h.recorded()
@@ -650,6 +926,11 @@ func TestPerFileErrorsBecomeALogView(t *testing.T) {
 	if final.AccentColor != pushward.ColorOrange {
 		t.Errorf("accent_color = %q, want orange for a warning", final.AccentColor)
 	}
+	// The warning still finished a snapshot, and its state line has to say so:
+	// "Complete (warnings)" on its own reads as a run that stored nothing.
+	if !strings.Contains(final.State, "files") {
+		t.Errorf("state = %q, want the warning to carry what it stored", final.State)
+	}
 }
 
 // Prune has no percent-done anywhere in the protocol, so it renders as its log
@@ -659,9 +940,14 @@ func TestPruneRendersAsLog(t *testing.T) {
 	prune.ID = 900
 	prune.Status = backrest.StatusInProgress
 
+	// Two lines older than the fixture's own, which stops at the 20 non-blank
+	// ones the template takes: on the fixture alone nothing is ever trimmed, so
+	// a ceiling that had stopped working would read as one that still does.
+	older := "unlocking repository\nchecking for stale locks\n"
+
 	br := &fakeBackrest{
 		windows: [][]backrest.Operation{{}, {prune}},
-		logs:    map[string]string{prune.OutputLogref(): loadText(t, "prune_output.log")},
+		logs:    map[string]string{prune.OutputLogref(): older + loadText(t, "prune_output.log")},
 	}
 	h := newHarness(t, testConfig(), br)
 
@@ -679,13 +965,47 @@ func TestPruneRendersAsLog(t *testing.T) {
 	if seed.Progress != 0 {
 		t.Errorf("progress = %v, want 0 - prune reports none", seed.Progress)
 	}
-	// The fixture has 22 lines and the template takes 20; the tail is what
-	// matters, newest first.
-	if len(seed.Lines) != maxLogLines {
-		t.Fatalf("got %d lines, want the %d-line ceiling", len(seed.Lines), maxLogLines)
+	// A literal, not maxLogLines: comparing against the constant the renderer
+	// reads would pass at whatever ceiling it was given, including one the
+	// server turns the frame down for.
+	if len(seed.Lines) != 20 {
+		t.Fatalf("got %d lines, want the template's 20-line ceiling", len(seed.Lines))
 	}
+	// The tail is what matters, newest first.
 	if seed.Lines[0].Text != "done" {
 		t.Errorf("lines[0] = %q, want the newest line first", seed.Lines[0].Text)
+	}
+	for _, l := range seed.Lines {
+		if strings.Contains(l.Text, "stale locks") {
+			t.Errorf("the oldest line survived the trim: %q", l.Text)
+		}
+	}
+}
+
+// Neither a prune nor a check has a bar to animate, and their frames are
+// merge-patched onto whatever the last tick sent. Leaving live_progress out
+// would have a repo task started right after a backup inherit that backup's
+// true and animate a bar pinned at zero.
+func TestRunningRepoTaskTurnsLiveProgressOff(t *testing.T) {
+	prune := loadOp(t, "prune_success.json")
+	prune.ID = 900
+	prune.Status = backrest.StatusInProgress
+
+	br := &fakeBackrest{
+		windows: [][]backrest.Operation{{}, {prune}},
+		logs:    map[string]string{prune.OutputLogref(): loadText(t, "prune_output.log")},
+	}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t)
+	h.poll(t)
+
+	seed := content(t, h.recorded()[1])
+	if seed.LiveProgress == nil {
+		t.Fatal("live_progress is absent from a running prune, so a previous frame's true survives")
+	}
+	if *seed.LiveProgress {
+		t.Error("live_progress = true on a prune, which reports no progress at all")
 	}
 }
 
@@ -715,10 +1035,152 @@ func TestRunningPruneCachesItsLog(t *testing.T) {
 		t.Errorf("re-fetched the log %d times inside the refresh window, want 0", got-fetched)
 	}
 
-	h.advance(logRefreshInterval)
+	// A literal, not logRefreshInterval: advancing by the constant the code reads
+	// would pass at any value it took, including one short enough to re-fetch on
+	// every tick.
+	h.advance(15 * time.Second)
 	h.poll(t)
 	if got := br.logCallCount(); got != fetched+1 {
 		t.Errorf("fetched %d times after the refresh interval, want 1", got-fetched)
+	}
+}
+
+// Reading the log is the only way to learn whether a prune's frame has anything
+// new on it, so the read happens whether or not it turns into a frame. What must
+// not follow is a frame per read: a prune sits on the same output for minutes at
+// a time, and each frame is a server write and an APNs update for a card nobody
+// has changed.
+func TestRunningPruneDoesNotResendAnUnchangedLog(t *testing.T) {
+	prune := loadOp(t, "prune_success.json")
+	prune.ID = 900
+	prune.Status = backrest.StatusInProgress
+
+	br := &fakeBackrest{
+		windows: [][]backrest.Operation{{}, {prune}},
+		logs:    map[string]string{prune.OutputLogref(): loadText(t, "prune_output.log")},
+	}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t)
+	for elapsed := time.Duration(0); elapsed < time.Minute; elapsed += h.p.cfg.Polling.Interval {
+		h.poll(t)
+		h.advance(h.p.cfg.Polling.Interval)
+	}
+
+	// One read per 15s of the minute. Written as a count rather than derived
+	// from logRefreshInterval, so shortening that constant fails here instead of
+	// moving the bar along with it.
+	if got := br.logCallCount(); got != 4 {
+		t.Errorf("read the log %d times in a minute, want one per refresh interval", got)
+	}
+	if got := h.pushCount(); got != 1 {
+		t.Errorf("sent %d frames for output that never changed, want the seed alone", got)
+	}
+}
+
+// The log is the only thing on a prune's card that moves, so a changed tail has
+// to reach the Lock Screen on the log's own cadence. Pacing the read by the
+// keep-alive instead works out at 15 minutes on the default 30m stale_timeout,
+// by which time most prunes are over.
+func TestRunningPruneLogChangeDoesNotWaitForTheHeartbeat(t *testing.T) {
+	prune := loadOp(t, "prune_success.json")
+	prune.ID = 900
+	prune.Status = backrest.StatusInProgress
+
+	br := &fakeBackrest{
+		windows: [][]backrest.Operation{{}, {prune}},
+		logs:    map[string]string{prune.OutputLogref(): loadText(t, "prune_output.log")},
+	}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t)
+	h.poll(t)
+	br.setLog(prune.OutputLogref(), loadText(t, "prune_output.log")+"\nremoving 3 old packs\n")
+
+	// The worst lag the design allows: a full refresh interval, plus the tick
+	// that notices it has passed.
+	lag := logRefreshInterval + h.p.cfg.Polling.Interval
+	if lag >= h.p.heartbeat() {
+		t.Fatalf("log lag %v is not below the heartbeat %v, so this proves nothing", lag, h.p.heartbeat())
+	}
+	for waited := time.Duration(0); waited < lag; waited += h.p.cfg.Polling.Interval {
+		h.advance(h.p.cfg.Polling.Interval)
+		h.poll(t)
+	}
+
+	calls := h.recorded()
+	last := content(t, calls[len(calls)-1])
+	if len(last.Lines) == 0 || last.Lines[0].Text != "removing 3 old packs" {
+		t.Fatalf("newest line = %+v, want the line the prune wrote %v ago", last.Lines, lag)
+	}
+	// Landing it must not mean sending on every tick of that window.
+	if got := h.pushCount(); got != 2 {
+		t.Errorf("sent %d frames, want the seed and the one the changed tail earned", got)
+	}
+}
+
+// A Backrest that will not hand the log over must not be asked on every tick,
+// which is what happens if the read clock only moves on a successful answer -
+// and it happens exactly when the host is least able to answer.
+func TestFailingLogFetchStaysOnTheRefreshCadence(t *testing.T) {
+	prune := loadOp(t, "prune_success.json")
+	prune.ID = 900
+	prune.Status = backrest.StatusInProgress
+
+	br := &fakeBackrest{
+		windows: [][]backrest.Operation{{}, {prune}},
+		logs:    map[string]string{prune.OutputLogref(): loadText(t, "prune_output.log")},
+		logErr:  context.DeadlineExceeded,
+	}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t)
+	for elapsed := time.Duration(0); elapsed < time.Minute; elapsed += h.p.cfg.Polling.Interval {
+		h.poll(t)
+		h.advance(h.p.cfg.Polling.Interval)
+	}
+
+	// The same one read per 15s a log that answers gets, as a literal for the
+	// same reason.
+	if got := br.logCallCount(); got != 4 {
+		t.Errorf("re-asked for the failing log %d times in a minute, want one per refresh interval", got)
+	}
+	// The tail never changes because it never arrives, so nothing after the seed
+	// has anything to say.
+	if got := h.pushCount(); got != 1 {
+		t.Errorf("sent %d frames off a failing log, want the seed alone", got)
+	}
+}
+
+// A prune with logs turned off has no tail to change, so the keep-alive is the
+// only thing left that can speak for it. It still has to speak: without a frame
+// inside the stale timeout the server ends the activity mid-prune.
+func TestPruneWithoutLogsPushesOnlyOnTheHeartbeat(t *testing.T) {
+	prune := loadOp(t, "prune_success.json")
+	prune.ID = 900
+	prune.Status = backrest.StatusInProgress
+
+	br := &fakeBackrest{
+		windows: [][]backrest.Operation{{}, {prune}},
+		logs:    map[string]string{prune.OutputLogref(): loadText(t, "prune_output.log")},
+	}
+	cfg := testConfig()
+	cfg.Render.Logs = false
+	h := newHarness(t, cfg, br)
+
+	h.poll(t)
+	for elapsed := time.Duration(0); elapsed < time.Minute; elapsed += cfg.Polling.Interval {
+		h.poll(t)
+		h.advance(cfg.Polling.Interval)
+	}
+	if got := h.pushCount(); got != 1 {
+		t.Fatalf("sent %d frames in a minute with logs off, want the seed alone", got)
+	}
+
+	h.advance(h.p.heartbeat())
+	h.poll(t)
+	if got := h.pushCount(); got != 2 {
+		t.Errorf("sent %d frames once the heartbeat fell due, want the seed and one keep-alive", got)
 	}
 }
 
@@ -778,6 +1240,116 @@ func TestLogLineClassification(t *testing.T) {
 	}
 }
 
+// The state lines are a cross-bridge contract, not a display preference: the
+// relay's own backrest provider can be pointed at the same PushWard account, and
+// a check reported as "Check Passed" by one and "Check passed" by the other
+// reads as two different events.
+//
+// Every string here is a literal on purpose. Comparing against the constants the
+// renderer reads would pass whatever wording they were given.
+func TestStateWordingIsPinnedToTheRelayProvider(t *testing.T) {
+	backupOf := func(s backrest.Status) *backrest.Operation {
+		return &backrest.Operation{Status: s, Backup: &backrest.OperationBackup{}}
+	}
+	pruneOf := func(s backrest.Status) *backrest.Operation {
+		return &backrest.Operation{Status: s, Prune: &backrest.OperationPrune{}}
+	}
+	checkOf := func(s backrest.Status) *backrest.Operation {
+		return &backrest.Operation{Status: s, Check: &backrest.OperationCheck{}}
+	}
+
+	ended := []struct {
+		op   *backrest.Operation
+		want string
+	}{
+		{pruneOf(backrest.StatusSuccess), "Pruned"},
+		{pruneOf(backrest.StatusError), "Prune Failed"},
+		{checkOf(backrest.StatusSuccess), "Check Passed"},
+		{checkOf(backrest.StatusError), "Check Failed"},
+		{backupOf(backrest.StatusSuccess), "Complete"},
+		{backupOf(backrest.StatusWarning), "Complete (warnings)"},
+		{backupOf(backrest.StatusUserCancelled), "Cancelled"},
+		{backupOf(backrest.StatusSystemCancelled), "Cancelled"},
+		{backupOf(backrest.StatusError), "Failed"},
+	}
+	for _, tc := range ended {
+		if got := endStateText(tc.op); got != tc.want {
+			t.Errorf("endStateText(%s %s) = %q, want %q", tc.op.Kind(), tc.op.Status, got, tc.want)
+		}
+	}
+
+	// The lines a frame carries while the work is still in flight.
+	if got := repoTaskContent(pruneOf(backrest.StatusInProgress), nil).State; got != "Pruning..." {
+		t.Errorf("running prune state = %q, want %q", got, "Pruning...")
+	}
+	if got := repoTaskContent(checkOf(backrest.StatusInProgress), nil).State; got != "Checking..." {
+		t.Errorf("running check state = %q, want %q", got, "Checking...")
+	}
+	if got := backupRunningState(backupOf(backrest.StatusInProgress), 0); got != "Scanning..." {
+		t.Errorf("pre-scan backup state = %q, want %q", got, "Scanning...")
+	}
+	if got := orphanContent("Backrest", 0).State; got != "Interrupted" {
+		t.Errorf("orphan state = %q, want %q", got, "Interrupted")
+	}
+}
+
+// Prune and check are the two outcomes resolved by kind rather than by status,
+// and getting the pass/fail pairing backwards would report a clean prune as a
+// failure. Driven end to end, because the renderer is only half of it: the
+// bridge also has to reach these two through handleTerminal at all.
+func TestFinishedRepoTasksRenderTheirOwnOutcome(t *testing.T) {
+	prune := loadOp(t, "prune_success.json")
+	prune.ID = 900
+	check := loadOp(t, "check_error.json")
+	check.ID = 901
+
+	br := &fakeBackrest{
+		windows: [][]backrest.Operation{{}, {prune, check}},
+		logs: map[string]string{
+			prune.OutputLogref(): loadText(t, "prune_output.log"),
+			check.OutputLogref(): loadText(t, "check_output.log"),
+		},
+	}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t)
+	h.poll(t)
+
+	frames := make(map[string]pushward.Content)
+	for _, c := range h.recorded() {
+		if c.Method != "PATCH" {
+			continue
+		}
+		frames[strings.TrimPrefix(c.Path, "/activities/")] = content(t, c)
+	}
+
+	pruned, ok := frames[slugFor(&prune)]
+	if !ok {
+		t.Fatalf("no frame for the finished prune, got %d frames", len(frames))
+	}
+	if pruned.State != "Pruned" {
+		t.Errorf("successful prune state = %q, want %q", pruned.State, "Pruned")
+	}
+	if pruned.AccentColor != pushward.ColorGreen {
+		t.Errorf("successful prune accent_color = %q, want green", pruned.AccentColor)
+	}
+
+	failed, ok := frames[slugFor(&check)]
+	if !ok {
+		t.Fatalf("no frame for the finished check, got %d frames", len(frames))
+	}
+	if failed.State != "Check Failed" {
+		t.Errorf("failed check state = %q, want %q", failed.State, "Check Failed")
+	}
+	if failed.AccentColor != pushward.ColorRed {
+		t.Errorf("failed check accent_color = %q, want red", failed.AccentColor)
+	}
+	// A check that failed is worth reading, so its output is the frame.
+	if failed.Template != pushward.TemplateLog {
+		t.Errorf("failed check template = %q, want %q", failed.Template, pushward.TemplateLog)
+	}
+}
+
 // An operation that started and finished inside one poll interval never shows
 // as running, but its outcome is still the part worth seeing.
 func TestOutcomeMissedBetweenPollsStillShows(t *testing.T) {
@@ -829,6 +1401,32 @@ func TestTerminalRowIsAnnouncedOnce(t *testing.T) {
 	}
 }
 
+// The done set is what keeps a terminal row from being announced twice, and it
+// grows by one entry per operation the bridge ever sees. A row that has scrolled
+// out of the query window cannot come back, so its entry is a slow leak on a
+// process meant to run for months.
+func TestBookkeepingIsDroppedOnceARowLeavesTheWindow(t *testing.T) {
+	old := finishedBackup(t, 777, 24*time.Hour)
+	br := &fakeBackrest{windows: [][]backrest.Operation{{old}, {}}}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t) // priming records it as history
+	h.p.mu.Lock()
+	recorded := len(h.p.done)
+	h.p.mu.Unlock()
+	if recorded != 1 {
+		t.Fatalf("the done set holds %d entries after priming, want the one row it saw", recorded)
+	}
+
+	h.poll(t) // the row has aged out of the query window
+
+	h.p.mu.Lock()
+	defer h.p.mu.Unlock()
+	if left := len(h.p.done); left != 0 {
+		t.Errorf("the done set still holds %d entries for a row that is gone, want 0", left)
+	}
+}
+
 // waitForUntracked blocks until the two-phase end has dropped its bookkeeping,
 // which is the state in which a re-announcement would happen.
 func waitForUntracked(t *testing.T, h *harness, opID int64) {
@@ -844,6 +1442,164 @@ func waitForUntracked(t *testing.T, h *harness, opID int64) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatal("the tracking entry was never released")
+}
+
+// Giving up on an activity marks its operation done, and a done operation is
+// never looked at again - so a run of rejected frames costs the outcome as well
+// as the frames. A PushWard blip must not be what decides that, or a backup that
+// finished during it is left on the Lock Screen mid-flight until the server ages
+// it out.
+func TestShortOutageDoesNotBuryACompletedBackup(t *testing.T) {
+	done := loadOp(t, "backup_success.json")
+	done.ID = 777
+
+	cfg := testConfig()
+	// Two minutes of a real outage, not a count of attempts: the attempts a
+	// window that long buys depend on how often this operation had cause to send.
+	ticks := int(2 * time.Minute / cfg.Polling.Interval)
+
+	br := &fakeBackrest{windows: [][]backrest.Operation{{}, {done}}}
+	h := newRejectingHarness(t, cfg, br, ticks)
+
+	h.poll(t) // priming, on an empty window
+	for i := 0; i < ticks; i++ {
+		h.poll(t)
+		h.advance(cfg.Polling.Interval)
+	}
+	h.poll(t) // the outage clears
+
+	calls := waitForEnded(t, h, 0)
+	final := content(t, calls[len(calls)-1])
+	if !strings.HasPrefix(final.State, stateComplete) {
+		t.Errorf("state = %q, want the outcome the outage held up", final.State)
+	}
+}
+
+// The window measures one unbroken run of rejections, so a frame that lands has
+// to clear it. Left running, two unrelated blips ten minutes apart add up to a
+// give-up on an activity that was healthy for the whole stretch between them.
+func TestALandedFrameClearsTheFailureClock(t *testing.T) {
+	cfg := testConfig()
+	br := &fakeBackrest{windows: [][]backrest.Operation{
+		{},
+		{runningBackup(1, 10_000_000, 100_000_000)},
+		{runningBackup(1, 20_000_000, 100_000_000)},
+	}}
+	h := newRejectingHarness(t, cfg, br, 1) // only the first frame is turned down
+
+	h.poll(t) // priming
+	h.poll(t) // rejected
+	h.advance(cfg.Polling.Interval)
+	h.poll(t) // lands
+
+	h.p.mu.Lock()
+	defer h.p.mu.Unlock()
+	tr, ok := h.p.tracked[1]
+	if !ok {
+		t.Fatal("the operation was dropped, so the rejection was never survived at all")
+	}
+	if !tr.failingSince.IsZero() {
+		t.Errorf("the failure clock still reads %v after a frame landed", tr.failingSince)
+	}
+}
+
+// A frame the server turned down was never delivered, so nothing about it may be
+// recorded as sent. Here the rejected frame is the seed itself, so the whole
+// record has to stay clear: a phase, a progress or a push stamp left behind by an
+// activity that was never created has the next tick comparing its frame against
+// one the server has never seen.
+func TestARejectedFrameIsNotRecordedAsSent(t *testing.T) {
+	cfg := testConfig()
+	br := &fakeBackrest{windows: [][]backrest.Operation{
+		{},
+		{runningBackup(1, 300, 1000)},
+	}}
+	h := newRejectingHarness(t, cfg, br, 1)
+
+	h.poll(t) // priming
+	h.poll(t) // the frame the server turns down
+
+	h.p.mu.Lock()
+	tr, ok := h.p.tracked[1]
+	h.p.mu.Unlock()
+	if !ok {
+		t.Fatal("the operation was dropped, so a single rejection ended it")
+	}
+	if tr.seeded {
+		t.Error("the activity is marked seeded off a frame that never landed")
+	}
+	if tr.lastPhase != "" || tr.lastProgress != 0 || !tr.lastPushAt.IsZero() {
+		t.Errorf("a rejected frame was recorded as sent: phase=%q progress=%v at=%v",
+			tr.lastPhase, tr.lastProgress, tr.lastPushAt)
+	}
+}
+
+// The same rule once the activity is up, where it is visible from the outside: a
+// rejected patch recorded as sent looks like a repeat to the throttle, so the
+// retry is dropped and the card stays frozen on the frame before it until the
+// heartbeat falls due - half of stale_timeout, 15 minutes on the defaults.
+func TestARejectedUpdateIsSentAgainOnTheNextTick(t *testing.T) {
+	cfg := testConfig()
+	// The live-progress anchor is not what this is about, and left on it moves
+	// enough between ticks to re-send the frame on its own account.
+	cfg.Render.LiveProgress = false
+
+	br := &fakeBackrest{windows: [][]backrest.Operation{
+		{},
+		{runningBackup(1, 100, 1000)},
+		{runningBackup(1, 300, 1000)},
+	}}
+	// The seed lands, so the throttle has a frame to compare against; the one
+	// after it is turned down.
+	srv, calls, mu := gatedServer(t, func(n int) int {
+		if n == 2 {
+			return http.StatusBadRequest
+		}
+		return http.StatusOK
+	})
+	h := wire(t, cfg, br, srv, calls, mu)
+
+	h.poll(t) // priming
+	h.poll(t) // the seed
+	h.advance(cfg.Polling.Interval)
+	h.poll(t) // the frame the server turns down
+	h.advance(cfg.Polling.Interval)
+	h.poll(t) // the same frame again, which the phone has still never seen
+
+	if got := h.pushCount(); got != 3 {
+		t.Errorf("sent %d frames, want the rejected one sent again (3)", got)
+	}
+}
+
+// The limit still has to bite. An activity the server will never accept holds
+// its entry forever otherwise, and interval() reads that entry as live work and
+// keeps the poll loop at its fast rate for as long as the row stays in the query
+// window - over a week on a nightly-backup instance.
+func TestPersistentRejectionIsEventuallyAbandoned(t *testing.T) {
+	done := loadOp(t, "backup_success.json")
+	done.ID = 777
+
+	cfg := testConfig()
+	br := &fakeBackrest{windows: [][]backrest.Operation{{}, {done}}}
+	h := newRejectingHarness(t, cfg, br, 1_000_000)
+
+	h.poll(t) // priming
+	h.poll(t) // the rejection that starts the clock
+	// A literal, not maxSendFailureWindow: advancing by the constant the code
+	// reads would pass at any value it was given, including one so long that the
+	// entry it exists to release is held for days.
+	h.advance(11 * time.Minute)
+	h.poll(t) // the tick that crosses the window
+	after := len(h.recorded())
+
+	h.poll(t)
+	h.poll(t)
+	if got := len(h.recorded()); got != after {
+		t.Errorf("made %d further calls for an activity the server refuses, want 0", got-after)
+	}
+	if got := h.p.interval(); got != cfg.Polling.IdleInterval {
+		t.Errorf("poll interval = %v, want the idle rate back once nothing is tracked", got)
+	}
 }
 
 // An operation that leaves the window without ever being seen finished would
@@ -943,11 +1699,12 @@ func TestSlugDiffersFromTheRelayScheme(t *testing.T) {
 	op := &backrest.Operation{PlanID: "appdata", RepoID: "nas", Backup: &backrest.OperationBackup{}}
 	got := slugFor(op)
 
-	// The relay concatenates plan and repo with no separator.
-	relayInput := "appdata" + "nas"
-	bridgeInput := "appdata" + "/" + "nas" + "/" + string(backrest.KindBackup)
-	if relayInput == bridgeInput {
-		t.Fatal("the two hash inputs are identical, so the slugs would collide")
+	// The relay hashes plan and repo concatenated with no separator, under the
+	// same prefix and hash width. Comparing the two hash inputs would only
+	// restate how this test builds them; comparing the slugs themselves is what
+	// the collision is.
+	if relay := text.SlugHash("backrest", op.PlanID+op.RepoID, 4); got == relay {
+		t.Errorf("slug = %q, which is what the relay's backrest provider would publish to", got)
 	}
 	if !strings.HasPrefix(got, "backrest-") {
 		t.Errorf("slug = %q, want the backrest- prefix", got)
@@ -990,6 +1747,202 @@ func TestIntervalFollowsActivity(t *testing.T) {
 	if got := h.p.interval(); got != cfg.Polling.Interval {
 		t.Errorf("active interval = %v, want %v", got, cfg.Polling.Interval)
 	}
+}
+
+// An operation in its two-phase close is not live work: the frames left to send
+// are on their own timers and no poll will produce another. Counting it holds
+// the loop at the fast rate through both phases, and through the whole
+// end_display_time between them.
+func TestIntervalDropsToIdleWhileAnActivityCloses(t *testing.T) {
+	cfg := testConfig()
+	// Long enough that the close is still pending when the interval is read.
+	cfg.PushWard.EndDelay = time.Minute
+
+	done := loadOp(t, "backup_success.json")
+	done.ID = 777
+	br := &fakeBackrest{windows: [][]backrest.Operation{{}, {done}}}
+	h := newHarness(t, cfg, br)
+	defer h.p.shutdown()
+
+	h.poll(t)
+	h.poll(t)
+
+	h.p.mu.Lock()
+	tr, ok := h.p.tracked[777]
+	closing := ok && tr.ending
+	h.p.mu.Unlock()
+	if !closing {
+		t.Fatal("the operation is not mid-close, so the interval it reports proves nothing")
+	}
+
+	if got := h.p.interval(); got != cfg.Polling.IdleInterval {
+		t.Errorf("interval = %v with nothing tracked but a closing activity, want the idle rate %v",
+			got, cfg.Polling.IdleInterval)
+	}
+}
+
+// Run is the whole process loop: it has to keep polling on its own timer and,
+// when its context goes, hand off to shutdown rather than returning while end
+// timers are still armed. main returns from Run straight into process exit, so a
+// timer left running is a frame with nobody left to send it.
+func TestRunPollsUntilItsContextIsCancelled(t *testing.T) {
+	cfg := testConfig()
+	cfg.Polling.Interval = 2 * time.Millisecond
+	cfg.Polling.IdleInterval = 2 * time.Millisecond
+	// Long enough that the close is still only armed when the context dies,
+	// which is what makes what shutdown does with it observable at all.
+	cfg.PushWard.EndDelay = 300 * time.Millisecond
+
+	done := loadOp(t, "backup_success.json")
+	done.ID = 777
+	br := &fakeBackrest{windows: [][]backrest.Operation{{}, {done}}}
+	h := newHarness(t, cfg, br)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	returned := make(chan error, 1)
+	go func() { returned <- h.p.Run(ctx) }()
+
+	// Waiting on the frames rather than on the poll count: a window is handed
+	// out before the poll has done anything with it, and cancelling in that gap
+	// kills the create on its way out, leaving shutdown nothing to walk.
+	waitFor(t, "the finished backup's frames", func() bool { return len(h.recorded()) >= 2 })
+	cancel()
+
+	select {
+	case err := <-returned:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Run returned %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run never returned, so shutdown is waiting on something it did not stop")
+	}
+
+	// Returning is only half of it: the armed phase has to have been stopped
+	// too, or it fires at a process that has already gone.
+	settled := len(h.recorded())
+	time.Sleep(2 * cfg.PushWard.EndDelay)
+	if got := len(h.recorded()); got != settled {
+		t.Errorf("%d frames went out after Run returned, want the end timers stopped", got-settled)
+	}
+}
+
+// shutdown stops the armed phases rather than only waiting on them. Phase 1 sends
+// a final ONGOING frame and arms phase 2 behind it, so one that fires as the
+// process leaves puts a card on the Lock Screen with no ENDED coming for it.
+func TestShutdownStopsAPendingClose(t *testing.T) {
+	cfg := testConfig()
+	// Long enough that phase 1 is still only armed when shutdown runs.
+	cfg.PushWard.EndDelay = 200 * time.Millisecond
+
+	done := loadOp(t, "backup_success.json")
+	done.ID = 777
+	br := &fakeBackrest{windows: [][]backrest.Operation{{}, {done}}}
+	h := newHarness(t, cfg, br)
+
+	h.poll(t) // priming
+	h.poll(t) // the completion frame, which schedules the close
+
+	settled := len(h.recorded())
+	h.p.shutdown()
+	time.Sleep(2 * cfg.PushWard.EndDelay)
+
+	if got := len(h.recorded()); got != settled {
+		t.Errorf("%d frames went out after shutdown, want the armed phase stopped", got-settled)
+	}
+}
+
+// The other half of the same rule: a phase already sending must not be cut off.
+// main returns from Run into process exit, so shutdown's wait is the only thing
+// keeping the process alive while a closing frame is on the wire.
+func TestShutdownWaitsForAFrameAlreadyInFlight(t *testing.T) {
+	cfg := testConfig()
+	cfg.PushWard.EndDelay = time.Millisecond
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	// httptest's Close blocks on the outstanding request, so the gate has to be
+	// opened ahead of it whichever way the test leaves.
+	free := func() { once.Do(func() { close(release) }) }
+
+	// The seed is the first frame; the second is end phase 1.
+	srv, calls, mu := gatedServer(t, func(n int) int {
+		if n == 2 {
+			close(entered)
+			<-release
+		}
+		return http.StatusOK
+	})
+	t.Cleanup(free)
+
+	done := loadOp(t, "backup_success.json")
+	done.ID = 777
+	br := &fakeBackrest{windows: [][]backrest.Operation{{}, {done}}}
+	h := wire(t, cfg, br, srv, calls, mu)
+
+	h.poll(t) // priming
+	h.poll(t) // the completion frame, which schedules the close
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the closing frame never reached the server")
+	}
+
+	returned := make(chan struct{})
+	go func() {
+		h.p.shutdown()
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+		t.Fatal("shutdown returned while a closing frame was still on the wire")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	free()
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("shutdown never returned once the frame had landed")
+	}
+}
+
+// The two closing frames fire from timers, by which time the poll context that
+// produced them is usually gone - a rollout cancels it seconds after the backup
+// it was watching finished. They run on a context detached from it for that
+// reason: sending on the poll context would abandon the close half-way and leave
+// the card on the Lock Screen until the server ages it out.
+func TestEndFramesSurviveTheirPollContext(t *testing.T) {
+	done := loadOp(t, "backup_success.json")
+	done.ID = 777
+	br := &fakeBackrest{windows: [][]backrest.Operation{{}, {done}}}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t) // priming
+
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := h.p.poll(ctx); err != nil {
+		t.Fatalf("poll: %v", err)
+	}
+	cancel()
+
+	waitForEnded(t, h, 0)
+}
+
+// waitFor blocks until cond holds, so a test driving Run does not have to guess
+// how long a poll takes on a loaded box.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
 }
 
 func TestSampleTracksStall(t *testing.T) {
@@ -1100,6 +2053,57 @@ func TestStatuslessTickDoesNotCorruptTheRate(t *testing.T) {
 	}
 }
 
+// The log template takes at most 20 lines and rejects an empty one, so both
+// limits are contract rather than taste - a frame that breaks either is turned
+// down whole and the outcome never reaches the phone. The numbers are literals
+// for that reason.
+func TestErrorLinesRespectTheLogTemplateLimits(t *testing.T) {
+	over := &backrest.Operation{Backup: &backrest.OperationBackup{}}
+	for i := 0; i < 25; i++ {
+		over.Backup.Errors = append(over.Backup.Errors, backrest.BackupProgressError{
+			Item:    fmt.Sprintf("/data/live/file-%02d", i),
+			During:  "archival",
+			Message: "permission denied",
+		})
+	}
+	if got := len(errorLines(over)); got != 20 {
+		t.Errorf("25 per-file errors produced %d lines, want the template's 20", got)
+	}
+
+	// Backrest fills in what restic gave it, so an entry that names neither a
+	// file nor a reason is possible and would render as an empty line.
+	blank := &backrest.Operation{Backup: &backrest.OperationBackup{Errors: []backrest.BackupProgressError{
+		{Item: "/data/live/session.db", During: "archival", Message: "permission denied"},
+		{During: "archival"},
+		{Item: "/data/live/cache.sock", During: "archival", Message: "unsupported file type: socket"},
+	}}}
+	lines := errorLines(blank)
+	if len(lines) != 2 {
+		t.Fatalf("got %d lines, want the two that name a file", len(lines))
+	}
+	for i, l := range lines {
+		if l.Text == "" {
+			t.Errorf("lines[%d] is empty, which the template rejects", i)
+		}
+	}
+}
+
+// restic's retry lines quote a full repository URL and run well past what one
+// log entry may hold. Over the limit the server rejects the frame outright, so
+// the whole outcome is lost rather than the tail of one line.
+func TestTruncateLineCapsAtTheTemplateLimit(t *testing.T) {
+	long := "check failed for pack " + strings.Repeat("a", 600)
+	got := truncateLine(long)
+	if n := len([]rune(got)); n != 512 {
+		t.Errorf("a %d-rune line truncated to %d, want the template's 512", len([]rune(long)), n)
+	}
+
+	short := "no errors were found"
+	if got := truncateLine(short); got != short {
+		t.Errorf("truncateLine(%q) = %q, want it untouched", short, got)
+	}
+}
+
 // restic quotes the repository URL in its retry lines. A REST/S3/B2 repo can
 // carry credentials there, and those must not reach the Lock Screen.
 func TestLogLinesRedactCredentials(t *testing.T) {
@@ -1188,6 +2192,20 @@ func TestShouldPushTriggersIndependently(t *testing.T) {
 	moved.EndDate = pushward.Int64Ptr(901)
 	if !base().shouldPush(moved, phaseRunning, now, time.Minute) {
 		t.Error("a moved anchor did not push")
+	}
+
+	written := same
+	written.Lines = []pushward.LogLine{{Text: "removing 3 old packs", Level: pushward.LogInfo}}
+	if !base().shouldPush(written, phaseRunning, now, time.Minute) {
+		t.Error("a new log line did not push")
+	}
+
+	// A separately built slice of the same lines, so this compares values and
+	// not the identity of the one the last frame carried.
+	sent := base()
+	sent.lastLines = []pushward.LogLine{{Text: "removing 3 old packs", Level: pushward.LogInfo}}
+	if sent.shouldPush(written, phaseRunning, now, time.Minute) {
+		t.Error("an unchanged log tail pushed")
 	}
 
 	if !base().shouldPush(same, phaseRunning, now.Add(2*time.Minute), time.Minute) {

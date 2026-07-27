@@ -26,14 +26,18 @@ pushward:
   # Integration key from the PushWard app.  (PUSHWARD_API_KEY)
   api_key: hlk_your_key_here
 
-  # Activity priority, 0-10.  (PUSHWARD_PRIORITY)
+  # Activity priority, 0-10. Higher survives eviction when several activities
+  # compete; a backup is worth a little more than the default 1 because it runs
+  # for hours.  (PUSHWARD_PRIORITY)
   priority: 2
 
   # How long an ended activity lingers before the server drops it.
   cleanup_delay: 15m
 
   # How long the server waits on silence before ending the activity itself.
-  # Must stay comfortably above the 30s heartbeat the bridge sends.
+  # The bridge derives its keep-alive from this (half of it, floored at 30s), so
+  # the two cannot drift apart. It also sets how recently a backup must have
+  # finished for a restarted bridge to still adopt and close its card.
   stale_timeout: 30m
 
   # Two-phase end: the final ONGOING frame lands after end_delay so the outcome
@@ -62,3 +66,11 @@ render:
   # off falls back to a plain state line and skips the log fetch entirely.
   # (PUSHWARD_BACKREST_LOGS)
   logs: true
+
+  # Longest ETA still worth anchoring the bar to. A backup that stalls in its
+  # first minutes produces an arbitrarily large estimate, and past this ceiling
+  # the number is dropped instead of shown. A week covers a multi-terabyte first
+  # run over a slow link, where the countdown is worth reading even though the
+  # bar barely moves. Lower it if you would rather see nothing than a multi-day
+  # estimate.  (PUSHWARD_BACKREST_MAX_ETA)
+  max_eta: 168h

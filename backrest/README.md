@@ -80,6 +80,7 @@ version.
 | `PUSHWARD_BACKREST_LAST_N` | `polling.last_n` | Operations requested per poll | `50` |
 | `PUSHWARD_BACKREST_LIVE_PROGRESS` | `render.live_progress` | Animate the bar and ETA between polls | `true` |
 | `PUSHWARD_BACKREST_LOGS` | `render.logs` | Render prune/check as a log view | `true` |
+| `PUSHWARD_BACKREST_MAX_ETA` | `render.max_eta` | Longest ETA still worth anchoring the bar to | `168h` |
 
 Backrest's auth middleware accepts HTTP Basic or a bearer JWT, and lets every request through when
 authentication is disabled. Leaving all three credential fields empty is a supported setup, not an
@@ -127,10 +128,22 @@ each poll and smoothed into a transfer rate. The resulting end date is only re-s
 estimate moves materially, because every new anchor restarts the animation on the phone and a
 constantly nudged one reads as a stutter.
 
-A frame is only pushed when the bar has moved more than 2%, the state line has changed, or the ETA
-has been re-anchored - plus a 30-second heartbeat so the server does not end the activity as stale
-during a long, quiet stretch.
+Anything past `max_eta` is dropped rather than anchored, since a backup that stalls in its first
+minutes can produce an estimate of any size. The ceiling defaults to a week, not a working day: a
+1.5 TB first run at 9 MB/s is roughly two days out, and that countdown is worth reading even though
+the bar itself only creeps.
+
+A frame is only pushed when the bar has moved more than 2%, the state line has changed, the ETA has
+been re-anchored, or a prune or check has written new output - plus a keep-alive at half the
+configured `stale_timeout` so the server does not end the activity as stale during a long, quiet
+stretch. A prune reports no progress at all, so that last output is the only thing its card has to
+say; the log behind it is re-read every 15 seconds rather than on every poll.
 
 The first poll after startup is special: it records what Backrest has already finished without
 announcing any of it. Without that, starting the bridge would fire an activity for every backup in
 the recent history.
+
+The exception is anything that finished within `stale_timeout` of startup, which is announced and
+closed normally. That covers the case where the bridge is restarted mid-backup - a container
+rollout, say - and the backup completes while it is down: without it the card the previous process
+left behind would sit on the Lock Screen showing stale progress until the server timed it out.

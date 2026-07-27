@@ -45,13 +45,9 @@ const (
 
 	// minLiveWindow is the shortest ETA worth animating. Below it the bar would
 	// finish filling before the next poll and the countdown would read as a
-	// glitch.
+	// glitch. The upper bound is render.max_eta, since how long an estimate may
+	// be before it is noise depends on the size of the backup.
 	minLiveWindow = 5 * time.Second
-
-	// maxLiveWindow caps the anchor. A backup that stalls early produces an
-	// arbitrarily large estimate, and an end date days out renders as a bar
-	// that never visibly moves - worse than no animation.
-	maxLiveWindow = 12 * time.Hour
 
 	// reanchorFloor and reanchorFrac decide when a new estimate differs enough
 	// to be worth re-sending. Without them the anchor moves on every tick and
@@ -64,15 +60,23 @@ const (
 	// rather than inheriting one.
 	endPushTimeout = 30 * time.Second
 
-	// maxSendFailures is how many consecutive rejections an operation gets
+	// maxSendFailureWindow is how long an operation may go on being rejected
 	// before the bridge stops trying.
 	//
-	// Without it a terminal operation whose activity the server refuses - a
+	// Without a limit a terminal operation whose activity the server refuses - a
 	// revoked key, a plan limit - is never closed out, so nothing ever removes
 	// its entry and interval() keeps the poll loop at its fast rate. It retries
 	// every tick for as long as the row stays in the query window, which on a
 	// nightly-backup instance is over a week.
-	maxSendFailures = 5
+	//
+	// The limit is a duration rather than a count of attempts because the push
+	// rate is not fixed: a backup sends as its bar moves and a prune as its log
+	// grows, so a five-attempt budget is a minute for one operation and an hour
+	// for another. Spending it on a PushWard blip is worse than it sounds -
+	// giving up marks the operation done, so its completion frame is never sent
+	// and the card is left showing a run still in flight until the server ages
+	// it out.
+	maxSendFailureWindow = 10 * time.Minute
 )
 
 // tracked is the poller's memory of one operation it has an open activity for.
@@ -92,6 +96,7 @@ type tracked struct {
 	lastProgress float64
 	lastPhase    string
 	lastTemplate string
+	lastLines    []pushward.LogLine
 	lastPushAt   time.Time
 
 	// Transfer-rate estimate.
@@ -110,9 +115,10 @@ type tracked struct {
 	logLines    []pushward.LogLine
 	lastLogPoll time.Time
 
-	// failures counts consecutive rejected sends, so an activity the server
-	// will never accept is eventually abandoned instead of retried forever.
-	failures int
+	// failingSince is when the current run of rejected sends began, zero once
+	// one lands, so an activity the server will never accept is eventually
+	// abandoned instead of retried forever.
+	failingSince time.Time
 
 	ending    bool
 	endTimers *syncx.TimerGroup
@@ -223,7 +229,8 @@ func (p *Poller) poll(ctx context.Context) error {
 
 	// The first poll returns everything Backrest has done recently, all of it
 	// finished. Announcing those would push a wall of activities for backups
-	// that ran days ago, so the first pass only records them.
+	// that ran days ago, so the first pass mostly records them instead - see
+	// prime for what it still has to speak up about.
 	p.mu.Lock()
 	priming := !p.primed
 	p.primed = true
@@ -240,11 +247,7 @@ func (p *Poller) poll(ctx context.Context) error {
 
 		switch {
 		case priming:
-			// A backup already running at startup is picked up normally on the
-			// next tick; only the finished ones need suppressing.
-			if op.Terminal() {
-				p.markDone(id)
-			}
+			p.prime(ctx, op)
 		case op.Running():
 			p.handleRunning(ctx, op)
 		case op.Terminal():
@@ -255,6 +258,51 @@ func (p *Poller) poll(ctx context.Context) error {
 	p.reapVanished(ctx, seen)
 	p.pruneDone(seen)
 	return nil
+}
+
+// prime decides what the first poll makes of an operation. One still running is
+// picked up normally on the next tick, and a finished one is only recorded.
+//
+// The exception is an operation that ended inside the stale timeout. A rollout
+// or a node drain restarts this process routinely, and when that happens
+// mid-backup the backup finishes in the gap: the previous process left an
+// activity on the Lock Screen, and nothing else is going to close it before the
+// server's stale timeout does, still showing the progress it stopped at. So
+// anything that ended inside that same window is announced and closed out here.
+// Re-adopting the slug is safe because creating an activity upserts on it.
+//
+// The cost is that an outcome the previous process did manage to announce is
+// announced a second time, because telling the two apart needs a read of the
+// activity that the client has no call for.
+func (p *Poller) prime(ctx context.Context, op *backrest.Operation) {
+	if !op.Terminal() {
+		return
+	}
+	if p.endedWithin(op, p.cfg.PushWard.StaleTimeout) {
+		p.handleTerminal(ctx, op)
+		return
+	}
+	p.markDone(op.ID.Int64())
+}
+
+// endedWithin reports whether the operation's finish stamp sits within d of
+// now. UnixTimeEnd is in milliseconds, and absent on a row Backrest never
+// stamped, which is not a finish at the epoch.
+//
+// The window is bounded on both sides because the stamp comes from the Backrest
+// host: a clock running ahead of this one, or this one stepping back after an
+// NTP correction, dates a finish in the future, and a one-sided window reads
+// that as maximally recent and announces the whole query window on every
+// restart. Skew of a few seconds still lands inside, which is what a genuinely
+// just-finished backup needs. A zero d - stale_timeout left to the server's own
+// default - adopts nothing, since the window is then unknown.
+func (p *Poller) endedWithin(op *backrest.Operation, d time.Duration) bool {
+	ms := op.UnixTimeEnd.Int64()
+	if ms <= 0 {
+		return false
+	}
+	age := p.now().Sub(time.UnixMilli(ms))
+	return age > -d && age < d
 }
 
 func (p *Poller) markDone(id int64) {
@@ -361,15 +409,17 @@ func (p *Poller) push(ctx context.Context, t *tracked, op *backrest.Operation, c
 		err = p.patch(ctx, t, content)
 	}
 	if err != nil {
-		t.failures++
-		if t.failures >= maxSendFailures {
+		if t.failingSince.IsZero() {
+			t.failingSince = now
+		}
+		if failing := now.Sub(t.failingSince); failing >= maxSendFailureWindow {
 			slog.Error("giving up on activity after repeated rejections",
-				"slug", t.slug, "op", t.opID, "attempts", t.failures)
+				"slug", t.slug, "op", t.opID, "failing_for", failing)
 			p.abandon(t)
 		}
 		return err
 	}
-	t.failures = 0
+	t.failingSince = time.Time{}
 	t.markPushed(content, phase, now)
 	return nil
 }
@@ -427,7 +477,7 @@ func (p *Poller) frameFor(ctx context.Context, t *tracked, op *backrest.Operatio
 	case !p.cfg.Render.LiveProgress:
 		liveStart, liveEnd = 0, 0
 	default:
-		if end, ok := t.anchor(op, now); ok {
+		if end, ok := t.anchor(op, now, p.cfg.Render.MaxETA); ok {
 			liveStart, liveEnd = now.Unix(), end
 		}
 	}
@@ -486,12 +536,18 @@ func (p *Poller) fetchLogLines(ctx context.Context, t *tracked, op *backrest.Ope
 		return nil
 	}
 
+	// Stamped on the attempt rather than on the answer, so the refresh interval
+	// bounds the asking and not just the answering: left unstamped, a Backrest
+	// that keeps refusing the log is re-asked on every poll tick, which is the
+	// load this interval exists to avoid and arrives when the host is already in
+	// trouble.
+	t.lastLogPoll = now
+
 	out, err := p.br.GetLogs(ctx, ref)
 	if err != nil {
 		slog.Warn("failed to fetch task log", "ref", ref, "error", err)
 		return t.logLines
 	}
-	t.lastLogPoll = now
 	t.logLines = outputLines(out)
 	return t.logLines
 }
@@ -632,7 +688,7 @@ func (t *tracked) sample(bytesDone int64, now time.Time) {
 //
 // Re-sending an anchor restarts the client-side animation, so an estimate that
 // wobbles by a second either way must never reach the payload.
-func (t *tracked) anchor(op *backrest.Operation, now time.Time) (int64, bool) {
+func (t *tracked) anchor(op *backrest.Operation, now time.Time, maxETA time.Duration) (int64, bool) {
 	// speed is only ever assigned from a second-or-later sample, so a positive
 	// rate already implies the two observations an estimate needs.
 	if t.speed <= 0 {
@@ -644,7 +700,7 @@ func (t *tracked) anchor(op *backrest.Operation, now time.Time) (int64, bool) {
 	}
 
 	eta := time.Duration(float64(remaining) / t.speed * float64(time.Second))
-	if eta < minLiveWindow || eta > maxLiveWindow {
+	if eta < minLiveWindow || eta > maxETA {
 		return 0, false
 	}
 	end := now.Add(eta).Unix()
@@ -681,15 +737,39 @@ func (t *tracked) shouldPush(c pushward.Content, phase string, now time.Time, he
 	if c.EndDate != nil && *c.EndDate != t.liveEnd {
 		return true
 	}
+	// A prune or check reports no progress and a fixed state line, so its
+	// command output is the only part of the frame that ever moves. Without this
+	// clause the only thing that carries that output to the phone is the
+	// heartbeat, which is half of stale_timeout - 15 minutes on the defaults,
+	// by which time most prunes are over.
+	if !sameLines(c.Lines, t.lastLines) {
+		return true
+	}
 	// The heartbeat is what stops the server ending the activity as stale
 	// during a long, quiet stretch.
 	return now.Sub(t.lastPushAt) >= heartbeat
+}
+
+// sameLines compares the two fields of a log line that this bridge fills in.
+// slices.Equal would also compare At, a pointer, and answer no for two lines
+// carrying equal stamps.
+func sameLines(a, b []pushward.LogLine) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Text != b[i].Text || a[i].Level != b[i].Level {
+			return false
+		}
+	}
+	return true
 }
 
 func (t *tracked) markPushed(c pushward.Content, phase string, now time.Time) {
 	t.lastPhase = phase
 	t.lastTemplate = c.Template
 	t.lastProgress = c.Progress
+	t.lastLines = c.Lines
 	t.lastPushAt = now
 	if c.EndDate != nil {
 		t.liveEnd = *c.EndDate
