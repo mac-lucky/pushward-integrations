@@ -98,8 +98,13 @@ func Load(path string) (*Config, error) {
 			Timeout: 15 * time.Second,
 		},
 		PushWard: sharedconfig.PushWardConfig{
-			Priority:       1,
-			CleanupDelay:   15 * time.Minute,
+			Priority: 1,
+			// The activity's ended_ttl: how long a finished backup's card
+			// lingers before the server drops it, and with dismissal_ttl unset,
+			// how long it stays on the Lock Screen. Ten minutes is long enough
+			// to catch up on a backup that finished while you were away and
+			// short enough that yesterday's is not still sitting there.
+			CleanupDelay:   10 * time.Minute,
 			StaleTimeout:   30 * time.Minute,
 			EndDelay:       5 * time.Second,
 			EndDisplayTime: 4 * time.Second,

@@ -55,6 +55,11 @@ func TestDefaults(t *testing.T) {
 	if cfg.Polling.LastN != 50 {
 		t.Errorf("polling.last_n = %d, want 50", cfg.Polling.LastN)
 	}
+	// cleanup_delay is the activity's ended_ttl. Ten minutes, not the shared
+	// fifteen: it is how long a finished backup sits on the Lock Screen.
+	if cfg.PushWard.CleanupDelay != 10*time.Minute {
+		t.Errorf("pushward.cleanup_delay = %v, want 10m", cfg.PushWard.CleanupDelay)
+	}
 	// Both render flags default on: the anchors are additive and the log view
 	// is the only readable rendering prune and check have.
 	if !cfg.Render.LiveProgress {
@@ -215,5 +220,8 @@ func TestExampleConfigLoads(t *testing.T) {
 	}
 	if cfg.Render.MaxETA != 7*24*time.Hour {
 		t.Errorf("example render.max_eta = %v, want the documented 168h default", cfg.Render.MaxETA)
+	}
+	if cfg.PushWard.CleanupDelay != 10*time.Minute {
+		t.Errorf("example pushward.cleanup_delay = %v, want the documented 10m", cfg.PushWard.CleanupDelay)
 	}
 }

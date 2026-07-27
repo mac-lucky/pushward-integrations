@@ -41,7 +41,9 @@ jobs:
     if: needs.parse.outputs.bridge == 'backrest'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
     permissions:
-      contents: read
+      # write, not read: the reusable workflow attaches the generated SBOM to
+      # the release, and a job-level block overrides the top-level grant.
+      contents: write
       packages: write
       security-events: write
       actions: read
@@ -67,7 +69,9 @@ jobs:
     if: needs.parse.outputs.bridge == 'bambulab'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
     permissions:
-      contents: read
+      # write, not read: the reusable workflow attaches the generated SBOM to
+      # the release, and a job-level block overrides the top-level grant.
+      contents: write
       packages: write
       security-events: write
       actions: read
@@ -93,7 +97,9 @@ jobs:
     if: needs.parse.outputs.bridge == 'github'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
     permissions:
-      contents: read
+      # write, not read: the reusable workflow attaches the generated SBOM to
+      # the release, and a job-level block overrides the top-level grant.
+      contents: write
       packages: write
       security-events: write
       actions: read
@@ -119,7 +125,9 @@ jobs:
     if: needs.parse.outputs.bridge == 'grafana'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
     permissions:
-      contents: read
+      # write, not read: the reusable workflow attaches the generated SBOM to
+      # the release, and a job-level block overrides the top-level grant.
+      contents: write
       packages: write
       security-events: write
       actions: read
@@ -145,7 +153,9 @@ jobs:
     if: needs.parse.outputs.bridge == 'relay'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
     permissions:
-      contents: read
+      # write, not read: the reusable workflow attaches the generated SBOM to
+      # the release, and a job-level block overrides the top-level grant.
+      contents: write
       packages: write
       security-events: write
       actions: read
@@ -171,7 +181,9 @@ jobs:
     if: needs.parse.outputs.bridge == 'sabnzbd'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
     permissions:
-      contents: read
+      # write, not read: the reusable workflow attaches the generated SBOM to
+      # the release, and a job-level block overrides the top-level grant.
+      contents: write
       packages: write
       security-events: write
       actions: read
@@ -194,7 +206,11 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    needs: [parse, bambulab, github, grafana, relay, sabnzbd]
+    # Every bridge job must be listed. A missing one is not a failure, it is a
+    # skip, so this job stops waiting for it and publishes the release while
+    # that bridge is still building - which also lets the SBOM step find a
+    # release to attach to and trip on it.
+    needs: [parse, backrest, bambulab, github, grafana, relay, sabnzbd]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     permissions:

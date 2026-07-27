@@ -31,8 +31,12 @@ pushward:
   # for hours.  (PUSHWARD_PRIORITY)
   priority: 2
 
-  # How long an ended activity lingers before the server drops it.
-  cleanup_delay: 15m
+  # The activity's ended_ttl: how long a finished backup's card lingers before
+  # the server drops it, and - since this bridge does not set dismissal_ttl -
+  # how long it stays on the Lock Screen after it ends (the server caps that at
+  # 4h). Raise it if you want longer to notice a backup that finished while you
+  # were away.  (PUSHWARD_CLEANUP_DELAY)
+  cleanup_delay: 10m
 
   # How long the server waits on silence before ending the activity itself.
   # The bridge derives its keep-alive from this (half of it, floored at 30s), so
