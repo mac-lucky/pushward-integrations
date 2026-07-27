@@ -63,6 +63,16 @@ const (
 	// timers after the poll context is gone, so they carry their own deadline
 	// rather than inheriting one.
 	endPushTimeout = 30 * time.Second
+
+	// maxSendFailures is how many consecutive rejections an operation gets
+	// before the bridge stops trying.
+	//
+	// Without it a terminal operation whose activity the server refuses - a
+	// revoked key, a plan limit - is never closed out, so nothing ever removes
+	// its entry and interval() keeps the poll loop at its fast rate. It retries
+	// every tick for as long as the row stays in the query window, which on a
+	// nightly-backup instance is over a week.
+	maxSendFailures = 5
 )
 
 // tracked is the poller's memory of one operation it has an open activity for.
@@ -76,9 +86,12 @@ type tracked struct {
 	subtitle string
 	seeded   bool
 
-	// Push throttle.
+	// Push throttle. lastPhase is the coarse step, not the rendered state line:
+	// that line carries a byte count and a transfer rate which move on nearly
+	// every tick, so comparing it would push on nearly every tick too.
 	lastProgress float64
-	lastState    string
+	lastPhase    string
+	lastTemplate string
 	lastPushAt   time.Time
 
 	// Transfer-rate estimate.
@@ -86,13 +99,20 @@ type tracked struct {
 	lastSampleAt time.Time
 	speed        float64
 
-	// Live-progress anchor: the unix second the bar is animating toward, zero
-	// when no anchor has been sent.
-	liveEnd int64
+	// Live-progress anchor: the unix window the bar is animating across, zero
+	// when no anchor has been sent. liveStart is republished unchanged on every
+	// push that keeps the anchor, because restamping it to now would restart
+	// the client-side animation and undo the drift suppression in anchor().
+	liveStart int64
+	liveEnd   int64
 
 	// Cached command-output tail for a running prune or check.
 	logLines    []pushward.LogLine
 	lastLogPoll time.Time
+
+	// failures counts consecutive rejected sends, so an activity the server
+	// will never accept is eventually abandoned instead of retried forever.
+	failures int
 
 	ending    bool
 	endTimers *syncx.TimerGroup
@@ -309,16 +329,38 @@ func (p *Poller) track(op *backrest.Operation) *tracked {
 
 // push seeds or patches the activity, recording the frame only once it has
 // landed so a failed send is simply re-evaluated on the next tick.
-func (p *Poller) push(ctx context.Context, t *tracked, op *backrest.Operation, content pushward.Content, now time.Time) error {
+func (p *Poller) push(ctx context.Context, t *tracked, op *backrest.Operation, content pushward.Content, phase string, now time.Time) error {
+	var err error
 	if !t.seeded {
-		if err := p.create(ctx, t, op, content); err != nil {
-			return err
+		err = p.create(ctx, t, op, content)
+	} else {
+		err = p.patch(ctx, t, content)
+	}
+	if err != nil {
+		t.failures++
+		if t.failures >= maxSendFailures {
+			slog.Error("giving up on activity after repeated rejections",
+				"slug", t.slug, "op", t.opID, "attempts", t.failures)
+			p.abandon(t)
 		}
-	} else if err := p.patch(ctx, t, content); err != nil {
 		return err
 	}
-	t.markPushed(content, now)
+	t.failures = 0
+	t.markPushed(content, phase, now)
 	return nil
+}
+
+// abandon drops an operation the server will not accept.
+//
+// It is marked done rather than merely deleted so a terminal row still sitting
+// in the query window is not picked straight back up on the next tick, and so
+// interval() stops treating it as live work holding the fast poll rate.
+func (p *Poller) abandon(t *tracked) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	t.ending = true
+	p.done[t.opID] = true
+	delete(p.tracked, t.opID)
 }
 
 // handleRunning creates the activity on first sight and pushes an update when
@@ -330,32 +372,37 @@ func (p *Poller) handleRunning(ctx context.Context, op *backrest.Operation) {
 	}
 
 	now := p.now()
-	content := p.frameFor(ctx, t, op, now)
+	content, phase := p.frameFor(ctx, t, op, now)
 
 	// The throttle applies only once there is a frame to compare against.
-	if t.seeded && !t.shouldPush(content, now, p.heartbeat()) {
+	if t.seeded && !t.shouldPush(content, phase, now, p.heartbeat()) {
 		return
 	}
-	_ = p.push(ctx, t, op, content, now)
+	_ = p.push(ctx, t, op, content, phase, now)
 }
 
 // frameFor builds the frame for an operation still in flight: the rate sample,
 // the live-progress anchor and the log tail are all poller state, so they are
 // resolved here and handed to the renderer.
-func (p *Poller) frameFor(ctx context.Context, t *tracked, op *backrest.Operation, now time.Time) pushward.Content {
+func (p *Poller) frameFor(ctx context.Context, t *tracked, op *backrest.Operation, now time.Time) (pushward.Content, string) {
 	if op.Kind() != backrest.KindBackup {
-		return repoTaskContent(op, p.cachedLogLines(ctx, t, op, now))
+		c := repoTaskContent(op, p.cachedLogLines(ctx, t, op, now))
+		// Prune and check render a fixed state line, so it is a usable phase.
+		return c, c.State
 	}
 
 	t.sample(op.BytesDone(), now)
 
-	liveEnd := t.liveEnd
-	if !p.cfg.Render.LiveProgress {
-		liveEnd = 0
-	} else if end, ok := t.anchor(op, now); ok {
-		liveEnd = end
+	liveStart, liveEnd := t.liveStart, t.liveEnd
+	switch {
+	case !p.cfg.Render.LiveProgress:
+		liveStart, liveEnd = 0, 0
+	default:
+		if end, ok := t.anchor(op, now); ok {
+			liveStart, liveEnd = now.Unix(), end
+		}
 	}
-	return runningContent(op, t.speed, liveEnd, now)
+	return runningContent(op, t.speed, liveStart, liveEnd)
 }
 
 // handleTerminal sends the completion frame and schedules the two-phase end.
@@ -374,7 +421,7 @@ func (p *Poller) handleTerminal(ctx context.Context, op *backrest.Operation) {
 	}
 	content := endContent(op, lines)
 
-	if err := p.push(ctx, t, op, content, now); err != nil {
+	if err := p.push(ctx, t, op, content, content.State, now); err != nil {
 		return
 	}
 
@@ -592,8 +639,11 @@ func (t *tracked) anchor(op *backrest.Operation, now time.Time) (int64, bool) {
 
 // shouldPush decides whether this tick has anything new to say. Without it a
 // multi-hour backup would spend thousands of pushes redrawing one frame.
-func (t *tracked) shouldPush(c pushward.Content, now time.Time, heartbeat time.Duration) bool {
-	if c.State != t.lastState {
+func (t *tracked) shouldPush(c pushward.Content, phase string, now time.Time, heartbeat time.Duration) bool {
+	if phase != t.lastPhase {
+		return true
+	}
+	if c.Template != t.lastTemplate {
 		return true
 	}
 	if math.Abs(c.Progress-t.lastProgress) >= progressChangeFrac {
@@ -607,13 +657,17 @@ func (t *tracked) shouldPush(c pushward.Content, now time.Time, heartbeat time.D
 	return now.Sub(t.lastPushAt) >= heartbeat
 }
 
-func (t *tracked) markPushed(c pushward.Content, now time.Time) {
-	t.lastState = c.State
+func (t *tracked) markPushed(c pushward.Content, phase string, now time.Time) {
+	t.lastPhase = phase
+	t.lastTemplate = c.Template
 	t.lastProgress = c.Progress
 	t.lastPushAt = now
 	if c.EndDate != nil {
 		t.liveEnd = *c.EndDate
+		if c.StartDate != nil {
+			t.liveStart = *c.StartDate
+		}
 	} else {
-		t.liveEnd = 0
+		t.liveStart, t.liveEnd = 0, 0
 	}
 }

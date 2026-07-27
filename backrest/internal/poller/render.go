@@ -3,7 +3,6 @@ package poller
 import (
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/mac-lucky/pushward-integrations/backrest/internal/backrest"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -159,25 +158,43 @@ func endIcon(op *backrest.Operation) (icon, color string) {
 	return iconOK, pushward.ColorGreen
 }
 
-// runningContent renders a backup in flight. liveEnd is the unix second the bar
-// is anchored to fill at; zero leaves the bar static, which is what happens
-// before there is enough history to estimate a rate.
-func runningContent(op *backrest.Operation, speed float64, liveEnd int64, now time.Time) pushward.Content {
+// Phases are the coarse steps a frame moves through, as opposed to the numbers
+// inside its state line. Only a phase change is worth a push on its own.
+const (
+	phaseScanning = "scanning"
+	phaseRunning  = "running"
+)
+
+// runningContent renders a backup in flight. liveStart/liveEnd are the unix
+// window the bar is anchored to fill across; zero leaves the bar static, which
+// is what happens before there is enough history to estimate a rate.
+//
+// The phase is returned rather than derived from the state line because that
+// line embeds a byte count and a transfer rate, both of which move on nearly
+// every tick.
+func runningContent(op *backrest.Operation, speed float64, liveStart, liveEnd int64) (pushward.Content, string) {
 	progress, _ := op.Progress()
+	state := backupRunningState(op, speed)
+
 	c := pushward.Content{
 		Template:    pushward.TemplateGeneric,
 		Progress:    progress,
-		State:       backupRunningState(op, speed),
+		State:       state,
 		Icon:        iconRunning,
 		Subtitle:    subtitle(op),
 		AccentColor: pushward.ColorBlue,
 	}
 	if liveEnd > 0 {
 		c.LiveProgress = pushward.BoolPtr(true)
-		c.StartDate = pushward.Int64Ptr(now.Unix())
+		c.StartDate = pushward.Int64Ptr(liveStart)
 		c.EndDate = pushward.Int64Ptr(liveEnd)
 	}
-	return c
+
+	phase := phaseRunning
+	if state == stateScanning {
+		phase = phaseScanning
+	}
+	return c, phase
 }
 
 // repoTaskContent renders a running prune or check. Neither reports progress -

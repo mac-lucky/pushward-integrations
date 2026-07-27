@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -195,6 +196,7 @@ func TestGetLogsReassemblesStream(t *testing.T) {
 		_ = json.Unmarshal(body[5:], &req)
 		gotRef = req.Ref
 
+		w.Header().Set("Content-Type", contentTypeStream)
 		// Split across frames: the client must concatenate, not take the first.
 		half := len(want) / 2
 		_, _ = w.Write(dataFrame(string(want[:half])))
@@ -221,6 +223,7 @@ func TestGetLogsReassemblesStream(t *testing.T) {
 // frame, so the HTTP status alone can never be trusted.
 func TestGetLogsSurfacesEndStreamError(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentTypeStream)
 		_, _ = w.Write(dataFrame("partial output\n"))
 		_, _ = w.Write(frame(endStreamFlag, []byte(`{"error":{"code":"not_found","message":"no such log"}}`)))
 	}, Options{})
@@ -242,6 +245,7 @@ func TestGetLogsSurfacesEndStreamError(t *testing.T) {
 // tail of a log is worth more than an error about the missing terminator.
 func TestGetLogsReturnsPartialOnTruncatedStream(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentTypeStream)
 		_, _ = w.Write(dataFrame("first line\n"))
 	}, Options{})
 
@@ -256,6 +260,7 @@ func TestGetLogsReturnsPartialOnTruncatedStream(t *testing.T) {
 
 func TestGetLogsRejectsOversizedFrame(t *testing.T) {
 	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentTypeStream)
 		var header [5]byte
 		binary.BigEndian.PutUint32(header[1:5], maxFrameBytes+1)
 		_, _ = w.Write(header[:])
@@ -287,5 +292,81 @@ func TestBaseURLTrailingSlashIsTrimmed(t *testing.T) {
 	}
 	if path != pathGetOperations {
 		t.Errorf("path = %q, want %q (no doubled slash)", path, pathGetOperations)
+	}
+}
+
+// A long log must yield its END, not its beginning. Stopping at the first
+// maxLogBytes returned the start of a big repo check, and the renderer then
+// showed its "last" lines from a fraction of the way in.
+func TestGetLogsKeepsTheTailOfALongStream(t *testing.T) {
+	var sb strings.Builder
+	const lines = 40000
+	for i := 1; i <= lines; i++ {
+		fmt.Fprintf(&sb, "log line %d\n", i)
+	}
+	full := sb.String()
+	if len(full) <= maxLogBytes {
+		t.Fatalf("fixture is %d bytes, need more than the %d-byte window", len(full), maxLogBytes)
+	}
+
+	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentTypeStream)
+		// Chunked, so the tail has to be assembled across frames.
+		for i := 0; i < len(full); i += 8192 {
+			end := min(i+8192, len(full))
+			_, _ = w.Write(dataFrame(full[i:end]))
+		}
+		_, _ = w.Write(frame(endStreamFlag, []byte(`{}`)))
+	}, Options{})
+
+	got, err := c.GetLogs(context.Background(), "c-big")
+	if err != nil {
+		t.Fatalf("GetLogs: %v", err)
+	}
+	if len(got) > maxLogBytes {
+		t.Errorf("retained %d bytes, want at most %d", len(got), maxLogBytes)
+	}
+	wantLast := fmt.Sprintf("log line %d", lines)
+	if !strings.HasSuffix(strings.TrimRight(got, "\n"), wantLast) {
+		tail := got
+		if len(tail) > 60 {
+			tail = tail[len(tail)-60:]
+		}
+		t.Errorf("stream ends with %q, want it to end at %q", tail, wantLast)
+	}
+	// And it must be a contiguous tail, not a stitched-together sample.
+	if !strings.Contains(got, fmt.Sprintf("log line %d\nlog line %d\n", lines-1, lines)) {
+		t.Error("the retained tail is not contiguous")
+	}
+}
+
+// A streaming response is 200 whatever happens, so a proxy error page reaches
+// the same code path as a real stream. Its bytes must not be fed to the
+// envelope parser.
+func TestGetLogsRejectsNonStreamContentType(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		_, _ = w.Write([]byte("<html><body>502 Bad Gateway</body></html>"))
+	}, Options{})
+
+	if _, err := c.GetLogs(context.Background(), "c-abc"); err == nil {
+		t.Fatal("GetLogs parsed an HTML error page as a Connect stream")
+	}
+}
+
+// The client never negotiates compression, so a compressed frame means gzip
+// bytes are about to hit a JSON decoder. Fail with something readable instead.
+func TestGetLogsRejectsCompressedFrame(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentTypeStream)
+		_, _ = w.Write(frame(compressedFlag, []byte("\x1f\x8b not json")))
+	}, Options{})
+
+	_, err := c.GetLogs(context.Background(), "c-abc")
+	if err == nil {
+		t.Fatal("GetLogs accepted a compressed frame")
+	}
+	if !strings.Contains(err.Error(), "compress") {
+		t.Errorf("error = %v, want it to name compression", err)
 	}
 }

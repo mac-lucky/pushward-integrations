@@ -26,10 +26,16 @@ const (
 	protocolVersion   = "1"
 )
 
-// maxLogBytes caps how much of a task log is read into memory. Only the tail is
-// ever rendered, but a repo check on a large repository can emit megabytes and
-// the whole stream has to be walked to reach its end.
-const maxLogBytes = 512 * 1024
+// maxLogBytes is how much of the tail of a task log is kept. Only the last
+// handful of lines is ever rendered, so this only has to be comfortably more
+// than that.
+const maxLogBytes = 64 * 1024
+
+// maxLogStreamBytes bounds how much of a log is read off the wire before the
+// stream is abandoned. A repo check on a large repository emits megabytes and
+// the end is the interesting part, so the whole thing is walked - but not
+// without a limit.
+const maxLogStreamBytes = 8 * 1024 * 1024
 
 // maxFrameBytes bounds a single stream frame. The length prefix is
 // attacker-influenced in the sense that a wrong endpoint (or a proxy error
@@ -41,8 +47,25 @@ const maxFrameBytes = 8 * 1024 * 1024
 // stream metadata and any terminal error, not response data.
 const endStreamFlag = 0b10
 
+// compressedFlag marks a frame whose payload is compressed per
+// Connect-Content-Encoding. This client never negotiates compression, so a
+// server setting it is a protocol violation - but handing gzip to a JSON
+// decoder fails in a way nobody can read, so it is rejected explicitly.
+const compressedFlag = 0b1
+
+// drainLimit bounds how much of an unfinished body is read back just to let the
+// connection be pooled. Past this, dropping the connection is cheaper.
+const drainLimit = 1 << 20
+
+// logStreamTimeout bounds a whole GetLogs call. It is generous compared with
+// the unary timeout because the response is a stream: a repo check on a large
+// repository trickles its output out over a long time, and the client-level
+// timeout covers the body read, not just the headers.
+const logStreamTimeout = 2 * time.Minute
+
 type Client struct {
 	httpClient *http.Client
+	timeout    time.Duration
 	baseURL    string
 	username   string
 	password   string
@@ -66,7 +89,10 @@ func NewClient(baseURL string, opts Options) *Client {
 		timeout = 15 * time.Second
 	}
 	return &Client{
-		httpClient: &http.Client{Timeout: timeout},
+		// No Client.Timeout: it covers the body read, so it would kill a
+		// still-flowing log stream mid-transfer. Deadlines are per call.
+		httpClient: &http.Client{},
+		timeout:    timeout,
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		username:   opts.Username,
 		password:   opts.Password,
@@ -96,6 +122,9 @@ func (c *Client) GetOperations(ctx context.Context, lastN int64) ([]Operation, e
 	// quoted. The server accepts a bare number too, but sending what it emits
 	// keeps one convention in play.
 	body := fmt.Sprintf(`{"selector":{},"lastN":"%d"}`, lastN)
+
+	ctx, cancel := context.WithTimeout(ctx, c.timeout)
+	defer cancel()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+pathGetOperations, strings.NewReader(body))
 	if err != nil {
@@ -146,6 +175,9 @@ func (c *Client) GetLogs(ctx context.Context, ref string) (string, error) {
 		return "", err
 	}
 
+	ctx, cancel := context.WithTimeout(ctx, logStreamTimeout)
+	defer cancel()
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+pathGetLogs, bytes.NewReader(frame))
 	if err != nil {
 		return "", err
@@ -158,11 +190,23 @@ func (c *Client) GetLogs(ctx context.Context, ref string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("get logs: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer func() {
+		// Drain before closing. A body that is closed without being read to EOF
+		// cannot be returned to the idle pool, so every capped or aborted log
+		// read would cost a fresh TCP connection.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, drainLimit))
+		_ = resp.Body.Close()
+	}()
 
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8*1024))
 		return "", fmt.Errorf("get logs: %w", connectError(resp.StatusCode, raw))
+	}
+	// A streaming response is 200 whatever happens, so the content type is the
+	// only signal that this is a Connect stream at all rather than a proxy
+	// error page about to be fed into the envelope parser.
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "application/connect+") {
+		return "", fmt.Errorf("get logs: unexpected content type %q", ct)
 	}
 	return readLogStream(resp.Body)
 }
@@ -187,11 +231,16 @@ func envelope(payload []byte) ([]byte, error) {
 // whose base64 value is a chunk of the log; the end-of-stream frame carries any
 // terminal error, which is the only place a streaming RPC can report one - the
 // HTTP status is 200 either way.
+//
+// It keeps a rolling tail rather than the first maxLogBytes. Stopping at the
+// start of the stream would return the beginning of a long repo check and the
+// renderer would then show its "last" lines from a quarter of the way in, which
+// is both wrong and the expensive way to be wrong.
 func readLogStream(r io.Reader) (string, error) {
-	var out strings.Builder
+	var out tailBuffer
 	var header [5]byte
 
-	for out.Len() < maxLogBytes {
+	for out.read < maxLogStreamBytes {
 		if _, err := io.ReadFull(r, header[:]); err != nil {
 			if errors.Is(err, io.EOF) {
 				// A stream that stops without its end frame has still delivered
@@ -215,6 +264,9 @@ func readLogStream(r io.Reader) (string, error) {
 		if header[0]&endStreamFlag != 0 {
 			return out.String(), endStreamError(payload)
 		}
+		if header[0]&compressedFlag != 0 {
+			return out.String(), fmt.Errorf("get logs: server compressed a frame without being asked to")
+		}
 
 		var frame struct {
 			Value string `json:"value"`
@@ -231,6 +283,29 @@ func readLogStream(r io.Reader) (string, error) {
 	}
 	return out.String(), nil
 }
+
+// tailBuffer accumulates the last maxLogBytes of a stream, discarding what
+// comes before. read counts everything that arrived, so the caller can bound
+// the stream independently of what is kept.
+type tailBuffer struct {
+	buf  []byte
+	read int
+}
+
+func (b *tailBuffer) Write(p []byte) {
+	b.read += len(p)
+	if len(p) >= maxLogBytes {
+		// This chunk alone overflows the window, so nothing older survives.
+		b.buf = append(b.buf[:0], p[len(p)-maxLogBytes:]...)
+		return
+	}
+	b.buf = append(b.buf, p...)
+	if excess := len(b.buf) - maxLogBytes; excess > 0 {
+		b.buf = append(b.buf[:0], b.buf[excess:]...)
+	}
+}
+
+func (b *tailBuffer) String() string { return string(b.buf) }
 
 // endStreamError reports the terminal error of a stream, or nil when the stream
 // ended cleanly.

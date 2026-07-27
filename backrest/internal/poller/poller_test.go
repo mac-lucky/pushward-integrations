@@ -295,6 +295,48 @@ func TestScanningPhaseHasNoFabricatedTotals(t *testing.T) {
 	}
 }
 
+// The throttle has to gate on the underlying numbers, not on the rendered
+// state line.
+//
+// That line carries a formatted byte count and transfer rate, both of which
+// move on nearly every 5s tick. Comparing it made the 2%-progress test and the
+// heartbeat below it unreachable, and an hour of steady backup pushed 207 times
+// where it should push 5. This test fails at ~200 if the state string ever
+// becomes a push trigger again.
+func TestThrottleIsNotDefeatedByTheStateLine(t *testing.T) {
+	const total = 200 << 30
+	const rate = 5 << 20 // bytes per second
+
+	windows := make([][]backrest.Operation, 0, 722)
+	windows = append(windows, []backrest.Operation{runningBackup(1, 0, total)})
+	for i := 1; i <= 720; i++ {
+		windows = append(windows, []backrest.Operation{runningBackup(1, rate*int64(i)*5, total)})
+	}
+	h := newHarness(t, testConfig(), &fakeBackrest{windows: windows})
+
+	h.poll(t) // priming
+	for i := 0; i < 720; i++ {
+		h.poll(t)
+		h.advance(5 * time.Second)
+	}
+
+	// One create + one seed, then a push per 2% of progress. An hour at 5 MB/s
+	// covers ~9% of 200 GB, so a handful - nowhere near one per tick.
+	pushes := 0
+	for _, c := range h.recorded() {
+		if c.Method == "PATCH" {
+			pushes++
+		}
+	}
+	if pushes > 20 {
+		t.Errorf("%d pushes over 720 ticks, want well under 20 - the throttle is not gating", pushes)
+	}
+	if pushes == 0 {
+		t.Error("no pushes at all, so the bar never moved")
+	}
+	t.Logf("720 ticks produced %d pushes", pushes)
+}
+
 // A tick that says nothing new must not become a push: a multi-hour backup
 // polled every 5s would otherwise spend thousands of them redrawing one frame.
 func TestUnchangedTickIsSuppressed(t *testing.T) {
