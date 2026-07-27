@@ -514,40 +514,42 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 		return nil
 	}
 
-	if !exists {
-		// Untracked (bridge restart)
-		gracePeriod := h.config.SyncGracePeriod
-		if gracePeriod > 0 {
-			// If deployed already arrived (out-of-order events), this is a no-op.
-			if h.hasTombstone(ctx, userKey, p.App) {
-				log.Info("skipped no-op sync (deployed arrived first)", "slug", slug, "app", p.App)
-				return nil
-			}
-
-			// Start grace period at step 2 — if deployed comes quickly, skip
-			app = &trackedAppState{
-				Slug:     slug,
-				Revision: p.Revision,
-				RepoURL:  p.RepoURL,
-				Step:     2,
-				Pending:  true,
-			}
-			if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
-				log.Error("failed to save app state", "app", p.App, "error", err)
-			}
-			h.mu.Lock()
-			h.graceTimers[tk] = &graceEntry{
-				timer: time.AfterFunc(gracePeriod, func() {
-					h.graceExpired(userKey, p.App)
-				}),
-				userKey: userKey,
-				appName: p.App,
-			}
-			h.mu.Unlock()
-			log.Info("sync succeeded (untracked, grace period)", "slug", slug, "app", p.App)
+	// Untracked (bridge restart) with a grace period. Both outcomes return
+	// without talking to PushWard, so this sits above the client lookup.
+	if gracePeriod := h.config.SyncGracePeriod; !exists && gracePeriod > 0 {
+		// If deployed already arrived (out-of-order events), this is a no-op.
+		if h.hasTombstone(ctx, userKey, p.App) {
+			log.Info("skipped no-op sync (deployed arrived first)", "slug", slug, "app", p.App)
 			return nil
 		}
 
+		// Start grace period at step 2, so a quick deployed event can skip ahead
+		app = &trackedAppState{
+			Slug:     slug,
+			Revision: p.Revision,
+			RepoURL:  p.RepoURL,
+			Step:     2,
+			Pending:  true,
+		}
+		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
+			log.Error("failed to save app state", "app", p.App, "error", err)
+		}
+		h.mu.Lock()
+		h.graceTimers[tk] = &graceEntry{
+			timer: time.AfterFunc(gracePeriod, func() {
+				h.graceExpired(userKey, p.App)
+			}),
+			userKey: userKey,
+			appName: p.App,
+		}
+		h.mu.Unlock()
+		log.Info("sync succeeded (untracked, grace period)", "slug", slug, "app", p.App)
+		return nil
+	}
+
+	pw := h.clients.Get(userKey)
+
+	if !exists {
 		// No grace period — create and send step 2 (original behavior)
 		app = &trackedAppState{
 			Slug:     slug,
@@ -559,7 +561,6 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 			log.Error("failed to save app state", "app", p.App, "error", err)
 		}
 
-		pw := h.clients.Get(userKey)
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
 		if err := pw.CreateActivity(ctx, slug, p.App, overrides.FromContext(ctx).PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
@@ -575,7 +576,6 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 		}
 	}
 
-	pw := h.clients.Get(userKey)
 	step := 2
 	total := totalSteps
 	url, secondaryURL := h.contentURLs(p.App, p.RepoURL, p.Revision)
