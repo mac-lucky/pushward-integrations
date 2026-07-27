@@ -18,7 +18,7 @@ polls the Backrest API instead, which is where the progress numbers live.
 | Backup, unreadable files | Log view listing each file restic could not read, orange |
 | Backup, failed | Red, bar left where restic stopped |
 | Prune / check, running | Log view of the restic output, refreshed as it grows |
-| Prune / check, finished | `Pruned` / `Check passed`, or the failing output |
+| Prune / check, finished | `Pruned` / `Check Passed`, or the failing output |
 
 Prune and check carry no percent-done anywhere in the Backrest protocol - only a log reference -
 so they get a log view rather than an invented bar.

@@ -113,12 +113,16 @@ func (h *harness) recorded() []testutil.APICall {
 	return testutil.GetCalls(h.calls, h.mu)
 }
 
-// content unmarshals the content object of the nth recorded call.
-func content(t *testing.T, call testutil.APICall) apiContent {
+// content unmarshals the content object of a recorded call.
+//
+// It decodes into pushward.Content rather than a local mirror of it, so a
+// renamed JSON key fails here instead of quietly decoding to a zero value and
+// letting assertions pass on a field the server never received.
+func content(t *testing.T, call testutil.APICall) pushward.Content {
 	t.Helper()
 	var body struct {
-		State   string     `json:"state"`
-		Content apiContent `json:"content"`
+		State   string           `json:"state"`
+		Content pushward.Content `json:"content"`
 	}
 	testutil.UnmarshalBody(t, call.Body, &body)
 	return body.Content
@@ -131,22 +135,6 @@ func activityState(t *testing.T, call testutil.APICall) string {
 	}
 	testutil.UnmarshalBody(t, call.Body, &body)
 	return body.State
-}
-
-type apiContent struct {
-	Template     string  `json:"template"`
-	Progress     float64 `json:"progress"`
-	State        string  `json:"state"`
-	Icon         string  `json:"icon"`
-	Subtitle     string  `json:"subtitle"`
-	AccentColor  string  `json:"accent_color"`
-	LiveProgress *bool   `json:"live_progress"`
-	StartDate    *int64  `json:"start_date"`
-	EndDate      *int64  `json:"end_date"`
-	Lines        []struct {
-		Text  string `json:"text"`
-		Level string `json:"level"`
-	} `json:"lines"`
 }
 
 func loadOp(t *testing.T, name string) backrest.Operation {
@@ -332,18 +320,44 @@ func TestUnchangedTickIsSuppressed(t *testing.T) {
 // a ceiling even when nothing changes.
 func TestHeartbeatBreaksTheSilence(t *testing.T) {
 	same := runningBackup(1, 500, 1000)
-	br := &fakeBackrest{windows: [][]backrest.Operation{{same}, {same}, {same}}}
+	br := &fakeBackrest{windows: [][]backrest.Operation{{same}, {same}, {same}, {same}}}
 	h := newHarness(t, testConfig(), br)
 
 	h.poll(t)
 	h.poll(t)
 	before := len(h.recorded())
 
-	h.advance(heartbeatInterval + time.Second)
+	// Just short of the interval, silence still holds.
+	h.advance(h.p.heartbeat() - time.Second)
 	h.poll(t)
+	if got := len(h.recorded()); got != before {
+		t.Fatalf("made %d calls before the heartbeat was due, want 0", got-before)
+	}
 
+	h.advance(2 * time.Second)
+	h.poll(t)
 	if after := len(h.recorded()); after != before+1 {
 		t.Errorf("made %d calls after the heartbeat interval, want 1", after-before)
+	}
+}
+
+// The keep-alive exists to beat the server's stale clock, so it has to track
+// stale_timeout rather than sit at a fixed interval. Pinning it would burn
+// pushes on a long quiet backup and, on a short stale_timeout, would stop
+// protecting the activity at all.
+func TestHeartbeatDerivesFromStaleTimeout(t *testing.T) {
+	cfg := testConfig()
+	cfg.PushWard.StaleTimeout = 40 * time.Minute
+	h := newHarness(t, cfg, &fakeBackrest{})
+	if got, want := h.p.heartbeat(), 20*time.Minute; got != want {
+		t.Errorf("heartbeat = %v, want %v (half of stale_timeout)", got, want)
+	}
+
+	// Below the floor the derived value would push far too often.
+	cfg.PushWard.StaleTimeout = 20 * time.Second
+	h = newHarness(t, cfg, &fakeBackrest{})
+	if got := h.p.heartbeat(); got != heartbeatFloor {
+		t.Errorf("heartbeat = %v, want the %v floor", got, heartbeatFloor)
 	}
 }
 
@@ -792,10 +806,14 @@ func waitForUntracked(t *testing.T, h *harness, opID int64) {
 
 // An operation that leaves the window without ever being seen finished would
 // otherwise show as running until the server's stale timeout.
+//
+// It closes as "Interrupted" in orange, not "Failed" in red: nothing is known
+// to have gone wrong, the bridge just lost sight of it. The bar stays where it
+// stopped, and the subtitle survives so the card still says which plan it was.
 func TestOperationLeavingTheWindowIsClosed(t *testing.T) {
 	br := &fakeBackrest{windows: [][]backrest.Operation{
 		{runningBackup(1, 0, 1000)},
-		{runningBackup(1, 100, 1000)},
+		{runningBackup(1, 300, 1000)},
 		{},
 	}}
 	h := newHarness(t, testConfig(), br)
@@ -805,7 +823,24 @@ func TestOperationLeavingTheWindowIsClosed(t *testing.T) {
 	before := len(h.recorded())
 	h.poll(t)
 
-	waitForEnded(t, h, before)
+	calls := waitForEnded(t, h, before)
+	final := content(t, calls[len(calls)-1])
+
+	if final.State != stateLostTrack {
+		t.Errorf("state = %q, want %q", final.State, stateLostTrack)
+	}
+	if final.AccentColor != pushward.ColorOrange {
+		t.Errorf("accent_color = %q, want orange", final.AccentColor)
+	}
+	if final.Progress != 0.3 {
+		t.Errorf("progress = %v, want the 0.3 it reached", final.Progress)
+	}
+	if final.Subtitle == "" {
+		t.Error("subtitle is empty, so the card cannot say which plan stalled")
+	}
+	if final.LiveProgress == nil || *final.LiveProgress {
+		t.Error("live_progress is not switched off on the closing frame")
+	}
 }
 
 func TestTwoPhaseEndReachesEnded(t *testing.T) {

@@ -3,21 +3,24 @@ package backrest
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 )
 
-// Operation status values. Backrest renders the enum by name, and the numbers
-// behind those names are not contiguous (ERROR is 4, WARNING is 7), so the name
-// is the only thing worth decoding.
+// Status is an operation's lifecycle state. Backrest renders the enum by name,
+// and the numbers behind those names are not contiguous (ERROR is 4, WARNING is
+// 7), so the name is the only thing worth decoding.
+type Status string
+
 const (
-	StatusUnknown         = "STATUS_UNKNOWN"
-	StatusPending         = "STATUS_PENDING"
-	StatusInProgress      = "STATUS_INPROGRESS"
-	StatusSuccess         = "STATUS_SUCCESS"
-	StatusWarning         = "STATUS_WARNING"
-	StatusError           = "STATUS_ERROR"
-	StatusSystemCancelled = "STATUS_SYSTEM_CANCELLED"
-	StatusUserCancelled   = "STATUS_USER_CANCELLED"
+	StatusUnknown         Status = "STATUS_UNKNOWN"
+	StatusPending         Status = "STATUS_PENDING"
+	StatusInProgress      Status = "STATUS_INPROGRESS"
+	StatusSuccess         Status = "STATUS_SUCCESS"
+	StatusWarning         Status = "STATUS_WARNING"
+	StatusError           Status = "STATUS_ERROR"
+	StatusSystemCancelled Status = "STATUS_SYSTEM_CANCELLED"
+	StatusUserCancelled   Status = "STATUS_USER_CANCELLED"
 )
 
 // PlanSystem is Backrest's stand-in plan id on a repo-scoped task (prune,
@@ -43,8 +46,12 @@ func (v *Int64) UnmarshalJSON(b []byte) error {
 		if s == "" {
 			return nil
 		}
-		var n int64
-		if _, err := fmt.Sscanf(s, "%d", &n); err != nil {
+		// strconv, not fmt.Sscanf: Sscanf stops at the first character it cannot
+		// use and reports success, so "12abc" would decode as 12, "1e5" as 1 and
+		// "0x1f" as 0. A corrupted byte count would then render a plausible but
+		// wrong bar instead of failing the tick.
+		n, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
 			return fmt.Errorf("parsing int64 %q: %w", s, err)
 		}
 		*v = Int64(n)
@@ -80,7 +87,7 @@ type Operation struct {
 	RepoGUID       string `json:"repoGuid"`
 	PlanID         string `json:"planId"`
 	SnapshotID     string `json:"snapshotId"`
-	Status         string `json:"status"`
+	Status         Status `json:"status"`
 	UnixTimeStart  Int64  `json:"unixTimeStartMs"`
 	UnixTimeEnd    Int64  `json:"unixTimeEndMs"`
 	DisplayMessage string `json:"displayMessage"`
@@ -258,6 +265,27 @@ func clamp01(v float64) float64 {
 		return 1
 	}
 	return v
+}
+
+// BytesDone is how much restic has transferred so far, or 0 before it emits a
+// status line.
+func (o *Operation) BytesDone() int64 {
+	st := o.BackupStatus()
+	if st == nil {
+		return 0
+	}
+	return st.BytesDone.Int64()
+}
+
+// RemainingBytes is how much is still to transfer. The bool is false while
+// restic is still scanning, when there is no total to subtract from - which is
+// a different statement from "nothing remains".
+func (o *Operation) RemainingBytes() (int64, bool) {
+	st := o.BackupStatus()
+	if st == nil || st.TotalBytes <= 0 {
+		return 0, false
+	}
+	return st.TotalBytes.Int64() - st.BytesDone.Int64(), true
 }
 
 // BackupStatus returns the live counter, or nil once the backup has finished

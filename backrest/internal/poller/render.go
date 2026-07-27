@@ -19,19 +19,25 @@ const (
 
 // State lines. The running ones end in an ellipsis so the Dynamic Island reads
 // as in-flight even when the numbers are still empty.
+//
+// The wording matches relay/internal/backrest's, deliberately: someone can run
+// the relay's hook provider and this bridge against the same account, and a
+// check reported as "Check Passed" by one and "Check passed" by the other reads
+// as two different events.
 const (
 	stateScanning        = "Scanning..."
 	stateBackingUp       = "Backing up..."
 	stateComplete        = "Complete"
 	stateCompleteWarning = "Complete (warnings)"
 	stateFailed          = "Failed"
+	stateLostTrack       = "Interrupted"
 	stateCancelled       = "Cancelled"
 	statePruning         = "Pruning..."
 	statePruned          = "Pruned"
-	statePruneFailed     = "Prune failed"
+	statePruneFailed     = "Prune Failed"
 	stateChecking        = "Checking..."
-	stateCheckPassed     = "Check passed"
-	stateCheckFailed     = "Check failed"
+	stateCheckPassed     = "Check Passed"
+	stateCheckFailed     = "Check Failed"
 )
 
 // maxLogLines is the log template's ceiling. The server rejects a longer list,
@@ -54,8 +60,6 @@ func activityName(op *backrest.Operation) string {
 	return "Backrest"
 }
 
-// subtitle names the source, the plan and the repo, in that order, dropping
-// whichever of the two is absent.
 func subtitle(op *backrest.Operation) string {
 	parts := make([]string, 0, 3)
 	parts = append(parts, "Backrest")
@@ -94,8 +98,8 @@ func backupRunningState(op *backrest.Operation, speed float64) string {
 	return strings.Join(parts, text.SepDot)
 }
 
-// summaryDetail renders what restic actually stored: bytes added, files
-// touched, and how long it took.
+// summaryDetail drops any of the three parts restic did not report, so an
+// unchanged tree reads as a duration alone rather than "0 B · 0 files · 3s".
 func summaryDetail(op *backrest.Operation) string {
 	s := op.BackupSummary()
 	if s == nil {
@@ -114,7 +118,6 @@ func summaryDetail(op *backrest.Operation) string {
 	return strings.Join(parts, text.SepDot)
 }
 
-// endStateText composes the final line for a finished operation.
 func endStateText(op *backrest.Operation) string {
 	switch op.Kind() {
 	case backrest.KindPrune:
@@ -185,7 +188,15 @@ func repoTaskContent(op *backrest.Operation, lines []pushward.LogLine) pushward.
 	if op.Kind() == backrest.KindCheck {
 		state = stateChecking
 	}
-	return logOrGeneric(op, 0, state, iconRunning, pushward.ColorBlue, lines)
+	return withLogLines(pushward.Content{
+		Template:     pushward.TemplateGeneric,
+		Progress:     0,
+		State:        state,
+		Icon:         iconRunning,
+		Subtitle:     subtitle(op),
+		AccentColor:  pushward.ColorBlue,
+		LiveProgress: pushward.BoolPtr(false),
+	}, lines)
 }
 
 // endContent renders a finished operation. A failure with something to show -
@@ -194,7 +205,33 @@ func repoTaskContent(op *backrest.Operation, lines []pushward.LogLine) pushward.
 // it.
 func endContent(op *backrest.Operation, lines []pushward.LogLine) pushward.Content {
 	icon, color := endIcon(op)
-	return logOrGeneric(op, endProgress(op), endStateText(op), icon, color, lines)
+	return withLogLines(pushward.Content{
+		Template:     pushward.TemplateGeneric,
+		Progress:     endProgress(op),
+		State:        endStateText(op),
+		Icon:         icon,
+		Subtitle:     subtitle(op),
+		AccentColor:  color,
+		LiveProgress: pushward.BoolPtr(false),
+	}, lines)
+}
+
+// orphanContent renders an operation that left the query window without ever
+// reporting an outcome.
+//
+// Orange rather than red, and "Interrupted" rather than "Failed": nothing is
+// known to have gone wrong, the bridge simply lost sight of it. The bar is left
+// where it stopped for the same reason endProgress leaves a failure there.
+func orphanContent(subtitle string, progress float64) pushward.Content {
+	return pushward.Content{
+		Template:     pushward.TemplateGeneric,
+		Progress:     progress,
+		State:        stateLostTrack,
+		Icon:         iconWarn,
+		Subtitle:     subtitle,
+		AccentColor:  pushward.ColorOrange,
+		LiveProgress: pushward.BoolPtr(false),
+	}
 }
 
 // endProgress is where the bar comes to rest. A completed operation fills it; a
@@ -211,22 +248,14 @@ func endProgress(op *backrest.Operation) float64 {
 	return 0
 }
 
-// logOrGeneric picks the template from whether there are lines to show.
+// withLogLines upgrades a frame to the log template when there is output worth
+// showing, and leaves it alone when there is not.
 //
-// It always sets LiveProgress explicitly rather than leaving it unset: these
+// Callers must set LiveProgress explicitly, including when it is false: these
 // bodies are merge-patched onto whatever the last tick sent, and an omitted
 // field is preserved, so a finished backup would inherit the running frame's
 // live_progress and keep animating a bar that has stopped moving.
-func logOrGeneric(op *backrest.Operation, progress float64, state, icon, color string, lines []pushward.LogLine) pushward.Content {
-	c := pushward.Content{
-		Template:     pushward.TemplateGeneric,
-		Progress:     progress,
-		State:        state,
-		Icon:         icon,
-		Subtitle:     subtitle(op),
-		AccentColor:  color,
-		LiveProgress: pushward.BoolPtr(false),
-	}
+func withLogLines(c pushward.Content, lines []pushward.LogLine) pushward.Content {
 	if len(lines) > 0 {
 		c.Template = pushward.TemplateLog
 		c.Lines = lines

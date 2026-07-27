@@ -27,10 +27,11 @@ const (
 	// push on its own.
 	progressChangeFrac = 0.02
 
-	// heartbeatInterval bounds how long the bridge can stay silent. The server
-	// ends an activity that goes quiet for stale_timeout, so a backup sitting
-	// on one unchanging frame still has to say it is alive.
-	heartbeatInterval = 30 * time.Second
+	// heartbeatFloor bounds how often the keep-alive can fire. The interval
+	// itself is derived from stale_timeout (see Poller.heartbeat); the floor
+	// only stops a very short stale_timeout turning the poll loop into a push
+	// loop.
+	heartbeatFloor = 30 * time.Second
 
 	// logRefreshInterval is how often a running prune or check re-reads its
 	// command output. The log only feeds a 20-line tail, so re-fetching it on
@@ -57,16 +58,23 @@ const (
 	// iOS restarts its animation each time, which reads as a stutter.
 	reanchorFloor = 15 * time.Second
 	reanchorFrac  = 0.2
+
+	// endPushTimeout bounds each of the two closing frames. They fire from
+	// timers after the poll context is gone, so they carry their own deadline
+	// rather than inheriting one.
+	endPushTimeout = 30 * time.Second
 )
 
 // tracked is the poller's memory of one operation it has an open activity for.
-// Its fields belong to the poll goroutine; the mutex guards the maps, which the
-// end timers also touch.
+//
+// Its fields belong to the poll goroutine. p.mu guards p.tracked and p.done,
+// which the end timers also touch; `ending` is read under it only because it is
+// read while walking those maps.
 type tracked struct {
-	opID   int64
-	slug   string
-	kind   backrest.Kind
-	seeded bool
+	opID     int64
+	slug     string
+	subtitle string
+	seeded   bool
 
 	// Push throttle.
 	lastProgress float64
@@ -77,12 +85,10 @@ type tracked struct {
 	lastBytes    int64
 	lastSampleAt time.Time
 	speed        float64
-	samples      int
 
-	// Live-progress anchor: the unix second the bar is animating toward, and
-	// whether the client was told to animate at all.
-	liveEnd  int64
-	liveSent bool
+	// Live-progress anchor: the unix second the bar is animating toward, zero
+	// when no anchor has been sent.
+	liveEnd int64
 
 	// Cached command-output tail for a running prune or check.
 	logLines    []pushward.LogLine
@@ -139,6 +145,21 @@ func (p *Poller) Run(ctx context.Context) error {
 		}
 		timer.Reset(p.interval())
 	}
+}
+
+// heartbeat is how long the bridge may stay silent before re-sending an
+// unchanged frame.
+//
+// It is half of stale_timeout rather than a fixed interval, because the only
+// job of the keep-alive is to beat the server's stale-dismissal clock. Pinning
+// it at 30s instead would spend ~720 pushes on a six-hour backup parked on one
+// frame where 24 do the same work, and would silently stop protecting the
+// activity for anyone who configures a stale_timeout below 30s.
+func (p *Poller) heartbeat() time.Duration {
+	if h := p.cfg.PushWard.StaleTimeout / 2; h > heartbeatFloor {
+		return h
+	}
+	return heartbeatFloor
 }
 
 // interval polls fast while something is running and slowly otherwise. An idle
@@ -256,138 +277,137 @@ func (p *Poller) reapVanished(ctx context.Context, seen map[int64]bool) {
 
 	for _, t := range orphans {
 		slog.Warn("operation left the query window, closing activity", "slug", t.slug, "op", t.opID)
-		content := pushward.Content{
-			Template:     pushward.TemplateGeneric,
-			Progress:     t.lastProgress,
-			State:        stateFailed,
-			Icon:         iconWarn,
-			AccentColor:  pushward.ColorOrange,
-			LiveProgress: pushward.BoolPtr(false),
-		}
-		p.scheduleEnd(ctx, t, content)
+		p.scheduleEnd(ctx, t, orphanContent(t.subtitle, t.lastProgress))
 	}
 }
 
-// handleRunning creates the activity on first sight and pushes an update when
-// the tick has something new to say.
-func (p *Poller) handleRunning(ctx context.Context, op *backrest.Operation) {
+// track returns the record for op, creating it on first sight. nil means the
+// operation is already closed out, or its two-phase end is under way, and must
+// not be reopened behind its own ENDED frame.
+func (p *Poller) track(op *backrest.Operation) *tracked {
 	id := op.ID.Int64()
 	if p.isDone(id) {
-		// A late in-progress row for an operation already closed out must not
-		// reopen the activity behind its own ENDED frame.
-		return
+		return nil
 	}
 
 	p.mu.Lock()
 	t, ok := p.tracked[id]
 	if !ok {
-		t = &tracked{opID: id, slug: slugFor(op), kind: op.Kind()}
+		t = &tracked{opID: id, slug: slugFor(op), subtitle: subtitle(op)}
 		p.tracked[id] = t
 	}
 	p.mu.Unlock()
 
+	// done[] is set alongside ending under one lock, so isDone above has
+	// already covered this. Kept because the two are separate fields and the
+	// read is free.
 	if t.ending {
+		return nil
+	}
+	return t
+}
+
+// push seeds or patches the activity, recording the frame only once it has
+// landed so a failed send is simply re-evaluated on the next tick.
+func (p *Poller) push(ctx context.Context, t *tracked, op *backrest.Operation, content pushward.Content, now time.Time) error {
+	if !t.seeded {
+		if err := p.create(ctx, t, op, content); err != nil {
+			return err
+		}
+	} else if err := p.patch(ctx, t, content); err != nil {
+		return err
+	}
+	t.markPushed(content, now)
+	return nil
+}
+
+// handleRunning creates the activity on first sight and pushes an update when
+// the tick has something new to say.
+func (p *Poller) handleRunning(ctx context.Context, op *backrest.Operation) {
+	t := p.track(op)
+	if t == nil {
 		return
 	}
 
 	now := p.now()
-	content := p.runningContent(ctx, t, op, now)
+	content := p.frameFor(ctx, t, op, now)
 
-	if !t.seeded {
-		if err := p.create(ctx, t, op, content); err != nil {
-			return
-		}
-		t.markPushed(content, now)
+	// The throttle applies only once there is a frame to compare against.
+	if t.seeded && !t.shouldPush(content, now, p.heartbeat()) {
 		return
 	}
-	if !t.shouldPush(content, now) {
-		return
-	}
-	if err := p.patch(ctx, t, content); err != nil {
-		return
-	}
-	t.markPushed(content, now)
+	_ = p.push(ctx, t, op, content, now)
 }
 
-// runningContent builds the frame for an operation still in flight.
-func (p *Poller) runningContent(ctx context.Context, t *tracked, op *backrest.Operation, now time.Time) pushward.Content {
+// frameFor builds the frame for an operation still in flight: the rate sample,
+// the live-progress anchor and the log tail are all poller state, so they are
+// resolved here and handed to the renderer.
+func (p *Poller) frameFor(ctx context.Context, t *tracked, op *backrest.Operation, now time.Time) pushward.Content {
 	if op.Kind() != backrest.KindBackup {
-		return repoTaskContent(op, p.logLines(ctx, t, op, now, false))
+		return repoTaskContent(op, p.cachedLogLines(ctx, t, op, now))
 	}
 
-	if st := op.BackupStatus(); st != nil {
-		t.sample(st.BytesDone.Int64(), now)
-	}
+	t.sample(op.BytesDone(), now)
 
-	liveEnd := int64(0)
-	if p.cfg.Render.LiveProgress {
-		if end, ok := t.anchor(op, now); ok {
-			liveEnd = end
-		} else {
-			liveEnd = t.liveEnd
-		}
+	liveEnd := t.liveEnd
+	if !p.cfg.Render.LiveProgress {
+		liveEnd = 0
+	} else if end, ok := t.anchor(op, now); ok {
+		liveEnd = end
 	}
 	return runningContent(op, t.speed, liveEnd, now)
 }
 
 // handleTerminal sends the completion frame and schedules the two-phase end.
 func (p *Poller) handleTerminal(ctx context.Context, op *backrest.Operation) {
-	id := op.ID.Int64()
-	if p.isDone(id) {
+	t := p.track(op)
+	if t == nil {
 		return
 	}
 
-	p.mu.Lock()
-	t, ok := p.tracked[id]
-	if !ok {
-		// The operation started and finished inside one poll interval. Its
-		// outcome is still the part worth showing, so it gets an activity that
-		// opens straight onto the result.
-		t = &tracked{opID: id, slug: slugFor(op), kind: op.Kind()}
-		p.tracked[id] = t
-	}
-	p.mu.Unlock()
-
-	if t.ending {
-		return
-	}
-
+	now := p.now()
 	lines := errorLines(op)
 	if len(lines) == 0 {
-		lines = p.logLines(ctx, t, op, p.now(), true)
+		// Straight to the fetch, not the cache: on the final frame the last
+		// lines of the log are the whole point.
+		lines = p.fetchLogLines(ctx, t, op, now)
 	}
 	content := endContent(op, lines)
 
-	if !t.seeded {
-		if err := p.create(ctx, t, op, content); err != nil {
-			return
-		}
-	} else if err := p.patch(ctx, t, content); err != nil {
+	if err := p.push(ctx, t, op, content, now); err != nil {
 		return
 	}
-	t.markPushed(content, p.now())
 
-	slog.Info("operation finished", "slug", t.slug, "op", id, "status", op.Status, "state", content.State)
+	slog.Info("operation finished", "slug", t.slug, "op", t.opID, "status", op.Status, "state", content.State)
 	p.scheduleEnd(ctx, t, content)
 }
 
-// logLines renders the command output of a prune or check. Backups are skipped:
-// their task log is restic's raw JSON status stream, which is not something to
-// put in front of a person.
+// cachedLogLines returns the command-output tail, re-reading it only once the
+// refresh interval has passed.
 //
-// The tail is cached between refreshes because a running prune is polled every
-// few seconds while its log changes far more slowly. force bypasses the cache
-// for the final frame, where the last lines are the whole point.
-func (p *Poller) logLines(ctx context.Context, t *tracked, op *backrest.Operation, now time.Time, force bool) []pushward.LogLine {
+// A running prune is polled every few seconds while its log grows far more
+// slowly, so re-fetching every tick would be a lot of transfer for a 20-line
+// view that barely changes.
+func (p *Poller) cachedLogLines(ctx context.Context, t *tracked, op *backrest.Operation, now time.Time) []pushward.LogLine {
+	if !t.lastLogPoll.IsZero() && now.Sub(t.lastLogPoll) < logRefreshInterval {
+		return t.logLines
+	}
+	return p.fetchLogLines(ctx, t, op, now)
+}
+
+// fetchLogLines reads the command output of a prune or check. Backups have no
+// output log of their own: their task log is restic's raw JSON status stream,
+// which is not something to put in front of a person.
+//
+// On failure the previous tail is kept rather than blanking the view, since a
+// stale log is more use than none.
+func (p *Poller) fetchLogLines(ctx context.Context, t *tracked, op *backrest.Operation, now time.Time) []pushward.LogLine {
 	if !p.cfg.Render.Logs {
 		return nil
 	}
 	ref := op.OutputLogref()
 	if ref == "" {
 		return nil
-	}
-	if !force && !t.lastLogPoll.IsZero() && now.Sub(t.lastLogPoll) < logRefreshInterval {
-		return t.logLines
 	}
 
 	out, err := p.br.GetLogs(ctx, ref)
@@ -414,11 +434,10 @@ func (p *Poller) create(ctx context.Context, t *tracked, op *backrest.Operation,
 		return err
 	}
 	t.seeded = true
-	slog.Info("tracking operation", "slug", t.slug, "op", t.opID, "kind", t.kind)
+	slog.Info("tracking operation", "slug", t.slug, "op", t.opID, "kind", op.Kind())
 	return nil
 }
 
-// patch sends a merge-patch tick.
 func (p *Poller) patch(ctx context.Context, t *tracked, content pushward.Content) error {
 	req := pushward.PatchRequest{Content: contentPatch(content)}
 	if err := p.pw.PatchActivity(ctx, t.slug, req); err != nil {
@@ -434,6 +453,11 @@ func (p *Poller) patch(ctx context.Context, t *tracked, content pushward.Content
 // RFC 7396 an omitted field keeps its stored value, so a completion frame that
 // simply left it out would inherit live_progress:true from the last running
 // tick and iOS would keep animating a bar that has stopped moving.
+//
+// StartDate and EndDate are deliberately not cleared alongside it. They are nil
+// on a terminal frame, so the stored anchor survives - which is harmless once
+// live_progress is false, since nothing reads the dates then, and it saves
+// sending two null fields on every closing push.
 func contentPatch(c pushward.Content) *pushward.ContentPatch {
 	return &pushward.ContentPatch{
 		Template:     pushward.StringPtr(c.Template),
@@ -473,7 +497,7 @@ func (p *Poller) scheduleEnd(ctx context.Context, t *tracked, content pushward.C
 	detached := context.WithoutCancel(ctx)
 
 	tg.Reset(p.cfg.PushWard.EndDelay, func() {
-		ctx1, cancel1 := context.WithTimeout(detached, 30*time.Second)
+		ctx1, cancel1 := context.WithTimeout(detached, endPushTimeout)
 		defer cancel1()
 		req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
 		if err := p.pw.UpdateActivity(ctx1, slug, req); err != nil {
@@ -481,7 +505,7 @@ func (p *Poller) scheduleEnd(ctx context.Context, t *tracked, content pushward.C
 		}
 
 		tg.Reset(p.cfg.PushWard.EndDisplayTime, func() {
-			ctx2, cancel2 := context.WithTimeout(detached, 30*time.Second)
+			ctx2, cancel2 := context.WithTimeout(detached, endPushTimeout)
 			defer cancel2()
 			endReq := pushward.UpdateRequest{State: pushward.StateEnded, Content: content}
 			if err := p.pw.UpdateActivity(ctx2, slug, endReq); err != nil {
@@ -509,7 +533,7 @@ func slugFor(op *backrest.Operation) string {
 
 // sample folds a new byte count into the transfer-rate average.
 func (t *tracked) sample(bytesDone int64, now time.Time) {
-	if t.samples > 0 {
+	if !t.lastSampleAt.IsZero() {
 		dt := now.Sub(t.lastSampleAt).Seconds()
 		// A counter that did not advance is a real observation - the backup has
 		// stalled - and folding in its zero is what makes the ETA grow. Only
@@ -525,7 +549,6 @@ func (t *tracked) sample(bytesDone int64, now time.Time) {
 	}
 	t.lastBytes = bytesDone
 	t.lastSampleAt = now
-	t.samples++
 }
 
 // anchor returns the unix second the bar should animate toward, and whether it
@@ -534,12 +557,13 @@ func (t *tracked) sample(bytesDone int64, now time.Time) {
 // Re-sending an anchor restarts the client-side animation, so an estimate that
 // wobbles by a second either way must never reach the payload.
 func (t *tracked) anchor(op *backrest.Operation, now time.Time) (int64, bool) {
-	st := op.BackupStatus()
-	if st == nil || t.samples < 2 || t.speed <= 0 {
+	// speed is only ever assigned from a second-or-later sample, so a positive
+	// rate already implies the two observations an estimate needs.
+	if t.speed <= 0 {
 		return 0, false
 	}
-	remaining := st.TotalBytes.Int64() - st.BytesDone.Int64()
-	if remaining <= 0 {
+	remaining, ok := op.RemainingBytes()
+	if !ok || remaining <= 0 {
 		return 0, false
 	}
 
@@ -549,7 +573,7 @@ func (t *tracked) anchor(op *backrest.Operation, now time.Time) (int64, bool) {
 	}
 	end := now.Add(eta).Unix()
 
-	if !t.liveSent {
+	if t.liveEnd == 0 {
 		return end, true
 	}
 	current := t.liveEnd - now.Unix()
@@ -568,7 +592,7 @@ func (t *tracked) anchor(op *backrest.Operation, now time.Time) (int64, bool) {
 
 // shouldPush decides whether this tick has anything new to say. Without it a
 // multi-hour backup would spend thousands of pushes redrawing one frame.
-func (t *tracked) shouldPush(c pushward.Content, now time.Time) bool {
+func (t *tracked) shouldPush(c pushward.Content, now time.Time, heartbeat time.Duration) bool {
 	if c.State != t.lastState {
 		return true
 	}
@@ -580,7 +604,7 @@ func (t *tracked) shouldPush(c pushward.Content, now time.Time) bool {
 	}
 	// The heartbeat is what stops the server ending the activity as stale
 	// during a long, quiet stretch.
-	return now.Sub(t.lastPushAt) >= heartbeatInterval
+	return now.Sub(t.lastPushAt) >= heartbeat
 }
 
 func (t *tracked) markPushed(c pushward.Content, now time.Time) {
@@ -589,9 +613,7 @@ func (t *tracked) markPushed(c pushward.Content, now time.Time) {
 	t.lastPushAt = now
 	if c.EndDate != nil {
 		t.liveEnd = *c.EndDate
-		t.liveSent = true
 	} else {
 		t.liveEnd = 0
-		t.liveSent = false
 	}
 }

@@ -67,6 +67,42 @@ func TestInt64AcceptsBareNumber(t *testing.T) {
 	}
 }
 
+// A quoted int64 that is not purely numeric has to be an error, not a partial
+// read. fmt.Sscanf("%d") stops at the first unusable character and reports
+// success, so "12abc" decodes as 12 and "1e5" as 1 - a corrupted byte count
+// would render a plausible but wrong bar rather than failing the tick.
+func TestInt64RejectsMalformedInput(t *testing.T) {
+	for _, raw := range []string{
+		`{"n":"12abc"}`,
+		`{"n":"1e5"}`,
+		`{"n":"0x1f"}`,
+		`{"n":"4 2"}`,
+		`{"n":" 42"}`,
+		`{"n":"42 "}`,
+		`{"n":"abc"}`,
+		`{"n":"9223372036854775808"}`, // one past MaxInt64
+	} {
+		var v struct {
+			N Int64 `json:"n"`
+		}
+		if err := json.Unmarshal([]byte(raw), &v); err == nil {
+			t.Errorf("%s decoded as %d, want an error", raw, v.N.Int64())
+		}
+	}
+}
+
+func TestInt64AcceptsWellFormedNegative(t *testing.T) {
+	var v struct {
+		N Int64 `json:"n"`
+	}
+	if err := json.Unmarshal([]byte(`{"n":"-5"}`), &v); err != nil {
+		t.Fatalf("decoding a negative: %v", err)
+	}
+	if v.N.Int64() != -5 {
+		t.Errorf("n = %d, want -5", v.N.Int64())
+	}
+}
+
 func TestInt64AcceptsNullAndEmpty(t *testing.T) {
 	for _, raw := range []string{`{"n":null}`, `{"n":""}`} {
 		var v struct {
@@ -192,7 +228,7 @@ func TestStatusPredicates(t *testing.T) {
 // A cancelled backup is a backup that did not happen. Rendering it green would
 // be a lie, so Failed has to cover both cancellation statuses.
 func TestCancellationCountsAsFailure(t *testing.T) {
-	for _, status := range []string{StatusSystemCancelled, StatusUserCancelled} {
+	for _, status := range []Status{StatusSystemCancelled, StatusUserCancelled} {
 		op := &Operation{Status: status}
 		if !op.Failed() {
 			t.Errorf("%s: Failed() = false, want true", status)
