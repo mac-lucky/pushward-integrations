@@ -1,0 +1,12 @@
+{
+  "event": "CONDITION_SNAPSHOT_WARNING",
+  "task": "backup for plan \"daily-backup\"",
+  "plan": "daily-backup",
+  "repo": "local-repo",
+  "snapshot_id": "abc123def",
+  "error": "partial backup, 3 files may not have been read completely.",
+  "duration_ms": 45000,
+  "data_added": 2468421632,
+  "total_files_processed": 198,
+  "total_duration": 45
+}

@@ -101,6 +101,26 @@ func NewEnder(clients *client.Pool, store state.Store, provider string, cfg EndC
 	return e
 }
 
+// EndIfTracked ends an activity a previous request opened, if one is tracked.
+// Use it where this request may not touch the activity surface
+// (channels=notification) but an earlier one, on a different hook URL, already
+// opened an activity that would otherwise hang on the lock screen until its
+// stale TTL expires. A nil store means no state at all.
+func (e *Ender) EndIfTracked(ctx context.Context, log *slog.Logger, userKey, mapKey, slug string, content pushward.Content) {
+	if e.store == nil {
+		return
+	}
+	tracked, err := e.store.Exists(ctx, e.provider, userKey, mapKey, "")
+	if err != nil {
+		log.Warn("state store read failed", "error", err, "provider", e.provider, "slug", slug)
+		return
+	}
+	if !tracked {
+		return
+	}
+	e.ScheduleEnd(userKey, mapKey, slug, content)
+}
+
 // ScheduleEnd schedules a two-phase end for an activity:
 //   - Phase 1 (after EndDelay): ONGOING update with final content
 //   - Phase 2 (EndDisplayTime later): ENDED with same content

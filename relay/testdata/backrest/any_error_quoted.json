@@ -1,0 +1,8 @@
+{
+  "event": "CONDITION_ANY_ERROR",
+  "task": "backup for plan \"daily-backup\"",
+  "plan": "daily-backup",
+  "repo": "local-repo",
+  "error": "command \"/bin/restic backup --json /backup/photos\" failed: exit status 1\nFatal: unable to open repo at \"sftp://backup\"",
+  "duration_ms": 2100
+}

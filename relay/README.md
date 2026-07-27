@@ -224,7 +224,7 @@ All webhook routes require an `hlk_` key (Bearer, HTTP Basic password, or the Op
 | Overseerr / Jellyseerr | `POST /overseerr` | Bearer | Live Activity (steps) | Yes |
 | Uptime Kuma | `POST /uptimekuma` | Bearer | Live Activity (alert) | Yes |
 | Gatus | `POST /gatus` | Bearer | Live Activity (alert) | Yes |
-| Backrest | `POST /backrest` | Bearer | Live Activity (steps) | Yes |
+| Backrest | `POST /backrest` | Bearer | Live Activity (steps) + push on failure | Yes |
 | Gitea | `POST /gitea` | Bearer | Live Activity (steps) | Yes |
 | Forgejo | `POST /forgejo` | Bearer | Live Activity (generic) | Yes |
 | Komodo | `POST /komodo` | Basic | Live Activity (alert) + push | Yes |
@@ -256,7 +256,7 @@ Example: deliver Komodo as notifications only, at priority 8, with a passive int
 https://relay.pushward.app/komodo?channels=notification&priority=8&level=passive
 ```
 
-Note the asymmetry: Live-Activity-only providers (ArgoCD, Proxmox, Backrest, Gitea/Forgejo, Jellyfin playback) have no one-shot notification to fall back to, so `channels=notification` suppresses their output entirely; notification-only providers (Grafana, Prowlarr, Bazarr) have no Live Activity, so `channels=activity` suppresses theirs.
+Note the asymmetry: Live-Activity-only providers (ArgoCD, Proxmox, Gitea/Forgejo, Jellyfin playback) have no one-shot notification to fall back to, so `channels=notification` suppresses their output entirely; notification-only providers (Grafana, Prowlarr, Bazarr) have no Live Activity, so `channels=activity` suppresses theirs.
 
 ---
 
@@ -607,33 +607,73 @@ Receives backup operation webhooks for snapshot, prune, check, and forget operat
 
 | Condition | State | Icon | Color |
 |---|---|---|---|
-| `CONDITION_SNAPSHOT_START` | Backing up… | `arrow.triangle.2.circlepath` | blue |
-| `CONDITION_SNAPSHOT_SUCCESS` | Complete (+ data added) | `checkmark.circle.fill` | green |
-| `CONDITION_SNAPSHOT_WARNING` | Complete (warnings) | `exclamationmark.triangle.fill` | orange |
-| `CONDITION_SNAPSHOT_ERROR` | Failed | `xmark.circle.fill` | red |
-| `CONDITION_PRUNE_START` | Pruning… | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_SNAPSHOT_START` | Backing up... | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_SNAPSHOT_SUCCESS` | Complete (+ data added, files, duration) | `checkmark.circle.fill` | green |
+| `CONDITION_SNAPSHOT_WARNING` | Complete (warnings) (+ error) | `exclamationmark.triangle.fill` | orange |
+| `CONDITION_SNAPSHOT_ERROR` | Failed (+ error) | `xmark.circle.fill` | red |
+| `CONDITION_SNAPSHOT_END` | resolved from `error`: success or failure frame | | |
+| `CONDITION_PRUNE_START` | Pruning... | `arrow.triangle.2.circlepath` | blue |
 | `CONDITION_PRUNE_SUCCESS` | Pruned | `checkmark.circle.fill` | green |
-| `CONDITION_PRUNE_ERROR` | Prune Failed | `xmark.circle.fill` | red |
-| `CONDITION_CHECK_START` | Checking… | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_PRUNE_ERROR` | Prune Failed (+ error) | `xmark.circle.fill` | red |
+| `CONDITION_CHECK_START` | Checking... | `arrow.triangle.2.circlepath` | blue |
 | `CONDITION_CHECK_SUCCESS` | Check Passed | `checkmark.circle.fill` | green |
-| `CONDITION_CHECK_ERROR` | Check Failed | `xmark.circle.fill` | red |
-| `CONDITION_FORGET_START` | Applying retention… | `arrow.triangle.2.circlepath` | blue |
+| `CONDITION_CHECK_ERROR` | Check Failed (+ error) | `xmark.circle.fill` | red |
+| `CONDITION_FORGET_START` | Applying retention... | `arrow.triangle.2.circlepath` | blue |
 | `CONDITION_FORGET_SUCCESS` | Retention applied | `checkmark.circle.fill` | green |
-| `CONDITION_FORGET_ERROR` | Retention failed | `xmark.circle.fill` | red |
+| `CONDITION_FORGET_ERROR` | Retention failed (+ error) | `xmark.circle.fill` | red |
 | `CONDITION_ANY_ERROR` | (error message) | `exclamationmark.triangle.fill` | red |
 | `CONDITION_SNAPSHOT_SKIPPED` | Snapshot Skipped | `info.circle.fill` | blue |
 
-**Setup:** In Backrest, on the Plan or Repo, under *Hooks* click **+ Add Hook** and select **Shoutrrr**. Select the 15 conditions above and set *On Error* to "Ignore". Set the **Shoutrrr URL** (the `@authorization` param adds the header):
+That is every value of Backrest's `Hook.Condition` enum except `CONDITION_UNKNOWN`, Backrest's
+internal "no condition matched" sentinel, which it never delivers. It is accepted and ignored,
+so leaving it ticked in the Backrest UI does nothing either way.
+
+Prune, check and forget run against a repo rather than a plan. Backrest still fills the hook's
+`.Plan.Id`, with its `_system_` sentinel, and the relay treats that as no plan: those activities
+are named "Backup" and their subtitle is just `Backrest · <repo>`.
+
+`CONDITION_SNAPSHOT_END` fires alongside the specific outcome, and Backrest delivers only the
+first condition a hook subscribes to, with `END` always last in the list. A hook subscribed to
+both `END` and `SNAPSHOT_SUCCESS`/`_ERROR` therefore never receives `END`; it only arrives for
+hooks subscribed to `END` on its own, where the outcome is taken from the `error` field.
+
+**Notifications:** failures and warnings also send a push notification (time-sensitive, linked
+to the activity). Routine starts and successes stay Live-Activity-only so a nightly backup does
+not also push every morning. With `?channels=notification` the activity is suppressed and every
+outcome notifies instead, successes included.
+
+**Setup:** In Backrest, on the Plan or Repo, under *Hooks* click **+ Add Hook** and select
+**Shoutrrr**. Tick the conditions you want and set *On Error* to "Ignore" so a relay hiccup can
+never cancel a backup. Set the **Shoutrrr URL** (the `@authorization` param adds the header):
 
 ```
 generic+https://relay.pushward.app/backrest?@authorization=Bearer+hlk_YOUR_KEY&contenttype=application/json
 ```
 
-Set the **Template** (Go template that renders the JSON body):
+Shoutrrr's `generic://` transport is the one to use. Backrest also lists a plain "Webhook"
+action, but it has no way to set an `Authorization` header, and as of v1.14.1 it has no backend
+handler at all, so it never sends anything.
+
+Set the **Template** (a Go template that renders the JSON body):
 
 ```
-{"event":"{{ .Event }}","plan":"{{ .Plan.Id }}","repo":"{{ .Repo.Id }}","snapshot_id":"{{ .SnapshotId }}","data_added":{{ if .SnapshotStats }}{{ .SnapshotStats.DataAdded }}{{ else }}0{{ end }},"error":"{{ .Error }}"}
+{"event":"{{ .Event }}","task":{{ .JsonMarshal .Task }},"plan":{{ .JsonMarshal .Plan.Id }},"repo":{{ .JsonMarshal .Repo.Id }},"snapshot_id":"{{ .SnapshotId }}","duration_ms":{{ .Duration.Milliseconds }},"error":{{ .JsonMarshal .Error }}{{ if .SnapshotStats }},"data_added":{{ .SnapshotStats.DataAdded }},"files_new":{{ .SnapshotStats.FilesNew }},"files_changed":{{ .SnapshotStats.FilesChanged }},"files_unmodified":{{ .SnapshotStats.FilesUnmodified }},"total_files_processed":{{ .SnapshotStats.TotalFilesProcessed }},"total_bytes_processed":{{ .SnapshotStats.TotalBytesProcessed }},"total_duration":{{ .SnapshotStats.TotalDuration }}{{ end }}}
 ```
+
+> **If you set this up before, replace your template with the one above.** The previous version
+> interpolated the error straight into a JSON string literal instead of through `.JsonMarshal`.
+> Backrest renders hook templates with `text/template`, which does no escaping, and its errors
+> routinely quote the command they ran, so any such error produced a body the relay could not
+> parse. The events you most wanted, the failures, were the only ones that never arrived.
+
+Every field except `event` is optional, so an older template keeps working, it just renders less
+detail. Guard anything from `.SnapshotStats` with `{{ if .SnapshotStats }}` as above: it is nil
+outside snapshot completion, and an unguarded reference renders `<no value>` and breaks the JSON.
+
+restic's `dirs_*` and `*_blobs` counters are left out on purpose, they are internal bookkeeping
+with nothing useful to show on a lock screen. Sending them anyway is harmless, unknown keys are
+ignored. On a failure the state line shows the error rather than the summary, since only one of
+them fits.
 
 ### Gitea
 

@@ -1,0 +1,8 @@
+{
+  "event": "CONDITION_SNAPSHOT_SUCCESS",
+  "plan": "daily-backup",
+  "repo": "local-repo",
+  "snapshot_id": "abc123def",
+  "data_added": 2468421632,
+  "error": ""
+}

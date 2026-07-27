@@ -1,0 +1,12 @@
+{
+  "event": "CONDITION_SNAPSHOT_END",
+  "task": "backup for plan \"daily-backup\"",
+  "plan": "daily-backup",
+  "repo": "local-repo",
+  "snapshot_id": "abc123def",
+  "error": "",
+  "duration_ms": 45000,
+  "data_added": 2468421632,
+  "total_files_processed": 198,
+  "total_duration": 45
+}

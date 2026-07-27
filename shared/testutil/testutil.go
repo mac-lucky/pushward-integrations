@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -138,6 +139,20 @@ type testNotificationAction struct {
 // validates them against the PushWard public API contract.
 func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex) {
 	t.Helper()
+	return mockPushWardServer(t, http.StatusCreated)
+}
+
+// MockPushWardServerFailingNotifications is MockPushWardServer with every
+// notification rejected, for handlers that have to decide whether a failed push
+// fails the request. The notification is still validated first, so a test can
+// tell a rejected call from a malformed one.
+func MockPushWardServerFailingNotifications(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex) {
+	t.Helper()
+	return mockPushWardServer(t, http.StatusUnprocessableEntity)
+}
+
+func mockPushWardServer(t *testing.T, notifyStatus int) (*httptest.Server, *[]APICall, *sync.Mutex) {
+	t.Helper()
 	var calls []APICall
 	var mu sync.Mutex
 	slugs := make(map[string]bool)
@@ -239,9 +254,14 @@ func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex
 			}
 		}
 
+		if notifyStatus >= 400 {
+			respondError(w, notifyStatus, "notification rejected")
+			return
+		}
+
 		pushed := req.Push == nil || *req.Push
 
-		w.WriteHeader(http.StatusCreated)
+		w.WriteHeader(notifyStatus)
 		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "pushed": pushed})
 	})
 
@@ -312,6 +332,26 @@ func GetCalls(calls *[]APICall, mu *sync.Mutex) []APICall {
 	result := make([]APICall, len(*calls))
 	copy(result, *calls)
 	return result
+}
+
+// WaitForCalls polls until at least n calls have been recorded, then settles
+// briefly and returns everything recorded by the end of that window. A loaded CI
+// box gets more time instead of a flake, and a caller asserting an exact count
+// still sees a call that arrives just after the nth.
+func WaitForCalls(t *testing.T, calls *[]APICall, mu *sync.Mutex, n int, timeout time.Duration) []APICall {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		got := GetCalls(calls, mu)
+		if len(got) >= n {
+			time.Sleep(10 * time.Millisecond)
+			return GetCalls(calls, mu)
+		}
+		if time.Now().After(deadline) {
+			return got
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
 }
 
 // UnmarshalBody decodes the JSON body of a recorded API call into v.

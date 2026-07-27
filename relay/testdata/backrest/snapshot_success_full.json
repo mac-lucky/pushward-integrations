@@ -1,0 +1,16 @@
+{
+  "event": "CONDITION_SNAPSHOT_SUCCESS",
+  "task": "backup for plan \"daily-backup\"",
+  "plan": "daily-backup",
+  "repo": "local-repo",
+  "snapshot_id": "7b44e647f53dc01fed2217f9caac25900f9158c4766ca5e7811363bfc971f529",
+  "error": "",
+  "duration_ms": 913630,
+  "data_added": 85082131721,
+  "files_new": 334,
+  "files_changed": 14,
+  "files_unmodified": 65007,
+  "total_files_processed": 65355,
+  "total_bytes_processed": 1195256287571,
+  "total_duration": 906.366048946
+}

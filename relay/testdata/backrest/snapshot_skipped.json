@@ -1,0 +1,8 @@
+{
+  "event": "CONDITION_SNAPSHOT_SKIPPED",
+  "task": "backup for plan \"daily-backup\"",
+  "plan": "daily-backup",
+  "repo": "local-repo",
+  "snapshot_id": "",
+  "error": ""
+}

@@ -1,6 +1,8 @@
 package backrest
 
 import (
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -30,33 +32,101 @@ func testConfig() *config.BackrestConfig {
 	}
 }
 
-func newTestAPI(t *testing.T, cfg *config.BackrestConfig) (http.Handler, *Handler, *[]testutil.APICall, *sync.Mutex) {
+func newHandler(t *testing.T, cfg *config.BackrestConfig) (http.Handler, *[]testutil.APICall, *sync.Mutex) {
+	t.Helper()
+	mux, _, calls, mu := newHandlerWithEnder(t, cfg)
+	return mux, calls, mu
+}
+
+func newHandlerWithEnder(t *testing.T, cfg *config.BackrestConfig) (http.Handler, *lifecycle.Ender, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
 	lifecycle.SetRetryDelay(10 * time.Millisecond)
 	srv, calls, mu := testutil.MockPushWardServer(t)
-	store := state.NewMemoryStore()
-	pool := client.NewPool(srv.URL, nil)
 
 	mux, api := humautil.NewTestAPI()
-	h := RegisterRoutes(api, store, pool, cfg)
-
-	return mux, h, calls, mu
-}
-
-func newHandler(t *testing.T, cfg *config.BackrestConfig) (http.Handler, *[]testutil.APICall, *sync.Mutex) {
-	t.Helper()
-	mux, _, calls, mu := newTestAPI(t, cfg)
-	return mux, calls, mu
+	h := RegisterRoutes(api, state.NewMemoryStore(), client.NewPool(srv.URL, nil), cfg)
+	return mux, h.Ender(), calls, mu
 }
 
 func send(t *testing.T, h http.Handler, payload string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/backrest", strings.NewReader(payload))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer hlk_test")
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, req)
-	return w
+	return sendQuery(t, h, "", payload)
+}
+
+// wantSuccessDetail is what summaryDetail renders for the snapshot-success
+// payload used across these tests (2468421632 bytes, 42 new + 156 changed
+// files, 45000 ms).
+const wantSuccessDetail = "2.3 GB · 198 files · 45s"
+
+// endState composes these; the tests mirror the composition rather than sharing
+// a constant with production, so a change to either side shows up here.
+const (
+	stateCompletePrefix = stateComplete + sepDetail
+	stateFailedPrefix   = stateFailed + sepError
+)
+
+// notifications decodes the recorded notification bodies, for the sites that
+// assert on their content. Use testutil.CountPath when only the count matters.
+func notifications(t *testing.T, recorded []testutil.APICall) []pushward.SendNotificationRequest {
+	t.Helper()
+	var out []pushward.SendNotificationRequest
+	for _, c := range recorded {
+		if c.Method == http.MethodPost && c.Path == "/notifications" {
+			var req pushward.SendNotificationRequest
+			testutil.UnmarshalBody(t, c.Body, &req)
+			out = append(out, req)
+		}
+	}
+	return out
+}
+
+// activityCalls drops the notification POSTs so index-based assertions keep a
+// stable numbering whether or not an event also notified.
+func activityCalls(recorded []testutil.APICall) []testutil.APICall {
+	var out []testutil.APICall
+	for _, c := range recorded {
+		if c.Path != "/notifications" {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// stepsFrame is the shape every steps-template frame is asserted against.
+type stepsFrame struct {
+	state string
+	color string
+	icon  string
+	step  int
+}
+
+func assertStepsFrame(t *testing.T, body json.RawMessage, want stepsFrame) pushward.UpdateRequest {
+	t.Helper()
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, body, &req)
+	c := req.Content
+	if c.State != want.state {
+		t.Errorf("state = %q, want %q", c.State, want.state)
+	}
+	if c.Template != pushward.TemplateSteps {
+		t.Errorf("template = %q, want %q", c.Template, pushward.TemplateSteps)
+	}
+	if c.AccentColor != want.color {
+		t.Errorf("accent = %q, want %q", c.AccentColor, want.color)
+	}
+	if c.Icon != want.icon {
+		t.Errorf("icon = %q, want %q", c.Icon, want.icon)
+	}
+	if c.CurrentStep == nil || *c.CurrentStep != want.step {
+		t.Errorf("current_step = %v, want %d", c.CurrentStep, want.step)
+	}
+	if c.TotalSteps == nil || *c.TotalSteps != 2 {
+		t.Errorf("total_steps = %v, want 2", c.TotalSteps)
+	}
+	if len(c.StepLabels) != 2 || c.StepLabels[0] != "Running" || c.StepLabels[1] != "Done" {
+		t.Errorf("step_labels = %v, want [Running Done]", c.StepLabels)
+	}
+	return req
 }
 
 func TestSnapshotLifecycle(t *testing.T) {
@@ -87,13 +157,9 @@ func TestSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
-	// START: create + ONGOING = 2
-	// SUCCESS: create + phase1(ONGOING) + phase2(ENDED) = 3
-	// Total = 5
+	// START: create + ONGOING.
+	// SUCCESS: create + the final frame + the ender's two phases.
+	recorded := testutil.WaitForCalls(t, calls, mu, 6, 2*time.Second)
 	if len(recorded) != 6 {
 		t.Fatalf("expected 6 calls, got %d", len(recorded))
 	}
@@ -151,8 +217,8 @@ func TestSnapshotLifecycle(t *testing.T) {
 	if phase1.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
 	}
-	if phase1.Content.State != stateCompletePrefix+"2.3 GB" {
-		t.Errorf("expected state 'Complete · 2.3 GB', got %s", phase1.Content.State)
+	if phase1.Content.State != stateCompletePrefix+wantSuccessDetail {
+		t.Errorf("expected state %q, got %s", stateCompletePrefix+wantSuccessDetail, phase1.Content.State)
 	}
 	if phase1.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
@@ -179,8 +245,14 @@ func TestSnapshotLifecycle(t *testing.T) {
 	if phase2.State != pushward.StateEnded {
 		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
 	}
-	if phase2.Content.State != stateCompletePrefix+"2.3 GB" {
-		t.Errorf("expected state 'Complete · 2.3 GB', got %s", phase2.Content.State)
+	if phase2.Content.State != stateCompletePrefix+wantSuccessDetail {
+		t.Errorf("expected state %q, got %s", stateCompletePrefix+wantSuccessDetail, phase2.Content.State)
+	}
+
+	// A routine success must not add a push on top of the Live Activity, or
+	// enabling notifications would spam every scheduled backup.
+	if n := notifications(t, recorded); len(n) != 0 {
+		t.Errorf("expected no notification for a successful snapshot, got %d", len(n))
 	}
 }
 
@@ -206,15 +278,28 @@ func TestSnapshotError(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
-	// START: create + ONGOING = 2
-	// ERROR: create + phase1(ONGOING) + phase2(ENDED) = 3
-	// Total = 5
-	if len(recorded) != 6 {
-		t.Fatalf("expected 6 calls, got %d", len(recorded))
+	recorded := testutil.WaitForCalls(t, calls, mu, 7, 2*time.Second)
+	// START: create + ONGOING                                          = 2
+	// ERROR: create + final ONGOING + notification + phase1 + phase2  = 5
+	if len(recorded) != 7 {
+		t.Fatalf("expected 7 calls, got %d", len(recorded))
 	}
+
+	// A failed snapshot is worth interrupting for, so it also notifies.
+	notifs := notifications(t, recorded)
+	if len(notifs) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(notifs))
+	}
+	if want := stateFailedPrefix + "repository not found"; notifs[0].Body != want {
+		t.Errorf("expected notification body %q, got %q", want, notifs[0].Body)
+	}
+	if notifs[0].Level != pushward.LevelTimeSensitive {
+		t.Errorf("expected time-sensitive level, got %q", notifs[0].Level)
+	}
+	if notifs[0].ActivitySlug == "" {
+		t.Error("expected the notification to deep-link into its activity")
+	}
+	recorded = activityCalls(recorded)
 
 	// Phase 1: red/failed
 	var phase1 pushward.UpdateRequest
@@ -267,18 +352,22 @@ func TestSnapshotWarning(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 6 {
-		t.Fatalf("expected 6 calls, got %d", len(recorded))
+	recorded := testutil.WaitForCalls(t, calls, mu, 7, 2*time.Second)
+	if len(recorded) != 7 {
+		t.Fatalf("expected 7 calls, got %d", len(recorded))
 	}
+
+	// A partial backup is a warning, which still notifies.
+	if n := testutil.CountPath(recorded, "/notifications"); n != 1 {
+		t.Fatalf("expected 1 notification, got %d", n)
+	}
+	recorded = activityCalls(recorded)
 
 	// Phase 1: orange/warning
 	var phase1 pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
-	if phase1.Content.State != stateCompleteWarnings {
-		t.Errorf("expected state %q, got %s", stateCompleteWarnings, phase1.Content.State)
+	if want := stateCompleteWarnings + sepDetail + "1.0 MB"; phase1.Content.State != want {
+		t.Errorf("expected state %q, got %s", want, phase1.Content.State)
 	}
 	if phase1.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
@@ -297,245 +386,175 @@ func TestSnapshotWarning(t *testing.T) {
 	}
 }
 
-func TestFormatBytes(t *testing.T) {
+func TestSummaryDetail(t *testing.T) {
+	i := func(v int64) *int64 { return &v }
+	f := func(v float64) *float64 { return &v }
+
 	tests := []struct {
-		input    int64
-		expected string
+		name string
+		p    backrestPayload
+		want string
 	}{
-		{0, "0 B"},
-		{512, "512 B"},
-		{1024, "1 KB"},
-		{1536, "2 KB"},
-		{1048576, "1 MB"},
-		{1073741824, "1.0 GB"},
-		{2468421632, "2.3 GB"},
+		{
+			// Every pre-existing template sends no stats at all. It must render
+			// as a bare outcome, not as a row of zeroes.
+			name: "no stats sent",
+			p:    backrestPayload{},
+			want: "",
+		},
+		{
+			name: "legacy template: data_added only",
+			p:    backrestPayload{DataAdded: i(2468421632)},
+			want: "2.3 GB",
+		},
+		{
+			name: "full stats",
+			p: backrestPayload{
+				DataAdded:           i(2468421632),
+				TotalFilesProcessed: i(198),
+				TotalDuration:       f(45),
+			},
+			want: "2.3 GB · 198 files · 45s",
+		},
+		{
+			// total_files_processed absent, so new+changed stands in for it.
+			name: "files fall back to new + changed",
+			p:    backrestPayload{FilesNew: i(42), FilesChanged: i(156)},
+			want: "198 files",
+		},
+		{
+			// restic's own timing wins over Backrest's task wall clock.
+			name: "total_duration preferred over duration_ms",
+			p:    backrestPayload{TotalDuration: f(45), DurationMs: 99000},
+			want: "45s",
+		},
+		{
+			name: "duration_ms used when total_duration absent",
+			p:    backrestPayload{DurationMs: 45000},
+			want: "45s",
+		},
+		{
+			// A genuinely empty backup reports zeroes, which must not be
+			// confused with "the template omitted the field".
+			name: "explicit zeroes render nothing",
+			p:    backrestPayload{DataAdded: i(0), TotalFilesProcessed: i(0)},
+			want: "",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := summaryDetail(&tc.p); got != tc.want {
+				t.Errorf("summaryDetail() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Pins the handler to Backrest's Hook.Condition enum (proto/v1/config.proto,
+// v1.14.1). Kind and problem are asserted too, so a condition wired to the
+// wrong branch fails here instead of in production.
+func TestSpecForCoversAllConditions(t *testing.T) {
+	tests := []struct {
+		cond    string
+		kind    eventKind
+		problem bool
+	}{
+		{condAnyError, kindAlert, true},
+		{condSnapshotStart, kindStart, false},
+		{condSnapshotEnd, kindEnd, false},
+		{condSnapshotError, kindEnd, true},
+		{condSnapshotWarning, kindEnd, true},
+		{condSnapshotSuccess, kindEnd, false},
+		{condSnapshotSkipped, kindAlert, false},
+		{condPruneStart, kindStart, false},
+		{condPruneError, kindEnd, true},
+		{condPruneSuccess, kindEnd, false},
+		{condCheckStart, kindStart, false},
+		{condCheckError, kindEnd, true},
+		{condCheckSuccess, kindEnd, false},
+		{condForgetStart, kindStart, false},
+		{condForgetError, kindEnd, true},
+		{condForgetSuccess, kindEnd, false},
+	}
+	if len(tests)+1 != 17 {
+		t.Fatalf("Hook.Condition has 17 values, table has %d plus condUnknown", len(tests))
+	}
+	// CONDITION_UNKNOWN is Backrest's "no condition matched" sentinel, never
+	// delivered, so it is deliberately unmapped and takes the unrecognised-event
+	// path along with any condition a future Backrest release adds.
+	if _, ok := specFor(&backrestPayload{Event: condUnknown}); ok {
+		t.Error("condUnknown should be unmapped")
 	}
 
 	for _, tc := range tests {
-		got := formatBytes(tc.input)
-		if got != tc.expected {
-			t.Errorf("formatBytes(%d) = %q, want %q", tc.input, got, tc.expected)
-		}
+		t.Run(tc.cond, func(t *testing.T) {
+			spec, ok := specFor(&backrestPayload{Event: tc.cond})
+			if !ok {
+				t.Fatalf("specFor(%s) not handled", tc.cond)
+			}
+			if spec.kind != tc.kind {
+				t.Errorf("kind = %d, want %d", spec.kind, tc.kind)
+			}
+			if spec.problem != tc.problem {
+				t.Errorf("problem = %v, want %v", spec.problem, tc.problem)
+			}
+			if tc.kind != kindIgnore && spec.state == "" {
+				t.Error("expected a non-empty state")
+			}
+		})
 	}
 }
 
-func TestPruneLifecycle(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
-
-	// Send PRUNE_START
-	w := send(t, h, `{
-		"event": "CONDITION_PRUNE_START",
-		"plan": "daily-backup",
-		"repo": "local-repo"
-	}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	// Send PRUNE_SUCCESS
-	w = send(t, h, `{
-		"event": "CONDITION_PRUNE_SUCCESS",
-		"plan": "daily-backup",
-		"repo": "local-repo"
-	}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
-	// PRUNE_START: create + ONGOING = 2
-	// PRUNE_SUCCESS: create + phase1(ONGOING) + phase2(ENDED) = 3
-	// Total = 5
-	if len(recorded) != 6 {
-		t.Fatalf("expected 6 calls, got %d", len(recorded))
-	}
-
-	// Verify PRUNE_START ONGOING
-	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.Content.State != statePruning {
-		t.Errorf("expected state %q, got %s", statePruning, update.Content.State)
-	}
-	if update.Content.Template != "steps" {
-		t.Errorf("expected template 'steps', got %s", update.Content.Template)
-	}
-	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 1 {
-		t.Errorf("expected current_step 1, got %v", update.Content.CurrentStep)
-	}
-	if update.Content.TotalSteps == nil || *update.Content.TotalSteps != 2 {
-		t.Errorf("expected total_steps 2, got %v", update.Content.TotalSteps)
-	}
-	if len(update.Content.StepLabels) != 2 || update.Content.StepLabels[0] != "Running" || update.Content.StepLabels[1] != "Done" {
-		t.Errorf("expected step_labels [Running, Done], got %v", update.Content.StepLabels)
-	}
-
-	// Phase 1: Pruned
-	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
-	if phase1.Content.State != statePruned {
-		t.Errorf("expected state %q, got %s", statePruned, phase1.Content.State)
-	}
-	if phase1.Content.Template != "steps" {
-		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
-	}
-	if phase1.Content.AccentColor != pushward.ColorGreen {
-		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
-	}
-	if phase1.Content.CurrentStep == nil || *phase1.Content.CurrentStep != 2 {
-		t.Errorf("expected current_step 2, got %v", phase1.Content.CurrentStep)
-	}
-	if phase1.Content.TotalSteps == nil || *phase1.Content.TotalSteps != 2 {
-		t.Errorf("expected total_steps 2, got %v", phase1.Content.TotalSteps)
+// SNAPSHOT_END carries no outcome of its own, so it is the one condition whose
+// spec depends on the payload.
+func TestSpecForSnapshotEndUsesError(t *testing.T) {
+	spec, _ := specFor(&backrestPayload{Event: condSnapshotEnd, Error: "boom"})
+	if !spec.problem || spec.state != stateFailed {
+		t.Errorf("END with an error should be a failure, got %+v", spec)
 	}
 }
 
-func TestCheckLifecycle(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+func TestRepoOperationLifecycles(t *testing.T) {
+	tests := []struct {
+		name       string
+		startEvent string
+		doneEvent  string
+		startState string
+		doneState  string
+	}{
+		{"prune", condPruneStart, condPruneSuccess, statePruning, statePruned},
+		{"check", condCheckStart, condCheckSuccess, stateChecking, stateCheckPassed},
+		{"forget", condForgetStart, condForgetSuccess, stateApplyingRetention, stateRetentionApplied},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, calls, mu := newHandler(t, testConfig())
 
-	// Send CHECK_START
-	w := send(t, h, `{
-		"event": "CONDITION_CHECK_START",
-		"plan": "daily-backup",
-		"repo": "local-repo"
-	}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
+			body := `{"event":"%s","plan":"daily-backup","repo":"local-repo"}`
+			for _, ev := range []string{tc.startEvent, tc.doneEvent} {
+				if w := send(t, h, fmt.Sprintf(body, ev)); w.Code != http.StatusOK {
+					t.Fatalf("%s: expected 200, got %d (%s)", ev, w.Code, w.Body.String())
+				}
+			}
 
-	// Send CHECK_SUCCESS
-	w = send(t, h, `{
-		"event": "CONDITION_CHECK_SUCCESS",
-		"plan": "daily-backup",
-		"repo": "local-repo"
-	}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
+			// start: create + ONGOING; done: create + final ONGOING + the
+			// ender's two phases.
+			recorded := testutil.WaitForCalls(t, calls, mu, 6, 2*time.Second)
+			if len(recorded) != 6 {
+				t.Fatalf("expected 6 calls, got %d", len(recorded))
+			}
+			if n := testutil.CountPath(recorded, "/notifications"); n != 0 {
+				t.Errorf("a successful repo operation must not push, got %d", n)
+			}
 
-	time.Sleep(100 * time.Millisecond)
+			assertStepsFrame(t, recorded[1].Body, stepsFrame{tc.startState, pushward.ColorBlue, iconRunning, 1})
+			assertStepsFrame(t, recorded[3].Body, stepsFrame{tc.doneState, pushward.ColorGreen, iconOK, 2})
 
-	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 6 {
-		t.Fatalf("expected 6 calls, got %d", len(recorded))
-	}
-
-	// Verify CHECK_START ONGOING
-	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.Content.State != stateChecking {
-		t.Errorf("expected state %q, got %s", stateChecking, update.Content.State)
-	}
-	if update.Content.Template != "steps" {
-		t.Errorf("expected template 'steps', got %s", update.Content.Template)
-	}
-	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 1 {
-		t.Errorf("expected current_step 1, got %v", update.Content.CurrentStep)
-	}
-	if update.Content.TotalSteps == nil || *update.Content.TotalSteps != 2 {
-		t.Errorf("expected total_steps 2, got %v", update.Content.TotalSteps)
-	}
-	if len(update.Content.StepLabels) != 2 || update.Content.StepLabels[0] != "Running" || update.Content.StepLabels[1] != "Done" {
-		t.Errorf("expected step_labels [Running, Done], got %v", update.Content.StepLabels)
-	}
-
-	// Phase 1: Check Passed
-	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase1)
-	if phase1.Content.State != stateCheckPassed {
-		t.Errorf("expected state %q, got %s", stateCheckPassed, phase1.Content.State)
-	}
-	if phase1.Content.Template != "steps" {
-		t.Errorf("expected template 'steps', got %s", phase1.Content.Template)
-	}
-	if phase1.Content.AccentColor != pushward.ColorGreen {
-		t.Errorf("expected green color, got %s", phase1.Content.AccentColor)
-	}
-	if phase1.Content.CurrentStep == nil || *phase1.Content.CurrentStep != 2 {
-		t.Errorf("expected current_step 2, got %v", phase1.Content.CurrentStep)
-	}
-	if phase1.Content.TotalSteps == nil || *phase1.Content.TotalSteps != 2 {
-		t.Errorf("expected total_steps 2, got %v", phase1.Content.TotalSteps)
-	}
-}
-
-func TestForgetLifecycle(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
-
-	// Send FORGET_START
-	w := send(t, h, `{
-		"event": "CONDITION_FORGET_START",
-		"plan": "daily-backup",
-		"repo": "local-repo"
-	}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	// Send FORGET_SUCCESS
-	w = send(t, h, `{
-		"event": "CONDITION_FORGET_SUCCESS",
-		"plan": "daily-backup",
-		"repo": "local-repo"
-	}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
-	// FORGET_START: create + ONGOING = 2
-	// FORGET_SUCCESS: create + phase1(ONGOING) + phase2(ENDED) = 3
-	// Total = 5
-	if len(recorded) != 6 {
-		t.Fatalf("expected 6 calls, got %d", len(recorded))
-	}
-
-	// Verify FORGET_START ONGOING
-	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.Content.State != stateApplyingRetention {
-		t.Errorf("expected state %q, got %s", stateApplyingRetention, update.Content.State)
-	}
-	if update.Content.Template != "steps" {
-		t.Errorf("expected template 'steps', got %s", update.Content.Template)
-	}
-	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 1 {
-		t.Errorf("expected current_step 1, got %v", update.Content.CurrentStep)
-	}
-	if update.Content.TotalSteps == nil || *update.Content.TotalSteps != 2 {
-		t.Errorf("expected total_steps 2, got %v", update.Content.TotalSteps)
-	}
-	if len(update.Content.StepLabels) != 2 || update.Content.StepLabels[0] != "Running" || update.Content.StepLabels[1] != "Done" {
-		t.Errorf("expected step_labels [Running, Done], got %v", update.Content.StepLabels)
-	}
-
-	// Phase 1: Retention applied
-	var phase1f pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase1f)
-	if phase1f.Content.State != stateRetentionApplied {
-		t.Errorf("expected state %q, got %s", stateRetentionApplied, phase1f.Content.State)
-	}
-	if phase1f.Content.Template != "steps" {
-		t.Errorf("expected template 'steps', got %s", phase1f.Content.Template)
-	}
-	if phase1f.Content.AccentColor != pushward.ColorGreen {
-		t.Errorf("expected green color, got %s", phase1f.Content.AccentColor)
-	}
-	if phase1f.Content.CurrentStep == nil || *phase1f.Content.CurrentStep != 2 {
-		t.Errorf("expected current_step 2, got %v", phase1f.Content.CurrentStep)
-	}
-	if phase1f.Content.TotalSteps == nil || *phase1f.Content.TotalSteps != 2 {
-		t.Errorf("expected total_steps 2, got %v", phase1f.Content.TotalSteps)
-	}
-
-	// Phase 2: ENDED
-	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[5].Body, &phase2)
-	if phase2.State != pushward.StateEnded {
-		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
+			final := assertStepsFrame(t, recorded[5].Body, stepsFrame{tc.doneState, pushward.ColorGreen, iconOK, 2})
+			if final.State != pushward.StateEnded {
+				t.Errorf("expected the last frame to be ENDED, got %s", final.State)
+			}
+		})
 	}
 }
 
@@ -560,21 +579,22 @@ func TestForgetError(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
-	// FORGET_START: create + ONGOING = 2
-	// FORGET_ERROR: create + phase1(ONGOING) + phase2(ENDED) = 3
-	// Total = 5
-	if len(recorded) != 6 {
-		t.Fatalf("expected 6 calls, got %d", len(recorded))
+	recorded := testutil.WaitForCalls(t, calls, mu, 7, 2*time.Second)
+	// FORGET_START: create + ONGOING                                         = 2
+	// FORGET_ERROR: create + final ONGOING + notification + phase1 + phase2  = 5
+	if len(recorded) != 7 {
+		t.Fatalf("expected 7 calls, got %d", len(recorded))
 	}
+	if n := testutil.CountPath(recorded, "/notifications"); n != 1 {
+		t.Fatalf("expected 1 notification, got %d", n)
+	}
+	recorded = activityCalls(recorded)
 
 	// Phase 1: red/failed
 	var phase1fe pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[3].Body, &phase1fe)
-	if phase1fe.Content.State != stateRetentionFailed {
-		t.Errorf("expected state %q, got %s", stateRetentionFailed, phase1fe.Content.State)
+	if want := stateRetentionFailed + sepError + "permission denied"; phase1fe.Content.State != want {
+		t.Errorf("expected state %q, got %s", want, phase1fe.Content.State)
 	}
 	if phase1fe.Content.Template != "steps" {
 		t.Errorf("expected template 'steps', got %s", phase1fe.Content.Template)
@@ -613,13 +633,15 @@ func TestAnyError(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
-	// create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls, got %d", len(recorded))
+	recorded := testutil.WaitForCalls(t, calls, mu, 5, 2*time.Second)
+	// create + ONGOING + notification + phase1(ONGOING) + phase2(ENDED) = 5
+	if len(recorded) != 5 {
+		t.Fatalf("expected 5 calls, got %d", len(recorded))
 	}
+	if n := testutil.CountPath(recorded, "/notifications"); n != 1 {
+		t.Fatalf("expected 1 notification, got %d", n)
+	}
+	recorded = activityCalls(recorded)
 
 	// Verify create
 	if recorded[0].Method != "POST" || recorded[0].Path != "/activities" {
@@ -678,9 +700,7 @@ func TestSnapshotSkipped(t *testing.T) {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
 
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 4, 2*time.Second)
 	// create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 4
 	if len(recorded) != 4 {
 		t.Fatalf("expected 4 calls, got %d", len(recorded))
@@ -752,5 +772,376 @@ func TestSnapshotStart_APIFailure_Returns502(t *testing.T) {
 	}`)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", w.Code)
+	}
+}
+
+// sendQuery posts with optional query-parameter overrides on the webhook URL.
+func sendQuery(t *testing.T, h http.Handler, query, payload string) *httptest.ResponseRecorder {
+	t.Helper()
+	url := "/backrest"
+	if query != "" {
+		url += "?" + query
+	}
+	req := httptest.NewRequest(http.MethodPost, url, strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer hlk_test")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	return w
+}
+
+// The hook template lives in the user's own config and cannot be migrated, so
+// the original six-field body has to keep rendering. Above all it must not
+// report "0 B" just because the template omits the stats.
+func TestLegacyTemplateStillWorks(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := send(t, h, `{
+		"event": "CONDITION_SNAPSHOT_SUCCESS",
+		"plan": "daily-backup",
+		"repo": "local-repo",
+		"snapshot_id": "abc123def",
+		"data_added": 0,
+		"error": ""
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	recorded := activityCalls(testutil.WaitForCalls(t, calls, mu, 4, 2*time.Second))
+	var final pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[len(recorded)-1].Body, &final)
+	if final.Content.State != stateComplete {
+		t.Errorf("expected bare %q with no stats sent, got %q", stateComplete, final.Content.State)
+	}
+}
+
+// Backrest delivers END only to hooks that do not also subscribe to the
+// specific outcome, so END has to carry the outcome itself.
+func TestSnapshotEndResolvesOutcome(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		wantState string
+		wantColor string
+		wantNotif int
+	}{
+		{
+			name:      "end without error is a success",
+			body:      `{"event":"CONDITION_SNAPSHOT_END","plan":"p","repo":"r","data_added":1048576}`,
+			wantState: stateCompletePrefix + "1.0 MB",
+			wantColor: pushward.ColorGreen,
+			wantNotif: 0,
+		},
+		{
+			name:      "end with error is a failure",
+			body:      `{"event":"CONDITION_SNAPSHOT_END","plan":"p","repo":"r","error":"repository not found"}`,
+			wantState: stateFailedPrefix + "repository not found",
+			wantColor: pushward.ColorRed,
+			wantNotif: 1,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, calls, mu := newHandler(t, testConfig())
+			if w := send(t, h, tc.body); w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+			}
+			all := testutil.WaitForCalls(t, calls, mu, 4+tc.wantNotif, 2*time.Second)
+			if n := notifications(t, all); len(n) != tc.wantNotif {
+				t.Errorf("expected %d notifications, got %d", tc.wantNotif, len(n))
+			}
+			recorded := activityCalls(all)
+			var final pushward.UpdateRequest
+			testutil.UnmarshalBody(t, recorded[len(recorded)-1].Body, &final)
+			if final.Content.State != tc.wantState {
+				t.Errorf("expected state %q, got %q", tc.wantState, final.Content.State)
+			}
+			if final.Content.AccentColor != tc.wantColor {
+				t.Errorf("expected color %q, got %q", tc.wantColor, final.Content.AccentColor)
+			}
+		})
+	}
+}
+
+func TestNotificationOnlyChannelCoversSuccess(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := sendQuery(t, h, "channels=notification", `{
+		"event": "CONDITION_SNAPSHOT_SUCCESS",
+		"plan": "daily-backup",
+		"repo": "local-repo",
+		"data_added": 2468421632,
+		"total_files_processed": 198,
+		"total_duration": 45
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	recorded := testutil.WaitForCalls(t, calls, mu, 1, 2*time.Second)
+	for _, c := range recorded {
+		if strings.HasPrefix(c.Path, "/activities") {
+			t.Fatalf("expected no activity calls with channels=notification, got %s %s", c.Method, c.Path)
+		}
+	}
+	notifs := notifications(t, recorded)
+	if len(notifs) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(notifs))
+	}
+	if want := stateCompletePrefix + wantSuccessDetail; notifs[0].Body != want {
+		t.Errorf("expected body %q, got %q", want, notifs[0].Body)
+	}
+	// No activity exists to deep-link into; sending its slug anyway would be
+	// rejected with 422 notification.activity_not_found.
+	if notifs[0].ActivitySlug != "" {
+		t.Errorf("expected no activity_slug, got %q", notifs[0].ActivitySlug)
+	}
+}
+
+// A failure normally pushes. With the notification surface off it stays silent.
+func TestActivityOnlySuppressesNotification(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := sendQuery(t, h, "channels=activity", `{
+		"event": "CONDITION_SNAPSHOT_ERROR",
+		"plan": "daily-backup",
+		"repo": "local-repo",
+		"error": "boom"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	recorded := testutil.WaitForCalls(t, calls, mu, 4, 2*time.Second)
+	if n := notifications(t, recorded); len(n) != 0 {
+		t.Fatalf("channels=activity must not push, got %d", len(n))
+	}
+}
+
+func TestAlertNotificationOnly(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := sendQuery(t, h, "channels=notification", `{
+		"event": "CONDITION_ANY_ERROR",
+		"plan": "daily-backup",
+		"repo": "local-repo",
+		"error": "repository lock held by PID 1234"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	recorded := testutil.WaitForCalls(t, calls, mu, 1, 2*time.Second)
+	for _, c := range recorded {
+		if strings.HasPrefix(c.Path, "/activities") {
+			t.Fatalf("expected no activity calls, got %s %s", c.Method, c.Path)
+		}
+	}
+	notifs := notifications(t, recorded)
+	if len(notifs) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(notifs))
+	}
+	if notifs[0].ActivitySlug != "" {
+		t.Errorf("expected no activity_slug, got %q", notifs[0].ActivitySlug)
+	}
+	if notifs[0].Level != pushward.LevelTimeSensitive {
+		t.Errorf("expected time-sensitive, got %q", notifs[0].Level)
+	}
+}
+
+// A start is not an outcome, so it must not fall back to a push: every
+// scheduled backup would notify on start.
+func TestStartSuppressedDoesNothing(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := sendQuery(t, h, "channels=notification", `{
+		"event": "CONDITION_SNAPSHOT_START",
+		"plan": "daily-backup",
+		"repo": "local-repo"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if recorded := testutil.GetCalls(calls, mu); len(recorded) != 0 {
+		t.Errorf("expected no upstream calls, got %d", len(recorded))
+	}
+}
+
+// A condition a future Backrest release adds must not 500 the hook.
+func TestUnmappedEventIsAccepted(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := send(t, h, `{"event":"CONDITION_SOMETHING_NEW","plan":"p","repo":"r"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	if recorded := testutil.GetCalls(calls, mu); len(recorded) != 0 {
+		t.Errorf("expected no upstream calls, got %d", len(recorded))
+	}
+}
+
+// TestRepoOnlyPayloadFallbacks covers repo-scoped operations (prune/check),
+// where Backrest sends no plan at all.
+func TestRepoOnlyPayloadFallbacks(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	w := send(t, h, `{"event":"CONDITION_CHECK_START","repo":"local-repo"}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	recorded := testutil.WaitForCalls(t, calls, mu, 2, 2*time.Second)
+
+	var createReq pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
+	if createReq.Name != "Backup" {
+		t.Errorf("expected name fallback 'Backup', got %q", createReq.Name)
+	}
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.Content.Subtitle != "Backrest · local-repo" {
+		t.Errorf("expected subtitle without a plan segment, got %q", update.Content.Subtitle)
+	}
+}
+
+func TestNotificationMetadata(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	send(t, h, `{
+		"event": "CONDITION_SNAPSHOT_ERROR",
+		"task": "backup for plan \"daily-backup\"",
+		"plan": "daily-backup",
+		"repo": "local-repo",
+		"snapshot_id": "abc123def",
+		"error": "repository not found"
+	}`)
+	recorded := testutil.WaitForCalls(t, calls, mu, 5, 2*time.Second)
+
+	notifs := notifications(t, recorded)
+	if len(notifs) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(notifs))
+	}
+	want := map[string]string{
+		"event":       condSnapshotError,
+		"plan":        "daily-backup",
+		"repo":        "local-repo",
+		"snapshot_id": "abc123def",
+		"task":        `backup for plan "daily-backup"`,
+	}
+	for k, v := range want {
+		if got := notifs[0].Metadata[k]; got != v {
+			t.Errorf("metadata[%q] = %q, want %q", k, got, v)
+		}
+	}
+}
+
+// Every value is attacker-controlled, so none may pass through unbounded.
+func TestNotificationMetadataIsBounded(t *testing.T) {
+	long := strings.Repeat("A", 5000)
+	md := notificationMetadata(&backrestPayload{
+		Event: condAnyError, Plan: long, Repo: long, SnapshotID: long, Task: long,
+	})
+	for k, v := range md {
+		if k == "event" {
+			continue
+		}
+		if len(v) > 100 {
+			t.Errorf("metadata[%q] is %d chars, want <= 100", k, len(v))
+		}
+	}
+}
+
+// The shipped snapshot_warning fixture carries both an error and a full
+// summary, and only one of them fits the state line.
+func TestEndStatePrefersErrorOverSummary(t *testing.T) {
+	i := func(v int64) *int64 { return &v }
+	p := &backrestPayload{
+		Error:               "partial backup, 3 files may not have been read completely.",
+		DataAdded:           i(2468421632),
+		TotalFilesProcessed: i(198),
+	}
+	got := endState(eventSpecs[condSnapshotWarning], p)
+	if !strings.HasPrefix(got, stateCompleteWarnings+sepError) {
+		t.Errorf("expected the error to win, got %q", got)
+	}
+	if strings.Contains(got, "2.3 GB") {
+		t.Errorf("expected the summary to be dropped, got %q", got)
+	}
+}
+
+// The mixed-hook case: Backrest allows several hooks with different URLs, so a
+// start can arrive on /backrest and the outcome on ?channels=notification.
+func TestSuppressedEndClosesPriorActivity(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	send(t, h, `{"event":"CONDITION_SNAPSHOT_START","plan":"daily-backup","repo":"local-repo"}`)
+	testutil.WaitForCalls(t, calls, mu, 2, 2*time.Second)
+
+	w := sendQuery(t, h, "channels=notification", `{
+		"event": "CONDITION_SNAPSHOT_ERROR",
+		"plan": "daily-backup",
+		"repo": "local-repo",
+		"error": "repository not found"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d (%s)", w.Code, w.Body.String())
+	}
+	// create + ongoing + notification + the ender's two phases.
+	recorded := testutil.WaitForCalls(t, calls, mu, 5, 2*time.Second)
+
+	var ended bool
+	for _, c := range recorded {
+		if c.Method == http.MethodPut || c.Method == http.MethodPost || c.Method == http.MethodPatch {
+			if strings.HasPrefix(c.Path, "/activities/") {
+				var req pushward.UpdateRequest
+				testutil.UnmarshalBody(t, c.Body, &req)
+				if req.State == pushward.StateEnded {
+					ended = true
+				}
+			}
+		}
+	}
+	if !ended {
+		t.Error("the activity opened by START was never ended, so it would hang until the stale TTL")
+	}
+}
+
+// newHandlerFailingNotifications builds a handler whose upstream accepts every
+// activity call but rejects notifications.
+func newHandlerFailingNotifications(t *testing.T, cfg *config.BackrestConfig) http.Handler {
+	t.Helper()
+	lifecycle.SetRetryDelay(10 * time.Millisecond)
+	srv, _, _ := testutil.MockPushWardServerFailingNotifications(t)
+
+	mux, api := humautil.NewTestAPI()
+	RegisterRoutes(api, state.NewMemoryStore(), client.NewPool(srv.URL, nil), cfg)
+	return mux
+}
+
+// With the activity suppressed the push is the only delivery path. Swallowing
+// its failure answers 200 to a backup failure that reached nobody.
+func TestNotificationOnlyFailurePropagates(t *testing.T) {
+	h := newHandlerFailingNotifications(t, testConfig())
+
+	w := sendQuery(t, h, "channels=notification", `{
+		"event": "CONDITION_SNAPSHOT_ERROR",
+		"plan": "daily-backup",
+		"repo": "local-repo",
+		"error": "repository not found"
+	}`)
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("expected 502 when the only delivery surface fails, got %d (%s)", w.Code, w.Body.String())
+	}
+}
+
+// The mirror case: with an activity also delivering the outcome, a failed push
+// must not fail the webhook.
+func TestNotificationFailureToleratedAlongsideActivity(t *testing.T) {
+	h := newHandlerFailingNotifications(t, testConfig())
+
+	w := send(t, h, `{
+		"event": "CONDITION_SNAPSHOT_ERROR",
+		"plan": "daily-backup",
+		"repo": "local-repo",
+		"error": "repository not found"
+	}`)
+	if w.Code != http.StatusOK {
+		t.Errorf("expected 200 when the activity carried the outcome, got %d (%s)", w.Code, w.Body.String())
 	}
 }
