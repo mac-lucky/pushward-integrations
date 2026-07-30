@@ -225,11 +225,15 @@ PUSHWARD_DATABASE_DSN='postgres://USER:PASS@HOST:5432/DB?sslmode=disable' \
 # Tests (CI runs Go tests with -race -count=1 -v)
 go test ./shared/... ./github/... ./forgejo/... ./sabnzbd/... ./bambulab/... ./grafana/... ./backrest/... ./relay/... -race -count=1 -v
 
-# Lint (matches CI: golangci-lint v2.11.4)
-golangci-lint run
+# Lint, one module at a time (matches CI: golangci-lint v2.11.4)
+for m in shared github forgejo sabnzbd bambulab grafana backrest relay; do
+  (cd "$m" && golangci-lint run ./...)
+done
 ```
 
 > Relay state tests under `relay/internal/state/...` use [testcontainers-go](https://golang.testcontainers.org/) and need a running Docker daemon.
+
+> **Lint per module, never from the repo root.** On a `go.work` repo a bare `golangci-lint run` prints `0 issues` and exits 0 while linting nothing at all - the reason is one line above the summary, as `level=error ... "directory prefix . does not contain modules listed in go.work"`. CI is not affected: the reusable lint workflow discovers the `use` entries in `go.work` and runs one job per module. A root-level run is not evidence a change is clean.
 
 ### Docker builds
 
@@ -250,7 +254,7 @@ Each image builds from a `golang:<ver>-alpine` builder into an `alpine:3.23` run
 Every per-bridge CI and the release workflow call the reusable `mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master`; the lint workflow calls `golangci-lint-reusable.yml@master`.
 
 - **Per-bridge CI** (`<bridge>-ci-cd.yml`) is path-filtered to `<bridge>/**` and `shared/**`, so a change to `shared/` triggers all seven.
-- **Lint** (`golangci-lint.yml`) runs `golangci-lint` v2.11.4 across the workspace.
+- **Lint** (`golangci-lint.yml`) reads the `use` entries out of `go.work` and fans out to one `golangci-lint` v2.11.4 job per module, so every module is linted on its own and one failure does not mask the rest.
 - **Release** (`release.yml`) fires on per-bridge tags `<bridge>/v*`, parses the bridge + version, builds that one bridge, and creates a per-bridge GitHub Release with auto-generated, categorized notes (`.github/release.yml`).
 
 Bridges are versioned **independently**.
