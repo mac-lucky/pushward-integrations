@@ -72,7 +72,17 @@ type Client struct {
 
 	mu    sync.Mutex
 	login string // cached login of the token's user (lazy)
+	// noActions remembers repos whose Actions are disabled, keyed by repo and
+	// stamped so the answer expires. Owner discovery returns every repo the
+	// token can see, and on a typical instance most of them have no workflows
+	// at all - without this each one costs a request and an error line on every
+	// tick, which is how the log stops being worth reading.
+	noActions map[string]time.Time
 }
+
+// noActionsTTL bounds how long a repo stays written off. Actions can be enabled
+// later, and the bridge should notice without a restart.
+const noActionsTTL = 30 * time.Minute
 
 // NewClient builds a client for the instance at baseURL, which may be the
 // instance root or an API base - normalizeBase accepts either.
@@ -89,6 +99,7 @@ func NewClient(baseURL, token string, opts Options) *Client {
 		apiBase:    web + "/api/v1",
 		webBase:    web,
 		opts:       opts,
+		noActions:  make(map[string]time.Time),
 	}
 }
 
@@ -309,13 +320,53 @@ func (c *Client) GetActiveRuns(ctx context.Context, repo string) ([]Run, error) 
 	if err != nil {
 		return nil, err
 	}
+	if c.actionsDisabled(repo) {
+		return nil, nil
+	}
+
 	q := url.Values{}
 	q.Set("page", "1")
 	q.Set("limit", strconv.Itoa(activeRunsPageSize))
 	for _, s := range activeStatuses {
 		q.Add("status", s)
 	}
-	return c.fetchRuns(ctx, c.runsURL(owner, name, q), "get active runs")
+	runs, err := c.fetchRuns(ctx, c.runsURL(owner, name, q), "get active runs")
+	if err != nil {
+		// A 404 here means the repo has no Actions rather than that something
+		// went wrong: the endpoint does not exist when the unit is disabled.
+		// Treat it as "nothing running" and stop asking for a while.
+		var ce *clientError
+		if errors.As(err, &ce) && ce.status == http.StatusNotFound {
+			c.markActionsDisabled(repo)
+			slog.Info("repo has no Actions, skipping it until the next re-check",
+				"repo", repo, "recheck_in", noActionsTTL)
+			return nil, nil
+		}
+		return nil, err
+	}
+	return runs, nil
+}
+
+// actionsDisabled reports whether this repo was recently found to have Actions
+// switched off.
+func (c *Client) actionsDisabled(repo string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	at, ok := c.noActions[repo]
+	if !ok {
+		return false
+	}
+	if time.Since(at) > noActionsTTL {
+		delete(c.noActions, repo)
+		return false
+	}
+	return true
+}
+
+func (c *Client) markActionsDisabled(repo string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.noActions[repo] = time.Now()
 }
 
 // GetRun fetches one run by its API id. Note the id here is Run.ID, never

@@ -312,8 +312,29 @@ func TestGetRunError(t *testing.T) {
 	if _, err := f.LiveJobs(context.Background(), testRepo, 1); err == nil {
 		t.Error("expected an error so the loop skips the tick")
 	}
-	if _, err := f.ActiveRuns(context.Background(), testRepo); err == nil {
-		t.Error("expected an error so the loop skips the repo")
+	// ActiveRuns is deliberately absent here: a 404 from the runs endpoint means
+	// the repo has Actions switched off, not that a lookup failed. See
+	// TestActiveRunsTreats404AsNoActions.
+}
+
+// TestActiveRunsTreats404AsNoActions: the runs endpoint does not exist when a
+// repo has Actions disabled, and owner discovery hands the poller every repo the
+// token can see. Surfacing that as an error cost a request and an error line per
+// repo per tick - on a real instance most repos have no workflows, which is
+// enough noise to bury anything worth reading.
+func TestActiveRunsTreats404AsNoActions(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	f := testForge(t, mux)
+
+	runs, err := f.ActiveRuns(context.Background(), testRepo)
+	if err != nil {
+		t.Fatalf("a repo without Actions must not error: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Errorf("runs = %v, want none", runs)
 	}
 }
 

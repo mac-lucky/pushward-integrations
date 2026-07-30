@@ -602,3 +602,78 @@ func TestAPIMessage(t *testing.T) {
 		}
 	}
 }
+
+// TestGetActiveRunsSkipsReposWithoutActions: owner discovery returns every repo
+// the token can see, and on a real instance most have no workflows. Each one was
+// costing a request and an error line on every tick.
+func TestGetActiveRunsSkipsReposWithoutActions(t *testing.T) {
+	var calls atomic.Int32
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"The target couldn't be found."}`))
+	}))
+
+	// First call discovers the repo has no Actions. A 404 is not an error here:
+	// there is genuinely nothing running.
+	runs, err := c.GetActiveRuns(context.Background(), "acme/app")
+	if err != nil {
+		t.Fatalf("a repo without Actions must not error: %v", err)
+	}
+	if len(runs) != 0 {
+		t.Errorf("runs = %v, want none", runs)
+	}
+
+	// Subsequent polls must not hit the network at all.
+	for range 5 {
+		if _, err := c.GetActiveRuns(context.Background(), "acme/app"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := calls.Load(); n != 1 {
+		t.Errorf("made %d requests, want 1 - the rest should be served from the write-off", n)
+	}
+
+	// A different repo is unaffected.
+	if _, err := c.GetActiveRuns(context.Background(), "acme/other"); err != nil {
+		t.Fatal(err)
+	}
+	if n := calls.Load(); n != 2 {
+		t.Errorf("made %d requests, want 2", n)
+	}
+}
+
+// TestActionsDisabledExpires: Actions can be switched on later, and the bridge
+// should notice without a restart.
+func TestActionsDisabledExpires(t *testing.T) {
+	c := NewClient("https://x", "t", Options{})
+	c.markActionsDisabled("acme/app")
+	if !c.actionsDisabled("acme/app") {
+		t.Fatal("expected the repo to be written off")
+	}
+	// Age the entry past the TTL.
+	c.mu.Lock()
+	c.noActions["acme/app"] = time.Now().Add(-noActionsTTL - time.Minute)
+	c.mu.Unlock()
+	if c.actionsDisabled("acme/app") {
+		t.Error("a stale write-off must expire so the repo is re-checked")
+	}
+}
+
+// TestGetActiveRunsStillErrorsOnRealFailures: only 404 means "no Actions"; a 403
+// or a 500 is a genuine problem and must not be swallowed as "nothing running".
+func TestGetActiveRunsStillErrorsOnRealFailures(t *testing.T) {
+	for _, status := range []int{http.StatusForbidden, http.StatusInternalServerError} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(status)
+			}))
+			if _, err := c.GetActiveRuns(context.Background(), "acme/app"); err == nil {
+				t.Errorf("status %d was swallowed", status)
+			}
+			if c.actionsDisabled("acme/app") {
+				t.Errorf("status %d must not write the repo off", status)
+			}
+		})
+	}
+}
