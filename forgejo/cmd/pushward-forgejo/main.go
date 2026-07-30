@@ -34,7 +34,7 @@ func main() {
 		// The timing join costs an extra tasks lookup per poll, so only ask for it
 		// when something actually renders the result.
 		LiveTimings:    cfg.Render.LiveProgress,
-		HistoryTimings: cfg.Render.StepWeights || cfg.Render.LiveProgress,
+		HistoryTimings: cfg.Render.WantTimings(),
 	})
 	pw := pushward.NewClient(cfg.PushWard.URL, cfg.PushWard.APIKey)
 

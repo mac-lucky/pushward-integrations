@@ -62,36 +62,6 @@ type RenderConfig struct {
 	MaxETA time.Duration `yaml:"max_eta"`
 }
 
-// envBool applies a boolean environment override to dst, leaving it untouched
-// when the variable is unset or empty. An unparseable value is an error rather
-// than a silent default: a flag that defaults on would otherwise stay on for
-// anyone who wrote "yes" or "enabled" and believed they had turned it off.
-func envBool(name string, dst *bool) error {
-	v := os.Getenv(name)
-	if v == "" {
-		return nil
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		return fmt.Errorf("parsing %s: %w", name, err)
-	}
-	*dst = b
-	return nil
-}
-
-func envDuration(name string, dst *time.Duration) error {
-	v := os.Getenv(name)
-	if v == "" {
-		return nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return fmt.Errorf("parsing %s: %w", name, err)
-	}
-	*dst = d
-	return nil
-}
-
 func Load(path string) (*Config, error) {
 	cfg := &Config{
 		Backrest: BackrestConfig{
@@ -138,13 +108,13 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("PUSHWARD_BACKREST_TOKEN"); v != "" {
 		cfg.Backrest.Token = v
 	}
-	if err := envDuration("PUSHWARD_BACKREST_TIMEOUT", &cfg.Backrest.Timeout); err != nil {
+	if err := sharedconfig.EnvDuration("PUSHWARD_BACKREST_TIMEOUT", &cfg.Backrest.Timeout); err != nil {
 		return nil, err
 	}
-	if err := envDuration("PUSHWARD_POLL_INTERVAL", &cfg.Polling.Interval); err != nil {
+	if err := sharedconfig.EnvDuration("PUSHWARD_POLL_INTERVAL", &cfg.Polling.Interval); err != nil {
 		return nil, err
 	}
-	if err := envDuration("PUSHWARD_POLL_IDLE", &cfg.Polling.IdleInterval); err != nil {
+	if err := sharedconfig.EnvDuration("PUSHWARD_POLL_IDLE", &cfg.Polling.IdleInterval); err != nil {
 		return nil, err
 	}
 	if v := os.Getenv("PUSHWARD_BACKREST_LAST_N"); v != "" {
@@ -154,13 +124,13 @@ func Load(path string) (*Config, error) {
 		}
 		cfg.Polling.LastN = n
 	}
-	if err := envBool("PUSHWARD_BACKREST_LIVE_PROGRESS", &cfg.Render.LiveProgress); err != nil {
+	if err := sharedconfig.EnvBool("PUSHWARD_BACKREST_LIVE_PROGRESS", &cfg.Render.LiveProgress); err != nil {
 		return nil, err
 	}
-	if err := envBool("PUSHWARD_BACKREST_LOGS", &cfg.Render.Logs); err != nil {
+	if err := sharedconfig.EnvBool("PUSHWARD_BACKREST_LOGS", &cfg.Render.Logs); err != nil {
 		return nil, err
 	}
-	if err := envDuration("PUSHWARD_BACKREST_MAX_ETA", &cfg.Render.MaxETA); err != nil {
+	if err := sharedconfig.EnvDuration("PUSHWARD_BACKREST_MAX_ETA", &cfg.Render.MaxETA); err != nil {
 		return nil, err
 	}
 

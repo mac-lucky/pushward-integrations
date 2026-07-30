@@ -85,3 +85,40 @@ func TestLoad_LiveProgressOverrides(t *testing.T) {
 		})
 	}
 }
+
+// A non-positive poll interval used to reach time.NewTicker and panic inside the
+// shared poller, after the bridge had already created an activity per repo. The
+// forgejo bridge always rejected it; this one now does too.
+func TestLoad_RejectsNonPositivePollInterval(t *testing.T) {
+	for _, v := range []string{"0s", "-1s"} {
+		t.Run(v, func(t *testing.T) {
+			t.Setenv("PUSHWARD_POLL_IDLE", v)
+			_, err := Load(writeConfig(t, ""))
+			if err == nil {
+				t.Fatalf("expected %s to be rejected", v)
+			}
+			if !strings.Contains(err.Error(), "idle_interval") {
+				t.Errorf("error should name the field, got %v", err)
+			}
+		})
+	}
+}
+
+// A trailing comma in the repo list used to produce an empty repo name that
+// failed every poll for the life of the process.
+func TestLoad_RepoListToleratesATrailingComma(t *testing.T) {
+	t.Setenv("PUSHWARD_GITHUB_REPOS", "owner/one, owner/two,")
+	cfg, err := Load(writeConfig(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"owner/one", "owner/two"}
+	if len(cfg.GitHub.Repos) != len(want) {
+		t.Fatalf("repos = %v, want %v", cfg.GitHub.Repos, want)
+	}
+	for i, r := range want {
+		if cfg.GitHub.Repos[i] != r {
+			t.Errorf("repos[%d] = %q, want %q", i, cfg.GitHub.Repos[i], r)
+		}
+	}
+}

@@ -96,6 +96,25 @@ func TestIsTerminal(t *testing.T) {
 	}
 }
 
+// TestIsTerminalMatchesNormalizeStatus keeps the two ways of asking "has this
+// stopped?" in step. Run.Terminal reads Forgejo's raw status through isTerminal,
+// while the shared poller reads the normalized one and checks it against
+// ci.StatusCompleted. A status added to one and not the other would end a card on
+// one path and leave it running on the other.
+func TestIsTerminalMatchesNormalizeStatus(t *testing.T) {
+	statuses := []string{
+		StatusUnknown, StatusWaiting, StatusRunning, StatusSuccess, StatusFailure,
+		StatusCancelled, StatusSkipped, StatusBlocked,
+		"", "a-status-a-later-release-adds",
+	}
+	for _, raw := range statuses {
+		status, _ := normalizeStatus(raw)
+		if got, want := status == ci.StatusCompleted, isTerminal(raw); got != want {
+			t.Errorf("status %q: normalizeStatus says completed=%v but isTerminal says %v", raw, got, want)
+		}
+	}
+}
+
 // TestFinishedStatusSetsCoverTerminal keeps the two-pass seed lookup in step
 // with isTerminal. Forgejo has no "completed" umbrella filter value, so the
 // second pass enumerates the rest by hand and would silently stop finding runs

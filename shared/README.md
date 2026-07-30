@@ -27,9 +27,10 @@ The client speaks the public pushward-server REST surface (`/activities`, `/noti
 | Package | Import suffix | What it provides |
 |---|---|---|
 | `pushward` | `.../shared/pushward` | Hand-written pushward-server REST client (activities, notifications, widgets), retry, circuit breaker, content/widget models, template/level/severity/color constants, pointer helpers, typed `HTTPError` |
-| `config` | `.../shared/config` | `LoadYAML` (tolerates a missing file), `PushWardConfig` / `ServerConfig` with `PUSHWARD_*` env overrides + `Validate`, `TimelineConfig` |
+| `config` | `.../shared/config` | `LoadYAML` (tolerates a missing file), `PushWardConfig` / `ServerConfig` / `RenderConfig` with `PUSHWARD_*` env overrides + `Validate`, `TimelineConfig`, the `EnvBool` / `EnvDuration` override helpers |
 | `server` | `.../shared/server` | `NewMux` (`/health` + `/ready` with readiness checks) and `ListenAndServe` with graceful shutdown |
 | `ci` | `.../shared/ci` | The CI steps ladder: job to step-group folding (matrix legs and reusable-workflow prefixes), step colors, prior-run duration weights, live-progress anchors |
+| `cipoll` | `.../shared/cipoll` | The whole poll-a-forge orchestration on top of `ci`: one activity per repo, the total-steps clamp, redundant-tick suppression, live-progress anchoring, the two-phase end. A forge plugs in through the `Forge` interface |
 | `widgets` | `.../shared/widgets` | Generic background poller publishing numeric values to the widget API; `ValueSource` / `MultiValueSource` / `StatListSource` |
 | `auth` | `.../shared/auth` | Constant-time, fail-closed header auth middleware + inline check |
 | `syncx` | `.../shared/syncx` | Small concurrency primitives: `DropCounter`, `Periodic`, `TimerGroup` |

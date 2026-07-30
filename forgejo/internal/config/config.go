@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"net/url"
 	"os"
-	"strconv"
-	"strings"
 	"time"
 
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
@@ -15,7 +13,7 @@ type Config struct {
 	Forgejo  ForgejoConfig               `yaml:"forgejo"`
 	PushWard sharedconfig.PushWardConfig `yaml:"pushward"`
 	Polling  PollingConfig               `yaml:"polling"`
-	Render   RenderConfig                `yaml:"render"`
+	Render   sharedconfig.RenderConfig   `yaml:"render"`
 }
 
 type ForgejoConfig struct {
@@ -37,51 +35,8 @@ type ForgejoConfig struct {
 	Timeout time.Duration `yaml:"timeout"`
 }
 
-// RenderConfig gates the step-pill fields. The two pill fields default to off,
-// matching the github bridge, so an operator opts in to the richer rendering.
-type RenderConfig struct {
-	StepColors bool `yaml:"step_colors"`
-	// StepWeights sizes each pill by how long that group ran in the prior run.
-	// Reaching those durations costs one extra tasks lookup per seeded run,
-	// because Forgejo's job objects carry no timestamps.
-	StepWeights bool `yaml:"step_weights"`
-	// LiveProgress lets iOS animate the current step's pill and count its ETA
-	// down between polls. Unlike the pill fields it defaults on: the anchors are
-	// additive, so a client that does not understand them renders the same bar.
-	LiveProgress bool `yaml:"live_progress"`
-}
-
 type PollingConfig struct {
 	IdleInterval time.Duration `yaml:"idle_interval"`
-}
-
-// envBool applies a bool env override, erroring on an unparseable value rather
-// than silently falling back to the default - a typo in a manifest should fail
-// loudly at startup, not quietly disable a feature.
-func envBool(name string, dst *bool) error {
-	v := os.Getenv(name)
-	if v == "" {
-		return nil
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		return fmt.Errorf("parsing %s: %w", name, err)
-	}
-	*dst = b
-	return nil
-}
-
-func envDuration(name string, dst *time.Duration) error {
-	v := os.Getenv(name)
-	if v == "" {
-		return nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return fmt.Errorf("parsing %s: %w", name, err)
-	}
-	*dst = d
-	return nil
 }
 
 func Load(path string) (*Config, error) {
@@ -99,9 +54,7 @@ func Load(path string) (*Config, error) {
 		Polling: PollingConfig{
 			IdleInterval: 60 * time.Second,
 		},
-		Render: RenderConfig{
-			LiveProgress: true,
-		},
+		Render: sharedconfig.DefaultRenderConfig(),
 	}
 
 	if err := sharedconfig.LoadYAML(path, cfg); err != nil {
@@ -119,21 +72,15 @@ func Load(path string) (*Config, error) {
 		cfg.Forgejo.Owner = v
 	}
 	if v := os.Getenv("PUSHWARD_FORGEJO_REPOS"); v != "" {
-		cfg.Forgejo.Repos = splitRepos(v)
+		cfg.Forgejo.Repos = sharedconfig.SplitList(v)
 	}
-	if err := envDuration("PUSHWARD_FORGEJO_TIMEOUT", &cfg.Forgejo.Timeout); err != nil {
+	if err := sharedconfig.EnvDuration("PUSHWARD_FORGEJO_TIMEOUT", &cfg.Forgejo.Timeout); err != nil {
 		return nil, err
 	}
-	if err := envDuration("PUSHWARD_POLL_IDLE", &cfg.Polling.IdleInterval); err != nil {
+	if err := sharedconfig.EnvDuration("PUSHWARD_POLL_IDLE", &cfg.Polling.IdleInterval); err != nil {
 		return nil, err
 	}
-	if err := envBool("PUSHWARD_FORGEJO_STEP_COLORS", &cfg.Render.StepColors); err != nil {
-		return nil, err
-	}
-	if err := envBool("PUSHWARD_FORGEJO_STEP_WEIGHTS", &cfg.Render.StepWeights); err != nil {
-		return nil, err
-	}
-	if err := envBool("PUSHWARD_FORGEJO_LIVE_PROGRESS", &cfg.Render.LiveProgress); err != nil {
+	if err := cfg.Render.ApplyEnvOverrides("PUSHWARD_FORGEJO"); err != nil {
 		return nil, err
 	}
 
@@ -168,20 +115,6 @@ func Load(path string) (*Config, error) {
 	}
 
 	return cfg, nil
-}
-
-// splitRepos parses the comma-separated repo env var, dropping blanks and
-// surrounding whitespace so a trailing comma or a wrapped YAML value does not
-// produce an empty repo that fails every poll.
-func splitRepos(v string) []string {
-	parts := strings.Split(v, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func validateURL(raw string) error {

@@ -1,4 +1,4 @@
-package poller
+package cipoll
 
 import (
 	"time"
@@ -6,14 +6,18 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 )
 
+// trackedRun is the per-repo state of the run currently on screen. Keyed by
+// repo, not by run: the activity slug is derived from the repo, so one repo can
+// only ever show one card and a new run supersedes its predecessor.
 type trackedRun struct {
-	Repo    string
-	RunID   int64
+	RunID int64
+	// Name is the workflow's display name, kept because the completion frame
+	// rebuilds the subtitle without re-reading the run.
 	Name    string
 	Slug    string
 	HTMLURL string
-	// RepoURL is the card's secondary link, resolved once at track time from
-	// the run's embedded repository or the configured instance root.
+	// RepoURL is the card's secondary link, resolved once at track time by the
+	// forge adapter.
 	RepoURL    string
 	LastUpdate time.Time
 	trackedAt  time.Time // when this run was first tracked; bounds absolute lifetime
@@ -22,10 +26,10 @@ type trackedRun struct {
 	// drain in-flight end deliveries (Stop/Close + Wait).
 	endTimers *syncx.TimerGroup
 
-	// maxTotalSteps tracks the highest TotalSteps seen across polls.
-	// Forgejo lazily creates jobs behind unsatisfied needs/if conditions,
-	// so new steps appear as the workflow progresses. We never decrease
-	// the total to avoid confusing step jumps (e.g. 1/5 -> 5/6 -> 6/7).
+	// maxTotalSteps tracks the highest TotalSteps seen across polls. Every forge
+	// here lazily creates jobs behind unsatisfied needs/if conditions, so new
+	// steps appear as the workflow progresses. We never decrease the total to
+	// avoid confusing step jumps (e.g. 1/5 -> 5/6 -> 6/7).
 	maxTotalSteps int
 	maxStepRows   []int
 	maxStepLabels []string
@@ -34,8 +38,8 @@ type trackedRun struct {
 	// keyed by group label. Historical (never recomputed from the live,
 	// in-progress jobs) and read-only after seeding; projected onto the current
 	// step_labels at send time, so a weight always tracks its own label even if
-	// Forgejo reveals the groups in a different order. Nil means no usable prior
-	// run - callers then omit step_weights and pills render equal-width.
+	// the forge reveals the groups in a different order. Nil means no usable
+	// prior run - callers then omit step_weights and pills render equal-width.
 	stepWeightByName map[string]float64
 	// shapeSent is the maxTotalSteps value at the time we last included
 	// step_rows/step_labels/step_weights in a merge-patch. When unchanged across

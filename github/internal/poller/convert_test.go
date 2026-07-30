@@ -70,28 +70,3 @@ func TestToCIJobs(t *testing.T) {
 		t.Error("toCIJobs(nil) must return an empty slice, not nil")
 	}
 }
-
-// TestLiveAnchor_FlagOff is the half of the old table-driven liveAnchor test
-// that exercised the config gate rather than the shared window arithmetic; the
-// rest now lives in shared/ci.
-func TestLiveAnchor_FlagOff(t *testing.T) {
-	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	info := ci.StepInfo{
-		CurrentStep:          2,
-		CurrentStepName:      "Build",
-		CurrentStepStartedAt: now.Add(-30 * time.Second),
-	}
-	weights := map[string]float64{"Build": 300}
-
-	cfg := testConfig()
-	cfg.Render.LiveProgress = false
-	if _, _, ok := (&Poller{cfg: cfg}).liveAnchor(info, weights, now); ok {
-		t.Error("expected no anchor when live progress is disabled")
-	}
-
-	cfg = testConfig()
-	cfg.Render.LiveProgress = true
-	if _, _, ok := (&Poller{cfg: cfg}).liveAnchor(info, weights, now); !ok {
-		t.Error("expected an anchor when live progress is enabled")
-	}
-}
