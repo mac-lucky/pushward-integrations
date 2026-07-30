@@ -4,14 +4,13 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"math"
-	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/github/internal/config"
 	ghclient "github.com/mac-lucky/pushward-integrations/github/internal/github"
+	"github.com/mac-lucky/pushward-integrations/shared/ci"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -36,34 +35,13 @@ const repoRefreshInterval = 5 * time.Minute
 // timeout ceiling so legitimate long runs are never evicted prematurely.
 const maxRunLifetime = 12 * time.Hour
 
-// GitHub Actions job statuses and conclusions.
-const (
-	jobStatusCompleted  = "completed"
-	jobStatusInProgress = "in_progress"
-
-	conclusionSuccess        = "success"
-	conclusionFailure        = "failure"
-	conclusionCancelled      = "cancelled"
-	conclusionTimedOut       = "timed_out"
-	conclusionStartupFailure = "startup_failure"
-)
-
 // seedStatuses orders the prior-run lookups used to seed a stable step total:
 // prefer the last fully-successful run (it executed the whole job DAG, so its
 // group count is the most accurate), then fall back to any completed run. Note
 // GitHub's runs `status` filter accepts both conclusions ("success") and
 // statuses ("completed"), so a single "completed" call would not distinguish a
 // truncated failed run from a full success — hence both, in this order.
-var seedStatuses = []string{conclusionSuccess, jobStatusCompleted}
-
-// jobFailed reports whether a completed job's conclusion indicates failure.
-func jobFailed(conclusion string) bool {
-	switch conclusion {
-	case conclusionFailure, conclusionCancelled, conclusionTimedOut, conclusionStartupFailure:
-		return true
-	}
-	return false
-}
+var seedStatuses = []string{ci.ConclusionSuccess, ci.StatusCompleted}
 
 func New(cfg *config.Config, gh *ghclient.Client, pw *pushward.Client) *Poller {
 	return &Poller{
@@ -275,7 +253,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		// fresh scan sees just the first wave and the denominator would climb
 		// (1/2 → 3/4 → 5/6). Seed from a prior run of the same workflow+branch,
 		// which already revealed its full DAG, for a stable total from frame 1.
-		shape := stepInfo{TotalSteps: 1}
+		shape := ci.StepInfo{TotalSteps: 1}
 		if jobs, err := p.gh.GetJobs(ctx, repo, run.ID); err != nil {
 			slog.Warn("failed to fetch jobs for initial step count, using default",
 				"repo", repo, "run_id", run.ID, "error", err)
@@ -358,323 +336,26 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 	return nil
 }
 
-// stepInfo holds computed steps template information from a set of jobs.
-type stepInfo struct {
-	TotalSteps      int
-	CurrentStep     int
-	CurrentStepName string
-	StepRows        []int
-	StepLabels      []string
-	StepColors      []string
-	// WeightsByName maps a step group's label to its pill weight (seconds of
-	// wall-clock in a prior run). Keyed by name, not index, so it survives the
-	// live scan revealing groups in a different order; projected to a per-step
-	// slice at send time. Only baselineShape populates it.
-	WeightsByName map[string]float64
-	// CurrentStepStartedAt is when the current group's earliest running job
-	// began, the anchor the live-progress window is measured from. Zero when no
-	// group is running or GitHub has not stamped a start yet.
-	CurrentStepStartedAt time.Time
-	AllCompleted         bool
-	AnyFailed            bool
-	Progress             float64
-}
-
 // shape computes the step shape and drops the opt-in pill fields the config
 // disables. step_colors is omitempty, so a nil slice reproduces the payload the
 // bridge sent before the field existed.
-func (p *Poller) shape(jobs []ghclient.Job) stepInfo {
-	info := computeSteps(jobs)
+func (p *Poller) shape(jobs []ghclient.Job) ci.StepInfo {
+	info := ci.ComputeSteps(toCIJobs(jobs))
 	if !p.cfg.Render.StepColors {
 		info.StepColors = nil
 	}
 	return info
 }
 
-// computeSteps groups jobs by base name (supporting matrix strategies) and
-// computes step progress information.
-func computeSteps(jobs []ghclient.Job) stepInfo {
-	type step struct {
-		name      string
-		count     int
-		completed int
-		active    bool
-		failed    bool
-		// startedAt is the earliest start among the group's running jobs. A
-		// fan-out group's shards run in parallel against one step deadline, so
-		// the first shard to start is when the step started.
-		startedAt time.Time
-	}
-	var steps []step
-	stepIdx := make(map[string]int)
-	completedJobs := 0
-	allCompleted := true
-	anyFailed := false
-
-	for _, job := range jobs {
-		base := baseJobName(job.Name)
-		si, ok := stepIdx[base]
-		if !ok {
-			si = len(steps)
-			stepIdx[base] = si
-			steps = append(steps, step{name: base})
-		}
-		steps[si].count++
-
-		switch job.Status {
-		case jobStatusCompleted:
-			completedJobs++
-			steps[si].completed++
-			if jobFailed(job.Conclusion) {
-				steps[si].failed = true
-				anyFailed = true
-			}
-		case jobStatusInProgress:
-			steps[si].active = true
-			allCompleted = false
-			if ts := parseJobTime(job.StartedAt); !ts.IsZero() &&
-				(steps[si].startedAt.IsZero() || ts.Before(steps[si].startedAt)) {
-				steps[si].startedAt = ts
-			}
-		default: // queued
-			allCompleted = false
-		}
-	}
-
-	totalSteps := len(steps)
-	stepRows := make([]int, totalSteps)
-	stepLabels := make([]string, totalSteps)
-	stepColors := make([]string, totalSteps)
-	currentStep := 0
-	var currentStepName string
-
-	for i, s := range steps {
-		stepRows[i] = s.count
-		stepLabels[i] = s.name
-		stepColors[i] = stepColor(s.name)
-		if s.active && currentStepName == "" {
-			currentStepName = s.name
-			currentStep = i + 1
-		}
-	}
-
-	if currentStepName == "" && !allCompleted {
-		currentStepName = "Queued"
-		for i, s := range steps {
-			if s.completed < s.count {
-				currentStep = i + 1
-				break
-			}
-		}
-	}
-
-	progress := 0.0
-	if len(jobs) > 0 {
-		progress = float64(completedJobs) / float64(len(jobs))
-	}
-
-	var currentStartedAt time.Time
-	if currentStep >= 1 {
-		currentStartedAt = steps[currentStep-1].startedAt
-	}
-
-	return stepInfo{
-		TotalSteps:           totalSteps,
-		CurrentStep:          currentStep,
-		CurrentStepName:      currentStepName,
-		StepRows:             stepRows,
-		StepLabels:           stepLabels,
-		StepColors:           stepColors,
-		CurrentStepStartedAt: currentStartedAt,
-		AllCompleted:         allCompleted,
-		AnyFailed:            anyFailed,
-		Progress:             progress,
-	}
-}
-
-// stepColor maps a job-group name to a Live Activity step color so the steps bar
-// reads at a glance: tests one hue, build another, deploy another. The match is
-// substring-based on the lowercased base job name; an unmatched group returns ""
-// and falls back to the activity accent color. Colors are named values the iOS
-// client and server both accept.
-func stepColor(name string) string {
-	n := strings.ToLower(name)
-	switch {
-	case containsAny(n, "test", "e2e", "pytest", "jest", "vitest"):
-		return "yellow"
-	case containsAny(n, "lint", "format", "typecheck", "golangci", "gofmt", "ruff"):
-		return "purple"
-	case containsAny(n, "build", "compile", "assemble"):
-		return "blue"
-	case containsAny(n, "docker", "image", "container", "buildx"):
-		return "cyan"
-	case containsAny(n, "deploy", "release", "publish"):
-		return "green"
-	case containsAny(n, "security", "scan", "codeql", "trivy", "grype", "sast"):
-		return "orange"
-	default:
-		return ""
-	}
-}
-
-// containsAny reports whether s contains any of the given substrings.
-func containsAny(s string, subs ...string) bool {
-	for _, sub := range subs {
-		if strings.Contains(s, sub) {
-			return true
-		}
-	}
-	return false
-}
-
-// stepWeightFloor is the minimum weight any step group receives, so a step with
-// a near-zero or unmeasurable duration still renders as a thin pill instead of
-// vanishing, and clock skew (completed before started) can't yield a
-// zero/negative weight.
-const stepWeightFloor = 1.0
-
-// groupWeights maps each step group's label to a pill weight, sized by how long
-// that group ran in the given (finished) run. A group's weight is the MAX
-// member-job duration: matrix jobs run in parallel, so the longest one is the
-// group's wall-clock contribution, and step_rows already conveys the fan-out
-// count. Weights are in seconds; the client normalizes. Keyed by group name (not
-// index) so projectWeights can re-attach them to the current run's labels even
-// if GitHub reveals the groups in a different order. Returns nil when no group
-// has a measurable duration (the run never finished, or timestamps are missing)
-// so callers omit step_weights and fall back to equal-width pills.
-func groupWeights(jobs []ghclient.Job) map[string]float64 {
-	weights := make(map[string]float64)
-	measured := false
-
-	for _, job := range jobs {
-		base := baseJobName(job.Name)
-		if _, ok := weights[base]; !ok {
-			weights[base] = stepWeightFloor
-		}
-		d := jobDuration(job)
-		if d <= 0 {
-			continue
-		}
-		measured = true
-		if w := d.Seconds(); w > weights[base] {
-			weights[base] = w
-		}
-	}
-
-	if !measured {
-		return nil
-	}
-	return weights
-}
-
-// projectWeights builds a per-step weight slice aligned to labels, looking each
-// label up in the name-keyed historical weights. A label with no history (a job
-// GitHub added since the prior run) gets the mean of the known weights, a
-// neutral estimate. The result is always len(labels), so step_weights never
-// desyncs from total_steps, and each weight tracks its own label regardless of
-// group order. Returns nil when there is no history, so callers omit step_weights
-// and pills render equal-width.
-func projectWeights(labels []string, byName map[string]float64) []float64 {
-	if len(byName) == 0 {
-		return nil
-	}
-	sum := 0.0
-	for _, w := range byName {
-		sum += w
-	}
-	mean := sum / float64(len(byName))
-	if mean < stepWeightFloor {
-		mean = stepWeightFloor
-	}
-	out := make([]float64, len(labels))
-	for i, l := range labels {
-		if w, ok := byName[l]; ok {
-			out[i] = w
-		} else {
-			out[i] = mean
-		}
-	}
-	return out
-}
-
-// parseJobTime parses one of GitHub's RFC3339 job timestamps, returning the
-// zero time when it is absent or malformed.
-func parseJobTime(ts string) time.Time {
-	if ts == "" {
-		return time.Time{}
-	}
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		return time.Time{}
-	}
-	return t
-}
-
-// jobDuration returns a finished job's wall-clock duration, or 0 when either
-// timestamp is missing/unparseable or the span is non-positive (clock skew).
-func jobDuration(job ghclient.Job) time.Duration {
-	start := parseJobTime(job.StartedAt)
-	end := parseJobTime(job.CompletedAt)
-	if start.IsZero() || end.IsZero() {
-		return 0
-	}
-	if d := end.Sub(start); d > 0 {
-		return d
-	}
-	return 0
-}
-
-// minLiveWindow is how much of the estimate must still be ahead of us for an
-// anchor to be worth sending. iOS drops any window whose end has passed, and one
-// about to pass would flash the animated bar for an instant before reverting to
-// the static one, so a step already at (or past) its estimate keeps the static
-// bar and the X/N counter instead.
-const minLiveWindow = 5 * time.Second
-
 // liveAnchor returns the unix window iOS animates the current step's pill
-// across, measured from when the step actually started rather than from now, so
-// a poll landing mid-step picks the bar up where it already is instead of
-// restarting it.
-//
-// ok is false when there is nothing trustworthy to animate toward: no step
-// running, no start stamped, no measurement for the group, or an estimate
-// already spent. iOS renders the static bar in exactly those cases anyway, so a
-// window sent regardless would buy nothing and cost a high-priority push.
-func (p *Poller) liveAnchor(info stepInfo, byName map[string]float64, now time.Time) (start, end int64, ok bool) {
-	if !p.cfg.Render.LiveProgress || info.CurrentStep < 1 {
+// across. The shared ladder decides whether there is anything worth animating;
+// this only applies the bridge's own config gate and supplies the ceiling that
+// bounds a corrupt prior-run duration.
+func (p *Poller) liveAnchor(info ci.StepInfo, byName map[string]float64, now time.Time) (start, end int64, ok bool) {
+	if !p.cfg.Render.LiveProgress {
 		return 0, 0, false
 	}
-	// groupWeights seeds every group it saw to stepWeightFloor, measured or not,
-	// so a floor value carries no duration information: it means "draw a thin
-	// pill", not "this took a second". Anything at or below it is unmeasured.
-	secs, known := byName[info.CurrentStepName]
-	if !known || secs <= stepWeightFloor {
-		return 0, 0, false
-	}
-	// A corrupt prior-run timestamp can yield a duration of years. Left alone it
-	// would put end_date past the server's 5-year ceiling, and since the client
-	// fails fast on 4xx, every later patch for this repo would 422 and the card
-	// would freeze. The bridge already refuses to track a run past this age.
-	secs = math.Min(secs, maxRunLifetime.Seconds())
-	// No start means nothing is running yet: the queued placeholder, or a job
-	// GitHub has not stamped. Anchoring from poll time would animate a step that
-	// has not begun, and would sit permanently offset by up to one poll interval
-	// once the real start appears, since the step index has not changed and
-	// nothing re-anchors.
-	startAt := info.CurrentStepStartedAt
-	if startAt.IsZero() {
-		return 0, 0, false
-	}
-	if startAt.After(now) {
-		// The runner's clock reads ahead of ours; anchoring forward would render
-		// an empty bar until local time caught up.
-		startAt = now
-	}
-	endAt := startAt.Add(time.Duration(math.Round(secs)) * time.Second)
-	if !endAt.After(now.Add(minLiveWindow)) {
-		return 0, 0, false
-	}
-	return startAt.Unix(), endAt.Unix(), true
+	return ci.LiveAnchor(info, byName, now, maxRunLifetime)
 }
 
 // liveProgressOff is the explicit false that stops an animation carried forward
@@ -695,25 +376,7 @@ func (p *Poller) payloadWeights(labels []string, byName map[string]float64) []fl
 	if !p.cfg.Render.StepWeights {
 		return nil
 	}
-	return projectWeights(labels, byName)
-}
-
-// realignStep moves a 1-based step index from one label list onto another by
-// group name. The live scan numbers groups in the order GitHub revealed them, so
-// a run that skips an if-gated job leaves the seeded list with an extra entry
-// ahead of the running one and the raw index lands on the wrong label. iOS draws
-// both the caption and the highlighted pill from step_labels[i-1], so a stale
-// index makes the card name one group while its state text names another.
-// Falls back to the original index when the group is not in the target list,
-// which is no worse than not remapping at all.
-func realignStep(current int, from, to []string) int {
-	if current < 1 || current > len(from) {
-		return current
-	}
-	if i := slices.Index(to, from[current-1]); i >= 0 {
-		return i + 1
-	}
-	return current
+	return ci.ProjectWeights(labels, byName)
 }
 
 // baselineShape returns the step shape of a prior run of the same workflow on
@@ -730,22 +393,22 @@ func realignStep(current int, from, to []string) int {
 // shorter path than the seed (if-gated jobs skipped), the total over-counts and
 // the final frame shows the phantom steps as done (self-heals to N/N via
 // scheduleEnd). If it grows past the seed, the pollActive clamp raises the total.
-func (p *Poller) baselineShape(ctx context.Context, repo string, workflowID int64, branch string) (stepInfo, bool) {
+func (p *Poller) baselineShape(ctx context.Context, repo string, workflowID int64, branch string) (ci.StepInfo, bool) {
 	if workflowID == 0 || branch == "" {
-		return stepInfo{}, false
+		return ci.StepInfo{}, false
 	}
 	prev := p.lastFinishedRun(ctx, repo, workflowID, branch)
 	if prev == nil {
-		return stepInfo{}, false
+		return ci.StepInfo{}, false
 	}
 	jobs, err := p.gh.GetJobs(ctx, repo, prev.ID)
 	if err != nil {
 		slog.Warn("failed to fetch prior-run jobs for step seed",
 			"repo", repo, "prev_run_id", prev.ID, "error", err)
-		return stepInfo{}, false
+		return ci.StepInfo{}, false
 	}
 	if len(jobs) == 0 {
-		return stepInfo{}, false
+		return ci.StepInfo{}, false
 	}
 	info := p.shape(jobs)
 	// Measure how long each group ran in this finished run, keyed by group name
@@ -753,7 +416,7 @@ func (p *Poller) baselineShape(ctx context.Context, repo string, workflowID int6
 	// groups in a different order. They size the pills and anchor the live
 	// window, so collect them when either consumer is switched on.
 	if p.cfg.Render.StepWeights || p.cfg.Render.LiveProgress {
-		info.WeightsByName = groupWeights(jobs)
+		info.WeightsByName = ci.GroupWeights(toCIJobs(jobs))
 	}
 	slog.Info("seeded steps from prior run",
 		"repo", repo, "prev_run_id", prev.ID, "steps", info.TotalSteps,
@@ -861,7 +524,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				// cached shape so the denominator holds, and carry current_step
 				// across by name first, while info.StepLabels still describes the
 				// list that index was numbered against.
-				info.CurrentStep = realignStep(info.CurrentStep, info.StepLabels, tt.maxStepLabels)
+				info.CurrentStep = ci.RealignStep(info.CurrentStep, info.StepLabels, tt.maxStepLabels)
 				info.TotalSteps = tt.maxTotalSteps
 				info.StepRows = tt.maxStepRows
 				info.StepLabels = tt.maxStepLabels
@@ -892,7 +555,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				slog.Warn("failed to confirm run completion, deferring end", "repo", repo, "run_id", tRunID, "error", err)
 				continue
 			}
-			if run.Status != jobStatusCompleted {
+			if run.Status != ci.StatusCompleted {
 				// More jobs are still pending; keep the activity ongoing and let
 				// the next wave surface on a subsequent poll.
 				slog.Debug("visible jobs complete but run still in progress, deferring end", "repo", repo, "run_id", tRunID, "status", run.Status)
@@ -901,7 +564,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			// Run.Conclusion is authoritative for the final outcome.
 			conclusion := "Success"
 			color := pushward.ColorGreen
-			if jobFailed(run.Conclusion) || (run.Conclusion == "" && info.AnyFailed) {
+			if ci.JobFailed(run.Conclusion) || (run.Conclusion == "" && info.AnyFailed) {
 				conclusion = "Failed"
 				color = pushward.ColorRed
 			}
@@ -1105,21 +768,4 @@ func repoName(fullRepo string) string {
 		return name
 	}
 	return fullRepo
-}
-
-// baseJobName strips the reusable-workflow caller prefix and matrix
-// parameters from a job name.
-// "ci-cd / Build (ubuntu, node-16)" → "Build"
-// "ci-cd / Setup Build Environment"  → "Setup Build Environment"
-// "Test" → "Test"
-func baseJobName(name string) string {
-	// Strip reusable-workflow caller prefix ("ci-cd / X" → "X").
-	if i := strings.Index(name, " / "); i != -1 {
-		name = name[i+3:]
-	}
-	// Strip matrix parameters ("Build (ubuntu, node-16)" → "Build").
-	if i := strings.LastIndex(name, " ("); i != -1 && strings.HasSuffix(name, ")") {
-		return name[:i]
-	}
-	return name
 }

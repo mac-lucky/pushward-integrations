@@ -316,3 +316,43 @@ func TestForgejoRecoverAfterSuccess(t *testing.T) {
 		t.Errorf("expected last-writer Recovered, got %s", end.Content.State)
 	}
 }
+
+// TestGiteaOmitsColorsWeightsAndLiveProgress guards the shared-ladder lift.
+// ci.ComputeSteps populates StepColors and the pollers additionally send
+// step_weights and the live-progress window, but this provider has never emitted
+// any of them: it has no timestamps to measure and its APNs budget is already
+// tight. The handler must keep reading only StepRows/StepLabels off StepInfo, so
+// none of these keys may appear in anything it sends.
+func TestGiteaOmitsColorsWeightsAndLiveProgress(t *testing.T) {
+	h, calls, mu := newHandler(t)
+
+	send(t, h, "/gitea", runBody("requested", "queued", "", 42))
+	send(t, h, "/gitea", jobBody("queued", "queued", "", "Build (ubuntu)", 100, 42))
+	send(t, h, "/gitea", jobBody("in_progress", "in_progress", "", "Build (ubuntu)", 100, 42))
+	send(t, h, "/gitea", jobBody("queued", "queued", "", "Test", 101, 42))
+	send(t, h, "/gitea", jobBody("completed", "completed", "success", "Build (ubuntu)", 100, 42))
+	send(t, h, "/gitea", runBody("completed", "completed", "success", 42))
+	send(t, h, "/forgejo", forgejoBody("success", 77))
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) == 0 {
+		t.Fatal("no calls recorded")
+	}
+	banned := []string{`"step_colors"`, `"step_weights"`, `"live_progress"`, `"start_date"`, `"end_date"`}
+	sawSteps := false
+	for _, c := range got {
+		body := string(c.Body)
+		if strings.Contains(body, `"step_labels"`) {
+			sawSteps = true
+		}
+		for _, key := range banned {
+			if strings.Contains(body, key) {
+				t.Errorf("%s %s carries %s, which this provider must never send: %s",
+					c.Method, c.Path, key, body)
+			}
+		}
+	}
+	if !sawSteps {
+		t.Fatal("no steps frame was sent, so the assertion above proved nothing")
+	}
+}

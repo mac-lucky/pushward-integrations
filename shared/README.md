@@ -29,6 +29,7 @@ The client speaks the public pushward-server REST surface (`/activities`, `/noti
 | `pushward` | `.../shared/pushward` | Hand-written pushward-server REST client (activities, notifications, widgets), retry, circuit breaker, content/widget models, template/level/severity/color constants, pointer helpers, typed `HTTPError` |
 | `config` | `.../shared/config` | `LoadYAML` (tolerates a missing file), `PushWardConfig` / `ServerConfig` with `PUSHWARD_*` env overrides + `Validate`, `TimelineConfig` |
 | `server` | `.../shared/server` | `NewMux` (`/health` + `/ready` with readiness checks) and `ListenAndServe` with graceful shutdown |
+| `ci` | `.../shared/ci` | The CI steps ladder: job to step-group folding (matrix legs and reusable-workflow prefixes), step colors, prior-run duration weights, live-progress anchors |
 | `widgets` | `.../shared/widgets` | Generic background poller publishing numeric values to the widget API; `ValueSource` / `MultiValueSource` / `StatListSource` |
 | `auth` | `.../shared/auth` | Constant-time, fail-closed header auth middleware + inline check |
 | `syncx` | `.../shared/syncx` | Small concurrency primitives: `DropCounter`, `Periodic`, `TimerGroup` |

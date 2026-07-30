@@ -19,6 +19,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
+	"github.com/mac-lucky/pushward-integrations/shared/ci"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
@@ -254,7 +255,7 @@ func (h *Handler) handleJob(ctx context.Context, userKey string, log *slog.Logge
 	}
 	jobs := upsertJob(parseJobs(group), jr)
 
-	info := computeSteps(jobs)
+	info := ci.ComputeSteps(toCIJobs(jobs))
 	state := info.CurrentStepName
 	if state == "" {
 		state = "Running"
@@ -306,7 +307,7 @@ func (h *Handler) runningContent(repoFull string, rec *runRecord, jobs []jobReco
 		content.TotalSteps = pushward.IntPtr(1)
 		return content
 	}
-	info := computeSteps(jobs)
+	info := ci.ComputeSteps(toCIJobs(jobs))
 	state := info.CurrentStepName
 	if state == "" {
 		state = "Running"
@@ -322,7 +323,7 @@ func (h *Handler) runningContent(repoFull string, rec *runRecord, jobs []jobReco
 // completedContent builds the final steps frame for a finished run.
 func (h *Handler) completedContent(repoFull string, rec *runRecord, conclusion string, jobs []jobRecord) pushward.Content {
 	state, color := conclusionState(conclusion)
-	if conclusion == "" && len(jobs) > 0 && computeSteps(jobs).AnyFailed {
+	if conclusion == "" && len(jobs) > 0 && ci.ComputeSteps(toCIJobs(jobs)).AnyFailed {
 		state, color = "Failed", pushward.ColorRed
 	}
 	content := pushward.Content{
@@ -336,7 +337,7 @@ func (h *Handler) completedContent(repoFull string, rec *runRecord, conclusion s
 		SecondaryURL: text.SanitizeURL(rec.RepoURL),
 	}
 	if len(jobs) > 0 {
-		info := computeSteps(jobs)
+		info := ci.ComputeSteps(toCIJobs(jobs))
 		content.CurrentStep = pushward.IntPtr(info.TotalSteps)
 		content.TotalSteps = pushward.IntPtr(info.TotalSteps)
 		content.StepRows, content.StepLabels = stepRowsLabels(info)
@@ -511,7 +512,7 @@ func conclusionState(conclusion string) (string, string) {
 // steps template, or nil slices when the group count exceeds the 4KB payload
 // cap (the template renders without labels in that case). Row counts are
 // clamped to 1-10 to satisfy the server's per-group job-count bound.
-func stepRowsLabels(info stepInfo) ([]int, []string) {
+func stepRowsLabels(info ci.StepInfo) ([]int, []string) {
 	if info.TotalSteps < 1 || info.TotalSteps > maxStepGroups {
 		return nil, nil
 	}
