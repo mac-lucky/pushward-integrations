@@ -106,6 +106,40 @@ func TestLoadAppliesEnvOverrides(t *testing.T) {
 	}
 }
 
+// TestLoadPushWardDefaults pins the activity tunables, which diverge from every
+// other bridge in three ways worth stating out loud.
+func TestLoadPushWardDefaults(t *testing.T) {
+	clearDurationVars(t)
+	t.Setenv("PUSHWARD_METRICS_URL", "http://victoria:8428")
+	t.Setenv("PUSHWARD_URL", "https://api.pushward.app")
+	t.Setenv("PUSHWARD_API_KEY", "hlk_test")
+
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	// Five, not one: an alert outranks a build or a download on the Lock Screen.
+	if cfg.PushWard.Priority != 5 {
+		t.Errorf("pushward.priority = %d, want 5", cfg.PushWard.Priority)
+	}
+	if cfg.PushWard.CleanupDelay != 15*time.Minute {
+		t.Errorf("pushward.cleanup_delay = %s, want 15m", cfg.PushWard.CleanupDelay)
+	}
+	// A day, not half an hour: an alert stays firing until something clears it,
+	// and a 30m TTL would evict the card while the problem is still live.
+	if cfg.PushWard.StaleTimeout != 24*time.Hour {
+		t.Errorf("pushward.stale_timeout = %s, want 24h", cfg.PushWard.StaleTimeout)
+	}
+	// Deliberately zero, and this is the invariant: the bridge ends an activity
+	// in one shot rather than the two-phase ONGOING-then-ENDED the pollers use,
+	// so nothing here reads these two fields. Giving them the shared 5s/4s would
+	// put live-looking values in a struct no code path consults.
+	if cfg.PushWard.EndDelay != 0 || cfg.PushWard.EndDisplayTime != 0 {
+		t.Errorf("end_delay/end_display_time = %s / %s, want both unset",
+			cfg.PushWard.EndDelay, cfg.PushWard.EndDisplayTime)
+	}
+}
+
 // A typo in a manifest must not quietly leave the default in place.
 func TestApplyEnvOverridesRejectsUnparseableDurations(t *testing.T) {
 	for _, name := range []string{

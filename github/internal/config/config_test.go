@@ -29,6 +29,31 @@ func writeConfig(t *testing.T, render string) string {
 	return path
 }
 
+// TestLoad_PushWardDefaults pins the activity tunables this bridge ships. They
+// are the plain shared set, with no per-bridge divergence.
+func TestLoad_PushWardDefaults(t *testing.T) {
+	clearPollEnv(t)
+	cfg, err := Load(writeConfig(t, ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.PushWard.Priority != 1 {
+		t.Errorf("priority = %d, want 1", cfg.PushWard.Priority)
+	}
+	if cfg.PushWard.CleanupDelay != 15*time.Minute {
+		t.Errorf("cleanup_delay = %v, want 15m", cfg.PushWard.CleanupDelay)
+	}
+	if cfg.PushWard.StaleTimeout != 30*time.Minute {
+		t.Errorf("stale_timeout = %v, want 30m", cfg.PushWard.StaleTimeout)
+	}
+	if cfg.PushWard.EndDelay != 5*time.Second {
+		t.Errorf("end_delay = %v, want 5s", cfg.PushWard.EndDelay)
+	}
+	if cfg.PushWard.EndDisplayTime != 4*time.Second {
+		t.Errorf("end_display_time = %v, want 4s", cfg.PushWard.EndDisplayTime)
+	}
+}
+
 // TestLoad_LiveProgressDefault pins the one render flag that ships on. The two
 // pill flags stay off, so an existing deployment sees the same pills it always
 // did and gains only the self-filling step.

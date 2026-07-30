@@ -65,6 +65,19 @@ func TestDefaults(t *testing.T) {
 	if cfg.PushWard.CleanupDelay != 10*time.Minute {
 		t.Errorf("pushward.cleanup_delay = %v, want 10m", cfg.PushWard.CleanupDelay)
 	}
+	// The rest are the plain shared values; only cleanup_delay diverges.
+	if cfg.PushWard.Priority != 1 {
+		t.Errorf("pushward.priority = %d, want 1", cfg.PushWard.Priority)
+	}
+	if cfg.PushWard.StaleTimeout != 30*time.Minute {
+		t.Errorf("pushward.stale_timeout = %v, want 30m", cfg.PushWard.StaleTimeout)
+	}
+	if cfg.PushWard.EndDelay != 5*time.Second {
+		t.Errorf("pushward.end_delay = %v, want 5s", cfg.PushWard.EndDelay)
+	}
+	if cfg.PushWard.EndDisplayTime != 4*time.Second {
+		t.Errorf("pushward.end_display_time = %v, want 4s", cfg.PushWard.EndDisplayTime)
+	}
 	// Both render flags default on: the anchors are additive and the log view
 	// is the only readable rendering prune and check have.
 	if !cfg.Render.LiveProgress {

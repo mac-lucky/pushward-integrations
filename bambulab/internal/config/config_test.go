@@ -44,6 +44,23 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Polling.UpdateInterval != 5*time.Second {
 		t.Errorf("polling.update_interval = %s, want 5s", cfg.Polling.UpdateInterval)
 	}
+	if cfg.PushWard.Priority != 1 {
+		t.Errorf("pushward.priority = %d, want 1", cfg.PushWard.Priority)
+	}
+	if cfg.PushWard.CleanupDelay != 15*time.Minute {
+		t.Errorf("pushward.cleanup_delay = %s, want 15m", cfg.PushWard.CleanupDelay)
+	}
+	// Sixty minutes, not the shared thirty: a print is a long job that reports
+	// over MQTT, and a half-hour TTL would evict the card mid-print.
+	if cfg.PushWard.StaleTimeout != 60*time.Minute {
+		t.Errorf("pushward.stale_timeout = %s, want 60m", cfg.PushWard.StaleTimeout)
+	}
+	if cfg.PushWard.EndDelay != 5*time.Second {
+		t.Errorf("pushward.end_delay = %s, want 5s", cfg.PushWard.EndDelay)
+	}
+	if cfg.PushWard.EndDisplayTime != 4*time.Second {
+		t.Errorf("pushward.end_display_time = %s, want 4s", cfg.PushWard.EndDisplayTime)
+	}
 }
 
 // The fingerprint is what turns "accept any self-signed cert" into pinned

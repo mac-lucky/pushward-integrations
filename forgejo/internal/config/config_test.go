@@ -59,6 +59,14 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.PushWard.CleanupDelay != 15*time.Minute || cfg.PushWard.StaleTimeout != 30*time.Minute {
 		t.Errorf("TTL defaults = %v / %v", cfg.PushWard.CleanupDelay, cfg.PushWard.StaleTimeout)
 	}
+	// The two-phase end: a final ONGOING update lands the completion content on
+	// the Dynamic Island, then ENDED follows once it has been seen.
+	if cfg.PushWard.EndDelay != 5*time.Second {
+		t.Errorf("end_delay = %v, want 5s", cfg.PushWard.EndDelay)
+	}
+	if cfg.PushWard.EndDisplayTime != 4*time.Second {
+		t.Errorf("end_display_time = %v, want 4s", cfg.PushWard.EndDisplayTime)
+	}
 	// The pill fields are opt-in; the ETA is on, matching the github bridge.
 	if cfg.Render.StepColors || cfg.Render.StepWeights {
 		t.Error("step colors and weights must default off")

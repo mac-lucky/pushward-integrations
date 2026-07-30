@@ -49,6 +49,22 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.SABnzbd.Template != "generic" {
 		t.Errorf("template = %q, want generic", cfg.SABnzbd.Template)
 	}
+	// The plain shared activity tunables, with no per-bridge divergence.
+	if cfg.PushWard.Priority != 1 {
+		t.Errorf("pushward.priority = %d, want 1", cfg.PushWard.Priority)
+	}
+	if cfg.PushWard.CleanupDelay != 15*time.Minute {
+		t.Errorf("pushward.cleanup_delay = %s, want 15m", cfg.PushWard.CleanupDelay)
+	}
+	if cfg.PushWard.StaleTimeout != 30*time.Minute {
+		t.Errorf("pushward.stale_timeout = %s, want 30m", cfg.PushWard.StaleTimeout)
+	}
+	if cfg.PushWard.EndDelay != 5*time.Second {
+		t.Errorf("pushward.end_delay = %s, want 5s", cfg.PushWard.EndDelay)
+	}
+	if cfg.PushWard.EndDisplayTime != 4*time.Second {
+		t.Errorf("pushward.end_display_time = %s, want 4s", cfg.PushWard.EndDisplayTime)
+	}
 }
 
 // The yaml tag is the contract for a chart that mounts a config file instead of
