@@ -70,7 +70,7 @@ The relay registers 20 webhook routes across 16 provider modules (`starr` serves
 | Unmanic | `POST /unmanic` | Transcode task completion/failure (Apprise `json://`) |
 | Bazarr | `POST /bazarr` | Subtitle downloaded/upgraded - sends a **push notification**, not a Live Activity (HTTP Basic auth) |
 | Proxmox VE | `POST /proxmox` | Backup, replication, fencing, package-update events |
-| Overseerr / Jellyseerr | `POST /overseerr` | Media request lifecycle (pending -> approved -> available) |
+| Overseerr / Jellyseerr / Seerr | `POST /overseerr` | Media request lifecycle (pending -> approved -> available), plus issue events as notifications |
 | Uptime Kuma | `POST /uptimekuma` | Monitor up/down/maintenance changes (alert) |
 | Gatus | `POST /gatus` | Endpoint health status changes (alert) |
 | Backrest | `POST /backrest` | Backup/prune/check/forget operations |

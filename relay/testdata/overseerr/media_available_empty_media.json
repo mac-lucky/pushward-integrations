@@ -1,0 +1,10 @@
+{
+  "notification_type": "MEDIA_AVAILABLE",
+  "event": "media.available",
+  "subject": "Big Buck Bunny",
+  "message": "Big Buck Bunny is now available!",
+  "image": "https://image.tmdb.org/t/p/w1280/bunny.jpg",
+  "media": {},
+  "request": {},
+  "extra": []
+}

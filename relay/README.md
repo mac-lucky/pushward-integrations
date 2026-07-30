@@ -178,6 +178,8 @@ Flags: `-config` (default `config.yml`) and `-pushward-url` (overrides `PUSHWARD
 
 All webhook routes require an `hlk_` key (Bearer, HTTP Basic password, or the OpsGenie `GenieKey` scheme), enforce a 1 MB body limit, and return `200` with `{"status":"ok"}` on success - `401` if the key is missing, `429` when rate-limited. Requests with a missing or `text/plain` `Content-Type` are normalized to `application/json` so misconfigured senders are still accepted.
 
+The key itself is only checked when the relay calls PushWard on your behalf, so a webhook that carries a bad key answers `401` on the first request that has something to deliver. A `200` whose `status` is not `"ok"` means the payload arrived but could not be acted on in full; the `detail` field says why.
+
 | Method | Path | Description |
 |---|---|---|
 | POST | `/grafana` | Grafana alert webhooks |
@@ -507,9 +509,11 @@ pvesh set /cluster/notifications/matchers/default-matcher --target mail-to-root 
 
 The test button on the same screen sends a webhook with an empty `type`, which the relay handles as a self-test so you can confirm delivery without waiting for a real event.
 
-### Overseerr / Jellyseerr
+### Overseerr / Jellyseerr / Seerr
 
-Receives media request webhooks. Tracks the request lifecycle from pending to available.
+Receives media request webhooks. Tracks the request lifecycle from pending to available. Overseerr
+and Jellyseerr merged into [Seerr](https://github.com/seerr-team/seerr) in February 2026; all three
+speak the same webhook format and use the same route.
 
 | | |
 |---|---|
@@ -525,21 +529,58 @@ Receives media request webhooks. Tracks the request lifecycle from pending to av
 | `MEDIA_FAILED` | Failed | - | red |
 | `TEST_NOTIFICATION` | test notification | - | varies |
 
-**Setup:** In Overseerr/Jellyseerr, go to **Settings > Notifications > Webhook**. Set the Webhook URL to `https://relay.pushward.app/overseerr`, the Authorization Header to `Bearer hlk_...`, and the JSON Payload to:
+These arrive as a push notification only, with no Live Activity:
+
+| Event | Notification body |
+|---|---|
+| `MEDIA_AUTO_REQUESTED` | Auto-requested |
+| `ISSUE_CREATED` | Issue reported |
+| `ISSUE_COMMENT` | New comment |
+| `ISSUE_RESOLVED` | Issue resolved |
+| `ISSUE_REOPENED` | Issue reopened |
+
+**Setup:** Go to **Settings > Notifications > Webhook**. Set the Webhook URL to
+`https://relay.pushward.app/overseerr` and the Authorization Header to `Bearer hlk_...`. The stock
+JSON Payload works as-is; if yours has been edited, reset it or paste this:
 
 ```json
 {
   "notification_type": "{{notification_type}}",
+  "event": "{{event}}",
   "subject": "{{subject}}",
   "message": "{{message}}",
   "image": "{{image}}",
-  "{{media}}": {},
-  "{{request}}": {},
+  "{{media}}": {
+    "media_type": "{{media_type}}",
+    "tmdbId": "{{media_tmdbid}}",
+    "tvdbId": "{{media_tvdbid}}",
+    "status": "{{media_status}}",
+    "status4k": "{{media_status4k}}"
+  },
+  "{{request}}": {
+    "request_id": "{{request_id}}",
+    "requestedBy_username": "{{requestedBy_username}}"
+  },
+  "{{issue}}": {
+    "issue_id": "{{issue_id}}",
+    "issue_type": "{{issue_type}}",
+    "issue_status": "{{issue_status}}",
+    "reportedBy_username": "{{reportedBy_username}}"
+  },
+  "{{comment}}": {
+    "comment_message": "{{comment_message}}",
+    "commentedBy_username": "{{commentedBy_username}}"
+  },
   "{{extra}}": []
 }
 ```
 
-Enable: Request Pending, Approved, Available, Declined, Failed.
+The `{{media}}` block has to list those fields. Whatever object you put under that key is what gets
+sent verbatim, so an empty `"{{media}}": {}` delivers `"media": {}` and the relay has no TMDB ID to
+key the Live Activity on. It falls back to a push notification and answers
+`{"status":"ignored_activity","detail":"..."}` saying which field was missing.
+
+Enable: Request Pending, Approved, Available, Declined, Failed, plus any of the issue types you want as notifications.
 
 ### Uptime Kuma
 

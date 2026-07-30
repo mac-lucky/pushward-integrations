@@ -151,7 +151,18 @@ func MockPushWardServerFailingNotifications(t *testing.T) (*httptest.Server, *[]
 	return mockPushWardServer(t, http.StatusUnprocessableEntity)
 }
 
-func mockPushWardServer(t *testing.T, notifyStatus int) (*httptest.Server, *[]APICall, *sync.Mutex) {
+// MockPushWardServerRejectingCalls is MockPushWardServer with every notification
+// AND every activity create answered with status, standing in for an integration
+// key the server refuses (401/403) or a tenant over quota (429). Handlers are
+// expected to surface those unchanged rather than as a generic 502, since the
+// caller is the one holding the key. Requests are still validated first, so a
+// test can tell a rejected call from a malformed one.
+func MockPushWardServerRejectingCalls(t *testing.T, status int) (*httptest.Server, *[]APICall, *sync.Mutex) {
+	t.Helper()
+	return mockPushWardServer(t, status, status)
+}
+
+func mockPushWardServer(t *testing.T, notifyStatus int, activityStatus ...int) (*httptest.Server, *[]APICall, *sync.Mutex) {
 	t.Helper()
 	var calls []APICall
 	var mu sync.Mutex
@@ -170,6 +181,11 @@ func mockPushWardServer(t *testing.T, notifyStatus int) (*httptest.Server, *[]AP
 
 		if err := validateCreateRequest(&req); err != nil {
 			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+
+		if len(activityStatus) > 0 {
+			respondError(w, activityStatus[0], "activity rejected")
 			return
 		}
 

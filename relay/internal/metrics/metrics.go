@@ -60,6 +60,17 @@ var (
 		Help:      "Total PushWard API calls by provider, operation, and result.",
 	}, []string{"provider", "operation", "result"})
 
+	// WebhookIgnoredTotal makes a misconfigured sender measurable. The response
+	// carries the reason in its body and the request is a plain 200, so without
+	// this the condition is invisible to http_requests_total. Reason must come
+	// from the handler's closed set, never from payload content, or it becomes an
+	// unbounded label dimension.
+	WebhookIgnoredTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "pushward_relay",
+		Name:      "webhook_ignored_total",
+		Help:      "Webhooks accepted but not acted on in full, by provider and reason.",
+	}, []string{"provider", "reason"})
+
 	APICallRetriesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "pushward_relay",
 		Name:      "api_call_retries_total",
