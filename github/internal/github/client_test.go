@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -18,6 +19,15 @@ func testClient(t *testing.T, handler http.Handler) *Client {
 	c := NewClient("test-token")
 	c.SetBaseURL(srv.URL)
 	return c
+}
+
+// workflowsRoute serves the presence lookup for a repo that has workflows. A test
+// exercising the runs probe needs it, because a repo with no workflows is skipped
+// before the runs endpoint is ever reached.
+func workflowsRoute(mux *http.ServeMux, repo string) {
+	mux.HandleFunc("/repos/"+repo+"/actions/workflows", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(WorkflowsResponse{TotalCount: 1})
+	})
 }
 
 func TestNewClient(t *testing.T) {
@@ -54,6 +64,7 @@ func TestGetInProgressRuns_Success(t *testing.T) {
 			},
 		})
 	})
+	workflowsRoute(mux, "owner/repo")
 	c := testClient(t, mux)
 
 	runs, err := c.GetInProgressRuns(context.Background(), "owner/repo")
@@ -76,6 +87,7 @@ func TestGetInProgressRuns_Empty(t *testing.T) {
 	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{TotalCount: 0})
 	})
+	workflowsRoute(mux, "owner/repo")
 	c := testClient(t, mux)
 
 	runs, err := c.GetInProgressRuns(context.Background(), "owner/repo")
@@ -84,6 +96,192 @@ func TestGetInProgressRuns_Empty(t *testing.T) {
 	}
 	if len(runs) != 0 {
 		t.Fatalf("expected 0 runs, got %d", len(runs))
+	}
+}
+
+// The idle probe is the request the bridge makes most, so it must go out
+// conditionally and a 304 must answer from cache. GitHub does not bill a 304
+// against the primary rate limit, which is what makes polling every repo every
+// pass affordable at all.
+func TestGetInProgressRuns_ConditionalRequestAnswersFromCache(t *testing.T) {
+	const etag = `W/"abc123"`
+	var calls atomic.Int32
+	var sawIfNoneMatch atomic.Value
+
+	mux := http.NewServeMux()
+	workflowsRoute(mux, "owner/repo")
+	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		sawIfNoneMatch.Store(r.Header.Get("If-None-Match"))
+		w.Header().Set("ETag", etag)
+		if n > 1 {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{
+			TotalCount:   1,
+			WorkflowRuns: []WorkflowRun{{ID: 7, Name: "CI", Status: "in_progress"}},
+		})
+	})
+	c := testClient(t, mux)
+
+	first, err := c.GetInProgressRuns(context.Background(), "owner/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 || first[0].ID != 7 {
+		t.Fatalf("first probe = %+v, want one run with ID 7", first)
+	}
+	if got := sawIfNoneMatch.Load(); got != "" {
+		t.Errorf("first probe sent If-None-Match %q, want none", got)
+	}
+
+	second, err := c.GetInProgressRuns(context.Background(), "owner/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sawIfNoneMatch.Load(); got != etag {
+		t.Errorf("second probe sent If-None-Match %q, want %q", got, etag)
+	}
+	if len(second) != 1 || second[0].ID != 7 {
+		t.Fatalf("304 answered %+v, want the cached run", second)
+	}
+
+	// The cached slice must not be handed out directly, or a caller reordering it
+	// would corrupt every later answer.
+	second[0].ID = 999
+	third, err := c.GetInProgressRuns(context.Background(), "owner/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third[0].ID != 7 {
+		t.Errorf("cache was mutated through a returned slice: ID %d", third[0].ID)
+	}
+}
+
+// A repo with no workflow files answers the runs probe with an empty 200, exactly
+// like a repo that simply has nothing running - so it takes the presence lookup to
+// tell them apart, and once told, the runs probe must stop entirely.
+func TestGetInProgressRuns_SkipsRepoWithNoWorkflows(t *testing.T) {
+	var runCalls, workflowCalls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/actions/workflows", func(w http.ResponseWriter, _ *http.Request) {
+		workflowCalls.Add(1)
+		_ = json.NewEncoder(w).Encode(WorkflowsResponse{TotalCount: 0})
+	})
+	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
+		runCalls.Add(1)
+		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{TotalCount: 0})
+	})
+	c := testClient(t, mux)
+
+	for range 3 {
+		runs, err := c.GetInProgressRuns(context.Background(), "owner/repo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(runs) != 0 {
+			t.Fatalf("expected no runs, got %d", len(runs))
+		}
+	}
+
+	if got := runCalls.Load(); got != 0 {
+		t.Errorf("polled the runs endpoint %d times for a repo with no workflows", got)
+	}
+	// Cached, so the presence lookup itself does not repeat either.
+	if got := workflowCalls.Load(); got != 1 {
+		t.Errorf("workflow presence looked up %d times, want 1 (cached)", got)
+	}
+}
+
+// Actions disabled on a repo 404s the workflows endpoint. Same conclusion as no
+// workflow files, and it must be cached rather than re-erroring on every pass.
+func TestGetInProgressRuns_WorkflowsNotFoundTreatedAsNoActions(t *testing.T) {
+	var workflowCalls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/actions/workflows", func(w http.ResponseWriter, _ *http.Request) {
+		workflowCalls.Add(1)
+		w.WriteHeader(http.StatusNotFound)
+	})
+	c := testClient(t, mux)
+
+	for range 2 {
+		runs, err := c.GetInProgressRuns(context.Background(), "owner/repo")
+		if err != nil {
+			t.Fatalf("a 404 from the workflows endpoint must not surface as an error: %v", err)
+		}
+		if len(runs) != 0 {
+			t.Fatalf("expected no runs, got %d", len(runs))
+		}
+	}
+	if got := workflowCalls.Load(); got != 1 {
+		t.Errorf("workflow presence looked up %d times, want 1 (the 404 is cached)", got)
+	}
+}
+
+// A negative answer has to expire, or a workflow added later is never noticed
+// until the bridge restarts.
+func TestHasWorkflows_NegativeAnswerExpires(t *testing.T) {
+	var calls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/actions/workflows", func(w http.ResponseWriter, _ *http.Request) {
+		total := 0
+		if calls.Add(1) > 1 {
+			total = 1 // a workflow was added since the first look
+		}
+		_ = json.NewEncoder(w).Encode(WorkflowsResponse{TotalCount: total})
+	})
+	c := testClient(t, mux)
+
+	has, err := c.hasWorkflows(context.Background(), "owner/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if has {
+		t.Fatal("expected no workflows on the first look")
+	}
+
+	// Age the cached negative past its TTL.
+	c.mu.Lock()
+	e := c.workflows["owner/repo"]
+	e.checkedAt = time.Now().Add(-noWorkflowsTTL - time.Second)
+	c.workflows["owner/repo"] = e
+	c.mu.Unlock()
+
+	has, err = c.hasWorkflows(context.Background(), "owner/repo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !has {
+		t.Error("expected the re-check to notice the new workflow")
+	}
+	if got := calls.Load(); got != 2 {
+		t.Errorf("looked up %d times, want 2", got)
+	}
+}
+
+// A positive answer is kept for the process lifetime: a repo that loses its
+// workflows costs only what every repo used to cost.
+func TestHasWorkflows_PositiveAnswerIsNotRelookedUp(t *testing.T) {
+	var calls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/actions/workflows", func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		_ = json.NewEncoder(w).Encode(WorkflowsResponse{TotalCount: 2})
+	})
+	c := testClient(t, mux)
+
+	for range 3 {
+		has, err := c.hasWorkflows(context.Background(), "owner/repo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !has {
+			t.Fatal("expected workflows")
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("looked up %d times, want 1", got)
 	}
 }
 
@@ -514,73 +712,211 @@ func TestRecordRateLimit_MissingHeaders(t *testing.T) {
 	}
 }
 
-func TestWaitForRateLimit_WaitsWhenLow(t *testing.T) {
+// The budget check must refuse rather than sleep.
+func TestCheckBudget_RefusesImmediatelyWhenSpent(t *testing.T) {
 	c := NewClient("token")
+	resetAt := time.Now().Add(time.Hour)
 	c.mu.Lock()
-	c.remaining = 10
-	c.resetAt = time.Now().Add(100 * time.Millisecond)
+	c.remaining = 0
+	c.resetAt = resetAt
 	c.mu.Unlock()
 
 	start := time.Now()
-	err := c.waitForRateLimit(context.Background())
+	err := c.checkBudget()
 	elapsed := time.Since(start)
 
-	if err != nil {
-		t.Fatal(err)
+	var be *BudgetError
+	if !errors.As(err, &be) {
+		t.Fatalf("expected a BudgetError, got %v", err)
 	}
-	if elapsed < 50*time.Millisecond {
-		t.Errorf("expected to wait, but only waited %v", elapsed)
-	}
-}
-
-func TestWaitForRateLimit_SkipsWhenPlenty(t *testing.T) {
-	c := NewClient("token")
-	c.mu.Lock()
-	c.remaining = 1000
-	c.resetAt = time.Now().Add(time.Hour)
-	c.mu.Unlock()
-
-	start := time.Now()
-	err := c.waitForRateLimit(context.Background())
-	elapsed := time.Since(start)
-
-	if err != nil {
-		t.Fatal(err)
+	if !be.ResetAt.Equal(resetAt) {
+		t.Errorf("ResetAt = %v, want %v", be.ResetAt, resetAt)
 	}
 	if elapsed > 10*time.Millisecond {
-		t.Errorf("expected no wait, but waited %v", elapsed)
+		t.Errorf("checkBudget blocked for %v; it must refuse, not wait", elapsed)
 	}
 }
 
-func TestWaitForRateLimit_SkipsWhenUnknown(t *testing.T) {
+// The reserve that keeps already-tracked runs affordable belongs to the poller, not
+// here. The client must not apply one of its own, or the cards on screen would
+// freeze at exactly the moment the reserve was meant to keep them alive.
+func TestCheckBudget_Allows(t *testing.T) {
+	tests := []struct {
+		name      string
+		remaining int
+		resetIn   time.Duration
+	}{
+		{name: "one request left is still a request", remaining: 1, resetIn: time.Hour},
+		{name: "well inside what the poller reserves", remaining: 49, resetIn: time.Hour},
+		{name: "plenty", remaining: 1000, resetIn: time.Hour},
+		{name: "unknown before the first response", remaining: -1, resetIn: time.Hour},
+		// A spent window that has already rolled over is open again; the next
+		// response re-reads the real numbers.
+		{name: "spent but the window has passed", remaining: 0, resetIn: -time.Minute},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewClient("token")
+			c.mu.Lock()
+			c.remaining = tc.remaining
+			c.resetAt = time.Now().Add(tc.resetIn)
+			c.mu.Unlock()
+
+			if err := c.checkBudget(); err != nil {
+				t.Errorf("refused with remaining=%d: %v", tc.remaining, err)
+			}
+		})
+	}
+}
+
+func TestBudget_UnknownUntilFirstResponse(t *testing.T) {
 	c := NewClient("token")
-	// remaining is -1 (unknown) by default
+	if _, _, ok := c.Budget(); ok {
+		t.Error("Budget reported a figure before any response was seen")
+	}
 
-	start := time.Now()
-	err := c.waitForRateLimit(context.Background())
-	elapsed := time.Since(start)
+	const resetEpoch int64 = 1893456000
+	c.recordRateLimit(&http.Response{Header: http.Header{
+		"X-Ratelimit-Remaining": []string{"4321"},
+		"X-Ratelimit-Reset":     []string{strconv.FormatInt(resetEpoch, 10)},
+	}})
 
+	remaining, resetAt, ok := c.Budget()
+	if !ok {
+		t.Fatal("Budget still unknown after a response carrying the headers")
+	}
+	if remaining != 4321 {
+		t.Errorf("remaining = %d, want 4321", remaining)
+	}
+	if resetAt.Unix() != resetEpoch {
+		t.Errorf("resetAt = %d, want %d", resetAt.Unix(), resetEpoch)
+	}
+}
+
+// A 304 carries the rate-limit headers like any other response, and the budget
+// view has to track them - in the steady state almost every response is a 304, so
+// ignoring them would leave the poller pacing against a stale number.
+func TestRecordRateLimit_TracksNotModifiedResponses(t *testing.T) {
+	mux := http.NewServeMux()
+	workflowsRoute(mux, "owner/repo")
+	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"e1"`)
+		w.Header().Set("X-RateLimit-Remaining", "4000")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+		if r.Header.Get("If-None-Match") != "" {
+			w.Header().Set("X-RateLimit-Remaining", "3999")
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{TotalCount: 0})
+	})
+	c := testClient(t, mux)
+
+	if _, err := c.GetInProgressRuns(context.Background(), "owner/repo"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.GetInProgressRuns(context.Background(), "owner/repo"); err != nil {
+		t.Fatal(err)
+	}
+	remaining, _, ok := c.Budget()
+	if !ok || remaining != 3999 {
+		t.Errorf("remaining = %d (ok=%v), want 3999 from the 304's headers", remaining, ok)
+	}
+}
+
+// The presence re-check must be conditional too. Without it the workflow filter
+// would spend a billed request every TTL per skipped repo, to avoid runs probes that
+// the ETag above has already made free - paying real budget for no budget saving.
+func TestHasWorkflows_RecheckIsConditional(t *testing.T) {
+	const etag = `W/"wf1"`
+	var conditional, unconditional atomic.Int32
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/actions/workflows", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", etag)
+		if r.Header.Get("If-None-Match") == etag {
+			conditional.Add(1)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		unconditional.Add(1)
+		_ = json.NewEncoder(w).Encode(WorkflowsResponse{TotalCount: 0})
+	})
+	c := testClient(t, mux)
+
+	has, err := c.hasWorkflows(context.Background(), "owner/repo")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if elapsed > 10*time.Millisecond {
-		t.Errorf("expected no wait, but waited %v", elapsed)
+	if has {
+		t.Fatal("expected no workflows")
+	}
+
+	// Two TTL expiries in a row: both re-checks must ride the ETag.
+	for range 2 {
+		c.mu.Lock()
+		e := c.workflows["owner/repo"]
+		e.checkedAt = time.Now().Add(-noWorkflowsTTL - time.Second)
+		c.workflows["owner/repo"] = e
+		c.mu.Unlock()
+
+		has, err = c.hasWorkflows(context.Background(), "owner/repo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if has {
+			t.Error("a 304 must preserve the cached answer, not flip it")
+		}
+	}
+
+	if got := unconditional.Load(); got != 1 {
+		t.Errorf("made %d billed lookups, want 1: the re-checks must be conditional", got)
+	}
+	if got := conditional.Load(); got != 2 {
+		t.Errorf("made %d conditional re-checks, want 2", got)
 	}
 }
 
-func TestWaitForRateLimit_RespectsContextCancel(t *testing.T) {
-	c := NewClient("token")
+// Both caches are keyed by repo name, so without a sweep they would hold an entry
+// for every repo ever seen - including ones since renamed, archived, or dropped from
+// the owner.
+func TestPruneCaches_DropsReposNothingAsksAbout(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(User{Login: "owner"})
+	})
+	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode([]Repository{{FullName: "owner/live"}})
+	})
+	c := testClient(t, mux)
+
+	stale := time.Now().Add(-cacheRetention - time.Minute)
+	fresh := time.Now()
 	c.mu.Lock()
-	c.remaining = 10
-	c.resetAt = time.Now().Add(time.Hour)
+	c.runsCache["owner/gone"] = runsProbe{etag: `"x"`, usedAt: stale}
+	c.runsCache["owner/live"] = runsProbe{etag: `"y"`, usedAt: fresh}
+	c.workflows["owner/gone"] = workflowPresence{has: true, usedAt: stale}
+	c.workflows["owner/live"] = workflowPresence{has: true, usedAt: fresh}
 	c.mu.Unlock()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	// Discovery is where the sweep runs.
+	if _, err := c.ListRepos(context.Background(), "owner"); err != nil {
+		t.Fatal(err)
+	}
 
-	err := c.waitForRateLimit(ctx)
-	if err != context.Canceled {
-		t.Errorf("expected context.Canceled, got %v", err)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if _, ok := c.runsCache["owner/gone"]; ok {
+		t.Error("runsCache kept an entry nothing has asked about")
+	}
+	if _, ok := c.workflows["owner/gone"]; ok {
+		t.Error("workflows kept an entry nothing has asked about")
+	}
+	if _, ok := c.runsCache["owner/live"]; !ok {
+		t.Error("runsCache dropped a live repo")
+	}
+	if _, ok := c.workflows["owner/live"]; !ok {
+		t.Error("workflows dropped a live repo")
 	}
 }
 
@@ -605,63 +941,74 @@ func TestRateLimitRetryAfter(t *testing.T) {
 	const maxWait = 15 * time.Minute
 
 	tests := []struct {
-		name    string
-		key     string
-		value   string
-		minWant time.Duration
-		maxWant time.Duration
+		name           string
+		key            string
+		value          string
+		minWant        time.Duration
+		maxWant        time.Duration
+		wantFromHeader bool
 	}{
 		{
-			name:    "retry-after numeric seconds",
-			key:     "Retry-After",
-			value:   "30",
-			minWant: 30 * time.Second,
-			maxWant: 30 * time.Second,
+			name:           "retry-after numeric seconds",
+			key:            "Retry-After",
+			value:          "30",
+			minWant:        30 * time.Second,
+			maxWant:        30 * time.Second,
+			wantFromHeader: true,
 		},
 		{
 			// "Retry-After: 0" is authoritative: retry immediately, not 60s.
-			name:    "retry-after zero retries now",
-			key:     "Retry-After",
-			value:   "0",
-			minWant: 0,
-			maxWant: 0,
+			name:           "retry-after zero retries now",
+			key:            "Retry-After",
+			value:          "0",
+			minWant:        0,
+			maxWant:        0,
+			wantFromHeader: true,
 		},
 		{
-			name:    "retry-after http-date near future",
-			key:     "Retry-After",
-			value:   time.Now().Add(2 * time.Minute).UTC().Format(http.TimeFormat),
-			minWant: 2*time.Minute - 10*time.Second,
-			maxWant: 2 * time.Minute,
+			name:           "retry-after http-date near future",
+			key:            "Retry-After",
+			value:          time.Now().Add(2 * time.Minute).UTC().Format(http.TimeFormat),
+			minWant:        2*time.Minute - 10*time.Second,
+			maxWant:        2 * time.Minute,
+			wantFromHeader: true,
 		},
 		{
 			// An HTTP-date already in the past → the window is open → retry now.
-			name:    "retry-after http-date in the past",
-			key:     "Retry-After",
-			value:   time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat),
-			minWant: 0,
-			maxWant: 0,
+			name:           "retry-after http-date in the past",
+			key:            "Retry-After",
+			value:          time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat),
+			minWant:        0,
+			maxWant:        0,
+			wantFromHeader: true,
 		},
 		{
-			name:    "x-ratelimit-reset epoch in the past",
-			key:     "X-RateLimit-Reset",
-			value:   strconv.FormatInt(time.Now().Add(-5*time.Minute).Unix(), 10),
-			minWant: 0,
-			maxWant: 0,
+			name:           "x-ratelimit-reset epoch in the past",
+			key:            "X-RateLimit-Reset",
+			value:          strconv.FormatInt(time.Now().Add(-5*time.Minute).Unix(), 10),
+			minWant:        0,
+			maxWant:        0,
+			wantFromHeader: true,
 		},
 		{
 			// A reset far beyond maxWait must be clamped, never parked.
-			name:    "x-ratelimit-reset far future clamped to maxWait",
-			key:     "X-RateLimit-Reset",
-			value:   strconv.FormatInt(time.Now().Add(30*time.Minute).Unix(), 10),
-			minWant: maxWait,
-			maxWant: maxWait,
+			name:           "x-ratelimit-reset far future clamped to maxWait",
+			key:            "X-RateLimit-Reset",
+			value:          strconv.FormatInt(time.Now().Add(30*time.Minute).Unix(), 10),
+			minWant:        maxWait,
+			maxWant:        maxWait,
+			wantFromHeader: true,
 		},
 		{
-			name:    "no headers falls back to 60s default",
-			key:     "",
-			value:   "",
-			minWant: 60 * time.Second,
-			maxWant: 60 * time.Second,
+			// No usable header is the one case GitHub prescribes exponential backoff
+			// for, so the caller has to be able to tell it apart. The duration is
+			// meaningless here - rateLimitError.wait supplies its own.
+			name:           "no headers reports nothing to trust",
+			key:            "",
+			value:          "",
+			minWant:        0,
+			maxWant:        0,
+			wantFromHeader: false,
 		},
 	}
 
@@ -671,12 +1018,50 @@ func TestRateLimitRetryAfter(t *testing.T) {
 			if tt.key != "" {
 				h.Set(tt.key, tt.value)
 			}
-			got := rateLimitRetryAfter(&http.Response{Header: h})
+			got, fromHeader := rateLimitRetryAfter(&http.Response{Header: h})
 			if got < tt.minWant || got > tt.maxWant {
 				t.Errorf("rateLimitRetryAfter() = %v, want in [%v, %v]", got, tt.minWant, tt.maxWant)
 			}
+			if fromHeader != tt.wantFromHeader {
+				t.Errorf("fromHeader = %v, want %v", fromHeader, tt.wantFromHeader)
+			}
 		})
 	}
+}
+
+// GitHub reserves exponential backoff for the ambiguous case: a rate-limit
+// response with no usable timing, which is most likely a secondary limit. When it
+// did say when to resume, waiting longer than that only costs freshness.
+func TestRateLimitErrorWait(t *testing.T) {
+	t.Run("a parsed header is taken at its word", func(t *testing.T) {
+		e := &rateLimitError{retryAfter: 20 * time.Second, fromHeader: true}
+		for n := 1; n <= 3; n++ {
+			got := e.wait(n)
+			// Jitter adds up to a quarter on top; it must not grow with the attempt.
+			if got < 20*time.Second || got > 25*time.Second {
+				t.Errorf("wait(%d) = %v, want ~20s regardless of attempt", n, got)
+			}
+		}
+	})
+
+	t.Run("no header grows from a minute and caps", func(t *testing.T) {
+		e := &rateLimitError{} // no header, so retryAfter carries nothing
+		for _, tc := range []struct {
+			n      int
+			lo, hi time.Duration
+		}{
+			{1, 60 * time.Second, 75 * time.Second},
+			{2, 120 * time.Second, 150 * time.Second},
+			{3, 240 * time.Second, 300 * time.Second},
+			// However many attempts, never longer than the ceiling - and never
+			// wrapping into a negative, which would mean no wait at all.
+			{30, maxRateLimitWait, maxRateLimitWait + maxRateLimitWait/4},
+		} {
+			if got := e.wait(tc.n); got < tc.lo || got > tc.hi {
+				t.Errorf("wait(%d) = %v, want in [%v, %v]", tc.n, got, tc.lo, tc.hi)
+			}
+		}
+	})
 }
 
 func TestDoRequest_RateLimitDefault(t *testing.T) {

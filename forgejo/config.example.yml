@@ -16,7 +16,14 @@ pushward:
   # end_display_time: 4s   # PUSHWARD_END_DISPLAY_TIME
 
 polling:
+  # How often every watched repo is checked for a run that has just started. One
+  # request per repo per pass, so on an instance where discovery finds a lot of
+  # repos this sets the whole idle request rate.
   idle_interval: 60s  # or set PUSHWARD_POLL_IDLE
+  # How often a run already in flight is advanced - what someone watching the card
+  # sees. One request per running run, so it stays cheap however many repos are
+  # watched. Defaults to the smaller of idle_interval and 15s.
+  # interval: 15s     # or set PUSHWARD_POLL_INTERVAL
 
 render:
   # step_colors: false   # or set PUSHWARD_FORGEJO_STEP_COLORS - tint step pills by job type

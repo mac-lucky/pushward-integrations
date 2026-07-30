@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/mac-lucky/pushward-integrations/github/internal/config"
 	ghclient "github.com/mac-lucky/pushward-integrations/github/internal/github"
@@ -40,10 +41,16 @@ func New(cfg *config.Config, gh *ghclient.Client, pw *pushward.Client) *cipoll.P
 		Owner:        cfg.GitHub.Owner,
 		Repos:        cfg.GitHub.Repos,
 		IdleInterval: cfg.Polling.IdleInterval,
-		PushWard:     cfg.PushWard,
-		Render:       cfg.Render,
-		TitlePrefix:  "GitHub",
-		SlugPrefix:   slugPrefix,
+		Interval:     cfg.Polling.Interval,
+		// GitHub's documented primary limit for a personal access token. Supplied
+		// here rather than in cipoll because it is GitHub's number: it is what the
+		// loop paces detection against, and what the startup line compares the
+		// configured rate to.
+		HourlyRequestBudget: ghclient.HourlyRateLimit,
+		PushWard:            cfg.PushWard,
+		Render:              cfg.Render,
+		TitlePrefix:         "GitHub",
+		SlugPrefix:          slugPrefix,
 		// github.com is a single well-known host that is either reachable or a
 		// credential problem, so a failed enumeration at startup is not something
 		// to poll through: fail loudly rather than watch a partial repo list.
@@ -53,6 +60,12 @@ func New(cfg *config.Config, gh *ghclient.Client, pw *pushward.Client) *cipoll.P
 
 func (f *forge) ListRepos(ctx context.Context, owner string) ([]string, error) {
 	return f.gh.ListRepos(ctx, owner)
+}
+
+// Budget passes GitHub's rate-limit headers, as the client last saw them, up to
+// the loop's pacing.
+func (f *forge) Budget() (remaining int, resetAt time.Time, ok bool) {
+	return f.gh.Budget()
 }
 
 func (f *forge) ActiveRuns(ctx context.Context, repo string) ([]cipoll.Run, error) {

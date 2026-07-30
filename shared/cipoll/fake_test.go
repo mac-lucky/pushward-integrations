@@ -44,6 +44,13 @@ type fakeForge struct {
 	baselineCalls   int
 	lastWantTimings bool
 	liveJobCalls    int
+
+	// Budget. Unset means the forge publishes no allowance - every self-hosted
+	// Forgejo - which is the default so pacing stays out of the way of tests that
+	// are not about it.
+	remaining   int
+	resetAt     time.Time
+	budgetKnown bool
 }
 
 func newFakeForge(t *testing.T) *fakeForge {
@@ -118,6 +125,19 @@ func (f *fakeForge) Outcome(run Run, anyFailed bool) (state, color string) {
 		return OutcomeFailed, pushward.ColorRed
 	}
 	return OutcomeSuccess, pushward.ColorGreen
+}
+
+func (f *fakeForge) Budget() (int, time.Time, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.remaining, f.resetAt, f.budgetKnown
+}
+
+// setBudget publishes an allowance, opting this forge into the loop's pacing.
+func (f *fakeForge) setBudget(remaining int, resetIn time.Duration) {
+	f.mu.Lock()
+	f.remaining, f.resetAt, f.budgetKnown = remaining, time.Now().Add(resetIn), true
+	f.mu.Unlock()
 }
 
 func (f *fakeForge) counts() (repoCalls, baselineCalls, liveJobCalls int) {
@@ -220,7 +240,7 @@ func priorDurations() map[string]float64 {
 
 // newTestPoller wires a poller to a fake forge and a mock PushWard server,
 // pre-seeded with one repo to poll.
-func newTestPoller(t *testing.T, opts Options, f *fakeForge) (*Poller, *[]testutil.APICall, *sync.Mutex) {
+func newTestPoller(t *testing.T, opts Options, f Forge) (*Poller, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	p := New(f, pushward.NewClient(srv.URL, "hlk_test"), opts)
@@ -232,7 +252,7 @@ func newTestPoller(t *testing.T, opts Options, f *fakeForge) (*Poller, *[]testut
 // activity up front. The creation matters: the mock 404s a PATCH to an unknown
 // slug, and the anchor state only promotes after a patch lands, so without it
 // every tick would look like the first one.
-func trackedPoller(t *testing.T, opts Options, f *fakeForge, tracked *trackedRun) (*Poller, func(int) []testutil.APICall) {
+func trackedPoller(t *testing.T, opts Options, f Forge, tracked *trackedRun) (*Poller, func(int) []testutil.APICall) {
 	t.Helper()
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	pw := pushward.NewClient(srv.URL, "hlk_test")

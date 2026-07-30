@@ -22,6 +22,13 @@ type WorkflowRun struct {
 	HTMLURL    string `json:"html_url"`
 }
 
+// WorkflowsResponse is the subset of GET /repos/{o}/{r}/actions/workflows the
+// bridge reads: only whether the repo defines any workflows at all. The list
+// itself is never used, so the request asks for one entry.
+type WorkflowsResponse struct {
+	TotalCount int `json:"total_count"`
+}
+
 type JobsResponse struct {
 	TotalCount int   `json:"total_count"`
 	Jobs       []Job `json:"jobs"`

@@ -31,7 +31,7 @@ Forgejo Actions --> pushward-forgejo --> pushward-server --> APNs --> PushWard i
 - **Color-coded steps** (`step_colors`, opt-in): tests one hue, build another, deploy another.
 - **Two-phase end.** The result lands as a final ongoing frame so it is visible on the Dynamic
   Island, then the activity is dismissed a few seconds later.
-- **Cheap when idle.** With nothing running, the per-repo poll is a few dozen bytes.
+- **Cheap when idle.** With nothing running, the per-repo poll is a few dozen bytes. Detection and live updates are separate intervals, so a smoother card does not mean polling every repo more often.
 
 ## Prerequisites
 
@@ -85,7 +85,8 @@ Environment variables always win over the YAML file.
 | `PUSHWARD_FORGEJO_OWNER` | `forgejo.owner` | Auto-discovers repos. When it matches the token's own login, every repo the token can reach is discovered - including repos owned by others | - |
 | `PUSHWARD_FORGEJO_REPOS` | `forgejo.repos` | Comma-separated `owner/repo` list, watched in addition to whatever `owner` discovers | - |
 | `PUSHWARD_FORGEJO_TIMEOUT` | `forgejo.timeout` | Bounds one API call | `15s` |
-| `PUSHWARD_POLL_IDLE` | `polling.idle_interval` | How often each repo is polled | `60s` |
+| `PUSHWARD_POLL_IDLE` | `polling.idle_interval` | How often each watched repo is checked for a run that has just started - one request per repo per pass | `60s` |
+| `PUSHWARD_POLL_INTERVAL` | `polling.interval` | How often a run already in flight is advanced - one request per running run. Must not exceed `idle_interval` | smaller of `idle_interval` and `15s` |
 | `PUSHWARD_FORGEJO_STEP_COLORS` | `render.step_colors` | Tint step pills by job type | `false` |
 | `PUSHWARD_FORGEJO_STEP_WEIGHTS` | `render.step_weights` | Size step pills by prior-run duration | `false` |
 | `PUSHWARD_FORGEJO_LIVE_PROGRESS` | `render.live_progress` | Fill the running step and count its ETA down | `true` |

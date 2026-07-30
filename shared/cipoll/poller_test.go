@@ -71,6 +71,9 @@ func TestRunRejectsUnusableOptions(t *testing.T) {
 	}{
 		{name: "zero interval", mut: func(o *Options) { o.IdleInterval = 0 }, want: "IdleInterval"},
 		{name: "negative interval", mut: func(o *Options) { o.IdleInterval = -time.Second }, want: "IdleInterval"},
+		// A zero active tier means "inherit the idle one", but a negative is a
+		// misconfiguration and must not be silently normalized into something valid.
+		{name: "negative active interval", mut: func(o *Options) { o.Interval = -time.Second }, want: "Interval"},
 		{name: "blank slug prefix", mut: func(o *Options) { o.SlugPrefix = "" }, want: "SlugPrefix"},
 		{name: "blank title prefix", mut: func(o *Options) { o.TitlePrefix = "" }, want: "TitlePrefix"},
 	}

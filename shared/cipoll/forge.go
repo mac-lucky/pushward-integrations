@@ -132,4 +132,24 @@ type Forge interface {
 	// anyFailed is the ladder's view of the run's jobs, for the case where the
 	// run reports no usable conclusion of its own.
 	Outcome(run Run, anyFailed bool) (state, color string)
+
+	// Budget reports how many requests are left in the current window and when it
+	// refills. It is what the loop paces detection against: the per-repo sweep
+	// stretches to fit what is left, and discovery is dropped before the allowance
+	// runs out.
+	//
+	// ok is false when there is nothing to pace against - a forge that publishes no
+	// rate-limit headers at all (every self-hosted Forgejo), or one that has not
+	// seen a response yet. That is a complete answer, and leaves the loop on its
+	// configured intervals.
+	//
+	// On Forge rather than an optional interface the adapter may or may not
+	// satisfy: a forge that failed to provide this would disable every pacing
+	// decision with no signal at all, indistinguishable from a forge that
+	// legitimately has no budget. One stub line is cheaper than that failure mode,
+	// and the compiler checks it.
+	//
+	// Deliberately not error-returning, and must not itself make a request: the
+	// loop asks on every tick.
+	Budget() (remaining int, resetAt time.Time, ok bool)
 }

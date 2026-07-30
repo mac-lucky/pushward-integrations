@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -50,6 +51,15 @@ func mockGitHubClient(t *testing.T, handler http.Handler) *ghclient.Client {
 func testForge(t *testing.T, handler http.Handler) *forge {
 	t.Helper()
 	return &forge{gh: mockGitHubClient(t, handler)}
+}
+
+// hasWorkflowsRoute answers the workflow-presence lookup the client makes before it
+// will poll a repo for runs at all. Repos with no workflows are skipped, so a mux
+// without this route describes a repo the bridge would ignore.
+func hasWorkflowsRoute(mux *http.ServeMux) {
+	mux.HandleFunc("/repos/"+testRepo+"/actions/workflows", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowsResponse{TotalCount: 1})
+	})
 }
 
 // --- wire conversion ---
@@ -278,6 +288,7 @@ func TestBaselineJobs_RejectsAMalformedWorkflowKey(t *testing.T) {
 
 func TestActiveRunsAndLiveJobs(t *testing.T) {
 	mux := http.NewServeMux()
+	hasWorkflowsRoute(mux)
 	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(runsResponse(ghclient.WorkflowRun{
 			ID: 42, Name: "CI", Status: ci.StatusInProgress, HeadBranch: "main", WorkflowID: 99,
@@ -330,6 +341,37 @@ func TestActiveRunsAndLiveJobs(t *testing.T) {
 	}
 }
 
+// The adapter must forward the client's rate-limit view, not shadow it. When this
+// lived on an optional interface the adapter did not satisfy, every pacing decision
+// in the shared loop silently became a no-op with nothing to show for it.
+func TestBudgetReachesTheClient(t *testing.T) {
+	mux := http.NewServeMux()
+	hasWorkflowsRoute(mux)
+	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-RateLimit-Remaining", "4242")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10))
+		_ = json.NewEncoder(w).Encode(runsResponse())
+	})
+	f := testForge(t, mux)
+
+	if _, _, ok := f.Budget(); ok {
+		t.Error("Budget reported a figure before any response was seen")
+	}
+	if _, err := f.ActiveRuns(context.Background(), testRepo); err != nil {
+		t.Fatal(err)
+	}
+	remaining, resetAt, ok := f.Budget()
+	if !ok {
+		t.Fatal("Budget still unknown after a response carrying the headers")
+	}
+	if remaining != 4242 {
+		t.Errorf("remaining = %d, want 4242", remaining)
+	}
+	if resetAt.IsZero() {
+		t.Error("resetAt was not carried through")
+	}
+}
+
 func TestListRepos(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
@@ -360,6 +402,7 @@ func TestListRepos(t *testing.T) {
 // the API, and the seed frame carries the shape the prior run implies.
 func TestNewEndToEnd(t *testing.T) {
 	mux := http.NewServeMux()
+	hasWorkflowsRoute(mux)
 	// The live run has revealed only its first wave.
 	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(runsResponse(ghclient.WorkflowRun{
@@ -501,6 +544,10 @@ func TestForgeErrorsPropagate(t *testing.T) {
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	})
+	// The repo has workflows, so a 404 from anything else is a real failure. Without
+	// this the presence lookup itself 404s, which means "Actions is off here" - a
+	// legitimately empty answer rather than the error this test is about.
+	hasWorkflowsRoute(mux)
 	f := testForge(t, mux)
 	ctx := context.Background()
 

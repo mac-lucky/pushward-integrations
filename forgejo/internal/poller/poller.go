@@ -11,6 +11,7 @@ package poller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/mac-lucky/pushward-integrations/forgejo/internal/config"
 	fjclient "github.com/mac-lucky/pushward-integrations/forgejo/internal/forgejo"
@@ -32,9 +33,13 @@ type forge struct {
 // New wires the Forgejo client into a shared poller.
 func New(cfg *config.Config, fj *fjclient.Client, pw *pushward.Client) *cipoll.Poller {
 	return cipoll.New(&forge{fj: fj}, pw, cipoll.Options{
-		Owner:             cfg.Forgejo.Owner,
-		Repos:             cfg.Forgejo.Repos,
-		IdleInterval:      cfg.Polling.IdleInterval,
+		Owner:        cfg.Forgejo.Owner,
+		Repos:        cfg.Forgejo.Repos,
+		IdleInterval: cfg.Polling.IdleInterval,
+		Interval:     cfg.Polling.Interval,
+		// No HourlyRequestBudget: a Forgejo instance publishes no rate-limit
+		// headers, so there is no allowance to pace against. The client's reactive
+		// 429 path is the whole story there.
 		PushWard:          cfg.PushWard,
 		Render:            cfg.Render,
 		TitlePrefix:       "Forgejo",
@@ -54,6 +59,14 @@ func discoveryRequired(cfg *config.Config) bool {
 
 func (f *forge) ListRepos(ctx context.Context, owner string) ([]string, error) {
 	return f.fj.ListRepos(ctx, owner)
+}
+
+// Budget reports that there is nothing to pace against: a Forgejo instance sends
+// no rate-limit headers at all, so the client has no allowance to track and the
+// reactive 429 path is the whole story. The loop stays on its configured
+// intervals.
+func (f *forge) Budget() (remaining int, resetAt time.Time, ok bool) {
+	return 0, time.Time{}, false
 }
 
 func (f *forge) ActiveRuns(ctx context.Context, repo string) ([]cipoll.Run, error) {
