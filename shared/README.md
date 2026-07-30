@@ -27,7 +27,7 @@ The client speaks the public pushward-server REST surface (`/activities`, `/noti
 | Package | Import suffix | What it provides |
 |---|---|---|
 | `pushward` | `.../shared/pushward` | Hand-written pushward-server REST client (activities, notifications, widgets), retry, circuit breaker, content/widget models, template/level/severity/color constants, pointer helpers, typed `HTTPError` |
-| `config` | `.../shared/config` | `LoadYAML` (tolerates a missing file), `PushWardConfig` / `ServerConfig` / `RenderConfig` with `PUSHWARD_*` env overrides + `Validate`, `TimelineConfig`, the `EnvBool` / `EnvDuration` override helpers |
+| `config` | `.../shared/config` | `LoadYAML` (tolerates a missing file), `PushWardConfig` / `ServerConfig` / `RenderConfig` with `PUSHWARD_*` env overrides + `Validate`, `PollingConfig` (the two-tier poll cadence: `ApplyActiveDefault` derives the active tier from the idle one, `Validate` checks both), `TimelineConfig`, the `EnvBool` / `EnvDuration` override helpers |
 | `server` | `.../shared/server` | `NewMux` (`/health` + `/ready` with readiness checks) and `ListenAndServe` with graceful shutdown |
 | `ci` | `.../shared/ci` | The CI steps ladder: job to step-group folding (matrix legs and reusable-workflow prefixes), step colors, prior-run duration weights, live-progress anchors |
 | `cipoll` | `.../shared/cipoll` | The whole poll-a-forge orchestration on top of `ci`: one activity per repo, the total-steps clamp, redundant-tick suppression, live-progress anchoring, the two-phase end. A forge plugs in through the `Forge` interface |
@@ -49,7 +49,7 @@ Its only direct dependency is `gopkg.in/yaml.v3`; everything else is the Go stan
 
 ## Configuration
 
-Bridges embed `config.PushWardConfig` and `config.ServerConfig` in their own config struct, load YAML, then apply env overrides. **Environment variables override YAML**, and the standardized prefix is `PUSHWARD_*`.
+Bridges carry `config.PushWardConfig` and `config.ServerConfig` as named fields of their own config struct, load YAML, then apply env overrides. **Environment variables override YAML**, and the standardized prefix is `PUSHWARD_*`. The two forge bridges take `config.RenderConfig` and `config.PollingConfig` the same way and hand them to `cipoll` whole; `PollingConfig` needs an `ApplyActiveDefault()` after the last override layer, because its active tier is derived from the idle one.
 
 ```yaml
 pushward:

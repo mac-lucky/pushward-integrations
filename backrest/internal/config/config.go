@@ -30,6 +30,12 @@ type BackrestConfig struct {
 	Timeout time.Duration `yaml:"timeout"`
 }
 
+// PollingConfig is deliberately not sharedconfig.PollingConfig, which the two forge
+// bridges use. The tiers there are a ticker plus a timestamp gate, so the active one
+// must not be slower than the idle one; here they are two mutually exclusive sleep
+// values picked per cycle, so that relationship does not exist and the defaults are
+// tighter (5s/30s against 60s). LastN is not a cadence at all. Adopting the shared
+// type would newly reject an interval above idle_interval, which loads today.
 type PollingConfig struct {
 	// Interval is how often the bridge polls while an operation is in flight.
 	Interval time.Duration `yaml:"interval"`

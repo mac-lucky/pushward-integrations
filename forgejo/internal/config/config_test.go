@@ -37,6 +37,9 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Polling.IdleInterval != 60*time.Second {
 		t.Errorf("idle interval = %v, want 60s", cfg.Polling.IdleInterval)
 	}
+	if cfg.Polling.Interval != 15*time.Second {
+		t.Errorf("active interval = %v, want 15s", cfg.Polling.Interval)
+	}
 	if cfg.Forgejo.Timeout != 15*time.Second {
 		t.Errorf("timeout = %v, want 15s", cfg.Forgejo.Timeout)
 	}
@@ -89,6 +92,11 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if cfg.Forgejo.Timeout != 30*time.Second || cfg.Polling.IdleInterval != 10*time.Second {
 		t.Errorf("durations = %v / %v", cfg.Forgejo.Timeout, cfg.Polling.IdleInterval)
+	}
+	// The active tier is resolved after this override, so it follows the lowered idle
+	// interval down instead of staying at 15s and outlasting it.
+	if cfg.Polling.Interval != 10*time.Second {
+		t.Errorf("active interval = %v, want it to follow the 10s idle interval", cfg.Polling.Interval)
 	}
 	if !cfg.Render.StepColors || !cfg.Render.StepWeights || cfg.Render.LiveProgress {
 		t.Errorf("render flags = %+v", cfg.Render)
@@ -162,8 +170,13 @@ func TestLoadRequiredFields(t *testing.T) {
 
 func TestLoadRejectsNonPositiveIntervals(t *testing.T) {
 	t.Setenv("PUSHWARD_POLL_IDLE", "0s")
-	if _, err := Load(writeConfig(t, minimal)); err == nil {
-		t.Error("expected an error for a zero poll interval")
+	_, err := Load(writeConfig(t, minimal))
+	if err == nil {
+		t.Fatal("expected an error for a zero poll interval")
+	}
+	// Names the tier that is wrong, so the operator knows which key to edit.
+	if !strings.Contains(err.Error(), "polling.idle_interval") {
+		t.Errorf("error should name the field, got %v", err)
 	}
 }
 

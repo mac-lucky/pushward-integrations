@@ -156,7 +156,9 @@ func (f *fakeForge) wantTimings() bool {
 
 func testOptions() Options {
 	return Options{
-		IdleInterval: 60 * time.Second,
+		// Mirrors the production default, active tier included: New resolves it the
+		// same way a bridge's config load does.
+		Polling: sharedconfig.DefaultPollingConfig(),
 		PushWard: sharedconfig.PushWardConfig{
 			Priority:       1,
 			CleanupDelay:   15 * time.Minute,

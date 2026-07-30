@@ -69,11 +69,11 @@ func TestRunRejectsUnusableOptions(t *testing.T) {
 		mut  func(*Options)
 		want string
 	}{
-		{name: "zero interval", mut: func(o *Options) { o.IdleInterval = 0 }, want: "IdleInterval"},
-		{name: "negative interval", mut: func(o *Options) { o.IdleInterval = -time.Second }, want: "IdleInterval"},
-		// A zero active tier means "inherit the idle one", but a negative is a
+		{name: "zero interval", mut: func(o *Options) { o.Polling.IdleInterval = 0 }, want: "polling.idle_interval"},
+		{name: "negative interval", mut: func(o *Options) { o.Polling.IdleInterval = -time.Second }, want: "polling.idle_interval"},
+		// A zero active tier takes the shared default, but a negative is a
 		// misconfiguration and must not be silently normalized into something valid.
-		{name: "negative active interval", mut: func(o *Options) { o.Interval = -time.Second }, want: "Interval"},
+		{name: "negative active interval", mut: func(o *Options) { o.Polling.Interval = -time.Second }, want: "polling.interval"},
 		{name: "blank slug prefix", mut: func(o *Options) { o.SlugPrefix = "" }, want: "SlugPrefix"},
 		{name: "blank title prefix", mut: func(o *Options) { o.TitlePrefix = "" }, want: "TitlePrefix"},
 	}
@@ -90,6 +90,11 @@ func TestRunRejectsUnusableOptions(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Errorf("error should name %s, got %v", tc.want, err)
+			}
+			// The tier rules come from shared/config, so the wrap is what tells an
+			// adapter author which package rejected their Options.
+			if !strings.HasPrefix(err.Error(), "cipoll: ") {
+				t.Errorf("error should name the package, got %v", err)
 			}
 		})
 	}
@@ -114,7 +119,7 @@ func TestStaleAfterOutlastsThePollInterval(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := testOptions()
 			opts.PushWard.StaleTimeout = tc.staleTimeout
-			opts.IdleInterval = tc.idle
+			opts.Polling.IdleInterval = tc.idle
 			got := New(newFakeForge(t), nil, opts).staleAfter()
 			if got != tc.want {
 				t.Errorf("staleAfter = %s, want %s", got, tc.want)
@@ -136,11 +141,11 @@ func TestPollActive_ZeroStaleTimeoutDoesNotEvictAHealthyRun(t *testing.T) {
 	}
 	opts := testOptions()
 	opts.PushWard.StaleTimeout = 0
-	opts.IdleInterval = 60 * time.Second
+	opts.Polling.IdleInterval = 60 * time.Second
 
 	tracked := liveTrackedRun(nil)
 	// Polled one interval ago, which is the normal steady state.
-	tracked.LastUpdate = time.Now().Add(-opts.IdleInterval)
+	tracked.LastUpdate = time.Now().Add(-opts.Polling.IdleInterval)
 	p, _ := trackedPoller(t, opts, f, tracked)
 
 	if err := p.pollActive(context.Background()); err != nil {
@@ -1959,7 +1964,7 @@ func TestRun_ShutsDownOnContextCancel(t *testing.T) {
 	f := newFakeForge(t)
 	f.activeRuns = func(string) ([]Run, error) { return nil, nil }
 	opts := testOptions()
-	opts.IdleInterval = 100 * time.Millisecond
+	opts.Polling.IdleInterval = 100 * time.Millisecond
 	opts.Repos = []string{testRepo}
 	p, _, _ := newTestPoller(t, opts, f)
 
@@ -1986,7 +1991,11 @@ func TestRun_ShutsDownOnContextCancel(t *testing.T) {
 func TestRun_DrainsPendingEndTimers(t *testing.T) {
 	f := newFakeForge(t)
 	opts := testOptions()
-	opts.IdleInterval = time.Hour // won't tick
+	// Both tiers well past the test's lifetime: Run must not poll again before the
+	// cancel. Set explicitly rather than leaning on the active tier's default, which
+	// caps at 15s however long the idle one is.
+	opts.Polling.IdleInterval = time.Hour
+	opts.Polling.Interval = time.Hour
 	p, _, _ := newTestPoller(t, opts, f)
 	p.repos = nil
 
@@ -2031,7 +2040,9 @@ func TestRun_DiscoveryFailure(t *testing.T) {
 			opts := testOptions()
 			opts.Owner = "owner"
 			opts.Repos = []string{testRepo}
-			opts.IdleInterval = time.Hour
+			// Only the startup pass should run before the cancel.
+			opts.Polling.IdleInterval = time.Hour
+			opts.Polling.Interval = time.Hour
 			opts.DiscoveryRequired = tc.required
 			p, _, _ := newTestPoller(t, opts, f)
 
@@ -2408,7 +2419,7 @@ func TestRun_PollsPeriodicallyAndHoldsTheDiscoveryCooldown(t *testing.T) {
 
 	opts := testOptions()
 	opts.Owner = "owner"
-	opts.IdleInterval = 10 * time.Millisecond
+	opts.Polling.IdleInterval = 10 * time.Millisecond
 	p, _, _ := newTestPoller(t, opts, f)
 
 	ctx, cancel := context.WithCancel(context.Background())

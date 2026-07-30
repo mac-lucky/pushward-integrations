@@ -33,10 +33,9 @@ type forge struct {
 // New wires the Forgejo client into a shared poller.
 func New(cfg *config.Config, fj *fjclient.Client, pw *pushward.Client) *cipoll.Poller {
 	return cipoll.New(&forge{fj: fj}, pw, cipoll.Options{
-		Owner:        cfg.Forgejo.Owner,
-		Repos:        cfg.Forgejo.Repos,
-		IdleInterval: cfg.Polling.IdleInterval,
-		Interval:     cfg.Polling.Interval,
+		Owner:   cfg.Forgejo.Owner,
+		Repos:   cfg.Forgejo.Repos,
+		Polling: cfg.Polling,
 		// No HourlyRequestBudget: a Forgejo instance publishes no rate-limit
 		// headers, so there is no allowance to pace against. The client's reactive
 		// 429 path is the whole story there.

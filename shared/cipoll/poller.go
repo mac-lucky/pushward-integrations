@@ -56,19 +56,13 @@ type Options struct {
 	Owner string
 	// Repos are watched in addition to whatever Owner discovers.
 	Repos []string
-	// IdleInterval is how often every watched repo is probed for a run that has
-	// just started. This is the expensive tier - it costs one request per watched
-	// repo per pass, so it sets the bridge's whole idle request rate - and it buys
-	// only detection latency.
-	IdleInterval time.Duration
-	// Interval is how often an already-tracked run is advanced. This is the cheap
-	// tier: one request per run actually in flight, no matter how many repos are
-	// watched. It is what a user watching a card sees, so it wants to be short.
-	//
-	// Kept separate from IdleInterval because the two have opposite cost profiles;
-	// tying them together means a smoother card can only be bought by multiplying
-	// the idle rate. Must not exceed IdleInterval - New clamps it.
-	Interval time.Duration
+	// Polling is the two-tier cadence, taken whole from the bridge's config. The
+	// expensive idle tier costs one request per watched repo per pass and buys only
+	// detection latency; the cheap active tier costs one request per run actually in
+	// flight and is what a user watching a card sees. Kept separate because the two
+	// have opposite cost profiles: tying them together means a smoother card can only
+	// be bought by multiplying the idle rate.
+	Polling sharedconfig.PollingConfig
 
 	// HourlyRequestBudget is what the forge allows per hour, for the startup
 	// arithmetic and the pacing in idleDue. Zero means the forge publishes no
@@ -130,14 +124,12 @@ func New(forge Forge, pw *pushward.Client, opts Options) *Poller {
 	if opts.Icon == "" {
 		opts.Icon = defaultIcon
 	}
-	// Unset means "inherit", so an adapter predating the active tier keeps the old
-	// single-tier behavior instead of tripping validate. Anything else - including a
-	// value slower than the idle tier - is left for validate to reject rather than
-	// quietly rewritten: silently clamping would give a caller a configured
-	// IdleInterval that is a lie.
-	if opts.Interval == 0 {
-		opts.Interval = opts.IdleInterval
-	}
+	// An unset active tier takes the same default the bridges' config layer applies,
+	// so the rule lives in one place rather than drifting between the two. Anything
+	// else - including a value slower than the idle tier - is left for validate to
+	// reject rather than quietly rewritten: silently clamping would give a caller a
+	// configured IdleInterval that is a lie.
+	opts.Polling.ApplyActiveDefault()
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -157,18 +149,10 @@ func New(forge Forge, pw *pushward.Client, opts Options) *Poller {
 // participate in the activity's identity, so a blank one is not a cosmetic
 // problem but a wrong slug persisted per repo.
 func (p *Poller) validate() error {
-	if p.opts.IdleInterval <= 0 {
-		return fmt.Errorf("cipoll: IdleInterval must be positive, got %s", p.opts.IdleInterval)
-	}
-	if p.opts.Interval <= 0 {
-		return fmt.Errorf("cipoll: Interval must be positive, got %s", p.opts.Interval)
-	}
-	// Run ticks on Interval and gates the detection pass off IdleInterval, so the
-	// fast tier being the slower of the two would stretch detection to Interval and
-	// leave the configured IdleInterval meaningless.
-	if p.opts.Interval > p.opts.IdleInterval {
-		return fmt.Errorf("cipoll: Interval (%s) must not exceed IdleInterval (%s)",
-			p.opts.Interval, p.opts.IdleInterval)
+	// One implementation of the tier rules, in shared/config, wrapped so an adapter
+	// author still sees which package rejected their Options.
+	if err := p.opts.Polling.Validate(); err != nil {
+		return fmt.Errorf("cipoll: %w", err)
 	}
 	if p.opts.SlugPrefix == "" {
 		return fmt.Errorf("cipoll: SlugPrefix is required, it namespaces the activity slug")
@@ -207,7 +191,7 @@ func (p *Poller) Run(ctx context.Context) error {
 	// Ticks on the active tier. pollIdle runs on a timestamp gate inside Poll
 	// rather than a ticker of its own, because two tickers would mean two cycles
 	// in flight and Poll is explicitly not safe that way.
-	ticker := time.NewTicker(p.opts.Interval)
+	ticker := time.NewTicker(p.opts.Polling.Interval)
 	defer ticker.Stop()
 
 	for {
@@ -371,7 +355,7 @@ func (p *Poller) activeReserve(untilReset time.Duration) int {
 	p.mu.Lock()
 	tracked := len(p.tracked)
 	p.mu.Unlock()
-	ticks := int(untilReset/p.opts.Interval) + 1
+	ticks := int(untilReset/p.opts.Polling.Interval) + 1
 	return tracked * ticks
 }
 
@@ -385,7 +369,7 @@ func (p *Poller) activeReserve(untilReset time.Duration) int {
 // ever slows down, and it needs no state to unwind: at the reset boundary the
 // arithmetic returns the configured value again on its own.
 func (p *Poller) effectiveIdleInterval(repos int) time.Duration {
-	configured := p.opts.IdleInterval
+	configured := p.opts.Polling.IdleInterval
 	if repos <= 0 {
 		return configured
 	}
@@ -412,7 +396,7 @@ func (p *Poller) effectiveIdleInterval(repos int) time.Duration {
 // caller has no reason to ask without acting on the answer.
 func (p *Poller) claimIdlePass() bool {
 	interval := p.effectiveIdleInterval(len(p.watched()))
-	paced := interval > p.opts.IdleInterval
+	paced := interval > p.opts.Polling.IdleInterval
 
 	p.mu.Lock()
 	claim := due(p.lastIdle, interval)
@@ -431,7 +415,7 @@ func (p *Poller) claimIdlePass() bool {
 		if paced {
 			remaining, untilReset, _ := p.spendable()
 			p.log.Warn("detection interval paced by the forge's request budget",
-				"configured", p.opts.IdleInterval, "effective", interval,
+				"configured", p.opts.Polling.IdleInterval, "effective", interval,
 				"spendable", remaining, "resets_in", untilReset.Round(time.Second))
 		} else {
 			p.log.Info("detection interval back to the configured value", "effective", interval)
@@ -462,15 +446,15 @@ func (p *Poller) logRequestBudget() {
 		}
 		return int(time.Hour / d)
 	}
-	estimate := repos*perHour(p.opts.IdleInterval) + perHour(p.opts.Interval)
+	estimate := repos*perHour(p.opts.Polling.IdleInterval) + perHour(p.opts.Polling.Interval)
 	if p.opts.Owner != "" {
 		estimate += perHour(repoRefreshInterval)
 	}
 
 	attrs := []any{
 		"repos", repos,
-		"idle_interval", p.opts.IdleInterval,
-		"interval", p.opts.Interval,
+		"idle_interval", p.opts.Polling.IdleInterval,
+		"interval", p.opts.Polling.Interval,
 		"estimated_requests_per_hour", estimate,
 	}
 	logAt := p.log.Info
@@ -700,7 +684,7 @@ func (p *Poller) subtitle(repoShort, runName string) string {
 // it would then evict every healthy run one tick after it was created - a
 // create/evict/re-create loop that never advances past the seed frame.
 func (p *Poller) staleAfter() time.Duration {
-	return max(p.opts.PushWard.StaleTimeout, p.opts.IdleInterval, p.opts.Interval) + staleEvictionGrace
+	return max(p.opts.PushWard.StaleTimeout, p.opts.Polling.IdleInterval, p.opts.Polling.Interval) + staleEvictionGrace
 }
 
 // shape computes the step shape and drops the opt-in pill fields the config

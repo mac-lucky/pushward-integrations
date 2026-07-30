@@ -13,30 +13,30 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/ci"
 )
 
-// An unset active tier inherits the idle one, so an adapter written before the tier
-// split keeps behaving exactly as it did.
-func TestNewInheritsTheActiveInterval(t *testing.T) {
+// An unset active tier takes the shared default, so an adapter that leaves it out
+// gets the same cadence a bridge's config load would have resolved.
+func TestNewAppliesTheActiveDefault(t *testing.T) {
 	tests := []struct {
 		name   string
 		idle   time.Duration
 		active time.Duration
 		want   time.Duration
 	}{
-		{name: "unset inherits the idle interval", idle: 60 * time.Second, active: 0, want: 60 * time.Second},
+		{name: "unset takes the shared default", idle: 60 * time.Second, active: 0, want: 15 * time.Second},
 		{name: "set is kept", idle: 60 * time.Second, active: 15 * time.Second, want: 15 * time.Second},
 		{name: "equal is left alone", idle: 10 * time.Second, active: 10 * time.Second, want: 10 * time.Second},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			opts := testOptions()
-			opts.IdleInterval = tc.idle
-			opts.Interval = tc.active
+			opts.Polling.IdleInterval = tc.idle
+			opts.Polling.Interval = tc.active
 			p := New(newFakeForge(t), nil, opts)
-			if p.opts.Interval != tc.want {
-				t.Errorf("Interval = %s, want %s", p.opts.Interval, tc.want)
+			if p.opts.Polling.Interval != tc.want {
+				t.Errorf("Interval = %s, want %s", p.opts.Polling.Interval, tc.want)
 			}
-			if p.opts.IdleInterval != tc.idle {
-				t.Errorf("IdleInterval = %s, want %s", p.opts.IdleInterval, tc.idle)
+			if p.opts.Polling.IdleInterval != tc.idle {
+				t.Errorf("IdleInterval = %s, want %s", p.opts.Polling.IdleInterval, tc.idle)
 			}
 		})
 	}
@@ -61,8 +61,8 @@ func TestPoll_ActiveTierAdvancesBetweenDetectionPasses(t *testing.T) {
 	}
 
 	opts := testOptions()
-	opts.IdleInterval = time.Hour // detection must not come due a second time
-	opts.Interval = time.Millisecond
+	opts.Polling.IdleInterval = time.Hour // detection must not come due a second time
+	opts.Polling.Interval = time.Millisecond
 	p, _ := trackedPoller(t, opts, f, liveTrackedRun(priorDurations()))
 	p.repos = []string{testRepo, otherRepo}
 
@@ -154,9 +154,9 @@ func TestEffectiveIdleInterval(t *testing.T) {
 				f.setBudget(tc.remaining, tc.resetIn)
 			}
 			opts := testOptions()
-			opts.IdleInterval = tc.idle
+			opts.Polling.IdleInterval = tc.idle
 			if tc.active > 0 {
-				opts.Interval = tc.active
+				opts.Polling.Interval = tc.active
 			}
 			opts.HourlyRequestBudget = 5000
 			p := New(f, nil, opts)
@@ -204,8 +204,8 @@ func TestPoll_ExhaustedBudgetStopsDetectionButNotTrackedRuns(t *testing.T) {
 	opts.Owner = "owner"
 	opts.HourlyRequestBudget = 5000
 	// Short enough that detection would be due on every cycle if the budget allowed.
-	opts.IdleInterval = 10 * time.Millisecond
-	opts.Interval = 10 * time.Millisecond
+	opts.Polling.IdleInterval = 10 * time.Millisecond
+	opts.Polling.Interval = 10 * time.Millisecond
 	p, patches := trackedPoller(t, opts, f, liveTrackedRun(priorDurations()))
 	p.repos = []string{testRepo, otherRepo}
 
@@ -254,7 +254,7 @@ func TestRefreshRepos_ResumesWhenTheBudgetRecovers(t *testing.T) {
 	opts := testOptions()
 	opts.Owner = "owner"
 	opts.HourlyRequestBudget = 5000
-	opts.Interval = 15 * time.Second
+	opts.Polling.Interval = 15 * time.Second
 	p, _, _ := newTestPoller(t, opts, f)
 	p.tracked["owner/tracked"] = &trackedRun{} // one card to reserve for
 
@@ -286,8 +286,8 @@ func TestClaimIdlePass_LogsPacingOncePerTransition(t *testing.T) {
 	f := newFakeForge(t)
 
 	opts := testOptions()
-	opts.IdleInterval = time.Minute
-	opts.Interval = 15 * time.Second
+	opts.Polling.IdleInterval = time.Minute
+	opts.Polling.Interval = 15 * time.Second
 	opts.HourlyRequestBudget = 5000
 	opts.Logger = slog.New(slog.NewTextHandler(&buf, nil))
 	p := New(f, nil, opts)
@@ -341,8 +341,8 @@ func TestLogRequestBudget(t *testing.T) {
 			var buf bytes.Buffer
 			opts := testOptions()
 			opts.Owner = "owner"
-			opts.IdleInterval = tc.idle
-			opts.Interval = min(15*time.Second, tc.idle)
+			opts.Polling.IdleInterval = tc.idle
+			opts.Polling.Interval = min(15*time.Second, tc.idle)
 			opts.HourlyRequestBudget = tc.budget
 			opts.Logger = slog.New(slog.NewTextHandler(&buf, nil))
 
@@ -366,8 +366,8 @@ func TestLogRequestBudget(t *testing.T) {
 func TestStaleAfterOutlastsBothTiers(t *testing.T) {
 	opts := testOptions()
 	opts.PushWard.StaleTimeout = 0
-	opts.IdleInterval = 10 * time.Minute
-	opts.Interval = 15 * time.Second
+	opts.Polling.IdleInterval = 10 * time.Minute
+	opts.Polling.Interval = 15 * time.Second
 	p := New(newFakeForge(t), nil, opts)
 
 	if got, want := p.staleAfter(), 10*time.Minute+staleEvictionGrace; got != want {

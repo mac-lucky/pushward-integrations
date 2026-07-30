@@ -33,7 +33,7 @@ func testConfig() *config.Config {
 			EndDelay:       10 * time.Millisecond,
 			EndDisplayTime: 10 * time.Millisecond,
 		},
-		Polling: config.PollingConfig{IdleInterval: 60 * time.Second},
+		Polling: sharedconfig.DefaultPollingConfig(),
 		// Mirrors the production default so tests exercise the shipped behavior.
 		Render: sharedconfig.DefaultRenderConfig(),
 	}

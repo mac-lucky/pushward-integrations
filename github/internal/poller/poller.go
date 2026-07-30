@@ -38,10 +38,9 @@ type forge struct {
 // New wires the GitHub client into a shared poller.
 func New(cfg *config.Config, gh *ghclient.Client, pw *pushward.Client) *cipoll.Poller {
 	return cipoll.New(&forge{gh: gh}, pw, cipoll.Options{
-		Owner:        cfg.GitHub.Owner,
-		Repos:        cfg.GitHub.Repos,
-		IdleInterval: cfg.Polling.IdleInterval,
-		Interval:     cfg.Polling.Interval,
+		Owner:   cfg.GitHub.Owner,
+		Repos:   cfg.GitHub.Repos,
+		Polling: cfg.Polling,
 		// GitHub's documented primary limit for a personal access token. Supplied
 		// here rather than in cipoll because it is GitHub's number: it is what the
 		// loop paces detection against, and what the startup line compares the

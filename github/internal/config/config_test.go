@@ -105,10 +105,11 @@ func TestLoad_RejectsNonPositivePollInterval(t *testing.T) {
 	}
 }
 
-// The active tier defaults to the smaller of the idle interval and 15s, and the
-// default is applied AFTER the env overrides. An operator who lowered idle_interval
-// to get faster cards must not end up with an active tier slower than the idle one.
-func TestLoad_ActiveIntervalDefault(t *testing.T) {
+// The rule itself is shared/config's; what this pins is the wiring - Load applies
+// it AFTER the env overrides. An operator who lowered idle_interval to get faster
+// cards must not end up with an active tier slower than the idle one, which is
+// exactly what resolving too early would produce.
+func TestLoad_ResolvesTheActiveIntervalAfterTheEnvOverrides(t *testing.T) {
 	tests := []struct {
 		name     string
 		idle     string
@@ -118,8 +119,6 @@ func TestLoad_ActiveIntervalDefault(t *testing.T) {
 	}{
 		{name: "unset takes 15s under the 60s default", wantIdle: 60 * time.Second, want: 15 * time.Second},
 		{name: "follows an idle interval below 15s", idle: "10s", wantIdle: 10 * time.Second, want: 10 * time.Second},
-		{name: "explicit value wins", idle: "60s", active: "5s", wantIdle: 60 * time.Second, want: 5 * time.Second},
-		{name: "stays 15s when idle is raised", idle: "5m", wantIdle: 5 * time.Minute, want: 15 * time.Second},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -136,21 +135,6 @@ func TestLoad_ActiveIntervalDefault(t *testing.T) {
 				t.Errorf("polling.idle_interval = %s, want %s", cfg.Polling.IdleInterval, tc.wantIdle)
 			}
 		})
-	}
-}
-
-// An active tier slower than the idle one is nonsense: the loop ticks on the active
-// interval and gates detection off the idle one, so it would silently stretch
-// detection instead.
-func TestLoad_RejectsAnActiveIntervalSlowerThanIdle(t *testing.T) {
-	t.Setenv("PUSHWARD_POLL_IDLE", "30s")
-	t.Setenv("PUSHWARD_POLL_INTERVAL", "60s")
-	_, err := Load(writeConfig(t, ""))
-	if err == nil {
-		t.Fatal("expected an active interval above the idle one to be rejected")
-	}
-	if !strings.Contains(err.Error(), "interval") {
-		t.Errorf("error should name the field, got %v", err)
 	}
 }
 
