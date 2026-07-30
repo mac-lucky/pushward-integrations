@@ -19,6 +19,8 @@ func AuthMiddleware(api huma.API) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
 		key := auth.ExtractKey(ctx.Header("Authorization"))
 		if key == "" {
+			// RFC 9110 section 15.5.2 makes a challenge mandatory on a 401.
+			ctx.SetHeader("WWW-Authenticate", `Bearer realm="pushward-relay"`)
 			_ = huma.WriteErr(api, ctx, http.StatusUnauthorized, "missing or invalid integration key")
 			return
 		}

@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/mediathread"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
@@ -104,7 +105,7 @@ func (h *Handler) handleSonarrWebhook(ctx context.Context, raw []byte) error {
 	}
 
 	if apiErr != nil {
-		return upstreamHumaError(apiErr)
+		return humautil.UpstreamError(apiErr)
 	}
 	return nil
 }

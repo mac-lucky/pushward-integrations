@@ -3,10 +3,8 @@ package starr
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -23,24 +21,6 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
-
-// upstreamHumaError maps a pushward API error to the huma error the webhook
-// caller should see. Auth/authz failures surface unchanged so the caller
-// (Sonarr/Radarr/etc.) reports "auth failed" instead of a generic 502.
-func upstreamHumaError(err error) error {
-	var he *pushward.HTTPError
-	if errors.As(err, &he) {
-		switch he.StatusCode {
-		case http.StatusUnauthorized:
-			return huma.Error401Unauthorized("upstream rejected integration key")
-		case http.StatusForbidden:
-			return huma.Error403Forbidden("upstream denied integration key")
-		case http.StatusTooManyRequests:
-			return huma.Error429TooManyRequests("upstream rate limited")
-		}
-	}
-	return huma.Error502BadGateway("upstream API error")
-}
 
 // trackedSlug is stored in the state store as JSON.
 type trackedSlug struct {
