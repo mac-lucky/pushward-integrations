@@ -88,6 +88,122 @@ func TestEnvBool(t *testing.T) {
 	}
 }
 
+func TestEnvInt(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    int
+		wantErr bool
+	}{
+		{name: "unset leaves the default", value: "", want: 1},
+		{name: "parsed", value: "7", want: 7},
+		{name: "negative", value: "-3", want: -3},
+		// The reason this is Atoi and not Sscanf: both of these would otherwise
+		// parse to a number the operator never wrote.
+		{name: "trailing garbage is an error", value: "5x", want: 1, wantErr: true},
+		{name: "hex is an error", value: "0x10", want: 1, wantErr: true},
+		{name: "a float is an error", value: "1.5", want: 1, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.value != "" {
+				t.Setenv("PUSHWARD_TEST_COUNT", tt.value)
+			}
+			got := 1
+			err := EnvInt("PUSHWARD_TEST_COUNT", &got)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				if !strings.Contains(err.Error(), "PUSHWARD_TEST_COUNT") {
+					t.Errorf("error should name the variable, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnvInt64(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    int64
+		wantErr bool
+	}{
+		{name: "unset leaves the default", value: "", want: 10},
+		{name: "parsed", value: "25", want: 25},
+		// The width is the point: this must survive a value an int32 cannot hold.
+		{name: "beyond 32 bits", value: "4294967296", want: 4294967296},
+		{name: "trailing garbage is an error", value: "25n", want: 10, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.value != "" {
+				t.Setenv("PUSHWARD_TEST_LAST_N", tt.value)
+			}
+			got := int64(10)
+			err := EnvInt64("PUSHWARD_TEST_LAST_N", &got)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				if !strings.Contains(err.Error(), "PUSHWARD_TEST_LAST_N") {
+					t.Errorf("error should name the variable, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnvFloat64(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    float64
+		wantErr bool
+	}{
+		{name: "unset leaves the default", value: "", want: 1.0},
+		{name: "parsed", value: "0.25", want: 0.25},
+		{name: "an integer form parses", value: "0", want: 0},
+		// Out of range is the caller's call, not the parser's: this one is clamped
+		// downstream rather than rejected here.
+		{name: "out of range still parses", value: "2.5", want: 2.5},
+		{name: "unparseable is an error", value: "half", want: 1.0, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.value != "" {
+				t.Setenv("PUSHWARD_TEST_SAMPLE_RATE", tt.value)
+			}
+			got := 1.0
+			err := EnvFloat64("PUSHWARD_TEST_SAMPLE_RATE", &got)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				if !strings.Contains(err.Error(), "PUSHWARD_TEST_SAMPLE_RATE") {
+					t.Errorf("error should name the variable, got %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestEnvDuration(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -54,3 +54,53 @@ func EnvDuration(name string, dst *time.Duration) error {
 	*dst = d
 	return nil
 }
+
+// EnvInt applies an integer environment override to dst, leaving it untouched
+// when the variable is unset or empty.
+//
+// strconv rejects trailing garbage ("5x", "0x10"); fmt.Sscanf would silently
+// accept it and truncate to a wrong value. The wrapped error already quotes the
+// offending input, so the message here only needs to name the variable.
+func EnvInt(name string, dst *int) error {
+	v := os.Getenv(name)
+	if v == "" {
+		return nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return fmt.Errorf("parsing %s: %w", name, err)
+	}
+	*dst = n
+	return nil
+}
+
+// EnvInt64 is EnvInt for a 64-bit field, which is the width a value has to be
+// when it crosses a wire that specifies one.
+func EnvInt64(name string, dst *int64) error {
+	v := os.Getenv(name)
+	if v == "" {
+		return nil
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return fmt.Errorf("parsing %s: %w", name, err)
+	}
+	*dst = n
+	return nil
+}
+
+// EnvFloat64 applies a floating-point environment override to dst, leaving it
+// untouched when the variable is unset or empty. Range is the caller's business:
+// this only reports what could not be parsed at all.
+func EnvFloat64(name string, dst *float64) error {
+	v := os.Getenv(name)
+	if v == "" {
+		return nil
+	}
+	f, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return fmt.Errorf("parsing %s: %w", name, err)
+	}
+	*dst = f
+	return nil
+}
