@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 const (
@@ -197,7 +199,7 @@ func (c *Client) doRequest(ctx context.Context, endpoint string) ([]byte, error)
 		return nil, &rateLimitError{retryAfter: retryAfter(resp), url: endpoint}
 	}
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
-		return nil, &clientError{status: resp.StatusCode, url: endpoint}
+		return nil, &clientError{status: resp.StatusCode, url: endpoint, message: apiMessage(body)}
 	}
 	return nil, fmt.Errorf("unexpected status %d for %s", resp.StatusCode, endpoint)
 }
@@ -234,12 +236,30 @@ func retryAfter(resp *http.Response) time.Duration {
 }
 
 type clientError struct {
-	status int
-	url    string
+	status  int
+	url     string
+	message string // the API's own error text, when it sent one
 }
 
 func (e *clientError) Error() string {
+	if e.message != "" {
+		return fmt.Sprintf("client error %d for %s: %s", e.status, e.url, e.message)
+	}
 	return fmt.Sprintf("client error %d for %s", e.status, e.url)
+}
+
+// apiMessage pulls the "message" field out of a Forgejo error body. It is where
+// a permission failure names the scope it wanted, e.g.
+// "token does not have at least one of required scope(s): [read:repository]" -
+// without it a 403 says nothing about how to fix it.
+func apiMessage(body []byte) string {
+	var payload struct {
+		Message string `json:"message"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	return text.Truncate(strings.TrimSpace(payload.Message), 200)
 }
 
 // Status exposes the HTTP status so callers can distinguish an absent resource

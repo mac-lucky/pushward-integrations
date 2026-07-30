@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -567,5 +568,37 @@ func TestFilterByOwner(t *testing.T) {
 	// A prefix match must not treat "acme2" as "acme".
 	if got := filterByOwner([]string{"acme2/app"}, "acme"); got != nil {
 		t.Errorf("filterByOwner matched a longer owner: %v", got)
+	}
+}
+
+// TestClientErrorCarriesTheAPIMessage: a 403 that only says "403" is useless
+// for the one failure operators actually hit, a token missing a scope. Forgejo
+// names the scope in the body, so it has to survive into the error.
+func TestClientErrorCarriesTheAPIMessage(t *testing.T) {
+	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write(fixture(t, "orgs_repos_403.json"))
+	}))
+	_, err := c.GetVersion(context.Background())
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "read:organization") {
+		t.Errorf("error %q does not name the missing scope", err)
+	}
+}
+
+func TestAPIMessage(t *testing.T) {
+	cases := map[string]string{
+		`{"message":"token does not have at least one of required scope(s): [read:repository]"}`: "token does not have at least one of required scope(s): [read:repository]",
+		`{"message":"  spaced  "}`: "spaced",
+		`{"other":"field"}`:        "",
+		`not json`:                 "",
+		``:                         "",
+	}
+	for body, want := range cases {
+		if got := apiMessage([]byte(body)); got != want {
+			t.Errorf("apiMessage(%q) = %q, want %q", body, got, want)
+		}
 	}
 }
