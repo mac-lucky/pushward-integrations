@@ -173,10 +173,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	case "AuthenticationFailure":
 		apiErr = h.handleAuthFailure(ctx, userKey, log, payload)
 	case "GenericUpdateNotification":
-		cl := h.clients.Get(userKey)
-		if err := selftest.SendTest(ctx, cl, "jellyfin"); err != nil {
-			log.Error("test notification failed", "provider", "jellyfin", "error", err)
-		}
+		apiErr = selftest.SendTest(ctx, h.clients.Get(userKey), log, "jellyfin")
 	default:
 		log.Warn("unknown notification type", "type", payload.NotificationType)
 	}

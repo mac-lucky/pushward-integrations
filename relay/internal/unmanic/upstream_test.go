@@ -34,3 +34,18 @@ func TestUpstreamRefusalSurfacesUnchanged(t *testing.T) {
 		}`)
 	})
 }
+
+// A self-test that never reached the upstream must not answer 200. The Test
+// button in the provider's own UI exists to tell the user whether their key
+// works, so a green checkmark on a refused key answers the one question being
+// asked with the wrong answer.
+func TestSelfTestRefusalSurfacesUnchanged(t *testing.T) {
+	testutil.AssertUpstreamRefusalSurfaces(t, func(t *testing.T, status int) *httptest.ResponseRecorder {
+		return send(t, newHandlerRejecting(t, status), `{
+			"version": "1.0",
+			"title": "Unmanic - Test",
+			"message": "This is a test notification",
+			"type": "info"
+		}`)
+	})
+}

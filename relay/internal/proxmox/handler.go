@@ -80,10 +80,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		// notification with an empty type metadata field. Treat that, and the
 		// explicit "test"/"system" aliases, as a self-test so users can verify
 		// the integration end to end.
-		cl := h.clients.Get(userKey)
-		if err := selftest.SendTest(ctx, cl, "proxmox"); err != nil {
-			log.Error("test notification failed", "provider", "proxmox", "error", err)
-		}
+		apiErr = selftest.SendTest(ctx, h.clients.Get(userKey), log, "proxmox")
 	default:
 		log.Debug("unknown proxmox event type", "type", payload.Type)
 	}

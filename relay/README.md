@@ -332,8 +332,6 @@ Receives Prowlarr webhooks. All events are **push notifications**: indexer grabs
 
 **Events:** `Grab` -> push notification with indexer, size, and categories · `Health` / `HealthRestored` · `ApplicationUpdate` · `Test`.
 
-> A Prowlarr `Test` event logs `unknown provider: prowlarr` instead of rendering a sample activity (Prowlarr has no self-test fixture). Its real `Grab` / `Health` events work normally.
-
 **Setup:** In Prowlarr, go to **Settings > Connect > + > Webhook**. Set the URL to `https://relay.pushward.app/prowlarr`, leave Username as any value, set Password to your `hlk_` key (Basic Auth). Enable the triggers you want (On Grab, On Health Issue, etc.), then Test and Save.
 
 ### Bazarr
@@ -876,8 +874,8 @@ Logs are structured JSON on stdout (`slog`). View them with `docker logs <contai
 | `config load` fails: `metrics_address must differ from address` | `server.metrics_address` equals `server.address`. | Use different ports (defaults `:8090` / `:9090`), or set `metrics_address` empty to disable metrics. |
 | `config load` fails: `stale_timeout must be > 0` | A provider has a non-positive `stale_timeout`. | Set a positive duration (a non-positive TTL writes state rows that are never cleaned up). |
 | `/ready` returns `503` | DB ping check failed. | Verify `PUSHWARD_DATABASE_DSN` / `password_file` and that PostgreSQL is reachable. |
-| Prowlarr `Test` logs `unknown provider: prowlarr` | Prowlarr has no self-test fixture. | Expected - real `Grab`/`Health` events still work. |
 | Upstream `401`/`403`/`429` surfaced to the sender | The PushWard server rejected the `hlk_` key or rate-limited. | Check the key is valid and has capacity; the relay forwards these statuses so the source app reports the real cause. |
+| The provider's `Test` button reports a failure | The self-test could not reach PushWard - most often a refused key. | Read the status: it is the upstream's own. A failed test is no longer answered with `200`, so the button reflects whether the integration actually works. |
 
 ## Requirements & License
 

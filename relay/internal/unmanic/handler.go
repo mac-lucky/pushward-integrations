@@ -65,10 +65,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	case "failure":
 		apiErr = h.handleResult(ctx, userKey, log, input.Body, false)
 	case "info":
-		cl := h.clients.Get(userKey)
-		if err := selftest.SendTest(ctx, cl, "unmanic"); err != nil {
-			log.Error("test notification failed", "provider", "unmanic", "error", err)
-		}
+		apiErr = selftest.SendTest(ctx, h.clients.Get(userKey), log, "unmanic")
 	default:
 		slog.Debug("unmanic unknown type", "type", input.Body.Type)
 	}

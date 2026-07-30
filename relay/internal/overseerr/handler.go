@@ -120,9 +120,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		return h.handleNotifyOnly(ctx, userKey, log, payload, "Issue reopened", "")
 
 	case "TEST_NOTIFICATION":
-		cl := h.clients.Get(userKey)
-		if err := selftest.SendTest(ctx, cl, "overseerr"); err != nil {
-			log.Error("test notification failed", "provider", "overseerr", "error", err)
+		if err := selftest.SendTest(ctx, h.clients.Get(userKey), log, "overseerr"); err != nil {
 			return nil, humautil.UpstreamError(err)
 		}
 		return humautil.NewOK(), nil

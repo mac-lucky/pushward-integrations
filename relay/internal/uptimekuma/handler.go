@@ -71,9 +71,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	case 2: // PENDING
 		err = h.handlePending(ctx, userKey, log, pwClient, payload)
 	case 3: // MAINTENANCE - used as test event
-		if err := selftest.SendTest(ctx, pwClient, "uptimekuma"); err != nil {
-			log.Error("test notification failed", "provider", "uptimekuma", "error", err)
-		}
+		err = selftest.SendTest(ctx, pwClient, log, "uptimekuma")
 	default:
 		log.Warn("unknown heartbeat status", "status", payload.Heartbeat.Status, "monitor_id", payload.Monitor.ID)
 	}

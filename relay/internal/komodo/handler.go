@@ -63,9 +63,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	var err error
 	switch {
 	case kd.Type == "Test":
-		if terr := selftest.SendTest(ctx, pwClient, "komodo"); terr != nil {
-			log.Error("test notification failed", "provider", "komodo", "error", terr)
-		}
+		err = selftest.SendTest(ctx, pwClient, log, "komodo")
 	case resolvableTypes[kd.Type]:
 		err = h.handleResolvable(ctx, userKey, log, pwClient, p)
 	default:

@@ -42,10 +42,7 @@ func (h *Handler) handleRadarrWebhook(ctx context.Context, raw []byte) error {
 		}
 		apiErr = h.handleRadarrDownload(ctx, userKey, log, p)
 	case "Test":
-		cl := h.clients.Get(userKey)
-		if err := selftest.SendTest(ctx, cl, "radarr"); err != nil {
-			log.Error("test notification failed", "provider", "radarr", "error", err)
-		}
+		apiErr = selftest.SendTest(ctx, h.clients.Get(userKey), log, "radarr")
 	case "Health":
 		p, err := unmarshalPayload[HealthPayload](raw)
 		if err != nil {

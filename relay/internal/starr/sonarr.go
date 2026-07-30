@@ -42,10 +42,7 @@ func (h *Handler) handleSonarrWebhook(ctx context.Context, raw []byte) error {
 		}
 		apiErr = h.handleSonarrDownload(ctx, userKey, log, p)
 	case "Test":
-		cl := h.clients.Get(userKey)
-		if err := selftest.SendTest(ctx, cl, "sonarr"); err != nil {
-			log.Error("test notification failed", "provider", "sonarr", "error", err)
-		}
+		apiErr = selftest.SendTest(ctx, h.clients.Get(userKey), log, "sonarr")
 	case "Health":
 		p, err := unmarshalPayload[HealthPayload](raw)
 		if err != nil {

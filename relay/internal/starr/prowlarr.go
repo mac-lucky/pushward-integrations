@@ -46,10 +46,7 @@ func (h *Handler) handleProwlarrWebhook(ctx context.Context, raw []byte) error {
 	var apiErr error
 	switch envelope.EventType {
 	case "Test":
-		cl := h.clients.Get(userKey)
-		if err := selftest.SendTest(ctx, cl, "prowlarr"); err != nil {
-			log.Error("test notification failed", "provider", "prowlarr", "error", err)
-		}
+		apiErr = selftest.SendTest(ctx, h.clients.Get(userKey), log, "prowlarr")
 	case "Grab":
 		p, err := unmarshalPayload[ProwlarrGrabPayload](raw)
 		if err != nil {

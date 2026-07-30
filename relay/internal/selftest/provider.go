@@ -54,6 +54,19 @@ var providers = map[string]providerTest{
 			TotalSteps:  pushward.IntPtr(2),
 		},
 	},
+	// Prowlarr is notification-only in the relay, so this card has no lifecycle
+	// to mirror - it is the one frame the Test button is meant to produce.
+	"prowlarr": {
+		name: "Prowlarr Test",
+		content: pushward.Content{
+			Template:    "generic",
+			Progress:    1.0,
+			State:       "Grabbed",
+			Icon:        "magnifyingglass",
+			Subtitle:    "Prowlarr · Test Indexer",
+			AccentColor: pushward.ColorBlue,
+		},
+	},
 	"jellyfin": {
 		name: "Jellyfin Test",
 		content: pushward.Content{
@@ -190,8 +203,23 @@ var providers = map[string]providerTest{
 	},
 }
 
-// SendTest creates a test activity and sends an ONGOING update for the given provider.
-func SendTest(ctx context.Context, cl *pushward.Client, provider string) error {
+// SendTest creates a test activity and sends an ONGOING update for the given
+// provider, logging any failure and returning it.
+//
+// Callers route the returned error into whatever their handler already converts
+// with humautil.UpstreamError. Answering 200 to a self-test that reached nobody
+// is the worst place to swallow a failure: the button exists precisely to tell
+// the user whether their configuration works, so a green checkmark on a refused
+// key is a wrong answer to the only question being asked.
+func SendTest(ctx context.Context, cl *pushward.Client, log *slog.Logger, provider string) error {
+	if err := sendTest(ctx, cl, log, provider); err != nil {
+		log.Error("test notification failed", "provider", provider, "error", err)
+		return err
+	}
+	return nil
+}
+
+func sendTest(ctx context.Context, cl *pushward.Client, log *slog.Logger, provider string) error {
 	pt, ok := providers[provider]
 	if !ok {
 		return fmt.Errorf("unknown provider: %s", provider)
@@ -230,6 +258,6 @@ func SendTest(ctx context.Context, cl *pushward.Client, provider string) error {
 		return fmt.Errorf("update activity: %w", err)
 	}
 
-	slog.Info("test notification sent", "provider", provider, "slug", slug)
+	log.Info("test notification sent", "provider", provider, "slug", slug)
 	return nil
 }

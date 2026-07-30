@@ -1,6 +1,7 @@
 package selftest
 
 import (
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -13,7 +14,7 @@ func TestSendTest(t *testing.T) {
 		srv, calls, mu := testutil.MockPushWardServer(t)
 		cl := pushward.NewClient(srv.URL, "hlk_test")
 
-		err := SendTest(t.Context(), cl, "radarr")
+		err := SendTest(t.Context(), cl, slog.Default(), "radarr")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -49,7 +50,7 @@ func TestSendTest(t *testing.T) {
 		srv, _, _ := testutil.MockPushWardServer(t)
 		cl := pushward.NewClient(srv.URL, "hlk_test")
 
-		err := SendTest(t.Context(), cl, "unknown")
+		err := SendTest(t.Context(), cl, slog.Default(), "unknown")
 		if err == nil {
 			t.Fatal("expected error for unknown provider")
 		}
