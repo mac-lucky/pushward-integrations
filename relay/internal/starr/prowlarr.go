@@ -86,7 +86,7 @@ func (h *Handler) handleProwlarrWebhook(ctx context.Context, raw []byte) error {
 func (h *Handler) handleProwlarrGrab(ctx context.Context, userKey string, log *slog.Logger, p *ProwlarrGrabPayload) error {
 	body := "Grabbed" + text.SepDot + p.Release.Indexer
 	if p.Source != "" {
-		body += " → " + p.Source
+		body += text.SepArrow + p.Source
 	}
 
 	meta := map[string]string{"indexer": p.Release.Indexer}

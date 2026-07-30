@@ -370,7 +370,7 @@ func buildSubtitle(state *bambulab.MergedState) string {
 	}
 
 	if state.NozzleTemper > 0 {
-		parts = append(parts, fmt.Sprintf("%.0f/%.0f\u00b0C", state.NozzleTemper, state.NozzleTarget))
+		parts = append(parts, fmt.Sprintf("%.0f/%.0f°C", state.NozzleTemper, state.NozzleTarget))
 	}
 
 	return strings.Join(parts, text.SepDot)

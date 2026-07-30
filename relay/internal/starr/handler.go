@@ -361,8 +361,8 @@ func (h *Handler) handleApplicationUpdate(ctx context.Context, userKey string, l
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      titleCase(provider),
-		Subtitle:   p.PreviousVersion + " → " + p.NewVersion,
-		Body:       "Updated" + text.SepDot + p.PreviousVersion + " → " + p.NewVersion,
+		Subtitle:   p.PreviousVersion + text.SepArrow + p.NewVersion,
+		Body:       "Updated" + text.SepDot + p.PreviousVersion + text.SepArrow + p.NewVersion,
 		ThreadID:   provider,
 		CollapseID: provider + "-update",
 		Level:      pushward.LevelPassive,
