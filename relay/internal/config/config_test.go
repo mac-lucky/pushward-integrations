@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -108,6 +109,125 @@ func TestApplyEnvOverrides_TrustedProxyCIDRs(t *testing.T) {
 			}
 			if !reflect.DeepEqual(cfg.TrustedProxyCIDRs, tt.want) {
 				t.Errorf("TrustedProxyCIDRs = %#v, want %#v", cfg.TrustedProxyCIDRs, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyEnvOverrides_ProviderEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     string
+		startOn bool
+		want    bool
+		wantErr bool
+	}{
+		{name: "false turns an enabled provider off", env: "false", startOn: true},
+		{name: "1 turns a disabled provider on", env: "1", want: true},
+		{name: "unset leaves the default", env: "", startOn: true, want: true},
+		{name: "an unparseable value is an error", env: "yes", startOn: true, wantErr: true},
+	}
+
+	// Every provider that has an _ENABLED override, paired with the field it sets.
+	providers := map[string]func(*Config) *bool{
+		"PUSHWARD_GRAFANA_ENABLED": func(c *Config) *bool { return &c.Providers.Grafana.Enabled },
+		"PUSHWARD_ARGOCD_ENABLED":  func(c *Config) *bool { return &c.Providers.ArgoCD.Enabled },
+		"PUSHWARD_STARR_ENABLED":   func(c *Config) *bool { return &c.Providers.Starr.Enabled },
+		"PUSHWARD_GITEA_ENABLED":   func(c *Config) *bool { return &c.Providers.Gitea.Enabled },
+	}
+
+	for name, field := range providers {
+		for _, tt := range tests {
+			t.Run(name+"/"+tt.name, func(t *testing.T) {
+				clearRelayEnv(t)
+				t.Setenv(name, tt.env)
+
+				cfg := &Config{}
+				*field(cfg) = tt.startOn
+				err := cfg.applyEnvOverrides()
+				if tt.wantErr {
+					if err == nil {
+						t.Fatal("expected an error for an unparseable flag")
+					}
+					if !strings.Contains(err.Error(), name) {
+						t.Errorf("error must name the variable, got %v", err)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("applyEnvOverrides() error = %v", err)
+				}
+				if got := *field(cfg); got != tt.want {
+					t.Errorf("%s = %v, want %v", name, got, tt.want)
+				}
+			})
+		}
+	}
+}
+
+func TestApplyEnvOverrides_SyncGracePeriodFallback(t *testing.T) {
+	const (
+		canonical = "PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD"
+		legacy    = "PUSHWARD_SYNC_GRACE_PERIOD"
+	)
+
+	tests := []struct {
+		name        string
+		canonical   string
+		legacy      string
+		want        time.Duration
+		wantErrName string
+	}{
+		{name: "canonical applies", canonical: "20s", want: 20 * time.Second},
+		{name: "legacy applies when canonical is unset", legacy: "45s", want: 45 * time.Second},
+		{name: "canonical wins when both are set", canonical: "20s", legacy: "45s", want: 20 * time.Second},
+		{name: "neither set leaves the YAML value", want: 10 * time.Second},
+		{
+			// The canonical name is what was read, so it is what the error names.
+			name:        "a malformed canonical value errors",
+			canonical:   "20 seconds",
+			wantErrName: canonical,
+		},
+		{
+			// Only reachable when the canonical name is unset, so the error must
+			// name the legacy variable rather than the one the operator never set.
+			name:        "a malformed legacy value errors under its own name",
+			legacy:      "45 seconds",
+			wantErrName: legacy,
+		},
+		{
+			// A stale malformed fallback must not block a boot the canonical name
+			// has already fixed: the fallback is never parsed once canonical is set.
+			name:      "a malformed legacy value is ignored when canonical is set",
+			canonical: "20s",
+			legacy:    "not a duration",
+			want:      20 * time.Second,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearRelayEnv(t)
+			t.Setenv(canonical, tt.canonical)
+			t.Setenv(legacy, tt.legacy)
+
+			cfg := &Config{}
+			cfg.Providers.ArgoCD.SyncGracePeriod = 10 * time.Second
+			err := cfg.applyEnvOverrides()
+			if tt.wantErrName != "" {
+				if err == nil {
+					t.Fatal("expected an error for an unparseable duration")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrName) {
+					t.Errorf("error must name %s, got %v", tt.wantErrName, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("applyEnvOverrides() error = %v", err)
+			}
+			if got := cfg.Providers.ArgoCD.SyncGracePeriod; got != tt.want {
+				t.Errorf("SyncGracePeriod = %v, want %v", got, tt.want)
 			}
 		})
 	}

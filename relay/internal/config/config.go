@@ -426,36 +426,20 @@ func (cfg *Config) applyEnvOverrides() error {
 	}
 
 	// Provider Enabled overrides
-	if v := os.Getenv("PUSHWARD_GRAFANA_ENABLED"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return fmt.Errorf("parsing PUSHWARD_GRAFANA_ENABLED: %w", err)
-		}
-		cfg.Providers.Grafana.Enabled = b
+	if err := sharedconfig.EnvBool("PUSHWARD_GRAFANA_ENABLED", &cfg.Providers.Grafana.Enabled); err != nil {
+		return err
 	}
-	if v := os.Getenv("PUSHWARD_ARGOCD_ENABLED"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return fmt.Errorf("parsing PUSHWARD_ARGOCD_ENABLED: %w", err)
-		}
-		cfg.Providers.ArgoCD.Enabled = b
+	if err := sharedconfig.EnvBool("PUSHWARD_ARGOCD_ENABLED", &cfg.Providers.ArgoCD.Enabled); err != nil {
+		return err
 	}
-	if v := os.Getenv("PUSHWARD_STARR_ENABLED"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return fmt.Errorf("parsing PUSHWARD_STARR_ENABLED: %w", err)
-		}
-		cfg.Providers.Starr.Enabled = b
+	if err := sharedconfig.EnvBool("PUSHWARD_STARR_ENABLED", &cfg.Providers.Starr.Enabled); err != nil {
+		return err
 	}
 	if v := os.Getenv("PUSHWARD_STARR_MODE"); v != "" {
 		cfg.Providers.Starr.Mode = NotificationMode(v)
 	}
-	if v := os.Getenv("PUSHWARD_GITEA_ENABLED"); v != "" {
-		b, err := strconv.ParseBool(v)
-		if err != nil {
-			return fmt.Errorf("parsing PUSHWARD_GITEA_ENABLED: %w", err)
-		}
-		cfg.Providers.Gitea.Enabled = b
+	if err := sharedconfig.EnvBool("PUSHWARD_GITEA_ENABLED", &cfg.Providers.Gitea.Enabled); err != nil {
+		return err
 	}
 	// ArgoCD overrides
 	if v := os.Getenv("PUSHWARD_ARGOCD_URL"); v != "" {
@@ -463,16 +447,14 @@ func (cfg *Config) applyEnvOverrides() error {
 	}
 	// PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD is the canonical name;
 	// PUSHWARD_SYNC_GRACE_PERIOD is kept as a fallback for existing deployments.
-	syncGrace := os.Getenv("PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD")
-	if syncGrace == "" {
-		syncGrace = os.Getenv("PUSHWARD_SYNC_GRACE_PERIOD")
+	// Resolve which name is in play before parsing: reading both would let a stale
+	// malformed fallback fail a boot that the canonical name had already fixed.
+	graceVar := "PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD"
+	if os.Getenv(graceVar) == "" {
+		graceVar = "PUSHWARD_SYNC_GRACE_PERIOD"
 	}
-	if syncGrace != "" {
-		d, err := time.ParseDuration(syncGrace)
-		if err != nil {
-			return fmt.Errorf("parsing PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD: %w", err)
-		}
-		cfg.Providers.ArgoCD.SyncGracePeriod = d
+	if err := sharedconfig.EnvDuration(graceVar, &cfg.Providers.ArgoCD.SyncGracePeriod); err != nil {
+		return err
 	}
 
 	return nil
