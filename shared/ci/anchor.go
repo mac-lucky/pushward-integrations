@@ -12,6 +12,27 @@ import (
 // bar and the X/N counter instead.
 const minLiveWindow = 5 * time.Second
 
+// AnchorDecline says which gate stopped LiveAnchor from anchoring. It exists for
+// logs: all four causes produce an identical payload (no window), so without a
+// reason the only way to tell them apart is to re-derive the conditions at the
+// call site or to run the bridge against a live forge and guess.
+type AnchorDecline string
+
+const (
+	// DeclineNoStepRunning means no group is in progress - the queued placeholder,
+	// or a run whose jobs have all finished.
+	DeclineNoStepRunning AnchorDecline = "no step running"
+	// DeclineUnmeasured means no prior run measured this group, so there is no
+	// duration to animate toward. The usual cause for a workflow that rarely runs:
+	// BaselineJobs found no finished run of it on this branch.
+	DeclineUnmeasured AnchorDecline = "no measured duration for this step group"
+	// DeclineNoStart means the forge has not stamped the running group's start.
+	DeclineNoStart AnchorDecline = "forge has not stamped a start"
+	// DeclineEstimateSpent means the group is already at or past its estimate.
+	// Expected for any group that finishes in less than one poll interval.
+	DeclineEstimateSpent AnchorDecline = "estimate already spent"
+)
+
 // LiveAnchor returns the unix window iOS animates the current step's pill
 // across, measured from when the step actually started rather than from now, so
 // a poll landing mid-step picks the bar up where it already is instead of
@@ -19,22 +40,30 @@ const minLiveWindow = 5 * time.Second
 //
 // ok is false when there is nothing trustworthy to animate toward: no step
 // running, no start stamped, no measurement for the group, or an estimate
-// already spent. iOS renders the static bar in exactly those cases anyway, so a
-// window sent regardless would buy nothing and cost a high-priority push.
+// already spent; why names which one. iOS renders the static bar in exactly those
+// cases anyway, so a window sent regardless would buy nothing and cost a
+// high-priority push.
+//
+// Note what this means for a short group: an anchor is only worth sending while
+// more than minLiveWindow of the estimate is still ahead, so a group that
+// finishes inside one poll interval will usually never produce an anchored frame
+// at all. That is the intended outcome, not a missing feature - and it has
+// nothing to do with how many jobs the run has, which is the wrong conclusion to
+// draw from a single-job workflow that never animates.
 //
 // maxWindow bounds a corrupt prior-run duration; callers pass their own
 // max-run-lifetime. The caller's own live-progress config gate stays with the
 // caller: this decides only whether there is something worth animating.
-func LiveAnchor(info StepInfo, byName map[string]float64, now time.Time, maxWindow time.Duration) (start, end int64, ok bool) {
+func LiveAnchor(info StepInfo, byName map[string]float64, now time.Time, maxWindow time.Duration) (start, end int64, ok bool, why AnchorDecline) {
 	if info.CurrentStep < 1 {
-		return 0, 0, false
+		return 0, 0, false, DeclineNoStepRunning
 	}
 	// GroupWeights seeds every group it saw to StepWeightFloor, measured or not,
 	// so a floor value carries no duration information: it means "draw a thin
 	// pill", not "this took a second". Anything at or below it is unmeasured.
 	secs, known := byName[info.CurrentStepName]
 	if !known || secs <= StepWeightFloor {
-		return 0, 0, false
+		return 0, 0, false, DeclineUnmeasured
 	}
 	// A corrupt prior-run timestamp can yield a duration of years. Left alone it
 	// would put end_date past the server's 5-year ceiling, and since the client
@@ -48,7 +77,7 @@ func LiveAnchor(info StepInfo, byName map[string]float64, now time.Time, maxWind
 	// and nothing re-anchors.
 	startAt := info.CurrentStepStartedAt
 	if startAt.IsZero() {
-		return 0, 0, false
+		return 0, 0, false, DeclineNoStart
 	}
 	if startAt.After(now) {
 		// The runner's clock reads ahead of ours; anchoring forward would render
@@ -57,7 +86,7 @@ func LiveAnchor(info StepInfo, byName map[string]float64, now time.Time, maxWind
 	}
 	endAt := startAt.Add(time.Duration(math.Round(secs)) * time.Second)
 	if !endAt.After(now.Add(minLiveWindow)) {
-		return 0, 0, false
+		return 0, 0, false, DeclineEstimateSpent
 	}
-	return startAt.Unix(), endAt.Unix(), true
+	return startAt.Unix(), endAt.Unix(), true, ""
 }

@@ -19,6 +19,7 @@ func TestLiveAnchor(t *testing.T) {
 		info    StepInfo
 		weights map[string]float64
 		wantOK  bool
+		wantWhy AnchorDecline
 		start   int64
 		end     int64
 	}{
@@ -37,26 +38,34 @@ func TestLiveAnchor(t *testing.T) {
 			name:    "no start stamped yet",
 			info:    StepInfo{CurrentStep: 2, CurrentStepName: "Build"},
 			weights: weights,
+			wantWhy: DeclineNoStart,
 		},
 		{
 			name:    "nothing running",
 			info:    StepInfo{CurrentStep: 0},
 			weights: weights,
+			wantWhy: DeclineNoStepRunning,
 		},
 		{
 			name:    "queued placeholder never matches a measured group",
 			info:    StepInfo{CurrentStep: 2, CurrentStepName: "Queued", CurrentStepStartedAt: startedAt},
 			weights: weights,
+			wantWhy: DeclineUnmeasured,
 		},
 		{
-			name:   "no prior run",
-			info:   StepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: startedAt},
-			wantOK: false,
+			// The single-job smoke-test case: a workflow that has not finished on
+			// this branch before has no measured group to animate toward. Nothing to
+			// do with the job count, which is the wrong conclusion to draw from it.
+			name:    "no prior run",
+			info:    StepInfo{CurrentStep: 1, CurrentStepName: "Build", CurrentStepStartedAt: startedAt},
+			wantOK:  false,
+			wantWhy: DeclineUnmeasured,
 		},
 		{
 			name:    "estimate already spent",
 			info:    StepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: now.Add(-10 * time.Minute)},
 			weights: weights,
+			wantWhy: DeclineEstimateSpent,
 		},
 		{
 			// GroupWeights seeds unmeasurable groups to the floor, so a floor
@@ -65,6 +74,7 @@ func TestLiveAnchor(t *testing.T) {
 			name:    "floor weight is not a measurement",
 			info:    StepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: startedAt},
 			weights: map[string]float64{"Build": StepWeightFloor},
+			wantWhy: DeclineUnmeasured,
 		},
 		{
 			// A duration long enough to push end_date past the server's 5-year
@@ -90,13 +100,19 @@ func TestLiveAnchor(t *testing.T) {
 			name:    "window too short to be worth animating",
 			info:    StepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: now.Add(-298 * time.Second)},
 			weights: weights,
+			wantWhy: DeclineEstimateSpent,
 		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			start, end, ok := LiveAnchor(tc.info, tc.weights, now, testMaxWindow)
+			start, end, ok, why := LiveAnchor(tc.info, tc.weights, now, testMaxWindow)
 			if ok != tc.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			// The reason is what a log line reports, so a decline naming the wrong
+			// gate sends the next reader after the wrong cause.
+			if why != tc.wantWhy {
+				t.Errorf("why = %q, want %q", why, tc.wantWhy)
 			}
 			if !ok {
 				return

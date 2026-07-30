@@ -510,7 +510,15 @@ func (p *Poller) liveAnchor(info ci.StepInfo, byName map[string]float64, now tim
 	if !p.opts.Render.LiveProgress {
 		return 0, 0, false
 	}
-	return ci.LiveAnchor(info, byName, now, maxRunLifetime)
+	start, end, ok, why := ci.LiveAnchor(info, byName, now, maxRunLifetime)
+	if !ok {
+		// Debug, not Info: for a short group this is the expected outcome on most
+		// ticks. It is here because a card that never animates is otherwise
+		// indistinguishable from a bug, and the four causes look identical on the
+		// wire.
+		p.log.Debug("live progress not anchored", "step", info.CurrentStepName, "reason", string(why))
+	}
+	return start, end, ok
 }
 
 // liveProgressOff is the explicit false that stops an animation carried forward

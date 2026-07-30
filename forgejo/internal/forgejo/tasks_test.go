@@ -83,10 +83,15 @@ func TestStampLiveTimingsJoinMissLeavesZero(t *testing.T) {
 			t.Errorf("job %d was stamped from a non-matching task", i)
 		}
 	}
-	// The degrade must be total: no anchor rather than a wrong one.
-	if _, _, ok := ci.LiveAnchor(ci.ComputeSteps(toCIJobsForTest(jobs)),
-		map[string]float64{"tofu": 300}, time.Now(), time.Hour); ok {
+	// The degrade must be total: no anchor rather than a wrong one, and it must
+	// decline for the missing start rather than for some unrelated gate.
+	_, _, ok, why := ci.LiveAnchor(ci.ComputeSteps(toCIJobsForTest(jobs)),
+		map[string]float64{"tofu": 300}, time.Now(), time.Hour)
+	if ok {
 		t.Error("an unstamped step must not produce a live window")
+	}
+	if why != ci.DeclineNoStart {
+		t.Errorf("declined for %q, want %q", why, ci.DeclineNoStart)
 	}
 }
 
