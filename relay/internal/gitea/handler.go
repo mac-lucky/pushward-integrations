@@ -105,7 +105,7 @@ func (h *Handler) handleGitea(ctx context.Context, input *struct {
 		log.Debug("gitea event ignored", "action", p.Action)
 	}
 	if err != nil {
-		return nil, huma.Error502BadGateway("upstream API error")
+		return nil, humautil.UpstreamError(err)
 	}
 	return humautil.NewOK(), nil
 }
@@ -393,7 +393,7 @@ func (h *Handler) handleForgejo(ctx context.Context, input *struct {
 	}
 	if err := h.createActivity(ctx, pwClient, slug, name); err != nil {
 		log.Error("failed to create forgejo activity", "slug", slug, "error", err)
-		return nil, huma.Error502BadGateway("upstream API error")
+		return nil, humautil.UpstreamError(err)
 	}
 
 	content := pushward.Content{

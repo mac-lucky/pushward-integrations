@@ -182,8 +182,11 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		h.updateState(ctx, userKey, stateKey, g, currentState, log)
 	}
 
+	// The loop above keeps going after a failure, so apiErr holds the last one.
+	// Any of them being an upstream refusal of this caller's key means the rest
+	// were too, so mapping the last is as good as mapping the first.
 	if apiErr != nil {
-		return nil, huma.Error502BadGateway("upstream API error")
+		return nil, humautil.UpstreamError(apiErr)
 	}
 	return humautil.NewOK(), nil
 }

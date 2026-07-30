@@ -72,7 +72,7 @@ func (h *Handler) handleCreate(ctx context.Context, input *struct {
 		return humautil.NewOK(), nil
 	}
 	if err := h.create(ctx, userKey, log, pwClient, p); err != nil {
-		return nil, huma.Error502BadGateway("upstream API error")
+		return nil, humautil.UpstreamError(err)
 	}
 	return humautil.NewOK(), nil
 }
@@ -175,7 +175,7 @@ func (h *Handler) handleDelete(ctx context.Context, input *struct {
 		return humautil.NewOK(), nil
 	}
 	if err := h.clear(ctx, userKey, log, pwClient, input.ID); err != nil {
-		return nil, huma.Error502BadGateway("upstream API error")
+		return nil, humautil.UpstreamError(err)
 	}
 	return humautil.NewOK(), nil
 }

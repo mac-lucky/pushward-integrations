@@ -182,7 +182,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	}
 
 	if apiErr != nil {
-		return nil, huma.Error502BadGateway("upstream API error")
+		return nil, humautil.UpstreamError(apiErr)
 	}
 	return humautil.NewOK(), nil
 }

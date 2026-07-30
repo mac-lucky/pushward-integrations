@@ -156,6 +156,34 @@ func MockPushWardServerRejecting(t *testing.T, notifyStatus, activityStatus int)
 	return mockPushWardServer(t, notifyStatus, activityStatus)
 }
 
+// AssertUpstreamRefusalSurfaces checks that a webhook handler passes an upstream
+// refusal of the caller's own key back to the caller unchanged, rather than
+// collapsing it into a generic 502. The relay forwards the caller's hlk_ key
+// rather than one of its own, so "the next hop rejected this key" is a fact
+// about the sender's configuration, and answering Bad Gateway sends them looking
+// for an outage instead.
+//
+// deliver builds a handler whose upstream answers status to everything and puts
+// one webhook through it, returning the recorded response.
+//
+// 429 is deliberately not covered: the pushward client retries it five times
+// with backoff, so driving it through a handler costs ~11s of sleeping to prove
+// what humautil's own TestUpstreamError already covers directly.
+func AssertUpstreamRefusalSurfaces(t *testing.T, deliver func(t *testing.T, status int) *httptest.ResponseRecorder) {
+	t.Helper()
+	for _, status := range []int{http.StatusUnauthorized, http.StatusForbidden} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			w := deliver(t, status)
+			if w.Code != status {
+				t.Fatalf("expected %d, got %d (%s)", status, w.Code, w.Body.String())
+			}
+			if status == http.StatusUnauthorized && w.Header().Get("WWW-Authenticate") == "" {
+				t.Error("RFC 9110 section 15.5.2 requires a challenge on a 401")
+			}
+		})
+	}
+}
+
 func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httptest.Server, *[]APICall, *sync.Mutex) {
 	t.Helper()
 	if notifyStatus == 0 {

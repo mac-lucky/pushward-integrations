@@ -44,7 +44,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	ctx = metrics.WithProvider(ctx, "changedetection")
 
 	if err := h.handleChange(ctx, &input.Body); err != nil {
-		return nil, huma.Error502BadGateway("upstream API error")
+		return nil, humautil.UpstreamError(err)
 	}
 	return humautil.NewOK(), nil
 }
