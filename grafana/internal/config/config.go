@@ -282,6 +282,11 @@ func Load(path string) (*Config, error) {
 		Server: sharedconfig.ServerConfig{
 			Address: ":8090",
 		},
+		// Not sharedconfig.DefaultPushWardConfig(): this bridge diverges on three
+		// of its five fields. Priority 5 outranks a build or a download, an alert
+		// stays firing until something clears it so the TTL is a day rather than
+		// half an hour, and EndDelay/EndDisplayTime stay unset because alerts end
+		// in one shot instead of the two-phase close the pollers use.
 		PushWard: sharedconfig.PushWardConfig{
 			Priority:     5,
 			CleanupDelay: 15 * time.Minute,

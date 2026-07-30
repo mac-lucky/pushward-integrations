@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"time"
 
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 )
@@ -23,14 +22,8 @@ type GitHubConfig struct {
 
 func Load(path string) (*Config, error) {
 	cfg := &Config{
-		PushWard: sharedconfig.PushWardConfig{
-			Priority:       1,
-			CleanupDelay:   15 * time.Minute,
-			StaleTimeout:   30 * time.Minute,
-			EndDelay:       5 * time.Second,
-			EndDisplayTime: 4 * time.Second,
-		},
-		Polling: sharedconfig.DefaultPollingConfig(),
+		PushWard: sharedconfig.DefaultPushWardConfig(),
+		Polling:  sharedconfig.DefaultPollingConfig(),
 		Render:  sharedconfig.DefaultRenderConfig(),
 	}
 

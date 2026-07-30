@@ -37,19 +37,18 @@ type PollingConfig struct {
 }
 
 func Load(path string) (*Config, error) {
+	pushward := sharedconfig.DefaultPushWardConfig()
+	// Sixty minutes, not the shared thirty: a print runs for hours and reports
+	// over MQTT, so the shorter TTL would evict the card mid-print.
+	pushward.StaleTimeout = 60 * time.Minute
+
 	cfg := &Config{
 		BambuLab: BambuLabConfig{
 			TLS: TLSConfig{
 				InsecureSkipVerify: false,
 			},
 		},
-		PushWard: sharedconfig.PushWardConfig{
-			Priority:       1,
-			CleanupDelay:   15 * time.Minute,
-			StaleTimeout:   60 * time.Minute,
-			EndDelay:       5 * time.Second,
-			EndDisplayTime: 4 * time.Second,
-		},
+		PushWard: pushward,
 		Polling: PollingConfig{
 			UpdateInterval: 5 * time.Second,
 		},

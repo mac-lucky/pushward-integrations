@@ -37,13 +37,7 @@ type ForgejoConfig struct {
 
 func Load(path string) (*Config, error) {
 	cfg := &Config{
-		PushWard: sharedconfig.PushWardConfig{
-			Priority:       1,
-			CleanupDelay:   15 * time.Minute,
-			StaleTimeout:   30 * time.Minute,
-			EndDelay:       5 * time.Second,
-			EndDisplayTime: 4 * time.Second,
-		},
+		PushWard: sharedconfig.DefaultPushWardConfig(),
 		Forgejo: ForgejoConfig{
 			Timeout: 15 * time.Second,
 		},
