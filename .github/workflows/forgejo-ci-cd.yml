@@ -1,0 +1,40 @@
+name: CI/CD Forgejo
+
+on:
+  push:
+    branches: [main]
+    paths: ['forgejo/**', 'shared/**', '.github/workflows/forgejo-ci-cd.yml']
+  pull_request:
+    branches: [main]
+    paths: ['forgejo/**', 'shared/**', '.github/workflows/forgejo-ci-cd.yml']
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  ci-cd:
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      actions: read
+    with:
+      app_name: "pushward-forgejo"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-forgejo"
+      dockerhub_image: "maclucky/pushward-forgejo"
+      push_to_dockerhub: false
+      push_on_main: true
+      enable_auto_version: false
+      enable_main_dev_tag: true
+      main_branch: "main"
+      build_context: "."
+      dockerfile_path: "./forgejo/Dockerfile"
+      go_module_path: "./forgejo"
+      enable_go_tests: true
+      go_test_args: "-race -count=1 -v"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit

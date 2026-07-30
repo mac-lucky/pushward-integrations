@@ -1,0 +1,19 @@
+{
+  "id": 12,
+  "title": "fix(ci): reference the item by its actual field name",
+  "workflow_id": "tofu.yml",
+  "index_in_repo": 9,
+  "prettyref": "master",
+  "commit_sha": "6d0515f0b4a32b90f554566d10f66829ac3815c8",
+  "need_approval": false,
+  "event": "",
+  "trigger_event": "workflow_dispatch",
+  "status": "success",
+  "started": "2026-07-28T10:27:04+02:00",
+  "stopped": "2026-07-28T10:27:26+02:00",
+  "created": "2026-07-28T10:27:02+02:00",
+  "updated": "2026-07-28T10:27:26+02:00",
+  "duration": 22000000000,
+  "html_url": "https://forgejo.example.com/acme/app/actions/runs/9",
+  "repository": {"full_name": "acme/app", "html_url": "https://forgejo.example.com/acme/app"}
+}

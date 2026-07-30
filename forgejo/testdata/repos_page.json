@@ -1,0 +1,6 @@
+[
+  {"id": 5, "name": "app", "full_name": "acme/app", "private": true, "empty": false, "archived": false, "html_url": "https://forgejo.example.com/acme/app"},
+  {"id": 6, "name": "infra", "full_name": "acme/infra", "private": true, "empty": false, "archived": false, "html_url": "https://forgejo.example.com/acme/infra"},
+  {"id": 7, "name": "attic", "full_name": "acme/attic", "private": false, "empty": false, "archived": true, "html_url": "https://forgejo.example.com/acme/attic"},
+  {"id": 8, "name": "blank", "full_name": "acme/blank", "private": false, "empty": true, "archived": false, "html_url": "https://forgejo.example.com/acme/blank"}
+]

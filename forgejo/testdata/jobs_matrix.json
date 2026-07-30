@@ -1,0 +1,30 @@
+[
+  {
+    "id": 113, "run_id": 39, "attempt": 1,
+    "handle": "fdd1a78b-048f-4924-9a8f-c299162760d1",
+    "repo_id": 5, "owner_id": 2,
+    "name": "checks", "needs": null, "runs_on": ["infra"],
+    "task_id": 84, "status": "success"
+  },
+  {
+    "id": 114, "run_id": 39, "attempt": 1,
+    "handle": "ab29b9bf-3edb-4457-b83d-85a561059066",
+    "repo_id": 5, "owner_id": 2,
+    "name": "detect", "needs": null, "runs_on": ["infra"],
+    "task_id": 85, "status": "success"
+  },
+  {
+    "id": 116, "run_id": 39, "attempt": 1,
+    "handle": "4820e690-b99d-4687-a98e-db388c7c123c",
+    "repo_id": 5, "owner_id": 2,
+    "name": "tofu (tailscale)", "needs": ["detect", "checks"], "runs_on": ["infra"],
+    "task_id": 86, "status": "running"
+  },
+  {
+    "id": 117, "run_id": 39, "attempt": 1,
+    "handle": "7f0a1c2d-3e4b-5a6f-8091-a2b3c4d5e6f7",
+    "repo_id": 5, "owner_id": 2,
+    "name": "tofu (grafana)", "needs": ["detect", "checks"], "runs_on": ["infra"],
+    "task_id": 87, "status": "waiting"
+  }
+]

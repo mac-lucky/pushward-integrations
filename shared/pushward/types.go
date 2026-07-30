@@ -509,6 +509,7 @@ var sourceDisplayNames = map[string]string{
 	"truenas":         "TrueNAS",
 	"sabnzbd":         "SABnzbd",
 	"github":          "GitHub",
+	"forgejo":         "Forgejo",
 	"bambulab":        "BambuLab",
 	"octoprint":       "OctoPrint",
 	"mqtt":            "MQTT",

@@ -1,0 +1,24 @@
+forgejo:
+  url: "https://git.example.com"  # or set PUSHWARD_FORGEJO_URL - instance root; /api/v1 is appended
+  token: ""                       # or set PUSHWARD_FORGEJO_TOKEN
+  owner: "your-user-or-org"       # or set PUSHWARD_FORGEJO_OWNER - auto-discovers repos
+  repos:                          # or set PUSHWARD_FORGEJO_REPOS - optional when owner is set
+    # - "other-org/some-repo"     # add repos outside owner if needed
+  # timeout: 15s                  # PUSHWARD_FORGEJO_TIMEOUT - bounds one API call
+
+pushward:
+  url: ""             # or set PUSHWARD_URL (e.g. https://api.pushward.app)
+  api_key: ""         # or set PUSHWARD_API_KEY (hlk_ integration key)
+  # priority: 1            # PUSHWARD_PRIORITY
+  # cleanup_delay: 15m     # PUSHWARD_CLEANUP_DELAY
+  # stale_timeout: 30m     # PUSHWARD_STALE_TIMEOUT
+  # end_delay: 5s          # PUSHWARD_END_DELAY
+  # end_display_time: 4s   # PUSHWARD_END_DISPLAY_TIME
+
+polling:
+  idle_interval: 60s  # or set PUSHWARD_POLL_IDLE
+
+render:
+  # step_colors: false   # or set PUSHWARD_FORGEJO_STEP_COLORS - tint step pills by job type
+  # step_weights: false  # or set PUSHWARD_FORGEJO_STEP_WEIGHTS - size step pills by prior-run duration
+  # live_progress: true  # or set PUSHWARD_FORGEJO_LIVE_PROGRESS - fill the running step and count its ETA down

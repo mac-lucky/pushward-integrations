@@ -1,0 +1,33 @@
+{
+  "id": 39,
+  "title": "feat(policy): add the operator tag to the tailnet policy",
+  "workflow_id": "tofu.yml",
+  "index_in_repo": 33,
+  "ScheduleID": 0,
+  "prettyref": "master",
+  "is_ref_deleted": false,
+  "commit_sha": "9b62caa36529ceded6922efe2156c4df75fbec58",
+  "is_fork_pull_request": false,
+  "need_approval": false,
+  "approved_by": 0,
+  "event": "push",
+  "trigger_event": "push",
+  "status": "success",
+  "started": "2026-07-29T21:27:22+02:00",
+  "stopped": "2026-07-29T21:27:44+02:00",
+  "created": "2026-07-29T21:27:22+02:00",
+  "updated": "2026-07-29T21:27:44+02:00",
+  "duration": 22000000000,
+  "html_url": "https://forgejo.example.com/acme/app/actions/runs/33",
+  "repository": {
+    "id": 5,
+    "name": "app",
+    "full_name": "acme/app",
+    "private": true,
+    "empty": false,
+    "archived": false,
+    "default_branch": "master",
+    "html_url": "https://forgejo.example.com/acme/app"
+  },
+  "trigger_user": {"id": 1, "login": "someone", "username": "someone"}
+}

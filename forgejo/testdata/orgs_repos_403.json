@@ -1,0 +1,1 @@
+{"message":"token does not have at least one of required scope(s): [read:organization]","url":"https://forgejo.example.com/api/swagger"}

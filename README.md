@@ -3,6 +3,8 @@
 
 # PushWard Integrations
 
+[![CI/CD Backrest](https://github.com/mac-lucky/pushward-integrations/actions/workflows/backrest-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/backrest-ci-cd.yml)
+[![CI/CD Forgejo](https://github.com/mac-lucky/pushward-integrations/actions/workflows/forgejo-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/forgejo-ci-cd.yml)
 [![CI/CD GitHub](https://github.com/mac-lucky/pushward-integrations/actions/workflows/github-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/github-ci-cd.yml)
 [![CI/CD SABnzbd](https://github.com/mac-lucky/pushward-integrations/actions/workflows/sabnzbd-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/sabnzbd-ci-cd.yml)
 [![CI/CD BambuLab](https://github.com/mac-lucky/pushward-integrations/actions/workflows/bambulab-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/bambulab-ci-cd.yml)
@@ -10,7 +12,7 @@
 [![CI/CD Relay](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml)
 [![golangci-lint](https://github.com/mac-lucky/pushward-integrations/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/golangci-lint.yml)
 
-Turn events from the services you already run — GitHub Actions, SABnzbd, a Bambu Lab printer, Grafana, and ~19 self-hosted apps behind the relay — into real-time **PushWard Live Activities, widgets, and push notifications** on your iPhone (Dynamic Island + Lock Screen). This is a Go [workspace](https://go.dev/ref/mod#workspaces) of small "bridge" programs, each shipped as its own Docker image.
+Turn events from the services you already run — GitHub Actions, Forgejo Actions, SABnzbd, a Bambu Lab printer, Grafana, and ~19 self-hosted apps behind the relay — into real-time **PushWard Live Activities, widgets, and push notifications** on your iPhone (Dynamic Island + Lock Screen). This is a Go [workspace](https://go.dev/ref/mod#workspaces) of small "bridge" programs, each shipped as its own Docker image.
 
 > **New to PushWard?** PushWard is a push-notification platform whose iOS app renders live, updating Live Activities and widgets from any source. Learn more at **[pushward.app](https://pushward.app)** and get the iOS app on the **[App Store](https://apps.apple.com/app/id6759689999)**.
 
@@ -27,7 +29,7 @@ external service ─▶ bridge ─▶ pushward-server REST API ─▶ APNs ─�
 
 Two shapes of bridge live here:
 
-- **Standalone (single-tenant)** — `backrest`, `bambulab`, `github`, `grafana`, `sabnzbd`. Each container holds **one** PushWard integration key (`hlk_...`) and serves one account.
+- **Standalone (single-tenant)** — `backrest`, `bambulab`, `forgejo`, `github`, `grafana`, `sabnzbd`. Each container holds **one** PushWard integration key (`hlk_...`) and serves one account.
 - **Relay (multi-tenant)** — `relay` is a single binary backed by PostgreSQL that fans out to many providers. It carries **no** key in config; instead it reads a per-request `hlk_` key from each webhook's `Authorization` header, so one deployment serves many tenants.
 
 ## Bridges
@@ -38,6 +40,7 @@ Each bridge has its own README with full configuration and per-event behavior.
 |---|---|---|---|
 | [backrest](./backrest/) | Backrest backup progress with transfer rate and live ETA (poller) | — (outbound only) | `ghcr.io/mac-lucky/pushward-backrest` |
 | [bambulab](./bambulab/) | Bambu Lab 3D-print progress via local MQTT (TLS) | — (outbound only) | `ghcr.io/mac-lucky/pushward-bambulab` |
+| [forgejo](./forgejo/) | Forgejo Actions workflow-run CI/CD progress (poller) | — (outbound only) | `ghcr.io/mac-lucky/pushward-forgejo` |
 | [github](./github/) | GitHub Actions workflow-run CI/CD progress (poller) | — (outbound only) | `ghcr.io/mac-lucky/pushward-github` |
 | [grafana](./grafana/) | Grafana alert timelines with Prometheus/VictoriaMetrics history + PromQL-polled iOS widgets | 8090 | `ghcr.io/mac-lucky/pushward-grafana` |
 | [sabnzbd](./sabnzbd/) | SABnzbd download + post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
@@ -48,6 +51,11 @@ Images are published to **GitHub Container Registry only** (`ghcr.io/mac-lucky/p
 ### Relay providers
 
 The relay registers 20 webhook routes across 16 provider modules (`starr` serves Radarr, Sonarr, and Prowlarr; `gitea` serves Gitea and Forgejo). Every route returns `200 {"status":"ok"}` and is wrapped by the middleware chain (per-IP rate limit → `hlk_` auth → per-key rate limit). Most providers create Live Activities; the exceptions are noted.
+
+> The relay's `/forgejo` route and the standalone [forgejo](./forgejo/) bridge cover the same service by different
+> routes: the relay takes Forgejo's terminal `action_run_*` hooks, the bridge polls the API for live per-job
+> progress. Their slug prefixes differ (`forgejo-` vs `fj-`) so they never contend for one activity — but run both
+> against one account and each build shows two cards.
 
 | Provider | Route | Notes |
 |---|---|---|
@@ -67,7 +75,7 @@ The relay registers 20 webhook routes across 16 provider modules (`starr` serves
 | Gatus | `POST /gatus` | Endpoint health status changes (alert) |
 | Backrest | `POST /backrest` | Backup/prune/check/forget operations |
 | Gitea | `POST /gitea` | Gitea Actions workflow-run build progress (steps) |
-| Forgejo | `POST /forgejo` | Forgejo Actions run result (generic) |
+| Forgejo | `POST /forgejo` | Forgejo Actions run result (generic) — for live per-job progress use the [forgejo](./forgejo/) poller bridge instead |
 | Komodo | `POST /komodo` | Resolvable conditions (server + swarm health) as Live Activities, other alerts as push notifications (HTTP Basic auth via URL userinfo) |
 | TrueNAS | `POST /truenas/v2/alerts`, `DELETE /truenas/v2/alerts/{id}` | OpsGenie-compatible alert open/clear (GenieKey auth) |
 
@@ -78,14 +86,14 @@ Auth styles differ by what each service's webhook UI allows: most providers acce
 - A reachable **PushWard server** — the public base is `https://api.pushward.app`.
 - A **PushWard integration key** (`hlk_` prefix), created in the PushWard iOS app under Settings → Integration Keys. Publishing widgets (the `grafana` bridge) needs a key with the `widgets` scope.
 - The **PushWard iOS app** installed and subscribed to the activity/widget slugs the bridge produces.
-- The **backend each bridge talks to**: a GitHub token (github), a SABnzbd instance (sabnzbd), a Bambu Lab printer on the LAN (bambulab), a Prometheus/VictoriaMetrics endpoint (grafana), or PostgreSQL plus the external services' webhooks (relay).
+- The **backend each bridge talks to**: a GitHub token (github), a Forgejo instance URL + API token (forgejo), a Backrest instance (backrest), a SABnzbd instance (sabnzbd), a Bambu Lab printer on the LAN (bambulab), a Prometheus/VictoriaMetrics endpoint (grafana), or PostgreSQL plus the external services' webhooks (relay).
 
 ## Installation
 
 Run a published image, mounting your config at `/config/config.yml` (the container's default `-config` path). Start from each bridge's `config.example.yml`.
 
 ```bash
-# Standalone bridge (sabnzbd shown; bambulab/grafana/github are analogous)
+# Standalone bridge (sabnzbd shown; bambulab/grafana/github/forgejo are analogous)
 docker run -p 8090:8090 \
   -v ./config.yml:/config/config.yml:ro \
   ghcr.io/mac-lucky/pushward-sabnzbd:latest
@@ -114,7 +122,7 @@ docker run -p 8090:8090 -p 9090:9090 \
 
 ## Configuration
 
-Configuration is layered: a YAML file (optional — a missing file is tolerated and the bridge runs from defaults + env) overlaid by `PUSHWARD_*` environment variables. **Environment variables always win.** Every bridge shares the `pushward.*` block below; bridge-specific keys (`github.*`, `sabnzbd.*`, `bambulab.*`, `metrics.*`, `providers.*`, …) live in each bridge's README and `config.example.yml`.
+Configuration is layered: a YAML file (optional — a missing file is tolerated and the bridge runs from defaults + env) overlaid by `PUSHWARD_*` environment variables. **Environment variables always win.** Every bridge shares the `pushward.*` block below; bridge-specific keys (`github.*`, `forgejo.*`, `sabnzbd.*`, `bambulab.*`, `metrics.*`, `providers.*`, …) live in each bridge's README and `config.example.yml`.
 
 ### Shared `pushward.*` (standalone bridges)
 
@@ -149,6 +157,7 @@ Per-provider knobs (`providers.<name>.enabled`, `priority`, `cleanup_delay`, `st
 | Bridge | Endpoints |
 |---|---|
 | `backrest` | None — outbound poller, no HTTP server |
+| `forgejo` | None — outbound poller, no HTTP server |
 | `github` | None — outbound poller, no HTTP server |
 | `bambulab` | None — connects **out** to the printer over MQTT (TLS `:8883`) |
 | `sabnzbd` | `POST /webhook` (optional `X-Webhook-Secret`), `GET /health`, `GET /ready` |
@@ -177,13 +186,15 @@ The `pushward.Client` retries up to 5 attempts with exponential backoff + jitter
 
 ## Project structure
 
-This is a Go workspace (`go.work`, Go 1.26.5) with one shared module plus five independently-versioned bridge modules under `github.com/mac-lucky/pushward-integrations/<module>`:
+This is a Go workspace (`go.work`, Go 1.26.5) with one shared module plus seven independently-versioned bridge modules under `github.com/mac-lucky/pushward-integrations/<module>`:
 
 ```
 pushward-integrations/
-  go.work          # Go workspace: use ./shared ./github ./sabnzbd ./bambulab ./relay ./grafana
-  shared/          # Common library (pushward client, config, server, widgets, auth, syncx, text, testutil)
+  go.work          # Go workspace: use ./shared ./github ./forgejo ./sabnzbd ./bambulab ./relay ./grafana ./backrest
+  shared/          # Common library (pushward client, config, server, ci ladder, widgets, auth, syncx, text, testutil)
+  backrest/        # Backrest backup poller — standalone bridge
   bambulab/        # Bambu Lab MQTT client — standalone bridge
+  forgejo/         # Forgejo Actions poller — standalone bridge
   github/          # GitHub Actions poller — standalone bridge
   grafana/         # Grafana alert timelines + widgets — standalone bridge
   sabnzbd/         # SABnzbd webhook + download tracker — standalone bridge
@@ -211,7 +222,7 @@ PUSHWARD_DATABASE_DSN='postgres://USER:PASS@HOST:5432/DB?sslmode=disable' \
   ./pushward-relay -config relay/config.example.yml
 
 # Tests (CI runs Go tests with -race -count=1 -v)
-go test ./shared/... ./github/... ./sabnzbd/... ./bambulab/... ./grafana/... ./relay/... -race -count=1 -v
+go test ./shared/... ./github/... ./forgejo/... ./sabnzbd/... ./bambulab/... ./grafana/... ./backrest/... ./relay/... -race -count=1 -v
 
 # Lint (matches CI: golangci-lint v2.11.4)
 golangci-lint run
@@ -237,7 +248,7 @@ Each image builds from a `golang:<ver>-alpine` builder into an `alpine:3.23` run
 
 Every per-bridge CI and the release workflow call the reusable `mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master`; the lint workflow calls `golangci-lint-reusable.yml@master`.
 
-- **Per-bridge CI** (`<bridge>-ci-cd.yml`) is path-filtered to `<bridge>/**` and `shared/**`, so a change to `shared/` triggers all five.
+- **Per-bridge CI** (`<bridge>-ci-cd.yml`) is path-filtered to `<bridge>/**` and `shared/**`, so a change to `shared/` triggers all seven.
 - **Lint** (`golangci-lint.yml`) runs `golangci-lint` v2.11.4 across the workspace.
 - **Release** (`release.yml`) fires on per-bridge tags `<bridge>/v*`, parses the bridge + version, builds that one bridge, and creates a per-bridge GitHub Release with auto-generated, categorized notes (`.github/release.yml`).
 
@@ -261,8 +272,8 @@ git tag relay/v0.4.1
 git push origin relay/v0.4.1
 
 # Coordinated baseline across all bridges
-for b in bambulab github grafana relay sabnzbd; do git tag "$b/v0.4.0"; done
-git push origin bambulab/v0.4.0 github/v0.4.0 grafana/v0.4.0 relay/v0.4.0 sabnzbd/v0.4.0
+for b in backrest bambulab forgejo github grafana relay sabnzbd; do git tag "$b/v0.4.0"; done
+git push origin backrest/v0.4.0 bambulab/v0.4.0 forgejo/v0.4.0 github/v0.4.0 grafana/v0.4.0 relay/v0.4.0 sabnzbd/v0.4.0
 ```
 
 ## Server compatibility

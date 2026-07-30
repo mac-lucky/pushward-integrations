@@ -1,6 +1,10 @@
 # Binaries
 /pushward-github
 /github/pushward-github
+/pushward-forgejo
+/forgejo/pushward-forgejo
+/pushward-backrest
+/backrest/pushward-backrest
 /pushward-sabnzbd
 /sabnzbd/pushward-sabnzbd
 /pushward-bambulab

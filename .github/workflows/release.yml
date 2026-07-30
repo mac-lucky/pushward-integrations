@@ -5,6 +5,7 @@ on:
     tags:
       - 'backrest/v*'
       - 'bambulab/v*'
+      - 'forgejo/v*'
       - 'github/v*'
       - 'grafana/v*'
       - 'relay/v*'
@@ -86,6 +87,34 @@ jobs:
       build_context: "."
       dockerfile_path: "./bambulab/Dockerfile"
       go_module_path: "./bambulab"
+      enable_go_tests: true
+      go_test_args: "-race -count=1 -v"
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit
+
+  forgejo:
+    needs: parse
+    if: needs.parse.outputs.bridge == 'forgejo'
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      # write, not read: the reusable workflow attaches the generated SBOM to
+      # the release, and a job-level block overrides the top-level grant.
+      contents: write
+      packages: write
+      security-events: write
+      actions: read
+    with:
+      app_name: "pushward-forgejo"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-forgejo"
+      dockerhub_image: "maclucky/pushward-forgejo"
+      push_to_dockerhub: false
+      release_on_tag: true
+      enable_auto_version: false
+      main_branch: "main"
+      build_context: "."
+      dockerfile_path: "./forgejo/Dockerfile"
+      go_module_path: "./forgejo"
       enable_go_tests: true
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
@@ -210,7 +239,7 @@ jobs:
     # skip, so this job stops waiting for it and publishes the release while
     # that bridge is still building - which also lets the SBOM step find a
     # release to attach to and trip on it.
-    needs: [parse, backrest, bambulab, github, grafana, relay, sabnzbd]
+    needs: [parse, backrest, bambulab, forgejo, github, grafana, relay, sabnzbd]
     if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-latest
     permissions:
