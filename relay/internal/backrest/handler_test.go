@@ -1144,7 +1144,7 @@ func TestSuppressedEndClosesPriorActivity(t *testing.T) {
 func newHandlerFailingNotifications(t *testing.T, cfg *config.BackrestConfig) http.Handler {
 	t.Helper()
 	lifecycle.SetRetryDelay(10 * time.Millisecond)
-	srv, _, _ := testutil.MockPushWardServerFailingNotifications(t)
+	srv, _, _ := testutil.MockPushWardServerRejecting(t, http.StatusUnprocessableEntity, 0)
 
 	mux, api := humautil.NewTestAPI()
 	RegisterRoutes(api, state.NewMemoryStore(), client.NewPool(srv.URL, nil), cfg)

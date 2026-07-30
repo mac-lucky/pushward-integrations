@@ -53,7 +53,7 @@ func newHandler(t *testing.T, cfg *config.OverseerrConfig) (http.Handler, *[]tes
 func newHandlerRejecting(t *testing.T, cfg *config.OverseerrConfig, status int) (http.Handler, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
 	lifecycle.SetRetryDelay(10 * time.Millisecond)
-	srv, calls, mu := testutil.MockPushWardServerRejectingCalls(t, status)
+	srv, calls, mu := testutil.MockPushWardServerRejecting(t, status, status)
 
 	mux, api := humautil.NewTestAPI()
 	RegisterRoutes(api, state.NewMemoryStore(), client.NewPool(srv.URL, nil), cfg)

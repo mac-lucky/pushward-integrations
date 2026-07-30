@@ -139,31 +139,28 @@ type testNotificationAction struct {
 // validates them against the PushWard public API contract.
 func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex) {
 	t.Helper()
-	return mockPushWardServer(t, http.StatusCreated)
+	return mockPushWardServer(t, 0, 0)
 }
 
-// MockPushWardServerFailingNotifications is MockPushWardServer with every
-// notification rejected, for handlers that have to decide whether a failed push
-// fails the request. The notification is still validated first, so a test can
+// MockPushWardServerRejecting is MockPushWardServer answering notifyStatus to
+// every POST /notifications and activityStatus to every POST /activities. Pass
+// 0 for either to keep that side on the success path, which is what separates
+// the two cases worth testing: a push the server refuses while activities still
+// work, and an integration key it refuses outright (401/403) or a tenant over
+// quota (429), where nothing gets through. Handlers are expected to surface the
+// latter unchanged rather than as a generic 502, since the caller is the one
+// holding the key. Requests are validated before being rejected, so a test can
 // tell a rejected call from a malformed one.
-func MockPushWardServerFailingNotifications(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex) {
+func MockPushWardServerRejecting(t *testing.T, notifyStatus, activityStatus int) (*httptest.Server, *[]APICall, *sync.Mutex) {
 	t.Helper()
-	return mockPushWardServer(t, http.StatusUnprocessableEntity)
+	return mockPushWardServer(t, notifyStatus, activityStatus)
 }
 
-// MockPushWardServerRejectingCalls is MockPushWardServer with every notification
-// AND every activity create answered with status, standing in for an integration
-// key the server refuses (401/403) or a tenant over quota (429). Handlers are
-// expected to surface those unchanged rather than as a generic 502, since the
-// caller is the one holding the key. Requests are still validated first, so a
-// test can tell a rejected call from a malformed one.
-func MockPushWardServerRejectingCalls(t *testing.T, status int) (*httptest.Server, *[]APICall, *sync.Mutex) {
+func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httptest.Server, *[]APICall, *sync.Mutex) {
 	t.Helper()
-	return mockPushWardServer(t, status, status)
-}
-
-func mockPushWardServer(t *testing.T, notifyStatus int, activityStatus ...int) (*httptest.Server, *[]APICall, *sync.Mutex) {
-	t.Helper()
+	if notifyStatus == 0 {
+		notifyStatus = http.StatusCreated
+	}
 	var calls []APICall
 	var mu sync.Mutex
 	slugs := make(map[string]bool)
@@ -184,8 +181,8 @@ func mockPushWardServer(t *testing.T, notifyStatus int, activityStatus ...int) (
 			return
 		}
 
-		if len(activityStatus) > 0 {
-			respondError(w, activityStatus[0], "activity rejected")
+		if activityStatus >= 400 {
+			respondError(w, activityStatus, "activity rejected")
 			return
 		}
 
