@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"time"
 
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
@@ -414,12 +413,8 @@ func (cfg *Config) applyEnvOverrides() error {
 	if v := os.Getenv("PUSHWARD_OTEL_TLS_KEY_PATH"); v != "" {
 		cfg.Telemetry.TLSKeyPath = v
 	}
-	if v := os.Getenv("PUSHWARD_OTEL_SAMPLE_RATE"); v != "" {
-		rate, err := strconv.ParseFloat(v, 64)
-		if err != nil {
-			return fmt.Errorf("parsing PUSHWARD_OTEL_SAMPLE_RATE: %w", err)
-		}
-		cfg.Telemetry.SampleRate = rate
+	if err := sharedconfig.EnvFloat64("PUSHWARD_OTEL_SAMPLE_RATE", &cfg.Telemetry.SampleRate); err != nil {
+		return err
 	}
 	if v := os.Getenv("PUSHWARD_TRUSTED_PROXY_CIDRS"); v != "" {
 		cfg.TrustedProxyCIDRs = sharedconfig.SplitList(v)

@@ -3,7 +3,6 @@ package config
 import (
 	"fmt"
 	"os"
-	"strconv"
 	"time"
 
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
@@ -131,12 +130,8 @@ func Load(path string) (*Config, error) {
 	if err := sharedconfig.EnvDuration("PUSHWARD_POLL_IDLE", &cfg.Polling.IdleInterval); err != nil {
 		return nil, err
 	}
-	if v := os.Getenv("PUSHWARD_BACKREST_LAST_N"); v != "" {
-		n, err := strconv.ParseInt(v, 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("parsing PUSHWARD_BACKREST_LAST_N: %w", err)
-		}
-		cfg.Polling.LastN = n
+	if err := sharedconfig.EnvInt64("PUSHWARD_BACKREST_LAST_N", &cfg.Polling.LastN); err != nil {
+		return nil, err
 	}
 	if err := sharedconfig.EnvBool("PUSHWARD_BACKREST_LIVE_PROGRESS", &cfg.Render.LiveProgress); err != nil {
 		return nil, err

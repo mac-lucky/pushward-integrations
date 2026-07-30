@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"strconv"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -51,14 +50,8 @@ func (c *PushWardConfig) ApplyEnvOverrides() error {
 	if v := os.Getenv("PUSHWARD_API_KEY"); v != "" {
 		c.APIKey = v
 	}
-	if v := os.Getenv("PUSHWARD_PRIORITY"); v != "" {
-		// strconv.Atoi rejects trailing garbage ("5x", "0x10"); fmt.Sscanf
-		// would silently accept it and truncate to a wrong value.
-		p, err := strconv.Atoi(v)
-		if err != nil {
-			return fmt.Errorf("parsing PUSHWARD_PRIORITY %q: %w", v, err)
-		}
-		c.Priority = p
+	if err := EnvInt("PUSHWARD_PRIORITY", &c.Priority); err != nil {
+		return err
 	}
 	if err := EnvDuration("PUSHWARD_CLEANUP_DELAY", &c.CleanupDelay); err != nil {
 		return err

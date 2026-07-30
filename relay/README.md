@@ -122,7 +122,7 @@ Tracing is fully disabled when `telemetry.endpoint` is empty.
 | `PUSHWARD_OTEL_ENDPOINT` | `telemetry.endpoint` | OTLP gRPC endpoint. Empty disables tracing entirely. | _(empty)_ |
 | `PUSHWARD_OTEL_TLS_CERT_PATH` | `telemetry.tls_cert_path` | Client certificate PEM for mTLS (cert and key both required for mTLS). | _(empty)_ |
 | `PUSHWARD_OTEL_TLS_KEY_PATH` | `telemetry.tls_key_path` | Client private key PEM for mTLS. | _(empty)_ |
-| `PUSHWARD_OTEL_SAMPLE_RATE` | `telemetry.sample_rate` | Trace sampling rate `0.0`–`1.0`. | `1.0` |
+| `PUSHWARD_OTEL_SAMPLE_RATE` | `telemetry.sample_rate` | Trace sampling rate `0.0`-`1.0`. A value outside that range falls back to `1.0`; an explicit `0` means sample nothing. | `1.0` |
 
 ### Provider toggles
 
