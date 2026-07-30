@@ -48,6 +48,37 @@ func TestDefaultRenderConfig(t *testing.T) {
 	}
 }
 
+// The zero value is not the shipped default, so a bridge starting from
+// PushWardConfig{} would ship priority 0 and no TTLs at all.
+func TestDefaultPushWardConfig(t *testing.T) {
+	d := DefaultPushWardConfig()
+	if d.Priority != 1 {
+		t.Errorf("priority = %d, want 1", d.Priority)
+	}
+	if d.CleanupDelay != 15*time.Minute || d.StaleTimeout != 30*time.Minute {
+		t.Errorf("TTLs = %v / %v, want 15m / 30m", d.CleanupDelay, d.StaleTimeout)
+	}
+	if d.EndDelay != 5*time.Second || d.EndDisplayTime != 4*time.Second {
+		t.Errorf("two-phase end = %v / %v, want 5s / 4s", d.EndDelay, d.EndDisplayTime)
+	}
+	// Validate requires both, so defaulting either would only move the failure
+	// from startup to the first push.
+	if d.URL != "" || d.APIKey != "" {
+		t.Errorf("credentials must stay empty, got %q / %q", d.URL, d.APIKey)
+	}
+	if (PushWardConfig{}) == d {
+		t.Error("if the zero value ever equals the default, this helper is pointless")
+	}
+	// The default must be one Validate accepts, or every bridge that takes it
+	// unmodified fails to start.
+	withCreds := d
+	withCreds.URL = "https://api.example.test"
+	withCreds.APIKey = "hlk_test"
+	if err := withCreds.Validate(); err != nil {
+		t.Errorf("the shipped default must validate, got %v", err)
+	}
+}
+
 func TestEnvBool(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -20,6 +20,28 @@ type PushWardConfig struct {
 	EndDisplayTime time.Duration `yaml:"end_display_time"`
 }
 
+// DefaultPushWardConfig is the shipped default for a bridge that closes its
+// activities in two phases: a final ONGOING update lands the completion content
+// on the Dynamic Island, then ENDED follows after EndDisplayTime.
+//
+// URL and APIKey stay empty. Neither has a sane default and Validate requires
+// both, so a bridge that forgot to configure them fails at startup rather than
+// pushing at some placeholder host.
+//
+// A bridge that diverges assigns over the field it differs on rather than
+// restating the whole set, which keeps the divergence and its reason together.
+// One caller does not use this at all: the grafana bridge ends in a single shot
+// and leaves EndDelay and EndDisplayTime unset on purpose.
+func DefaultPushWardConfig() PushWardConfig {
+	return PushWardConfig{
+		Priority:       1,
+		CleanupDelay:   15 * time.Minute,
+		StaleTimeout:   30 * time.Minute,
+		EndDelay:       5 * time.Second,
+		EndDisplayTime: 4 * time.Second,
+	}
+}
+
 // ServerConfig holds the HTTP server settings for webhook-based integrations.
 type ServerConfig struct {
 	Address        string `yaml:"address"`
