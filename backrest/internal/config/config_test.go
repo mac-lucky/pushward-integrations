@@ -23,6 +23,11 @@ func baseEnv(t *testing.T) {
 		"PUSHWARD_BACKREST_URL": "http://backrest:9898",
 		"PUSHWARD_URL":          "https://api.pushward.app",
 		"PUSHWARD_API_KEY":      "hlk_test",
+		// Cleared, not assumed absent: both names are shared across six bridges, so an
+		// exported value in the developer's shell would fail the default assertions for
+		// an unrelated reason. Tests that want a value set it after calling this.
+		"PUSHWARD_POLL_INTERVAL": "",
+		"PUSHWARD_POLL_IDLE":     "",
 	})
 }
 
@@ -207,7 +212,12 @@ func TestNoCredentialsIsValid(t *testing.T) {
 // The example config is what users copy, so it has to parse and agree with the
 // defaults it documents.
 func TestExampleConfigLoads(t *testing.T) {
-	withEnv(t, map[string]string{"PUSHWARD_API_KEY": "hlk_test"})
+	withEnv(t, map[string]string{
+		"PUSHWARD_API_KEY": "hlk_test",
+		// The point is what the file documents, so the environment must not speak.
+		"PUSHWARD_POLL_INTERVAL": "",
+		"PUSHWARD_POLL_IDLE":     "",
+	})
 	cfg, err := Load(filepath.Join("..", "..", "config.example.yml"))
 	if err != nil {
 		t.Fatalf("loading config.example.yml: %v", err)

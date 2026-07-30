@@ -55,10 +55,6 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// After the overrides: the active tier inherits from whatever idle_interval ends
-	// up being.
-	cfg.Polling.ApplyActiveDefault()
-
 	// Shared PushWard env overrides
 	if err := cfg.PushWard.ApplyEnvOverrides(); err != nil {
 		return nil, err
@@ -71,6 +67,9 @@ func Load(path string) (*Config, error) {
 	if len(cfg.GitHub.Repos) == 0 && cfg.GitHub.Owner == "" {
 		return nil, fmt.Errorf("github.repos or github.owner is required (set PUSHWARD_GITHUB_REPOS or PUSHWARD_GITHUB_OWNER)")
 	}
+	// Derive before checking, and only once every override layer above has run: the
+	// active tier comes from whatever idle_interval survived them.
+	cfg.Polling.ApplyActiveDefault()
 	if err := cfg.Polling.Validate(); err != nil {
 		return nil, err
 	}

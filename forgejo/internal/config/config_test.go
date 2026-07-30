@@ -29,7 +29,17 @@ pushward:
   api_key: "hlk_test"
 `
 
+// clearPollEnv makes a test independent of the shell it runs in. Both names are
+// shared across six bridges, so an exported pair can be mutually invalid and fail
+// Load for a reason the test is not about. Call it before a test sets its own values.
+func clearPollEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("PUSHWARD_POLL_IDLE", "")
+	t.Setenv("PUSHWARD_POLL_INTERVAL", "")
+}
+
 func TestLoadDefaults(t *testing.T) {
+	clearPollEnv(t)
 	cfg, err := Load(writeConfig(t, minimal))
 	if err != nil {
 		t.Fatal(err)
@@ -59,6 +69,7 @@ func TestLoadDefaults(t *testing.T) {
 }
 
 func TestLoadEnvOverrides(t *testing.T) {
+	clearPollEnv(t)
 	t.Setenv("PUSHWARD_FORGEJO_URL", "https://other.example.com")
 	t.Setenv("PUSHWARD_FORGEJO_TOKEN", "env-token")
 	t.Setenv("PUSHWARD_FORGEJO_OWNER", "env-owner")
@@ -115,6 +126,7 @@ func TestLoadRejectsUnparseableEnv(t *testing.T) {
 	}
 	for name, bad := range tests {
 		t.Run(name, func(t *testing.T) {
+			clearPollEnv(t)
 			t.Setenv(name, bad)
 			if _, err := Load(writeConfig(t, minimal)); err == nil {
 				t.Errorf("expected an error for %s=%q", name, bad)
@@ -157,6 +169,7 @@ func TestLoadRequiredFields(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			clearPollEnv(t)
 			_, err := Load(writeConfig(t, tc.body))
 			if err == nil {
 				t.Fatal("expected an error")
@@ -169,6 +182,7 @@ func TestLoadRequiredFields(t *testing.T) {
 }
 
 func TestLoadRejectsNonPositiveIntervals(t *testing.T) {
+	clearPollEnv(t)
 	t.Setenv("PUSHWARD_POLL_IDLE", "0s")
 	_, err := Load(writeConfig(t, minimal))
 	if err == nil {
@@ -183,6 +197,7 @@ func TestLoadRejectsNonPositiveIntervals(t *testing.T) {
 // TestLoadToleratesMissingFile covers the env-only deployment: the container
 // runs with -config /dev/null and every value arrives through the environment.
 func TestLoadToleratesMissingFile(t *testing.T) {
+	clearPollEnv(t)
 	t.Setenv("PUSHWARD_FORGEJO_URL", "https://git.example.com")
 	t.Setenv("PUSHWARD_FORGEJO_TOKEN", "tok")
 	t.Setenv("PUSHWARD_FORGEJO_OWNER", "acme")

@@ -23,7 +23,9 @@ func TestNewAppliesTheActiveDefault(t *testing.T) {
 		want   time.Duration
 	}{
 		{name: "unset takes the shared default", idle: 60 * time.Second, active: 0, want: 15 * time.Second},
-		{name: "set is kept", idle: 60 * time.Second, active: 15 * time.Second, want: 15 * time.Second},
+		// Deliberately not 15s: that is what the default would produce anyway, so the
+		// case could not tell "kept" from "overwritten".
+		{name: "set is kept", idle: 60 * time.Second, active: 30 * time.Second, want: 30 * time.Second},
 		{name: "equal is left alone", idle: 10 * time.Second, active: 10 * time.Second, want: 10 * time.Second},
 	}
 	for _, tc := range tests {

@@ -60,35 +60,16 @@ func (c *PushWardConfig) ApplyEnvOverrides() error {
 		}
 		c.Priority = p
 	}
-	if v := os.Getenv("PUSHWARD_CLEANUP_DELAY"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return fmt.Errorf("parsing PUSHWARD_CLEANUP_DELAY: %w", err)
-		}
-		c.CleanupDelay = d
+	if err := EnvDuration("PUSHWARD_CLEANUP_DELAY", &c.CleanupDelay); err != nil {
+		return err
 	}
-	if v := os.Getenv("PUSHWARD_STALE_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return fmt.Errorf("parsing PUSHWARD_STALE_TIMEOUT: %w", err)
-		}
-		c.StaleTimeout = d
+	if err := EnvDuration("PUSHWARD_STALE_TIMEOUT", &c.StaleTimeout); err != nil {
+		return err
 	}
-	if v := os.Getenv("PUSHWARD_END_DELAY"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return fmt.Errorf("parsing PUSHWARD_END_DELAY: %w", err)
-		}
-		c.EndDelay = d
+	if err := EnvDuration("PUSHWARD_END_DELAY", &c.EndDelay); err != nil {
+		return err
 	}
-	if v := os.Getenv("PUSHWARD_END_DISPLAY_TIME"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return fmt.Errorf("parsing PUSHWARD_END_DISPLAY_TIME: %w", err)
-		}
-		c.EndDisplayTime = d
-	}
-	return nil
+	return EnvDuration("PUSHWARD_END_DISPLAY_TIME", &c.EndDisplayTime)
 }
 
 // Validate checks that required fields are set and priority is in range.

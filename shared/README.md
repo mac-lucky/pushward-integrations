@@ -233,11 +233,11 @@ Lint matches CI (`golangci-lint` `v2.11.4`, run at the workspace root):
 golangci-lint run
 ```
 
-All five bridge CIs run their tests with the race detector (`-race -count=1 -v`); add `-race` locally when touching shared code those bridges exercise.
+Every bridge CI runs its tests with the race detector (`-race -count=1 -v`); add `-race` locally when touching shared code those bridges exercise.
 
 ## CI/CD
 
-`shared/` produces **no image and no binary** — it has no release of its own. Because every bridge imports it, a change under `shared/**` triggers each bridge's CI workflow (via path filters) plus the workspace-wide `golangci-lint` workflow, and ships only when a consuming bridge is tagged `<bridge>/v<X.Y.Z>`. Be conservative about churn here: one shared edit re-tests and can re-release all five bridges. Release mechanics live in the [root README](../README.md).
+`shared/` produces **no image and no binary** — it has no release of its own. Because every bridge imports it, a change under `shared/**` triggers each bridge's CI workflow (via path filters) plus the workspace-wide `golangci-lint` workflow, and ships only when a consuming bridge is tagged `<bridge>/v<X.Y.Z>`. Be conservative about churn here: one shared edit re-tests and can re-release every bridge. Release mechanics live in the [root README](../README.md).
 
 ## Server compatibility
 

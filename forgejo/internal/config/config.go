@@ -78,10 +78,6 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	// After the overrides: the active tier inherits from whatever idle_interval ends
-	// up being.
-	cfg.Polling.ApplyActiveDefault()
-
 	// Shared PushWard env overrides
 	if err := cfg.PushWard.ApplyEnvOverrides(); err != nil {
 		return nil, err
@@ -103,6 +99,9 @@ func Load(path string) (*Config, error) {
 	if cfg.Forgejo.Timeout <= 0 {
 		return nil, fmt.Errorf("forgejo.timeout must be positive, got %s", cfg.Forgejo.Timeout)
 	}
+	// Derive before checking, and only once every override layer above has run: the
+	// active tier comes from whatever idle_interval survived them.
+	cfg.Polling.ApplyActiveDefault()
 	if err := cfg.Polling.Validate(); err != nil {
 		return nil, err
 	}

@@ -62,6 +62,9 @@ type Options struct {
 	// flight and is what a user watching a card sees. Kept separate because the two
 	// have opposite cost profiles: tying them together means a smoother card can only
 	// be bought by multiplying the idle rate.
+	//
+	// A zero active tier is legal: New derives it, the same way a bridge's config load
+	// would have. Anything else is taken as configured and validated as-is.
 	Polling sharedconfig.PollingConfig
 
 	// HourlyRequestBudget is what the forge allows per hour, for the startup
@@ -124,11 +127,8 @@ func New(forge Forge, pw *pushward.Client, opts Options) *Poller {
 	if opts.Icon == "" {
 		opts.Icon = defaultIcon
 	}
-	// An unset active tier takes the same default the bridges' config layer applies,
-	// so the rule lives in one place rather than drifting between the two. Anything
-	// else - including a value slower than the idle tier - is left for validate to
-	// reject rather than quietly rewritten: silently clamping would give a caller a
-	// configured IdleInterval that is a lie.
+	// Resolved here too: an adapter can build Options by hand and never run the config
+	// layer that would otherwise have derived the active tier.
 	opts.Polling.ApplyActiveDefault()
 	logger := opts.Logger
 	if logger == nil {
@@ -145,12 +145,11 @@ func New(forge Forge, pw *pushward.Client, opts Options) *Poller {
 }
 
 // validate rejects the Options a forge adapter can get wrong in a way the loop
-// cannot recover from. Interval would panic time.NewTicker; the two prefixes
-// participate in the activity's identity, so a blank one is not a cosmetic
-// problem but a wrong slug persisted per repo.
+// cannot recover from: the cadence, and the two prefixes, which participate in the
+// activity's identity - a blank one is not a cosmetic problem but a wrong slug
+// persisted per repo.
 func (p *Poller) validate() error {
-	// One implementation of the tier rules, in shared/config, wrapped so an adapter
-	// author still sees which package rejected their Options.
+	// Wrapped so an adapter author sees which package rejected their Options.
 	if err := p.opts.Polling.Validate(); err != nil {
 		return fmt.Errorf("cipoll: %w", err)
 	}

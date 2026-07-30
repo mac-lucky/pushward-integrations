@@ -1,14 +1,34 @@
 package config
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 )
 
+// durationVars are the four env vars applyEnvOverrides parses as durations. Tests
+// clear them rather than assume they are absent: PUSHWARD_POLL_INTERVAL in particular
+// is shared across six bridges, so an exported value in the developer's shell would
+// otherwise make an assertion pass - or fail - for an unrelated reason.
+var durationVars = []string{
+	"PUSHWARD_METRICS_TIMEOUT",
+	"PUSHWARD_ALERT_CHECK_INTERVAL",
+	"PUSHWARD_HISTORY_WINDOW",
+	"PUSHWARD_POLL_INTERVAL",
+}
+
+func clearDurationVars(t *testing.T) {
+	t.Helper()
+	for _, name := range durationVars {
+		t.Setenv(name, "")
+	}
+}
+
 // applyEnvOverrides is exercised directly rather than through Load: it takes the
 // whole Config, so a test needs no otherwise-valid file or credential set.
 func TestApplyEnvOverridesDurations(t *testing.T) {
+	clearDurationVars(t)
 	t.Setenv("PUSHWARD_METRICS_TIMEOUT", "20s")
 	t.Setenv("PUSHWARD_ALERT_CHECK_INTERVAL", "1m")
 	t.Setenv("PUSHWARD_HISTORY_WINDOW", "2h")
@@ -35,14 +55,54 @@ func TestApplyEnvOverridesDurations(t *testing.T) {
 // An unset variable leaves whatever the YAML and defaults produced, so an empty
 // environment must not zero a configured duration.
 func TestApplyEnvOverridesLeavesUnsetDurationsAlone(t *testing.T) {
+	clearDurationVars(t)
+
 	cfg := Config{}
+	cfg.Metrics.Timeout = 5 * time.Second
+	cfg.Grafana.AlertCheckInterval = 2 * time.Minute
+	cfg.Timeline.HistoryWindow = time.Hour
 	cfg.Timeline.PollInterval = 30 * time.Second
 
 	if err := applyEnvOverrides(&cfg); err != nil {
 		t.Fatalf("applyEnvOverrides: %v", err)
 	}
+	if cfg.Metrics.Timeout != 5*time.Second {
+		t.Errorf("metrics.timeout = %s, want it untouched at 5s", cfg.Metrics.Timeout)
+	}
+	if cfg.Grafana.AlertCheckInterval != 2*time.Minute {
+		t.Errorf("grafana.alert_check_interval = %s, want it untouched at 2m0s", cfg.Grafana.AlertCheckInterval)
+	}
+	if cfg.Timeline.HistoryWindow != time.Hour {
+		t.Errorf("timeline.history_window = %s, want it untouched at 1h0m0s", cfg.Timeline.HistoryWindow)
+	}
 	if cfg.Timeline.PollInterval != 30*time.Second {
 		t.Errorf("timeline.poll_interval = %s, want it untouched at 30s", cfg.Timeline.PollInterval)
+	}
+}
+
+// Load is what production calls, and nothing else in this module covers it. Without
+// this the applyEnvOverrides call could be deleted outright and every test would
+// still pass, while every PUSHWARD_* override for the bridge silently stopped
+// working - a pod that crashloops on "metrics.url is required" in the cluster and
+// nowhere else.
+func TestLoadAppliesEnvOverrides(t *testing.T) {
+	clearDurationVars(t)
+	t.Setenv("PUSHWARD_METRICS_URL", "http://victoria:8428")
+	t.Setenv("PUSHWARD_URL", "https://api.pushward.app")
+	t.Setenv("PUSHWARD_API_KEY", "hlk_test")
+	t.Setenv("PUSHWARD_POLL_INTERVAL", "45s")
+
+	// A missing file is tolerated: the bridge is configurable from the environment
+	// alone, which is how it runs in a container.
+	cfg, err := Load(filepath.Join(t.TempDir(), "absent.yml"))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Metrics.URL != "http://victoria:8428" {
+		t.Errorf("metrics.url = %q, want the env value", cfg.Metrics.URL)
+	}
+	if cfg.Timeline.PollInterval != 45*time.Second {
+		t.Errorf("timeline.poll_interval = %s, want 45s", cfg.Timeline.PollInterval)
 	}
 }
 
@@ -55,6 +115,7 @@ func TestApplyEnvOverridesRejectsUnparseableDurations(t *testing.T) {
 		"PUSHWARD_POLL_INTERVAL",
 	} {
 		t.Run(name, func(t *testing.T) {
+			clearDurationVars(t)
 			t.Setenv(name, "30")
 
 			var cfg Config

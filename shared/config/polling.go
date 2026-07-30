@@ -6,21 +6,21 @@ import (
 )
 
 const (
-	// defaultIdleInterval is the gap between detection passes over every watched repo.
+	// defaultIdleInterval is the shipped detection cadence. See IdleInterval for what
+	// a pass costs and why raising this is the lever when a bridge gets throttled.
 	defaultIdleInterval = 60 * time.Second
-	// defaultActiveInterval is the gap between updates to a run already in flight
-	// when polling.interval is not set. Kept well under the idle default because the
-	// two tiers cost very different amounts: this one is a request per *running* run,
-	// while the idle tier is a request per *watched repo*.
+	// defaultActiveInterval caps the derived active tier. Kept well under the idle
+	// default because the two tiers cost very different amounts: this one is a request
+	// per *running* run, while the idle tier is a request per *watched repo*.
 	defaultActiveInterval = 15 * time.Second
 )
 
 // DefaultPollingConfig is the shipped two-tier default.
 //
-// Interval is deliberately left unset rather than pre-filled with 15s: it inherits
-// from IdleInterval in ApplyActiveDefault, after the YAML and env layers have had
-// their say. Pre-filling it here would reject an idle_interval of 10s as a
-// cross-field error instead of following it down.
+// Interval is deliberately left unset rather than pre-filled: it is derived in
+// ApplyActiveDefault, after the YAML and env layers have had their say. Pre-filling
+// the cap here would turn an idle_interval below it into a cross-field error instead
+// of following it down.
 func DefaultPollingConfig() PollingConfig {
 	return PollingConfig{IdleInterval: defaultIdleInterval}
 }
@@ -37,8 +37,8 @@ type PollingConfig struct {
 	IdleInterval time.Duration `yaml:"idle_interval"`
 	// Interval is how often a run already being tracked is advanced - what someone
 	// watching the card sees. One request per run in flight, so it stays cheap no
-	// matter how many repos are watched. Defaults to the smaller of idle_interval
-	// and 15s, so lowering idle_interval alone never leaves this slower than it.
+	// matter how many repos are watched. Derived from idle_interval when unset; see
+	// ApplyActiveDefault.
 	Interval time.Duration `yaml:"interval"`
 }
 
@@ -55,35 +55,36 @@ func (p *PollingConfig) ApplyEnvOverrides() error {
 	return EnvDuration("PUSHWARD_POLL_INTERVAL", &p.Interval)
 }
 
-// ApplyActiveDefault fills in an unset active tier from the idle one. Call it after
-// the last override layer, so an operator who lowered idle_interval to get faster
-// cards is not left with an active tier slower than the idle one.
+// ApplyActiveDefault derives an unset active tier: the smaller of idle_interval and
+// defaultActiveInterval. Call it after the last override layer, so an operator who
+// lowered idle_interval to get faster cards is not left with an active tier slower
+// than the idle one.
 //
-// Only an unset value inherits: a negative one is a mistake and falls through to
-// Validate rather than being quietly turned into something workable.
+// Only an unset value is derived. Anything else - including a value slower than the
+// idle tier - is left for Validate to reject rather than quietly repaired: clamping
+// it would hand the operator back a cadence they never configured.
 func (p *PollingConfig) ApplyActiveDefault() {
 	if p.Interval == 0 {
 		p.Interval = min(p.IdleInterval, defaultActiveInterval)
 	}
 }
 
-// Validate rejects a cadence the poll loop cannot run on. A non-positive interval
-// would panic time.NewTicker, and an active tier slower than the idle one is
-// nonsense the loop cannot honor.
+// Validate rejects a cadence the poll loop cannot run on: a non-positive interval
+// panics time.NewTicker, a non-positive idle_interval makes every tick a full
+// detection pass and burns the forge's whole request budget, and an active tier
+// slower than the idle one would stretch detection to interval and leave the
+// configured idle_interval meaningless.
 //
-// The errors name the YAML key rather than the Go field: the reader is the operator
-// whose manifest set it, and both this layer and cipoll surface them through the
-// same startup log.
-func (p PollingConfig) Validate() error {
+// The errors name the YAML key rather than the Go field. Most readers are operators
+// editing a manifest; an adapter author building Options by hand gets the same
+// spelling, which cipoll's wrap keeps traceable.
+func (p *PollingConfig) Validate() error {
 	if p.IdleInterval <= 0 {
 		return fmt.Errorf("polling.idle_interval must be positive, got %s", p.IdleInterval)
 	}
 	if p.Interval <= 0 {
 		return fmt.Errorf("polling.interval must be positive, got %s", p.Interval)
 	}
-	// The loop ticks on interval and gates the detection pass off idle_interval, so
-	// the fast tier being the slower of the two would stretch detection to interval
-	// and leave the configured idle_interval meaningless.
 	if p.Interval > p.IdleInterval {
 		return fmt.Errorf("polling.interval (%s) must not exceed polling.idle_interval (%s): the active tier cannot be slower than the idle one",
 			p.Interval, p.IdleInterval)

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -16,7 +17,22 @@ func baseEnv(t *testing.T) string {
 	t.Setenv("PUSHWARD_SABNZBD_API_KEY", "sab-key")
 	t.Setenv("PUSHWARD_URL", "https://api.pushward.app")
 	t.Setenv("PUSHWARD_API_KEY", "hlk_test")
+	// Cleared, not assumed absent: this name is shared across six bridges, so an
+	// exported value in the developer's shell would fail the default assertions for an
+	// unrelated reason. Tests that want a value set it after calling this.
+	t.Setenv("PUSHWARD_POLL_INTERVAL", "")
 	return filepath.Join(t.TempDir(), "absent.yml")
+}
+
+// writeConfig writes a config file next to the env-only path baseEnv returns, so the
+// YAML branch of Load gets exercised too.
+func writeConfig(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -32,6 +48,30 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.SABnzbd.Template != "generic" {
 		t.Errorf("template = %q, want generic", cfg.SABnzbd.Template)
+	}
+}
+
+// The yaml tag is the contract for a chart that mounts a config file instead of
+// setting the env var, and env-beats-YAML is the documented precedence.
+func TestLoadPollIntervalFromYAML(t *testing.T) {
+	baseEnv(t)
+	path := writeConfig(t, "polling:\n  interval: 12s\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Polling.Interval != 12*time.Second {
+		t.Errorf("polling.interval = %s, want the 12s from the file", cfg.Polling.Interval)
+	}
+
+	t.Setenv("PUSHWARD_POLL_INTERVAL", "20s")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Polling.Interval != 20*time.Second {
+		t.Errorf("polling.interval = %s, want the env var to beat the file", cfg.Polling.Interval)
 	}
 }
 

@@ -30,12 +30,14 @@ type BackrestConfig struct {
 	Timeout time.Duration `yaml:"timeout"`
 }
 
-// PollingConfig is deliberately not sharedconfig.PollingConfig, which the two forge
-// bridges use. The tiers there are a ticker plus a timestamp gate, so the active one
-// must not be slower than the idle one; here they are two mutually exclusive sleep
-// values picked per cycle, so that relationship does not exist and the defaults are
-// tighter (5s/30s against 60s). LastN is not a cadence at all. Adopting the shared
-// type would newly reject an interval above idle_interval, which loads today.
+// PollingConfig is this bridge's cadence pair plus the operation-window size.
+//
+// Deliberately not sharedconfig.PollingConfig, which the two forge bridges use. The
+// tiers there are a ticker plus a timestamp gate, so the active one must not be
+// slower than the idle one; here they are two mutually exclusive sleep values picked
+// per cycle, so that relationship does not exist and the defaults are tighter (5s/30s
+// against 60s). LastN is not a cadence at all. Adopting the shared type would newly
+// reject an interval above idle_interval, which loads today.
 type PollingConfig struct {
 	// Interval is how often the bridge polls while an operation is in flight.
 	Interval time.Duration `yaml:"interval"`
@@ -50,6 +52,12 @@ type PollingConfig struct {
 }
 
 // RenderConfig gates the optional presentation features.
+//
+// Also deliberately local, for a different reason than PollingConfig: it shares only
+// the LiveProgress name with sharedconfig.RenderConfig, and even that differs in
+// meaning - a progress bar and ETA here, a step pill there. Adopting the shared type
+// would hand this bridge StepColors/StepWeights and two meaningless
+// PUSHWARD_BACKREST_STEP_* variables.
 type RenderConfig struct {
 	// LiveProgress lets iOS animate the bar and count the ETA down between
 	// polls instead of stepping once per tick. It defaults on: the anchors are

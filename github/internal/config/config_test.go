@@ -8,6 +8,15 @@ import (
 	"time"
 )
 
+// clearPollEnv makes a test independent of the shell it runs in. Both names are
+// shared across six bridges, so an exported pair can be mutually invalid and fail
+// Load for a reason the test is not about. Call it before a test sets its own values.
+func clearPollEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("PUSHWARD_POLL_IDLE", "")
+	t.Setenv("PUSHWARD_POLL_INTERVAL", "")
+}
+
 // writeConfig writes a config file carrying the required credentials plus the
 // given render block, and returns its path.
 func writeConfig(t *testing.T, render string) string {
@@ -24,6 +33,7 @@ func writeConfig(t *testing.T, render string) string {
 // pill flags stay off, so an existing deployment sees the same pills it always
 // did and gains only the self-filling step.
 func TestLoad_LiveProgressDefault(t *testing.T) {
+	clearPollEnv(t)
 	// Clear all three: an exported pill flag in the developer's shell would
 	// otherwise fail this for an unrelated reason.
 	t.Setenv("PUSHWARD_GITHUB_LIVE_PROGRESS", "")
@@ -66,6 +76,7 @@ func TestLoad_LiveProgressOverrides(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			clearPollEnv(t)
 			t.Setenv("PUSHWARD_GITHUB_LIVE_PROGRESS", tc.env)
 			cfg, err := Load(writeConfig(t, tc.yaml))
 			if tc.fails {
@@ -93,6 +104,7 @@ func TestLoad_LiveProgressOverrides(t *testing.T) {
 func TestLoad_RejectsNonPositivePollInterval(t *testing.T) {
 	for _, v := range []string{"0s", "-1s"} {
 		t.Run(v, func(t *testing.T) {
+			clearPollEnv(t)
 			t.Setenv("PUSHWARD_POLL_IDLE", v)
 			_, err := Load(writeConfig(t, ""))
 			if err == nil {
@@ -119,6 +131,8 @@ func TestLoad_ResolvesTheActiveIntervalAfterTheEnvOverrides(t *testing.T) {
 	}{
 		{name: "unset takes 15s under the 60s default", wantIdle: 60 * time.Second, want: 15 * time.Second},
 		{name: "follows an idle interval below 15s", idle: "10s", wantIdle: 10 * time.Second, want: 10 * time.Second},
+		// The derived default must not clobber a value the operator set.
+		{name: "an explicit value wins", idle: "60s", active: "5s", wantIdle: 60 * time.Second, want: 5 * time.Second},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -139,19 +153,42 @@ func TestLoad_ResolvesTheActiveIntervalAfterTheEnvOverrides(t *testing.T) {
 }
 
 func TestLoad_RejectsNonPositiveActiveInterval(t *testing.T) {
+	clearPollEnv(t)
 	t.Setenv("PUSHWARD_POLL_INTERVAL", "-1s")
 	_, err := Load(writeConfig(t, ""))
 	if err == nil {
 		t.Fatal("expected a negative active interval to be rejected")
 	}
-	if !strings.Contains(err.Error(), "interval") {
-		t.Errorf("error should name the field, got %v", err)
+	// Not a bare "interval": that is a substring of "idle_interval" too, so it would
+	// pass on an error naming the wrong tier.
+	if !strings.Contains(err.Error(), "polling.interval") {
+		t.Errorf("error should name the active tier, got %v", err)
+	}
+	if strings.Contains(err.Error(), "polling.idle_interval") {
+		t.Errorf("the idle tier was reported for an active-tier problem: %v", err)
+	}
+}
+
+// An active tier slower than the idle one is nonsense: the loop ticks on the active
+// interval and gates detection off the idle one, so it would silently stretch
+// detection instead. The rule lives in shared/config; what this pins is that Load
+// still routes through it rather than resolving the conflict itself.
+func TestLoad_RejectsAnActiveIntervalSlowerThanIdle(t *testing.T) {
+	t.Setenv("PUSHWARD_POLL_IDLE", "30s")
+	t.Setenv("PUSHWARD_POLL_INTERVAL", "60s")
+	_, err := Load(writeConfig(t, ""))
+	if err == nil {
+		t.Fatal("expected an active interval above the idle one to be rejected")
+	}
+	if !strings.Contains(err.Error(), "must not exceed") {
+		t.Errorf("error should name the cross-field rule, got %v", err)
 	}
 }
 
 // A trailing comma in the repo list used to produce an empty repo name that
 // failed every poll for the life of the process.
 func TestLoad_RepoListToleratesATrailingComma(t *testing.T) {
+	clearPollEnv(t)
 	t.Setenv("PUSHWARD_GITHUB_REPOS", "owner/one, owner/two,")
 	cfg, err := Load(writeConfig(t, ""))
 	if err != nil {

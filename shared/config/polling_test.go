@@ -39,6 +39,10 @@ func TestPollingConfigApplyEnvOverrides(t *testing.T) {
 // manifest in production sets these exact names for whichever bridge is in the
 // container.
 func TestPollingConfigApplyEnvOverridesTakesNoBridgePrefix(t *testing.T) {
+	// Cleared rather than assumed absent: an inherited value in the developer's shell
+	// would otherwise make this pass for the wrong reason.
+	t.Setenv("PUSHWARD_POLL_IDLE", "")
+	t.Setenv("PUSHWARD_POLL_INTERVAL", "")
 	t.Setenv("PUSHWARD_GITHUB_POLL_IDLE", "5m")
 
 	p := DefaultPollingConfig()
@@ -99,6 +103,22 @@ func TestPollingConfigApplyActiveDefault(t *testing.T) {
 			name: "a negative value is left alone",
 			in:   PollingConfig{IdleInterval: 60 * time.Second, Interval: -time.Second},
 			want: -time.Second,
+		},
+		{
+			// Also not an unset value. Repairing this here instead would make
+			// Validate's cross-field rejection unreachable on every path that
+			// resolves before validating - which is all of them.
+			name: "a value slower than the idle tier is left alone",
+			in:   PollingConfig{IdleInterval: 30 * time.Second, Interval: 60 * time.Second},
+			want: 60 * time.Second,
+		},
+		{
+			// The one input where the derived value is itself zero, so the second
+			// application re-enters the branch. It is a fixed point; Validate is what
+			// reports the real problem, the idle tier.
+			name: "a zero idle interval leaves the active tier for Validate",
+			in:   PollingConfig{},
+			want: 0,
 		},
 	}
 	for _, tt := range tests {

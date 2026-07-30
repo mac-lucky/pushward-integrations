@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -17,7 +18,22 @@ func baseEnv(t *testing.T) string {
 	t.Setenv("PUSHWARD_BAMBULAB_SERIAL", "01P00A000000000")
 	t.Setenv("PUSHWARD_URL", "https://api.pushward.app")
 	t.Setenv("PUSHWARD_API_KEY", "hlk_test")
+	// Cleared, not assumed absent: this name is shared across six bridges, so an
+	// exported value in the developer's shell would fail the default assertions for an
+	// unrelated reason. Tests that want a value set it after calling this.
+	t.Setenv("PUSHWARD_POLL_INTERVAL", "")
 	return filepath.Join(t.TempDir(), "absent.yml")
+}
+
+// writeConfig writes a config file next to the env-only path baseEnv returns, so the
+// YAML branch of Load gets exercised too.
+func writeConfig(t *testing.T, body string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.yml")
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }
 
 func TestLoadDefaults(t *testing.T) {
@@ -28,10 +44,46 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Polling.UpdateInterval != 5*time.Second {
 		t.Errorf("polling.update_interval = %s, want 5s", cfg.Polling.UpdateInterval)
 	}
-	// The printer's cert is self-signed, but verification is only skipped when an
-	// operator asks for it.
-	if cfg.BambuLab.TLS.InsecureSkipVerify {
-		t.Error("insecure_skip_verify must default off")
+}
+
+// The fingerprint is what turns "accept any self-signed cert" into pinned
+// verification, so an override that silently stopped arriving would drop the pinning
+// with nothing else failing.
+func TestLoadCertFingerprintOverride(t *testing.T) {
+	path := baseEnv(t)
+	const fingerprint = "aa:bb:cc:dd:ee:ff:00:11"
+	t.Setenv("PUSHWARD_BAMBULAB_CERT_FINGERPRINT", fingerprint)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.BambuLab.TLS.CertFingerprintSHA256 != fingerprint {
+		t.Errorf("cert_fingerprint_sha256 = %q, want %q", cfg.BambuLab.TLS.CertFingerprintSHA256, fingerprint)
+	}
+}
+
+// The yaml tag is the contract for a chart that mounts a config file instead of
+// setting the env var, and env-beats-YAML is the documented precedence.
+func TestLoadUpdateIntervalFromYAML(t *testing.T) {
+	baseEnv(t)
+	path := writeConfig(t, "polling:\n  update_interval: 12s\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Polling.UpdateInterval != 12*time.Second {
+		t.Errorf("polling.update_interval = %s, want the 12s from the file", cfg.Polling.UpdateInterval)
+	}
+
+	t.Setenv("PUSHWARD_POLL_INTERVAL", "20s")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Polling.UpdateInterval != 20*time.Second {
+		t.Errorf("polling.update_interval = %s, want the env var to beat the file", cfg.Polling.UpdateInterval)
 	}
 }
 

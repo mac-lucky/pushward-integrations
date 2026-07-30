@@ -156,8 +156,8 @@ func (f *fakeForge) wantTimings() bool {
 
 func testOptions() Options {
 	return Options{
-		// Mirrors the production default, active tier included: New resolves it the
-		// same way a bridge's config load does.
+		// Left unresolved so New's own derivation stays exercised. A bridge resolves
+		// this in its config load, so production never hands New a zero active tier.
 		Polling: sharedconfig.DefaultPollingConfig(),
 		PushWard: sharedconfig.PushWardConfig{
 			Priority:       1,

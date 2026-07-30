@@ -112,6 +112,11 @@ func TestEnvDuration(t *testing.T) {
 			if !tt.wantErr && err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
+			// Callers rely on the message identifying which variable was wrong: the
+			// bridges pass several of these in a row and report the first failure.
+			if tt.wantErr && !strings.Contains(err.Error(), "PUSHWARD_TEST_INTERVAL") {
+				t.Errorf("error should name the variable, got %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("got %v, want %v", got, tt.want)
 			}

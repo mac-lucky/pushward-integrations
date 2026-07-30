@@ -24,7 +24,7 @@ import (
 const testRepo = "owner/repo"
 
 func testConfig() *config.Config {
-	return &config.Config{
+	cfg := &config.Config{
 		GitHub: config.GitHubConfig{Repos: []string{testRepo}},
 		PushWard: sharedconfig.PushWardConfig{
 			Priority:       1,
@@ -37,6 +37,10 @@ func testConfig() *config.Config {
 		// Mirrors the production default so tests exercise the shipped behavior.
 		Render: sharedconfig.DefaultRenderConfig(),
 	}
+	// As Load leaves it: a resolved active tier, never the zero one the constructor
+	// alone returns.
+	cfg.Polling.ApplyActiveDefault()
+	return cfg
 }
 
 func mockGitHubClient(t *testing.T, handler http.Handler) *ghclient.Client {
