@@ -19,8 +19,8 @@ var (
 )
 
 // releaseBaseTitle extracts the media name from a scene release title.
-// TV: "Show.Name.S01E02.1080p..." → "Show.Name"
-// Movie: "Movie.Name.2024.1080p..." → "Movie.Name"
+// TV: "Show.Name.S01E02.1080p..." -> "Show.Name"
+// Movie: "Movie.Name.2024.1080p..." -> "Movie.Name"
 // Returns empty string if the title cannot be parsed.
 func releaseBaseTitle(title string) string {
 	if m := reTV.FindStringSubmatch(title); m != nil {

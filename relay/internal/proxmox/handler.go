@@ -123,7 +123,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 		// Cancel any pending two-phase end from a prior cycle on this key so a
 		// new backup within the end window isn't clobbered and prematurely ended.
 		h.ender.StopTimer(userKey, mapKey)
-		// Backup starting — create activity + ONGOING
+		// Backup starting - create activity + ONGOING
 		if err := cl.CreateActivity(ctx, slug, text.TruncateHard(p.Title, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
 			log.Error("failed to create proxmox backup activity", "slug", slug, "error", err)
 			return err
@@ -158,7 +158,7 @@ func (h *Handler) handleVzdump(ctx context.Context, userKey string, log *slog.Lo
 		log.Info("proxmox backup started", "slug", slug, "vmid", vmid, "hostname", p.Hostname)
 	} else if strings.Contains(msgLower, "finished successfully") {
 		// Only end if we have a tracked start event. Surface a store error as
-		// 502 so the completion event is retried — otherwise a transient DB blip
+		// 502 so the completion event is retried - otherwise a transient DB blip
 		// is indistinguishable from "no start" and the activity lingers.
 		existing, err := h.store.Get(ctx, "proxmox", userKey, mapKey, "")
 		if err != nil {
@@ -223,7 +223,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, log *sl
 	if !ov.AllowsActivity() {
 		return nil
 	}
-	// Extract job ID from message — titles differ between start/finish phases.
+	// Extract job ID from message - titles differ between start/finish phases.
 	jobID := "unknown"
 	if m := replicationJobRe.FindStringSubmatch(p.Message); len(m) > 1 {
 		jobID = m[1]

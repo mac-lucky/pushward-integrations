@@ -184,7 +184,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 	}
 
 	// Activity mode. If the same content key was already tracked (retry of a
-	// failed release), skip CreateActivity — the update below refreshes the
+	// failed release), skip CreateActivity - the update below refreshes the
 	// existing activity back to "Grabbed".
 	_, alreadyTracked := h.getTrackedSlug(ctx, userKey, mapKey)
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
@@ -446,7 +446,7 @@ func sonarrMediaThreadID(s SonarrSeries) string {
 //
 // APNs caps apns-collapse-id at 64 bytes total; the suffix is budgeted to
 // stay well below that when combined with prefixes like "sonarr-import-complete"
-// (22 bytes). Season-pack grabs with many episodes are truncated — the ones
+// (22 bytes). Season-pack grabs with many episodes are truncated - the ones
 // that fit still uniquely identify the set for realistic concurrent-push cases.
 func episodeCollapseSuffix(episodes []SonarrEpisode) string {
 	if len(episodes) == 0 {

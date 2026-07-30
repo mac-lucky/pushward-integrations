@@ -86,8 +86,8 @@ type ArgoCDConfig struct {
 type NotificationMode string
 
 const (
-	ModeActivity NotificationMode = "activity" // All events → Live Activity (default, current behavior)
-	ModeNotify   NotificationMode = "notify"   // All events → push notification
+	ModeActivity NotificationMode = "activity" // All events -> Live Activity (default, current behavior)
+	ModeNotify   NotificationMode = "notify"   // All events -> push notification
 	ModeSmart    NotificationMode = "smart"    // Handler decides per event type
 )
 
@@ -488,7 +488,7 @@ func (cfg *Config) baseProviders() []providerEntry {
 
 // validateProviderTimeouts rejects a non-positive StaleTimeout for any enabled
 // provider. A non-positive TTL makes the state store write rows with NULL
-// expiry that the periodic Cleanup never deletes (postgres.go) — an unbounded
+// expiry that the periodic Cleanup never deletes (postgres.go) - an unbounded
 // table at 10k+ users.
 func (cfg *Config) validateProviderTimeouts() error {
 	for _, p := range cfg.baseProviders() {

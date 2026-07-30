@@ -234,7 +234,7 @@ func TestRefiringAlert_SendsNotification(t *testing.T) {
 		t.Fatalf("expected 1 notification on first fire, got %d", len(recorded))
 	}
 
-	// Second fire (same state) — should be skipped by dedup
+	// Second fire (same state) - should be skipped by dedup
 	sendWebhook(t, handler, payload)
 	recorded = testutil.GetCalls(calls, mu)
 	if len(recorded) != 1 {
@@ -631,7 +631,7 @@ func TestGroupedNotification_MixedFiringAndResolved(t *testing.T) {
 func TestGroupedNotification_CollapseID(t *testing.T) {
 	handler, calls, mu, _ := setup(t)
 
-	// Two alerts with same alertname → grouped → alertname-based CollapseID
+	// Two alerts with same alertname -> grouped -> alertname-based CollapseID
 	payload := `{
 		"alerts": [
 			{
@@ -840,7 +840,7 @@ func TestStateDedup_SameWebhookTwice(t *testing.T) {
 		t.Fatalf("expected 1 notification on first send, got %d", len(recorded))
 	}
 
-	// Second send with same payload — should be skipped
+	// Second send with same payload - should be skipped
 	sendWebhook(t, handler, payload)
 	recorded = testutil.GetCalls(calls, mu)
 	if len(recorded) != 1 {
@@ -891,7 +891,7 @@ func TestStateDedup_StateChange(t *testing.T) {
 func TestStateDedup_ColdResolve(t *testing.T) {
 	handler, calls, mu, _ := setup(t)
 
-	// Resolved webhook with no prior state — should still send
+	// Resolved webhook with no prior state - should still send
 	payload := `{
 		"alerts": [{
 			"status": "resolved",
@@ -921,7 +921,7 @@ func TestStateDedup_FullResolveDeletesState(t *testing.T) {
 		}]
 	}`)
 
-	// Resolve (all resolved → state deleted)
+	// Resolve (all resolved -> state deleted)
 	sendWebhook(t, handler, `{
 		"alerts": [{
 			"status": "resolved",
@@ -936,7 +936,7 @@ func TestStateDedup_FullResolveDeletesState(t *testing.T) {
 		t.Fatalf("expected 2 notifications (fire + resolve), got %d", len(recorded))
 	}
 
-	// Send resolved again — should re-send because state was deleted
+	// Send resolved again - should re-send because state was deleted
 	sendWebhook(t, handler, `{
 		"alerts": [{
 			"status": "resolved",
@@ -979,7 +979,7 @@ func TestStateDedup_GroupedSameWebhookTwice(t *testing.T) {
 		t.Fatalf("expected 1 grouped notification, got %d", len(recorded))
 	}
 
-	// Second send — dedup
+	// Second send - dedup
 	sendWebhook(t, handler, payload)
 	recorded = testutil.GetCalls(calls, mu)
 	if len(recorded) != 1 {
@@ -989,7 +989,7 @@ func TestStateDedup_GroupedSameWebhookTwice(t *testing.T) {
 
 // TestStateDedup_CaseAndPunctuationIndependent verifies that alertnames that
 // differ only in casing/punctuation dedup INDEPENDENTLY. The dedup state key is
-// derived with text.SlugHash, which is collision-resistant — unlike text.Slug,
+// derived with text.SlugHash, which is collision-resistant - unlike text.Slug,
 // which would collapse "High CPU" and "high_cpu" to the same key
 // ("grafana-high-cpu") and cross-contaminate their dedup state.
 //
@@ -1023,7 +1023,7 @@ func TestStateDedup_CaseAndPunctuationIndependent(t *testing.T) {
 		t.Fatalf("after first 'High CPU' delivery: expected 1 notification, got %d", got)
 	}
 
-	// First delivery of "high_cpu": must NOT be suppressed by "High CPU" state —
+	// First delivery of "high_cpu": must NOT be suppressed by "High CPU" state -
 	// distinct SlugHash key, so a second notification fires. (Buggy Slug key
 	// would collapse both to one key and suppress this, leaving the count at 1.)
 	sendWebhook(t, handler, highCPUUnderscore)
@@ -1044,7 +1044,7 @@ func TestStateDedup_CaseAndPunctuationIndependent(t *testing.T) {
 
 // TestNotificationURL_HTTPAndPrivateHostsKept verifies that http URLs and
 // private-host URLs (common in self-hosted Grafana behind a reverse proxy on
-// the user's LAN) are forwarded to the server unchanged — the iOS device
+// the user's LAN) are forwarded to the server unchanged - the iOS device
 // receiving the push is typically on the same VPN and can resolve them.
 func TestNotificationURL_HTTPAndPrivateHostsKept(t *testing.T) {
 	tests := []struct {

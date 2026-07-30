@@ -204,7 +204,7 @@ func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, 
 		return err
 	}
 
-	// Schedule two-phase end — the activity will be dismissed after EndDelay + EndDisplayTime.
+	// Schedule two-phase end - the activity will be dismissed after EndDelay + EndDisplayTime.
 	// If a subsequent "added" event arrives for the same document, it creates a new activity
 	// with a doc_id-based slug (different from this filename-based slug).
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)

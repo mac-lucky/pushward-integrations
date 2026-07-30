@@ -51,7 +51,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 
 	ev := parseMessage(input.Body.Message)
 	if ev == nil {
-		// Unrecognized message format → treat as test notification.
+		// Unrecognized message format -> treat as test notification.
 		cl := h.clients.Get(userKey)
 		if err := selftest.SendTest(ctx, cl, "bazarr"); err != nil {
 			log.Error("test notification failed", "provider", "bazarr", "error", err)

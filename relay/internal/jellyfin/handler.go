@@ -40,11 +40,11 @@ type Handler struct {
 	config       *config.JellyfinConfig
 	ender        *lifecycle.Ender
 	mu           sync.Mutex
-	pauseTimers  map[string]*pauseTimer // debounceKey → pause auto-end timer + its generation
+	pauseTimers  map[string]*pauseTimer // debounceKey -> pause auto-end timer + its generation
 	pauseSeq     uint64                 // monotonic generation source for pause timers
-	lastUpdate   map[string]time.Time   // "userKey:slug" → last progress update time
-	lastPaused   map[string]bool        // "userKey:slug" → last IsPaused state
-	lastProgress map[string]float64     // "userKey:slug" → last progress value
+	lastUpdate   map[string]time.Time   // "userKey:slug" -> last progress update time
+	lastPaused   map[string]bool        // "userKey:slug" -> last IsPaused state
+	lastProgress map[string]float64     // "userKey:slug" -> last progress value
 }
 
 // RegisterRoutes registers the Jellyfin webhook endpoint and returns the Handler.
@@ -136,7 +136,7 @@ func playbackProgress(p *jellyfinPayload) float64 {
 	}
 	// Clamp to [0,1]: Jellyfin can report a position past the runtime
 	// (end-credits/post-roll or rounding), and the server rejects progress
-	// outside [0,1] — mirrors the max(...,0) clamp in remainingSeconds.
+	// outside [0,1] - mirrors the max(...,0) clamp in remainingSeconds.
 	return min(max(float64(p.PlaybackPositionTicks)/float64(p.RunTimeTicks), 0), 1)
 }
 
@@ -206,7 +206,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *
 	}
 	slug := playbackSlug(p.ItemID, p.UserName)
 
-	// Skip paused starts �� Jellyfin fires PlaybackStart with IsPaused=true
+	// Skip paused starts - Jellyfin fires PlaybackStart with IsPaused=true
 	// for stale sessions, causing false-positive activities. Record debounce
 	// state so a real resume (IsPaused=false) triggers late-join creation.
 	if p.IsPaused {
@@ -289,14 +289,14 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 	slug := playbackSlug(p.ItemID, p.UserName)
 	mapKey := "playback:" + p.ItemID + ":" + p.UserName
 
-	// Debounce check — bypass on state change, suppress while paused
+	// Debounce check - bypass on state change, suppress while paused
 	debounceKey := auth.MapKeyPrefix(userKey) + ":" + slug
 	h.mu.Lock()
 	last, hasLast := h.lastUpdate[debounceKey]
 	prevPaused, hasPrev := h.lastPaused[debounceKey]
 	stateChanged := hasPrev && prevPaused != p.IsPaused
 
-	// Handle pause→play: cancel pause timer
+	// Handle pause->play: cancel pause timer
 	if stateChanged && !p.IsPaused {
 		if pt, ok := h.pauseTimers[debounceKey]; ok {
 			pt.timer.Stop()
@@ -332,7 +332,7 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 	progress := playbackProgress(p)
 	h.lastProgress[debounceKey] = progress
 
-	// Start pause timer on play→pause or initial pause
+	// Start pause timer on play->pause or initial pause
 	if p.IsPaused && h.config.PauseTimeout > 0 && (stateChanged || !hasPrev) {
 		deviceName := p.DeviceName
 		userName := p.UserName
@@ -352,7 +352,7 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 
 	// Create activity if it doesn't exist (e.g. PlaybackStart was missed)
 	if exists, _ := h.store.Exists(ctx, "jellyfin", userKey, mapKey, ""); !exists {
-		// Don't create activity for paused playback — wait for a real play event.
+		// Don't create activity for paused playback - wait for a real play event.
 		if p.IsPaused {
 			h.mu.Lock()
 			if pt, ok := h.pauseTimers[debounceKey]; ok {
@@ -602,7 +602,7 @@ func (h *Handler) armPauseTimer(debounceKey string, fn func(gen uint64)) {
 	}
 }
 
-// endPaused is called when the pause timer fires — auto-ends the activity
+// endPaused is called when the pause timer fires - auto-ends the activity
 // because it has been paused with no progress change. gen identifies the timer
 // generation that scheduled this call; if the current entry for the key is gone
 // or carries a different generation (a resume/seek/sweep replaced or stopped it,

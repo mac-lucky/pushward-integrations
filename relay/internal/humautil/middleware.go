@@ -63,7 +63,7 @@ func IPRateLimitMiddleware(api huma.API) func(huma.Context, func(huma.Context)) 
 // NormalizeJSONContentType rewrites Content-Type to application/json on POST
 // requests arriving with a missing or text/plain header, so Huma's strict
 // content negotiation accepts JSON bodies sent by misconfigured webhook
-// senders. A non-JSON body still fails — with a 400 from the decoder
+// senders. A non-JSON body still fails - with a 400 from the decoder
 // instead of a 415 from negotiation.
 func NormalizeJSONContentType(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

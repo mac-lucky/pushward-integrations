@@ -58,7 +58,7 @@ func ExtractKey(authHeader string) string {
 		if strings.HasPrefix(rest, "hlk_") {
 			return rest
 		}
-	// Pattern 2: Basic Auth — hlk_ in password field
+	// Pattern 2: Basic Auth - hlk_ in password field
 	case strings.EqualFold(scheme, "Basic"):
 		if decoded, err := base64.StdEncoding.DecodeString(rest); err == nil {
 			if _, password, ok := strings.Cut(string(decoded), ":"); ok {

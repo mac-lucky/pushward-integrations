@@ -320,7 +320,7 @@ func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 		t.Fatal("expected app to still be tracked after transient degraded")
 	}
 
-	// deployed arrives — should recover to 100% Deployed
+	// deployed arrives - should recover to 100% Deployed
 	w = sendWebhook(t, mux, `{"app":"web-app","event":"deployed","revision":"rev1"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("deployed: expected 200, got %d", w.Code)
@@ -358,7 +358,7 @@ func TestUntracked_SyncSucceeded(t *testing.T) {
 	cfg := testConfig()
 	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	// No prior sync-running — bridge restarted
+	// No prior sync-running - bridge restarted
 	w := sendWebhook(t, mux, `{"app":"my-app","event":"sync-succeeded","revision":"rev1"}`)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
@@ -613,10 +613,10 @@ func TestCleanupAfterEnd_RemovesFromStore(t *testing.T) {
 
 	recorded := testutil.GetCalls(calls, mu)
 	// create + step1 + phase1(ONGOING) + phase2(ENDED) = 4
-	// No DELETE call — server handles cleanup via ended_ttl
+	// No DELETE call - server handles cleanup via ended_ttl
 	for _, c := range recorded {
 		if c.Method == "DELETE" {
-			t.Error("unexpected DELETE call — server handles cleanup via ended_ttl")
+			t.Error("unexpected DELETE call -- server handles cleanup via ended_ttl")
 		}
 	}
 
@@ -767,7 +767,7 @@ func TestGracePeriod_FastSync_Skipped(t *testing.T) {
 	cfg.SyncGracePeriod = 100 * time.Millisecond
 	mux, h := setupHandler(t, cfg, srv.URL)
 
-	// Full sync cycle within grace period — should be skipped as no-op
+	// Full sync cycle within grace period - should be skipped as no-op
 	sendWebhook(t, mux, `{"app":"fast-app","event":"sync-running","revision":"r1"}`)
 	sendWebhook(t, mux, `{"app":"fast-app","event":"sync-succeeded","revision":"r1"}`)
 	sendWebhook(t, mux, `{"app":"fast-app","event":"deployed","revision":"r1"}`)
@@ -872,7 +872,7 @@ func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
 		t.Fatalf("expected 0 API calls during grace, got %d", len(recorded))
 	}
 
-	// Sync fails — should bypass grace and create immediately
+	// Sync fails - should bypass grace and create immediately
 	sendWebhook(t, mux, `{"app":"fail-app","event":"sync-failed","revision":"r1"}`)
 
 	// Wait for two-phase end
@@ -928,7 +928,7 @@ func TestGracePeriod_UntrackedDeployed_Recorded(t *testing.T) {
 	cfg.SyncGracePeriod = 100 * time.Millisecond
 	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	// Untracked deployed with grace period — recorded but no API calls
+	// Untracked deployed with grace period - recorded but no API calls
 	sendWebhook(t, mux, `{"app":"already-done","event":"deployed","revision":"r1"}`)
 
 	time.Sleep(200 * time.Millisecond)
@@ -949,7 +949,7 @@ func TestGracePeriod_DeployedBeforeSyncSucceeded_Skipped(t *testing.T) {
 	sendWebhook(t, mux, `{"app":"ooo-app","event":"deployed","revision":"r1"}`)
 	sendWebhook(t, mux, `{"app":"ooo-app","event":"sync-succeeded","revision":"r1"}`)
 
-	// Wait for grace timer (should NOT fire — the sync was detected as no-op)
+	// Wait for grace timer (should NOT fire - the sync was detected as no-op)
 	time.Sleep(200 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
@@ -969,7 +969,7 @@ func TestGracePeriod_UntrackedSyncSucceeded_ThenDeployed_Skipped(t *testing.T) {
 	cfg.SyncGracePeriod = 100 * time.Millisecond
 	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	// Untracked sync-succeeded starts grace, then deployed during grace — skip
+	// Untracked sync-succeeded starts grace, then deployed during grace - skip
 	sendWebhook(t, mux, `{"app":"untracked-app","event":"sync-succeeded","revision":"r1"}`)
 	sendWebhook(t, mux, `{"app":"untracked-app","event":"deployed","revision":"r1"}`)
 
@@ -987,7 +987,7 @@ func TestGracePeriod_UntrackedSyncSucceeded_GraceExpires(t *testing.T) {
 	cfg.SyncGracePeriod = 50 * time.Millisecond
 	mux, _ := setupHandler(t, cfg, srv.URL)
 
-	// Untracked sync-succeeded with grace — if no deployed arrives, create at step 2
+	// Untracked sync-succeeded with grace - if no deployed arrives, create at step 2
 	sendWebhook(t, mux, `{"app":"untracked-rolling","event":"sync-succeeded","revision":"r1"}`)
 
 	time.Sleep(150 * time.Millisecond)
@@ -1013,7 +1013,7 @@ func TestHealthDegraded_AtStep1_StillEnds(t *testing.T) {
 	cfg := testConfig()
 	mux, h := setupHandler(t, cfg, srv.URL)
 
-	// sync-running (step 1) → health-degraded: should end immediately (not transient)
+	// sync-running (step 1) -> health-degraded: should end immediately (not transient)
 	sendWebhook(t, mux, `{"app":"step1-app","event":"sync-running","revision":"rev1"}`)
 	sendWebhook(t, mux, `{"app":"step1-app","event":"health-degraded","revision":"rev1"}`)
 
@@ -1052,7 +1052,7 @@ func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
 	sendWebhook(t, mux, `{"app":"multi-deg","event":"sync-running","revision":"rev1"}`)
 	sendWebhook(t, mux, `{"app":"multi-deg","event":"sync-succeeded","revision":"rev1"}`)
 
-	// Two degraded events at step 2 — both should be transient ONGOING warnings
+	// Two degraded events at step 2 - both should be transient ONGOING warnings
 	sendWebhook(t, mux, `{"app":"multi-deg","event":"health-degraded","revision":"rev1"}`)
 	sendWebhook(t, mux, `{"app":"multi-deg","event":"health-degraded","revision":"rev1"}`)
 
@@ -1113,7 +1113,7 @@ func TestGracePeriod_SyncRunning_DeployedBeforeSyncSucceeded_Skipped(t *testing.
 	sendWebhook(t, mux, `{"app":"pending-ooo","event":"deployed","revision":"r1"}`)
 	sendWebhook(t, mux, `{"app":"pending-ooo","event":"sync-succeeded","revision":"r1"}`)
 
-	// Wait for any grace timer to fire (should NOT — entire sync was no-op)
+	// Wait for any grace timer to fire (should NOT - entire sync was no-op)
 	time.Sleep(300 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
@@ -1312,7 +1312,7 @@ func TestCreateActivityFails_PendingSyncFailed(t *testing.T) {
 
 	// sync-running enters grace (no API calls)
 	sendWebhook(t, mux, `{"app":"pending-fail","event":"sync-running","revision":"r1"}`)
-	// sync-failed bypasses grace, tries create — fails
+	// sync-failed bypasses grace, tries create - fails
 	sendWebhook(t, mux, `{"app":"pending-fail","event":"sync-failed","revision":"r1"}`)
 
 	if appExists(t, h, "pending-fail") {
@@ -1388,7 +1388,7 @@ func TestTransientHealthDegraded_UpdateFails(t *testing.T) {
 		n := callCount
 		calls = append(calls, testutil.APICall{Method: r.Method, Path: r.URL.Path, Body: json.RawMessage(body)})
 		mu.Unlock()
-		// 4th call is the transient degraded PATCH — fail it
+		// 4th call is the transient degraded PATCH - fail it
 		if n == 4 {
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -1423,7 +1423,7 @@ func TestScheduleEnd_AppNotInStore(t *testing.T) {
 	cfg := testConfig()
 	_, h := setupHandler(t, cfg, srv.URL)
 
-	// Call ender.ScheduleEnd for non-existent app — the ender fires both phases
+	// Call ender.ScheduleEnd for non-existent app - the ender fires both phases
 	// but ArgoCD's old scheduleEnd would skip. With lifecycle.Ender, it proceeds
 	// (best-effort). This test now verifies it doesn't panic.
 	h.ender.ScheduleEnd(testKey, "non-existent", "argocd-non-existent", pushward.Content{})
@@ -1441,7 +1441,7 @@ func TestScheduleEnd_UpdateFails(t *testing.T) {
 	cfg := testConfig()
 	mux, h := setupHandler(t, cfg, srv.URL)
 
-	// Create app via sync-running (POST ok, PATCH fail — but app is tracked)
+	// Create app via sync-running (POST ok, PATCH fail - but app is tracked)
 	sendWebhook(t, mux, `{"app":"end-fail","event":"sync-running","revision":"r1"}`)
 	// Deploy triggers scheduleEnd (PATCH phase1 fail, PATCH phase2 fail)
 	sendWebhook(t, mux, `{"app":"end-fail","event":"deployed","revision":"r1"}`)
@@ -1462,7 +1462,7 @@ func TestGraceExpired_AppNotInStore(t *testing.T) {
 	cfg := testConfig()
 	_, h := setupHandler(t, cfg, srv.URL)
 
-	// Call graceExpired for non-existent app — should return immediately
+	// Call graceExpired for non-existent app - should return immediately
 	h.graceExpired(testKey, "non-existent")
 
 	recorded := testutil.GetCalls(calls, mu)

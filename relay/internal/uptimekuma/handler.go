@@ -70,7 +70,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		err = h.handleUp(ctx, userKey, log, pwClient, payload)
 	case 2: // PENDING
 		err = h.handlePending(ctx, userKey, log, pwClient, payload)
-	case 3: // MAINTENANCE — used as test event
+	case 3: // MAINTENANCE - used as test event
 		if err := selftest.SendTest(ctx, pwClient, "uptimekuma"); err != nil {
 			log.Error("test notification failed", "provider", "uptimekuma", "error", err)
 		}
@@ -209,7 +209,7 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 		return nil
 	}
 	if existing == nil {
-		return nil // No prior DOWN — skip routine UP checks
+		return nil // No prior DOWN - skip routine UP checks
 	}
 
 	slug, _, monitorIDStr := h.slugAndKey(p)

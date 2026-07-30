@@ -215,7 +215,7 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 		return nil
 	}
 	if existing == nil {
-		return nil // No prior TRIGGERED — skip routine RESOLVED
+		return nil // No prior TRIGGERED - skip routine RESOLVED
 	}
 
 	ov := overrides.FromContext(ctx)

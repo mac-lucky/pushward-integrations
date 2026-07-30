@@ -434,7 +434,7 @@ func TestSonarrGrab(t *testing.T) {
 	}
 	var create pushward.CreateActivityRequest
 	testutil.UnmarshalBody(t, got[1].Body, &create)
-	// No tvdbId in payload → series-id fallback; no episode id → series-level slug.
+	// No tvdbId in payload -> series-id fallback; no episode id -> series-level slug.
 	if create.Slug != "sonarr-series-id-1" {
 		t.Errorf("expected slug sonarr-series-id-1, got %s", create.Slug)
 	}
@@ -588,7 +588,7 @@ func TestSonarrConcurrentDownloads(t *testing.T) {
 			slugs[create.Slug] = true
 		}
 	}
-	// Content-keyed: no tvdbId → series-id fallback per series.
+	// Content-keyed: no tvdbId -> series-id fallback per series.
 	if !slugs["sonarr-series-id-1"] || !slugs["sonarr-series-id-2"] {
 		t.Errorf("expected slugs sonarr-series-id-1 and sonarr-series-id-2, got %v", slugs)
 	}
@@ -907,7 +907,7 @@ func TestRadarrManualInteraction(t *testing.T) {
 func TestRadarrManualInteractionUntracked(t *testing.T) {
 	mux, _, calls, mu := newHandler(t, testConfig())
 
-	// ManualInteractionRequired without a prior Grab — still sends notification
+	// ManualInteractionRequired without a prior Grab - still sends notification
 	w := sendRadarr(t, mux, `{
 		"eventType": "ManualInteractionRequired",
 		"downloadId": "SABnzbd_nzo_untracked",
@@ -1246,7 +1246,7 @@ func TestRadarrGrab_NotifyMode_SendsNotification(t *testing.T) {
 func TestRadarrRetryConsolidatesActivity(t *testing.T) {
 	mux, _, calls, mu := newHandler(t, testConfig())
 
-	// First grab — release A
+	// First grab - release A
 	sendRadarr(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Inception", "year": 2010, "tmdbId": 27205},
@@ -1255,7 +1255,7 @@ func TestRadarrRetryConsolidatesActivity(t *testing.T) {
 		"downloadId": "dl-A"
 	}`)
 
-	// Release A fails — ManualInteractionRequired (with movie so activity updates)
+	// Release A fails - ManualInteractionRequired (with movie so activity updates)
 	sendRadarr(t, mux, `{
 		"eventType": "ManualInteractionRequired",
 		"downloadId": "dl-A",
@@ -1268,7 +1268,7 @@ func TestRadarrRetryConsolidatesActivity(t *testing.T) {
 		}
 	}`)
 
-	// User picks release B — different downloadId, same movie
+	// User picks release B - different downloadId, same movie
 	sendRadarr(t, mux, `{
 		"eventType": "Grab",
 		"movie": {"id": 1, "title": "Inception", "year": 2010, "tmdbId": 27205},
@@ -1334,7 +1334,7 @@ func TestSonarrRetryConsolidatesActivity(t *testing.T) {
 		"downloadId": "dl-A"
 	}`)
 
-	// Release B — same series + same episode set
+	// Release B - same series + same episode set
 	sendSonarr(t, mux, `{
 		"eventType": "Grab",
 		"series": {"id": 1, "title": "Breaking Bad", "tvdbId": 81189},

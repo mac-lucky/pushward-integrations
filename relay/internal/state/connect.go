@@ -134,7 +134,7 @@ func watchPasswordFile(ctx context.Context, pool *pgxpool.Pool, passwordFile str
 			}
 			if event.Has(fsnotify.Create) || event.Has(fsnotify.Write) {
 				// Kubernetes/CNPG rotate a mounted Secret by atomically swapping
-				// the "..data" symlink — the leaf file itself is never written —
+				// the "..data" symlink - the leaf file itself is never written -
 				// so also react to "..data" or the rotation no-ops in production.
 				base := filepath.Base(event.Name)
 				if event.Name != passwordFile && base != baseName && base != "..data" {

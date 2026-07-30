@@ -229,7 +229,7 @@ func (h *Handler) getTrackedSlug(ctx context.Context, userKey, mapKey string) (s
 // derived from config (not a hardcoded 60m) so the dedup record can never
 // outlive the server-side activity: otherwise a retry Grab between the activity
 // expiry and the dedup expiry would skip CreateActivity and PATCH a slug the
-// server already evicted (404 → 502).
+// server already evicted (404 -> 502).
 func (h *Handler) setTrackedSlug(ctx context.Context, userKey, mapKey, slug string) error {
 	data, err := json.Marshal(trackedSlug{Slug: slug})
 	if err != nil {

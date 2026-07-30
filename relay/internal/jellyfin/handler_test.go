@@ -157,7 +157,7 @@ func TestPlaybackStartPausedIgnored(t *testing.T) {
 func TestPlaybackStartPausedThenResume(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 
-	// Paused start — should be ignored
+	// Paused start - should be ignored
 	send(t, h, `{
 		"NotificationType": "PlaybackStart",
 		"ItemId": "abc123",
@@ -177,7 +177,7 @@ func TestPlaybackStartPausedThenResume(t *testing.T) {
 		t.Fatalf("expected 0 calls after paused start, got %d", len(recorded))
 	}
 
-	// Resume — should create activity via late join
+	// Resume - should create activity via late join
 	send(t, h, `{
 		"NotificationType": "PlaybackProgress",
 		"ItemId": "abc123",
@@ -424,7 +424,7 @@ func TestPlaybackProgressSuppressedWhilePaused(t *testing.T) {
 		"IsPaused": false
 	}`)
 
-	// Pause (state change → goes through)
+	// Pause (state change -> goes through)
 	send(t, h, `{
 		"NotificationType": "PlaybackProgress",
 		"ItemId": "abc123",
@@ -442,7 +442,7 @@ func TestPlaybackProgressSuppressedWhilePaused(t *testing.T) {
 	// Wait for debounce to expire
 	time.Sleep(20 * time.Millisecond)
 
-	// Still paused — should be suppressed even though debounce expired
+	// Still paused - should be suppressed even though debounce expired
 	send(t, h, `{
 		"NotificationType": "PlaybackProgress",
 		"ItemId": "abc123",
@@ -600,7 +600,7 @@ func TestPauseAutoEnd(t *testing.T) {
 		"IsPaused": false
 	}`)
 
-	// Pause (state change → goes through, starts pause timer)
+	// Pause (state change -> goes through, starts pause timer)
 	send(t, h, `{
 		"NotificationType": "PlaybackProgress",
 		"ItemId": "abc123",
@@ -680,7 +680,7 @@ func TestPauseResumeCancelsAutoEnd(t *testing.T) {
 		"IsPaused": true
 	}`)
 
-	// Resume before timeout (state change → bypasses debounce)
+	// Resume before timeout (state change -> bypasses debounce)
 	send(t, h, `{
 		"NotificationType": "PlaybackProgress",
 		"ItemId": "abc123",
@@ -695,7 +695,7 @@ func TestPauseResumeCancelsAutoEnd(t *testing.T) {
 		"IsPaused": false
 	}`)
 
-	// Wait past the timeout — should NOT auto-end
+	// Wait past the timeout - should NOT auto-end
 	time.Sleep(200 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)

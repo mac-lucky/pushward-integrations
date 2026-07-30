@@ -73,7 +73,7 @@ func TestGetOrCreate_EvictsLRU(t *testing.T) {
 	m.GetOrCreate("a", func() int { return 99 })
 	time.Sleep(time.Millisecond)
 
-	// Insert "d" — should evict "b" (least recently used).
+	// Insert "d" - should evict "b" (least recently used).
 	var evictedKey string
 	m.SetOnEvict(func(key string, _ int) { evictedKey = key })
 	m.GetOrCreate("d", func() int { return 4 })

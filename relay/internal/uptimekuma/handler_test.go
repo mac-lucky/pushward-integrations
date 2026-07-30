@@ -352,7 +352,7 @@ func TestMonitorDown_UpdateFailureRollsBackDedup(t *testing.T) {
 	store := state.NewMemoryStore()
 	h := newHandlerWithStore(t, testConfig(), store, srv.URL)
 
-	// First send: create OK, UpdateActivity fails → dedup row rolled back → 502.
+	// First send: create OK, UpdateActivity fails -> dedup row rolled back -> 502.
 	w := send(t, h, downBody)
 	if w.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502 on update failure, got %d", w.Code)

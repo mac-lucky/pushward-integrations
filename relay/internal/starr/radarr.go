@@ -206,7 +206,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 	}
 
 	// Activity mode. If the same content key was already tracked (retry of a
-	// failed release), skip CreateActivity — the update below refreshes the
+	// failed release), skip CreateActivity - the update below refreshes the
 	// existing activity back to "Grabbed".
 	_, alreadyTracked := h.getTrackedSlug(ctx, userKey, mapKey)
 	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
@@ -353,7 +353,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 // handleRadarrManualInteraction sends the manual-interaction push notification
 // and, when there is a tracked Live Activity for the movie, flips it into a
 // "Needs attention" state so the user sees the failure on lock screen. The
-// activity is intentionally left ONGOING — a subsequent Grab for a new release
+// activity is intentionally left ONGOING - a subsequent Grab for a new release
 // (different downloadId, same tmdbId) will update the same slug back to
 // "Grabbed", and a successful Download will end it normally.
 func (h *Handler) handleRadarrManualInteraction(ctx context.Context, userKey string, log *slog.Logger, p *ManualInteractionPayload) error {

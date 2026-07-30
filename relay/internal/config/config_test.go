@@ -40,7 +40,7 @@ func clearRelayEnv(t *testing.T) {
 // validConfig returns a Config whose provider list passes both
 // validateProviderTimeouts and validatePriorities: a couple of enabled
 // providers with positive timeouts and in-range priorities, the rest left as
-// disabled zero values (which are valid — a disabled provider is never checked
+// disabled zero values (which are valid - a disabled provider is never checked
 // for stale_timeout, and priority 0 is in range).
 func validConfig() *Config {
 	cfg := &Config{}
@@ -299,7 +299,7 @@ func TestValidateProviderTimeouts(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			// A disabled argocd with a negative grace period must not error —
+			// A disabled argocd with a negative grace period must not error -
 			// the guard only applies when argocd is enabled.
 			name: "argocd disabled with negative sync grace period is ok",
 			mutate: func(c *Config) {

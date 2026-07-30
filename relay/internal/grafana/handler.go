@@ -153,7 +153,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		g := groups[alertname]
 
 		// Check state for dedup. Use the collision-resistant hash (matching the
-		// CollapseID derivation) — text.Slug collapses distinct alertnames like
+		// CollapseID derivation) - text.Slug collapses distinct alertnames like
 		// "High CPU"/"high_cpu" to one key, cross-contaminating dedup.
 		stateKey := text.SlugHash("grafana", alertname, 6)
 		currentState := h.buildState(g)
@@ -261,7 +261,7 @@ func (h *Handler) stateUnchanged(ctx context.Context, userKey, stateKey string, 
 // updateState stores or deletes state after a successful notification send.
 func (h *Handler) updateState(ctx context.Context, userKey, stateKey string, g *alertGroup, current *alertGroupState, log *slog.Logger) {
 	if len(g.firing) == 0 {
-		// All resolved — delete state.
+		// All resolved - delete state.
 		if err := h.store.Delete(ctx, "grafana", userKey, stateKey, ""); err != nil {
 			log.Warn("failed to delete alert state", "key", stateKey, "error", err)
 		}

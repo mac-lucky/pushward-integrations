@@ -20,7 +20,7 @@ func (e *memEntry) expired() bool {
 // MemoryStore implements Store using an in-memory map. Used for tests.
 type MemoryStore struct {
 	mu      sync.Mutex
-	entries map[string]*memEntry // composite key → entry
+	entries map[string]*memEntry // composite key -> entry
 }
 
 // NewMemoryStore creates a new in-memory state store.

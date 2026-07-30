@@ -319,11 +319,11 @@ func (e *Ender) Wait() {
 // updateWithRetry attempts an UpdateActivity call and retries once after
 // e.retryDelay on failure. Each UpdateActivity call already does up to 5
 // internal retries, so worst case is:
-// attempt (5 retries) → retryDelay wait → attempt (5 retries).
+// attempt (5 retries) -> retryDelay wait -> attempt (5 retries).
 // The retry sleep is interruptible via the ender's shutdown context.
 func (e *Ender) updateWithRetry(cl *pushward.Client, slug string, req pushward.UpdateRequest, perAttemptTimeout time.Duration) error {
 	// Derive per-attempt contexts from shutdownCtx so FlushAll's shutdownCancel
-	// aborts any in-flight UpdateActivity immediately — otherwise an attempt
+	// aborts any in-flight UpdateActivity immediately - otherwise an attempt
 	// against an unresponsive server could hold the WaitGroup for the full
 	// per-attempt timeout (up to ~65s across retry), overrunning the k8s
 	// termination grace period. In normal operation shutdownCtx is live, so

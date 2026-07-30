@@ -86,7 +86,7 @@ func (a *appLocks) Acquire(key string) *sync.Mutex {
 
 // Release decrements the refcount and deletes the entry when it reaches zero.
 // A concurrent Acquire after the deletion will find no entry and create a new
-// one — correct because the deleted lock had no remaining holders or waiters.
+// one - correct because the deleted lock had no remaining holders or waiters.
 func (a *appLocks) Release(key string) {
 	a.mu.Lock()
 	l, ok := a.locks[key]
@@ -108,7 +108,7 @@ func (a *appLocks) size() int {
 	return len(a.locks)
 }
 
-// Lock ordering: appLocks (per-app) → mu (graceTimers). Never acquire mu before appLocks.
+// Lock ordering: appLocks (per-app) -> mu (graceTimers). Never acquire mu before appLocks.
 type Handler struct {
 	store       state.Store
 	clients     *client.Pool
@@ -116,7 +116,7 @@ type Handler struct {
 	ender       *lifecycle.Ender
 	mu          sync.Mutex             // protects graceTimers map only
 	appLocks    *appLocks              // refcounted per-app mutexes
-	graceTimers map[string]*graceEntry // hash(userKey)+":"+appName → grace entry
+	graceTimers map[string]*graceEntry // hash(userKey)+":"+appName -> grace entry
 }
 
 // lockApp returns an unlock function for per-app serialization. The returned
@@ -189,7 +189,7 @@ func (h *Handler) StartCleanup(ctx context.Context) { // #nosec G118 -- intentio
 
 					app, ok, err := h.loadApp(context.Background(), userKey, appName)
 					if err != nil {
-						// Transient DB read error — leave the timer in place and
+						// Transient DB read error - leave the timer in place and
 						// re-evaluate on the next tick. Treating a blip as
 						// "not pending" would delete a still-pending app's grace
 						// timer, so graceExpired never fires and the deferred
@@ -388,7 +388,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 	defer unlock()
 
 	// If a recent-deploy tombstone exists, the sync already completed and this
-	// sync-running arrived out of order — skip it entirely.
+	// sync-running arrived out of order - skip it entirely.
 	if h.hasTombstone(ctx, userKey, p.App) {
 		log.Info("skipped late sync-running (already deployed)", "slug", slug, "app", p.App)
 		return nil
@@ -504,7 +504,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 		return nil
 	}
 
-	// Tracked and still in grace period — just advance step, don't touch PushWard
+	// Tracked and still in grace period - just advance step, don't touch PushWard
 	if exists && app.Pending {
 		app.Step = 2
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
@@ -550,7 +550,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 	pw := h.clients.Get(userKey)
 
 	if !exists {
-		// No grace period — create and send step 2 (original behavior)
+		// No grace period - create and send step 2 (original behavior)
 		app = &trackedAppState{
 			Slug:     slug,
 			Revision: p.Revision,
@@ -616,7 +616,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.
 		return nil
 	}
 
-	// Completed during grace period — no-op sync, skip entirely
+	// Completed during grace period - no-op sync, skip entirely
 	if exists && app.Pending {
 		h.mu.Lock()
 		if ge, ok := h.graceTimers[tk]; ok {
@@ -643,7 +643,7 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.
 			return nil
 		}
 
-		// No grace period — create and immediately end (original behavior)
+		// No grace period - create and immediately end (original behavior)
 		app = &trackedAppState{
 			Slug:     slug,
 			Revision: p.Revision,
@@ -724,7 +724,7 @@ func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.L
 		if err != nil {
 			log.Error("failed to load app state", "app", p.App, "error", err)
 			// Surface the error (not nil,nil) so the caller propagates it as a
-			// 502 and ArgoCD retries — otherwise a transient DB read silently
+			// 502 and ArgoCD retries - otherwise a transient DB read silently
 			// drops the sync-failed / health-degraded alert (the most important
 			// class).
 			return nil, err
@@ -903,7 +903,7 @@ func (h *Handler) graceExpired(userKey, appName string) {
 		// would strand the pending app (no activity until the stale TTL). Re-arm
 		// unconditionally: RecoverPending (post-restart) calls graceExpired with
 		// no graceTimers entry, so a "re-arm only if present" guard would skip the
-		// recovery path — the exact case this retry is meant to cover.
+		// recovery path - the exact case this retry is meant to cover.
 		h.mu.Lock()
 		ge, ok := h.graceTimers[tk]
 		if !ok {

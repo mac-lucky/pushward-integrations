@@ -75,7 +75,7 @@ func (m *Map[V]) GetOrCreate(key string, create func() V) V {
 	if len(m.entries) >= m.maxSize {
 		// Sample at most evictionSampleSize entries and evict the oldest among
 		// them. Go randomizes map iteration order, so this is a pseudo-random
-		// sample — making eviction O(K) instead of an O(n) scan of up to 100k
+		// sample - making eviction O(K) instead of an O(n) scan of up to 100k
 		// entries under the write lock on the per-request hot path.
 		var oldestTime int64
 		first := true

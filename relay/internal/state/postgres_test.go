@@ -178,7 +178,7 @@ func TestPostgres_GetGroup(t *testing.T) {
 	if err := store.Set(ctx, "grafana", "hlk_g", "alert1", "fp2", json.RawMessage(`{"i":2}`), 0); err != nil {
 		t.Fatal(err)
 	}
-	// Different key — should not appear
+	// Different key - should not appear
 	if err := store.Set(ctx, "grafana", "hlk_g", "alert2", "fp3", json.RawMessage(`{"i":3}`), 0); err != nil {
 		t.Fatal(err)
 	}
@@ -386,7 +386,7 @@ func TestPostgres_UpsertUpdatesTTL(t *testing.T) {
 
 	time.Sleep(1500 * time.Millisecond)
 
-	// Should still exist — TTL was cleared by upsert
+	// Should still exist - TTL was cleared by upsert
 	got, err := store.Get(ctx, "p", "u", "k", "")
 	if err != nil {
 		t.Fatal(err)

@@ -97,7 +97,7 @@ func main() {
 		}
 		slog.Info("configured trusted proxy CIDRs", "count", len(cfg.TrustedProxyCIDRs))
 	} else {
-		// Without trusted proxies, ClientIP falls back to the socket peer — which
+		// Without trusted proxies, ClientIP falls back to the socket peer - which
 		// behind a reverse proxy (Cloudflare/gateway) is the SAME proxy IP for
 		// every request, collapsing all traffic into one per-IP bucket (5 r/s).
 		slog.Warn("no trusted_proxy_cidrs configured: per-IP rate limiting will collapse all reverse-proxied traffic into a single bucket; set PUSHWARD_TRUSTED_PROXY_CIDRS if running behind Cloudflare/a gateway")
@@ -122,7 +122,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Client pool — use an instrumented transport when tracing is enabled
+	// Client pool - use an instrumented transport when tracing is enabled
 	// so outbound requests propagate trace context to pushward-server.
 	var httpClient *http.Client
 	if cfg.Telemetry.Endpoint != "" {
@@ -141,7 +141,7 @@ func main() {
 	// Router
 	mux := server.NewMux(pool.Ping)
 
-	// Huma API — auto-generates OpenAPI 3.1 spec at /openapi.json and docs at /docs.
+	// Huma API - auto-generates OpenAPI 3.1 spec at /openapi.json and docs at /docs.
 	humaConfig := huma.DefaultConfig("PushWard Relay", "1.0.0")
 	humaConfig.Info.Description = "Webhook relay that bridges external service webhooks to PushWard push notifications"
 	humaConfig.AllowAdditionalPropertiesByDefault = true
