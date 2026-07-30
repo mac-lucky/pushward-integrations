@@ -102,10 +102,14 @@ func NewEnder(clients *client.Pool, store state.Store, provider string, cfg EndC
 }
 
 // EndIfTracked ends an activity a previous request opened, if one is tracked,
-// and reports whether it scheduled anything. Use it where this request may not
-// touch the activity surface (channels=notification) but an earlier one already
-// opened an activity, which would otherwise hang on the lock screen until its
-// stale TTL expires.
+// and reports whether an end is in flight for it. Use it where this request may
+// not touch the activity surface (channels=notification) but an earlier one
+// already opened an activity, which would otherwise hang on the lock screen
+// until its stale TTL expires.
+//
+// It is idempotent: calling it again while an end is already pending is a
+// no-op that still reports true, so a redelivered webhook cannot postpone the
+// end it asked for.
 //
 // Only sound where the provider writes its state row below its own
 // AllowsActivity gate, so a row implies the activity exists. Where the row
@@ -123,7 +127,15 @@ func (e *Ender) EndIfTracked(ctx context.Context, log *slog.Logger, userKey, map
 	if !tracked {
 		return false
 	}
-	e.ScheduleEnd(userKey, mapKey, slug, content, onComplete...)
+	// Deliberately not ScheduleEnd: that cancels and re-arms, so a redelivery of
+	// the same terminal webhook would push the end out by another EndDelay, and
+	// a sender retrying faster than that keeps the card on the lock screen
+	// indefinitely. An end already in flight is the outcome this call wants, so
+	// leaving it alone is the correct no-op. Where two DIFFERENT terminal events
+	// land on one key the first one's content wins - for every caller of this
+	// method those are mutually exclusive outcomes for one run, so there is no
+	// real sequence where the later content is the one to show.
+	e.scheduleEnd(userKey, mapKey, slug, content, true, onComplete...)
 	return true
 }
 
@@ -134,11 +146,23 @@ func (e *Ender) EndIfTracked(ctx context.Context, log *slog.Logger, userKey, map
 // The optional onComplete callback runs after the activity is ended and state
 // is cleaned up. It is called outside the Ender's lock.
 func (e *Ender) ScheduleEnd(userKey, mapKey, slug string, content pushward.Content, onComplete ...func()) {
+	e.scheduleEnd(userKey, mapKey, slug, content, false, onComplete...)
+}
+
+// scheduleEnd is ScheduleEnd with the supersede rule made explicit. With
+// skipIfPending set it leaves an in-flight two-phase end alone instead of
+// cancelling and re-arming it; the check and the arm share one critical section
+// so concurrent callers cannot both decide nothing is pending.
+func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Content, skipIfPending bool, onComplete ...func()) {
 	timerKey := auth.MapKeyPrefix(userKey) + ":" + mapKey
 	cl := e.clients.Get(userKey)
 
 	e.mu.Lock()
 	if existing, ok := e.timers[timerKey]; ok {
+		if skipIfPending {
+			e.mu.Unlock()
+			return
+		}
 		if existing.phase1.Stop() {
 			e.wg.Done()
 		}
