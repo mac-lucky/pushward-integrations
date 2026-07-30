@@ -56,7 +56,7 @@ type Spec struct {
 	// StatChangeMask, when non-nil, restricts stat_list change detection to
 	// the rows whose mask entry is true. A false entry marks a display-only
 	// row: it is still rendered and published, but a change in its value alone
-	// never triggers a PATCH — when a triggering row does change, the whole
+	// never triggers a PATCH - when a triggering row does change, the whole
 	// card (including these rows) re-renders with current values. A nil mask
 	// (the default) means every row participates, matching the historical
 	// "any row changed" behavior. Indexed by row position; rows at indices
@@ -73,7 +73,7 @@ type Spec struct {
 	PushThrottle *int
 
 	// Content holds the static fields applied to every PATCH (icon, unit,
-	// severity, accent colors, min_value, max_value, …). The Value field is
+	// severity, accent colors, min_value, max_value, ...). The Value field is
 	// overwritten at each tick from the source.
 	Content pushward.WidgetContent
 
@@ -85,19 +85,19 @@ type Spec struct {
 	// Multi-source-only fields.
 	SlugTemplate   string // e.g. "users-{{.instance}}"
 	NameTemplate   string // e.g. "Users on {{.instance}}"; falls back to Name
-	MaxSeries      int    // per-spec cap; 0 → DefaultMaxSeries
+	MaxSeries      int    // per-spec cap; 0 -> DefaultMaxSeries
 	CleanupMissing bool   // DELETE widgets for series that disappear
 	// MissGrace is how many consecutive ticks a series may be absent before it
 	// is pruned (and DELETEd when CleanupMissing). It debounces transient
-	// scrape gaps and NaN/Inf readings — which surface as an absent series —
+	// scrape gaps and NaN/Inf readings - which surface as an absent series -
 	// so a single missed tick no longer churns the widget (DELETE+re-CREATE
-	// flicker, redundant pushes). 0 → DefaultMissGrace.
+	// flicker, redundant pushes). 0 -> DefaultMissGrace.
 	MissGrace      int
 	parsedSlugTpl  *template.Template
 	parsedNameTpl  *template.Template
 	parsedLabelTpl *template.Template
 	// seriesState is per-series last-value state for multi-source specs.
-	// Owned by exactly one supervisor goroutine — no synchronization needed.
+	// Owned by exactly one supervisor goroutine - no synchronization needed.
 	seriesState map[string]seriesState
 }
 
@@ -207,7 +207,7 @@ func prepare(s *Spec) error {
 	// short all-false mask (display-only head, triggering tail) still updates;
 	// and a full-length all-false mask is a legitimate "create once, never patch"
 	// static widget. Row count is unknown at construction, so the frozen case
-	// cannot be proven here — guarding it would false-reject both valid forms.
+	// cannot be proven here - guarding it would false-reject both valid forms.
 	if s.MaxSeries == 0 {
 		s.MaxSeries = DefaultMaxSeries
 	}
@@ -250,7 +250,7 @@ func prepare(s *Spec) error {
 // Start spawns one goroutine per scalar widget and one supervisor per
 // multi-source / stat_list spec. The first poll for each spec runs
 // synchronously so the initial widget creation includes a real value (no
-// transient empty state). Spec startups fan out concurrently — for N widgets
+// transient empty state). Spec startups fan out concurrently - for N widgets
 // this is one CreateWidget round-trip wall-clock instead of N.
 //
 // Returns the first fatal startup error (e.g. widget-limit exceeded); on
@@ -308,7 +308,7 @@ func (m *Manager) startScalar(ctx context.Context, spec *Spec) error {
 		return fmt.Errorf("widget %q initial poll failed fatally: %w", spec.Slug, err)
 	}
 	// Defer create until the first successful poll for gauge/progress
-	// templates — the server rejects them without a Value, and we don't
+	// templates - the server rejects them without a Value, and we don't
 	// want a missing metric at startup to crash-loop the bridge.
 	if !ok && requiresInitialValue(spec.Template) {
 		logger.Info("widget create deferred until first successful poll", "template", string(spec.Template))
@@ -521,7 +521,7 @@ func (m *Manager) startMulti(ctx context.Context, spec *Spec) error {
 	// Initial poll: collect values, ensure widget instances exist.
 	values, err := pollMulti(ctx, spec)
 	if err != nil {
-		// Non-fatal — supervisor will retry next tick.
+		// Non-fatal - supervisor will retry next tick.
 		logger.Warn("multi-source initial poll failed", "error", err)
 	}
 	if err := m.applyMulti(ctx, spec, logger, values /*firstTime=*/, true); err != nil {
@@ -626,7 +626,7 @@ func (m *Manager) applyMulti(ctx context.Context, spec *Spec, logger *slog.Logge
 		}
 		if spec.CleanupMissing {
 			if err := m.pwClient.DeleteWidget(ctx, slug); err != nil {
-				// A cancelled ctx is the normal shutdown path, not a failure —
+				// A cancelled ctx is the normal shutdown path, not a failure -
 				// don't log it as one (matches the sibling update paths).
 				if !errors.Is(err, context.Canceled) {
 					logger.Warn("failed to delete missing widget", "slug", slug, "error", err)

@@ -45,7 +45,7 @@ func main() {
 	}
 
 	if cfg.SABnzbd.WebhookSecret == "" {
-		slog.Warn("webhook secret not configured — webhook endpoint is unauthenticated",
+		slog.Warn("webhook secret not configured -- webhook endpoint is unauthenticated",
 			"hint", "set sabnzbd.webhook_secret or PUSHWARD_SABNZBD_WEBHOOK_SECRET")
 	}
 

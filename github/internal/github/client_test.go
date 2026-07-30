@@ -450,7 +450,7 @@ func TestListRepos_FiltersArchivedAndDisabled(t *testing.T) {
 	})
 	c := testClient(t, mux)
 
-	// owner == token login → /user/repos (includes private repos).
+	// owner == token login -> /user/repos (includes private repos).
 	repos, err := c.ListRepos(context.Background(), "owner")
 	if err != nil {
 		t.Fatal(err)
@@ -620,7 +620,7 @@ func TestDoRequest_ClientErrorNoRetry(t *testing.T) {
 
 func TestDoRequest_403NoRateLimitHeadersNoRetry(t *testing.T) {
 	// A 403 WITHOUT rate-limit headers (bad token / insufficient scope) must
-	// fail fast as a client error, never be retried as a rate limit — otherwise
+	// fail fast as a client error, never be retried as a rate limit - otherwise
 	// auth failures turn into retry storms.
 	var attempts int32
 	mux := http.NewServeMux()
@@ -936,7 +936,7 @@ func TestClientError_String(t *testing.T) {
 
 // rateLimitRetryAfter must honor each header form and clamp parsed signals to
 // [0, 15m]. A non-positive parsed value means "retry now" (NOT the 60s default,
-// which applies only when no header parses) — this pins the clamp fix.
+// which applies only when no header parses) - this pins the clamp fix.
 func TestRateLimitRetryAfter(t *testing.T) {
 	const maxWait = 15 * time.Minute
 
@@ -974,7 +974,7 @@ func TestRateLimitRetryAfter(t *testing.T) {
 			wantFromHeader: true,
 		},
 		{
-			// An HTTP-date already in the past → the window is open → retry now.
+			// An HTTP-date already in the past -> the window is open -> retry now.
 			name:           "retry-after http-date in the past",
 			key:            "Retry-After",
 			value:          time.Now().Add(-time.Minute).UTC().Format(http.TimeFormat),

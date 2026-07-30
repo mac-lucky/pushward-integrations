@@ -191,7 +191,7 @@ func (c *Client) doConditional(ctx context.Context, url, operation, etag string)
 		resp, err := c.doRequest(reqCtx, url, etag)
 		cancel()
 		if err != nil {
-			// Handle rate limit (429) — wait and retry without consuming a normal retry slot.
+			// Handle rate limit (429) - wait and retry without consuming a normal retry slot.
 			var rle *rateLimitError
 			if errors.As(err, &rle) {
 				rateLimitRetries++
@@ -300,7 +300,7 @@ func rateLimitRetryAfter(resp *http.Response) (wait time.Duration, ok bool) {
 	// clamp bounds a *successfully parsed* signal to [0, maxRateLimitWait]. A
 	// non-positive value is authoritative, not garbage: "Retry-After: 0" means
 	// retry now, and an X-RateLimit-Reset / HTTP-date already in the past (clock
-	// skew or the window already reset) means the limit is open again — both map to
+	// skew or the window already reset) means the limit is open again - both map to
 	// an immediate retry, NOT the default.
 	clamp := func(d time.Duration) time.Duration {
 		if d < 0 {
@@ -700,9 +700,9 @@ func (c *Client) authenticatedLogin(ctx context.Context) (string, error) {
 }
 
 // ListRepos discovers repositories for owner, honoring it correctly:
-//   - the token's own account → GET /user/repos?affiliation=owner (includes
+//   - the token's own account -> GET /user/repos?affiliation=owner (includes
 //     private repos the user owns);
-//   - any other owner → GET /orgs/{owner}/repos (org repos the token can see),
+//   - any other owner -> GET /orgs/{owner}/repos (org repos the token can see),
 //     falling back to GET /users/{owner}/repos for personal accounts (public).
 //
 // Archived and disabled repos are filtered out.
@@ -725,7 +725,7 @@ func (c *Client) ListRepos(ctx context.Context, owner string) ([]string, error) 
 	if err != nil {
 		var ce *clientError
 		if errors.As(err, &ce) && ce.status == http.StatusNotFound {
-			// Not an org — treat owner as a personal account (public repos).
+			// Not an org - treat owner as a personal account (public repos).
 			userURL := fmt.Sprintf("%s/users/%s/repos?per_page=100", c.baseURL, url.PathEscape(owner))
 			return c.listReposPaged(ctx, userURL)
 		}

@@ -403,7 +403,7 @@ func TestWebhook_MultiInstancePartialResolve(t *testing.T) {
 	fire2 := `{"status":"firing","alerts":[{"status":"firing","labels":{"alertname":"CPUHigh"},"annotations":{},"values":{"A":85},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"inst2"}]}`
 	fireWebhook(t, h, fire2)
 
-	// Resolve one instance — activity should stay active.
+	// Resolve one instance - activity should stay active.
 	resolve1 := `{"status":"resolved","alerts":[{"status":"resolved","labels":{"alertname":"CPUHigh"},"annotations":{},"values":{"A":5},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"inst1"}]}`
 	fireWebhook(t, h, resolve1)
 
@@ -418,7 +418,7 @@ func TestWebhook_MultiInstancePartialResolve(t *testing.T) {
 		}
 	}
 
-	// Resolve the second instance — now the activity should end.
+	// Resolve the second instance - now the activity should end.
 	resolve2 := `{"status":"resolved","alerts":[{"status":"resolved","labels":{"alertname":"CPUHigh"},"annotations":{},"values":{"A":3},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"inst2"}]}`
 	fireWebhook(t, h, resolve2)
 

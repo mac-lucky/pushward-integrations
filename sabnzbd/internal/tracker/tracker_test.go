@@ -261,7 +261,7 @@ func TestHandleWebhook_SecretValidation(t *testing.T) {
 	tr := New(cfg, sab, pw)
 	handler := tr.WebhookHandler(ctx)
 
-	// Wrong secret → 401
+	// Wrong secret -> 401
 	req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	req.Header.Set("X-Webhook-Secret", "wrong-secret")
 	w := httptest.NewRecorder()
@@ -270,7 +270,7 @@ func TestHandleWebhook_SecretValidation(t *testing.T) {
 		t.Fatalf("wrong secret: expected 401, got %d", w.Code)
 	}
 
-	// Missing secret → 401
+	// Missing secret -> 401
 	req = httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	w = httptest.NewRecorder()
 	handler(w, req)
@@ -278,7 +278,7 @@ func TestHandleWebhook_SecretValidation(t *testing.T) {
 		t.Fatalf("missing secret: expected 401, got %d", w.Code)
 	}
 
-	// Correct secret → 200
+	// Correct secret -> 200
 	req = httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	req.Header.Set("X-Webhook-Secret", "my-secret")
 	w = httptest.NewRecorder()
@@ -308,7 +308,7 @@ func TestHandleWebhook_AlreadyActive(t *testing.T) {
 	tr := New(cfg, sab, pw)
 	handler := tr.WebhookHandler(ctx)
 
-	// First webhook → tracking_started
+	// First webhook -> tracking_started
 	req := httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	w := httptest.NewRecorder()
 	handler(w, req)
@@ -319,7 +319,7 @@ func TestHandleWebhook_AlreadyActive(t *testing.T) {
 		t.Fatalf("expected tracking_started, got: %s", w.Body.String())
 	}
 
-	// Second webhook while active → already_tracking
+	// Second webhook while active -> already_tracking
 	// Need to ensure first goroutine is still running; send immediately
 	req = httptest.NewRequest(http.MethodPost, "/webhook", nil)
 	w = httptest.NewRecorder()
@@ -1213,7 +1213,7 @@ func TestSendDownloadProgress_MultipleSlots(t *testing.T) {
 	}
 	var req pushward.UpdateRequest
 	testutil.UnmarshalBody(t, got[0].Body, &req)
-	// Multiple slots → "X/Y · name" format (current is first slot of 3).
+	// Multiple slots -> "X/Y · name" format (current is first slot of 3).
 	if !strings.HasPrefix(req.Content.Subtitle, "1/3 · ") {
 		t.Errorf("expected subtitle prefixed with '1/3 · ', got %q", req.Content.Subtitle)
 	}
@@ -1536,7 +1536,7 @@ func TestTimeline_HistorySeeding(t *testing.T) {
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
 
-	// Activity must exist before PATCH — the seed is committed only on a
+	// Activity must exist before PATCH - the seed is committed only on a
 	// successful send, so an unregistered slug (404) would re-seed on every
 	// tick instead of exercising the seed-once path under test.
 	if err := pw.CreateActivity(ctx, "sabnzbd", "SABnzbd", cfg.PushWard.Priority, 0, int(cfg.PushWard.StaleTimeout.Seconds())); err != nil {
@@ -1601,7 +1601,7 @@ func TestTimeline_DisplaySettings(t *testing.T) {
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
 
-	// Activity must exist before PATCH — real tracker flow calls CreateActivity
+	// Activity must exist before PATCH - real tracker flow calls CreateActivity
 	// before the first seed.
 	if err := pw.CreateActivity(ctx, "sabnzbd", "SABnzbd", cfg.PushWard.Priority, 0, int(cfg.PushWard.StaleTimeout.Seconds())); err != nil {
 		t.Fatalf("unexpected create error: %v", err)
@@ -1675,7 +1675,7 @@ func TestSendDownloadProgress_SkipsUnchangedPoll(t *testing.T) {
 
 	q := downloadingQueue("51200", "500") // 50 MB/s, progress 0.5
 	tr.sendDownloadProgress(ctx, q)
-	tr.sendDownloadProgress(ctx, q) // identical — should be deduped
+	tr.sendDownloadProgress(ctx, q) // identical - should be deduped
 
 	got := testutil.GetCalls(calls, mu)
 	if len(got) != 1 {
@@ -1695,7 +1695,7 @@ func TestSendDownloadProgress_HeartbeatAfterInterval(t *testing.T) {
 	tr.sendDownloadProgress(ctx, q) // first poll, sends
 	// Rewind lastSendTime past the heartbeat interval.
 	tr.lastSendTime = time.Now().Add(-heartbeatInterval - time.Second)
-	tr.sendDownloadProgress(ctx, q) // unchanged, but heartbeat due → should send
+	tr.sendDownloadProgress(ctx, q) // unchanged, but heartbeat due -> should send
 
 	got := testutil.GetCalls(calls, mu)
 	if len(got) != 2 {
@@ -1711,11 +1711,11 @@ func TestSendDownloadProgress_SpeedBoundary(t *testing.T) {
 	tr := New(cfg, nil, pw)
 	seedActivityAndReset(t, pw, calls, mu)
 
-	// 45.1 MB/s → rounds to 45
+	// 45.1 MB/s -> rounds to 45
 	tr.sendDownloadProgress(ctx, downloadingQueue("46182", "500"))
-	// 45.4 MB/s → still rounds to 45, and progress unchanged → dedup
+	// 45.4 MB/s -> still rounds to 45, and progress unchanged -> dedup
 	tr.sendDownloadProgress(ctx, downloadingQueue("46489", "500"))
-	// 45.6 MB/s → rounds to 46, crosses boundary → send
+	// 45.6 MB/s -> rounds to 46, crosses boundary -> send
 	tr.sendDownloadProgress(ctx, downloadingQueue("46694", "500"))
 
 	got := testutil.GetCalls(calls, mu)
@@ -1734,9 +1734,9 @@ func TestSendDownloadProgress_ProgressBucket(t *testing.T) {
 
 	// progress 0.500 (mbLeft=500/1000)
 	tr.sendDownloadProgress(ctx, downloadingQueue("51200", "500"))
-	// progress 0.515 (mbLeft=485/1000) — <2%, speed identical → dedup
+	// progress 0.515 (mbLeft=485/1000) - <2%, speed identical -> dedup
 	tr.sendDownloadProgress(ctx, downloadingQueue("51200", "485"))
-	// progress 0.525 (mbLeft=475/1000) — >=2% vs last sent (0.500) → send
+	// progress 0.525 (mbLeft=475/1000) - >=2% vs last sent (0.500) -> send
 	tr.sendDownloadProgress(ctx, downloadingQueue("51200", "475"))
 
 	got := testutil.GetCalls(calls, mu)
@@ -1759,7 +1759,7 @@ func TestSendDownloadProgress_SubtitleChange(t *testing.T) {
 
 	q2 := downloadingQueue("51200", "500")
 	q2.Slots = []sabnzbd.QueueSlot{{Filename: "second.nzb"}}
-	tr.sendDownloadProgress(ctx, q2) // filename changed → send
+	tr.sendDownloadProgress(ctx, q2) // filename changed -> send
 
 	got := testutil.GetCalls(calls, mu)
 	if len(got) != 2 {
@@ -1780,7 +1780,7 @@ func TestSendDownloadProgress_PausedDedupsRepeatedPolls(t *testing.T) {
 		TimeLeft: "0:00:00", Slots: []sabnzbd.QueueSlot{{Filename: "test.nzb"}},
 	}
 	tr.sendDownloadProgress(ctx, pausedQ)
-	tr.sendDownloadProgress(ctx, pausedQ) // identical pause state → dedup
+	tr.sendDownloadProgress(ctx, pausedQ) // identical pause state -> dedup
 
 	got := testutil.GetCalls(calls, mu)
 	if len(got) != 1 {
@@ -1796,7 +1796,7 @@ func TestSendDownloadProgress_PauseResumeTransitionsSend(t *testing.T) {
 	tr := New(cfg, nil, pw)
 	seedActivityAndReset(t, pw, calls, mu)
 
-	// Downloading → Paused → Downloading. Each transition changes mode → send.
+	// Downloading -> Paused -> Downloading. Each transition changes mode -> send.
 	tr.sendDownloadProgress(ctx, downloadingQueue("51200", "500"))
 	tr.sendDownloadProgress(ctx, &sabnzbd.Queue{
 		Status: "Paused", MB: "1000", MBLeft: "500", KBPerSec: "0",
@@ -1820,12 +1820,12 @@ func TestShouldSend_PPStageTransitions(t *testing.T) {
 	}
 	tr.recordSent(1.0, 0, "Verifying", "ubuntu-24.04")
 
-	// Same stage, same subtitle → dedup.
+	// Same stage, same subtitle -> dedup.
 	if tr.shouldSend(1.0, 0, "Verifying", "ubuntu-24.04") {
 		t.Fatal("repeated same-stage poll should dedup")
 	}
 
-	// Stage change → send.
+	// Stage change -> send.
 	if !tr.shouldSend(1.0, 0, "Repairing", "ubuntu-24.04") {
 		t.Fatal("stage transition should send")
 	}
@@ -1847,13 +1847,13 @@ func TestSendDownloadProgress_RetriesAfterSendFailure(t *testing.T) {
 	ctx := context.Background()
 	tr := New(cfg, nil, pw)
 
-	// No seedActivityAndReset → the slug is unregistered → PATCH 404 (a
-	// non-retryable 4xx) → send() returns an error → recordSent is skipped. The
+	// No seedActivityAndReset -> the slug is unregistered -> PATCH 404 (a
+	// non-retryable 4xx) -> send() returns an error -> recordSent is skipped. The
 	// dedup state therefore never advances, so a second identical poll must
 	// re-attempt the PATCH rather than dedup it.
 	q := downloadingQueue("51200", "500")
 	tr.sendDownloadProgress(ctx, q)
-	tr.sendDownloadProgress(ctx, q) // identical, but the prior send failed → retry
+	tr.sendDownloadProgress(ctx, q) // identical, but the prior send failed -> retry
 
 	got := testutil.GetCalls(calls, mu)
 	if len(got) != 2 {
@@ -1875,14 +1875,14 @@ func TestSendDownloadProgress_DedupsAfterSuccessfulRetry(t *testing.T) {
 
 	q := downloadingQueue("51200", "500")
 
-	// 1) Unseeded slug → PATCH 404 → send() fails → recordSent skipped.
+	// 1) Unseeded slug -> PATCH 404 -> send() fails -> recordSent skipped.
 	tr.sendDownloadProgress(ctx, q)
 
 	// 2) Register the activity so PATCH now succeeds, and clear recorded calls so
 	//    the assertion only sees the post-seed polls.
 	seedActivityAndReset(t, pw, calls, mu)
 
-	// 3) Identical poll now succeeds → recordSent fires, advancing dedup state.
+	// 3) Identical poll now succeeds -> recordSent fires, advancing dedup state.
 	tr.sendDownloadProgress(ctx, q)
 	// 4) Identical poll dedups because the prior send succeeded.
 	tr.sendDownloadProgress(ctx, q)
@@ -1914,13 +1914,13 @@ func TestGetCompletedSummary_SumsAcrossPagesAndStopsAtCutoff(t *testing.T) {
 			Bytes: oneMB, DownloadTime: 1, Completed: inSession,
 		})
 	}
-	// Page 2: one more in-session Completed slot (must be summed in — proves the
+	// Page 2: one more in-session Completed slot (must be summed in - proves the
 	// paging crossed onto the second page) ...
 	slots = append(slots, sabnzbd.HistorySlot{
 		Status: "Completed", Name: "page2-file",
 		Bytes: 2 * oneMB, DownloadTime: 2, Completed: inSession,
 	})
-	// ... then an older Completed slot → the loop must STOP at the session cutoff.
+	// ... then an older Completed slot -> the loop must STOP at the session cutoff.
 	slots = append(slots, sabnzbd.HistorySlot{
 		Status: "Completed", Name: "old-file",
 		Bytes: 999 * oneMB, DownloadTime: 999, Completed: older,
@@ -1963,7 +1963,7 @@ func TestGetCompletedSummary_FailedSlotBeforeCutoffStops(t *testing.T) {
 	slots := []sabnzbd.HistorySlot{
 		{Status: "Completed", Name: "recent", Bytes: 3 * oneMB, DownloadTime: 3, Completed: inSession},
 		// A Failed slot from a PREVIOUS session. Its non-Completed status must not
-		// let it slip past the timestamp cutoff — the loop must STOP here. (The
+		// let it slip past the timestamp cutoff - the loop must STOP here. (The
 		// regression: gating the cutoff on Completed status would `continue` past
 		// this slot and page through the whole history.)
 		{Status: "Failed", Name: "old-failed", Bytes: 0, DownloadTime: 0, Completed: older},
@@ -2007,7 +2007,7 @@ func TestTrack_QueueIdleButPostProcessingActive_DoesNotGiveUp(t *testing.T) {
 	// fall-through give-up check, #3 the first post-processing poll, then the
 	// completion reads. Keep PP active (Extracting) for the first three reads so
 	// the fall-through never sees an empty PP status, then flip to Completed so
-	// the PP loop ends and the summary carries real stats. No sleeps → no race.
+	// the PP loop ends and the summary carries real stats. No sleeps -> no race.
 	var reads int
 	sabMk.setHistoryFn(func() sabnzbd.History {
 		reads++

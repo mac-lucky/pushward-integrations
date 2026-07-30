@@ -20,7 +20,7 @@ import (
 const defaultMissingValue = "—"
 
 // StatListRow describes one row of a stat_list widget at the source layer.
-// ValueTemplate is a Go template applied to the polled float — vars are
+// ValueTemplate is a Go template applied to the polled float - vars are
 // `.Value` (float64) and `.Unit` (string).
 type StatListRow struct {
 	Label         string
@@ -76,8 +76,8 @@ type statListSource struct {
 
 // Rows fans out the per-row queries concurrently so a stat_list with N rows
 // costs roughly one Prometheus round-trip rather than N. Per-row query
-// errors render as the row's MissingValue placeholder — a transient blip on
-// one query never blanks the entire widget — so the fan-out only needs a
+// errors render as the row's MissingValue placeholder - a transient blip on
+// one query never blanks the entire widget - so the fan-out only needs a
 // plain WaitGroup, not errgroup. Capturing now once before the fan-out
 // keeps all rows aligned to the same evaluation instant.
 func (s *statListSource) Rows(ctx context.Context) ([]pushward.StatRow, error) {

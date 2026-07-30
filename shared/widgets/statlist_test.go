@@ -207,7 +207,7 @@ func TestManager_StatList_MaskSkipsDisplayOnlyRowChange(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	_ = m.Start(ctx)
-	// Let several ticks elapse — the display-only row changes each time but
+	// Let several ticks elapse - the display-only row changes each time but
 	// must never trigger a PATCH.
 	waitFor(t, 500*time.Millisecond, func() bool { return i.Load() >= 4 })
 	cancel()
@@ -225,7 +225,7 @@ func TestManager_StatList_MaskTriggerPatchRefreshesDisplayRow(t *testing.T) {
 	// The display-only row advances every poll; the trigger row flips exactly
 	// once, after several display-only-only ticks. The PATCH that flip fires
 	// must carry the display row's CURRENT value, not the stale one captured
-	// at widget creation — a regression that patched lastRows would send "1".
+	// at widget creation - a regression that patched lastRows would send "1".
 	var i atomic.Int64
 	src := StatListSourceFunc(func(_ context.Context) ([]pushward.StatRow, error) {
 		n := i.Add(1)
@@ -306,7 +306,7 @@ func TestManager_StatList_TrimsToCap(t *testing.T) {
 	}
 }
 
-// stringOf renders an int64 without pulling in strconv at every call site —
+// stringOf renders an int64 without pulling in strconv at every call site -
 // keeps test files compact.
 func stringOf(n int64) string {
 	if n == 0 {

@@ -28,7 +28,7 @@ var (
 	hexColor       = regexp.MustCompile(`^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$`)
 	validTemplates = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true, "timeline": true, "board": true, "log": true}
 	// validTrends / validLogLevels include "" because trend and level are
-	// optional — an omitted value is valid; only a non-empty unknown value fails.
+	// optional - an omitted value is valid; only a non-empty unknown value fails.
 	validTrends     = map[string]bool{"": true, pushward.TrendUp: true, pushward.TrendDown: true, pushward.TrendFlat: true}
 	validLogLevels  = map[string]bool{"": true, pushward.LogInfo: true, pushward.LogWarn: true, pushward.LogError: true}
 	validTapMethods = map[string]bool{"": true, "GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "HEAD": true}
@@ -173,7 +173,7 @@ func mockPushWardServer(t *testing.T, notifyStatus int) (*httptest.Server, *[]AP
 			return
 		}
 
-		// POST /activities is an upsert — always 201, never 409 for duplicate
+		// POST /activities is an upsert - always 201, never 409 for duplicate
 		// slug. X-Resource-Action distinguishes the two cases.
 		mu.Lock()
 		action := "created"
@@ -411,7 +411,7 @@ func validateCreateRequest(req *createRequest) error {
 }
 
 func validateUpdateRequest(req *updateRequest) error {
-	// state and content.template are optional under RFC 7396 merge-patch —
+	// state and content.template are optional under RFC 7396 merge-patch -
 	// an absent field means "preserve server-side value". Only validate when
 	// present (non-empty).
 	if req.State != "" && !validStates[req.State] {
@@ -454,7 +454,7 @@ func validateContent(c *apiContent) error {
 		return err
 	}
 	// url / secondary_url (and the structured tap-action slots) are accepted on
-	// every template — the server no longer gates tap routing to steps/alert.
+	// every template - the server no longer gates tap routing to steps/alert.
 	if err := validateColor(c.AccentColor, "accent_color"); err != nil {
 		return err
 	}

@@ -6,7 +6,7 @@ import "sync/atomic"
 
 // DropCounter counts dropped items and reports whether the caller should
 // emit a log on the first drop and every Nth drop thereafter. Zero value
-// is not valid — use NewDropCounter.
+// is not valid - use NewDropCounter.
 type DropCounter struct {
 	n        atomic.Uint64
 	logEvery uint64

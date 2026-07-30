@@ -100,7 +100,7 @@ func main() {
 		webhookHandler = sharedauth.RequireHeader("Authorization", "Bearer "+cfg.WebhookToken)(h)
 		slog.Info("webhook bearer auth enabled")
 	} else {
-		slog.Warn("webhook token not configured — webhook endpoint is unauthenticated",
+		slog.Warn("webhook token not configured -- webhook endpoint is unauthenticated",
 			"hint", "set webhook_token or PUSHWARD_WEBHOOK_TOKEN")
 	}
 	mux.Handle("POST /webhook", webhookHandler)

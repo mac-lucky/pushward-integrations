@@ -34,9 +34,9 @@ type WidgetConfig struct {
 	Slug          string        `yaml:"slug" json:"slug"`
 	Name          string        `yaml:"name" json:"name"`
 	Template      string        `yaml:"template" json:"template"` // value|progress|status|gauge|stat_list; default "value"
-	Query         string        `yaml:"query" json:"query"`       // PromQL/MetricsQL — scalar variant
+	Query         string        `yaml:"query" json:"query"`       // PromQL/MetricsQL - scalar variant
 	QueryAll      string        `yaml:"query_all" json:"query_all"`
-	Interval      time.Duration `yaml:"interval" json:"interval"`       // default 60s; clamped to ≥5s
+	Interval      time.Duration `yaml:"interval" json:"interval"`       // default 60s; clamped to >=5s
 	UpdateMode    string        `yaml:"update_mode" json:"update_mode"` // "on_change" (default) | "always"
 	MinChange     float64       `yaml:"min_change" json:"min_change"`   // change threshold; default 0 (any change)
 	PushThrottle  *int          `yaml:"push_throttle" json:"push_throttle,omitempty"`
@@ -44,7 +44,7 @@ type WidgetConfig struct {
 	// Multi-series-only fields:
 	SlugTemplate   string `yaml:"slug_template" json:"slug_template"`     // e.g. "users-{{.instance}}"
 	NameTemplate   string `yaml:"name_template" json:"name_template"`     // e.g. "Users on {{.instance}}"
-	MaxSeries      int    `yaml:"max_series" json:"max_series"`           // per-spec cap; 0 → shared default
+	MaxSeries      int    `yaml:"max_series" json:"max_series"`           // per-spec cap; 0 -> shared default
 	CleanupMissing bool   `yaml:"cleanup_missing" json:"cleanup_missing"` // DELETE widgets for series that disappear
 
 	// StatRows is required when Template == "stat_list". Each row carries its
@@ -57,9 +57,10 @@ type WidgetConfig struct {
 }
 
 // StatRowConfig is one row of a stat_list widget. ValueTemplate is required
-// — it controls how the polled float renders (e.g. `"$%.0f"`,
+// - it controls how the polled float renders (e.g. `"$%.0f"`,
 // `"{{printf \"%.1f\" .Value}}%"`). Vars: .Value (float64), .Unit (string).
-// MissingValue is emitted when the query returns no data; defaults to "—".
+// MissingValue is emitted when the query returns no data; defaults to the
+// em dash in defaultMissingValue, which is exempt product typography.
 type StatRowConfig struct {
 	Label         string `yaml:"label" json:"label"`
 	Query         string `yaml:"query" json:"query"`
@@ -67,8 +68,8 @@ type StatRowConfig struct {
 	Unit          string `yaml:"unit" json:"unit"`
 	MissingValue  string `yaml:"missing_value" json:"missing_value"`
 	// Trigger controls whether a change in this row's value triggers a widget
-	// update; defaults to true (nil → true). Set it false to display the row
-	// without letting its value drive PATCHes — useful when one row (e.g. a
+	// update; defaults to true (nil -> true). Set it false to display the row
+	// without letting its value drive PATCHes - useful when one row (e.g. a
 	// user counter) should be the sole update trigger while volatile rows
 	// (activity counts, DB size) ride along and refresh only when the trigger
 	// row changes. With update_mode on_change, at least one row must remain a
@@ -145,7 +146,7 @@ func validateStatRows(slug string, idx int, rows []StatRowConfig) error {
 func runeLen(s string) int { return len([]rune(s)) }
 
 // validateStatListTriggers rejects a stat_list under update_mode on_change
-// where every row is trigger:false — such a widget would never PATCH after
+// where every row is trigger:false - such a widget would never PATCH after
 // creation. update_mode always is exempt (it patches every tick regardless of
 // which rows changed).
 func validateStatListTriggers(idx int, w *WidgetConfig) error {
@@ -157,7 +158,7 @@ func validateStatListTriggers(idx int, w *WidgetConfig) error {
 			return nil
 		}
 	}
-	return fmt.Errorf("widgets[%d] %q: all stat_rows have trigger:false with update_mode on_change; the widget would never update — keep a row as a trigger or set update_mode: always", idx, w.Slug)
+	return fmt.Errorf("widgets[%d] %q: all stat_rows have trigger:false with update_mode on_change; the widget would never update -- keep a row as a trigger or set update_mode: always", idx, w.Slug)
 }
 
 // validWidgetTemplates lists the renderers supported by the server today.
@@ -372,7 +373,7 @@ func applyEnvOverrides(cfg *Config) error {
 		cfg.WebhookToken = v
 	}
 	if v := os.Getenv("PUSHWARD_WIDGETS_JSON"); v != "" {
-		// Replaces the YAML widgets list wholesale — we don't merge because
+		// Replaces the YAML widgets list wholesale - we don't merge because
 		// there's no stable key to merge by (slugs aren't unique across the
 		// two sources by contract). Helm charts pass the full list via env.
 		widgets, err := parseWidgetsJSON(v)
@@ -386,7 +387,7 @@ func applyEnvOverrides(cfg *Config) error {
 
 // parseWidgetsJSON decodes the env-var JSON payload into []WidgetConfig.
 // Interval is read as a Go duration string ("60s") rather than nanoseconds so
-// helm values stay legible — time.Duration's default JSON encoding is integer
+// helm values stay legible - time.Duration's default JSON encoding is integer
 // nanoseconds, which is awful for humans editing values.yaml.
 func parseWidgetsJSON(raw string) ([]WidgetConfig, error) {
 	type widgetIn struct {

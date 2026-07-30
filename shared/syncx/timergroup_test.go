@@ -57,7 +57,7 @@ func TestTimerGroup(t *testing.T) {
 		g.Stop()
 		elapsed := time.Since(start)
 		if elapsed > 50*time.Millisecond {
-			t.Errorf("Stop blocked for %v — should not wait", elapsed)
+			t.Errorf("Stop blocked for %v -- should not wait", elapsed)
 		}
 		close(release)
 		g.Wait()
@@ -152,7 +152,7 @@ func waitReturns(t *testing.T, g *TimerGroup, timeout time.Duration) {
 	select {
 	case <-done:
 	case <-time.After(timeout):
-		t.Fatal("Wait blocked — group wedged")
+		t.Fatal("Wait blocked -- group wedged")
 	}
 }
 

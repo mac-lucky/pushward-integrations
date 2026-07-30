@@ -141,7 +141,7 @@ func TestManager_ScalarCreateAndUpdate(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// Initial poll runs synchronously in Start → exactly 1 create with value 1.
+	// Initial poll runs synchronously in Start -> exactly 1 create with value 1.
 	if got := stub.creates.Load(); got != 1 {
 		t.Fatalf("creates = %d, want 1", got)
 	}
@@ -285,7 +285,7 @@ func TestManager_GaugeDefersCreateUntilFirstValue(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	// No create yet — initial poll returned ErrNoData.
+	// No create yet - initial poll returned ErrNoData.
 	if got := stub.creates.Load(); got != 0 {
 		t.Fatalf("creates after Start = %d, want 0 (deferred)", got)
 	}
@@ -372,7 +372,7 @@ func TestManager_MultiFanOut(t *testing.T) {
 	if stub.creates.Load() != 3 {
 		t.Errorf("expected 3 creates, got %d", stub.creates.Load())
 	}
-	// Values unchanged across ticks → no PATCH.
+	// Values unchanged across ticks -> no PATCH.
 	if stub.updates.Load() != 0 {
 		t.Errorf("expected 0 PATCH for unchanged multi values, got %d", stub.updates.Load())
 	}
@@ -471,8 +471,8 @@ func TestManager_MultiCleanupMissing(t *testing.T) {
 // TestManager_MultiCleanupGraceAbsorbsSingleMiss pins the MissGrace debounce:
 // a series that disappears for exactly one tick and then returns must NOT be
 // pruned or DELETEd. MissGrace=2 tolerates one missing tick (missCount reaches
-// 1 < 2, then resets on recovery). Unlike TestManager_MultiCleanupMissing —
-// where the series stays gone forever and so is eventually deleted regardless —
+// 1 < 2, then resets on recovery). Unlike TestManager_MultiCleanupMissing -
+// where the series stays gone forever and so is eventually deleted regardless -
 // this exercises the grace window itself: without it, the first miss DELETEs.
 func TestManager_MultiCleanupGraceAbsorbsSingleMiss(t *testing.T) {
 	stub, client, closeSrv := newStubServer(t)

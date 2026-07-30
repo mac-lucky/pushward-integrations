@@ -32,7 +32,7 @@ func SlugHash(prefix, input string, hashBytes int) string {
 //
 // When input is non-empty but has no ASCII-alphanumeric characters (e.g. a
 // CJK-only or emoji-only name, or a pure-symbol string) the normalized body
-// collapses to empty, which would make every such input map to the same slug —
+// collapses to empty, which would make every such input map to the same slug -
 // a real hazard because callers use these as Live-Activity identifiers and
 // dedup/state keys. In that case it falls back to SlugHash so distinct inputs
 // stay distinct. Genuinely-empty input has nothing to disambiguate and still
@@ -47,7 +47,7 @@ func Slug(prefix, input string) string {
 		}
 		// Distinct non-alphanumeric inputs must stay distinct (used as state
 		// keys); Slug's prefix already carries its own separator, so append the
-		// bare hash — no double hyphen for "argocd-" prefixes, no leading hyphen
+		// bare hash - no double hyphen for "argocd-" prefixes, no leading hyphen
 		// for an empty prefix, both of which the slug pattern can reject.
 		return prefix + HashHex(input, 8)
 	}

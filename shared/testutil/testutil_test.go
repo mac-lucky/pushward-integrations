@@ -91,7 +91,7 @@ func TestCreateActivity(t *testing.T) {
 	}
 }
 
-// POST /activities is an upsert — the server returns 201 on duplicate slug
+// POST /activities is an upsert - the server returns 201 on duplicate slug
 // with X-Resource-Action: updated, rather than 409.
 func TestCreateActivity_DuplicateSlug_Upserts(t *testing.T) {
 	srv, _, _ := testutil.MockPushWardServer(t)

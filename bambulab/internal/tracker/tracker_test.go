@@ -136,7 +136,7 @@ func TestProcess_PrepareToRunningToFinish(t *testing.T) {
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	tr := newTestTracker(printer, client, cfg)
 
-	// Step 1: PREPARE — should start tracking and create activity
+	// Step 1: PREPARE - should start tracking and create activity
 	printer.SetState(bambulab.MergedState{
 		GcodeState:  bambulab.StatePrepare,
 		SubtaskName: "Benchy.3mf",
@@ -182,7 +182,7 @@ func TestProcess_PrepareToRunningToFinish(t *testing.T) {
 		t.Fatal("tracker should be in tracking state")
 	}
 
-	// Step 2: RUNNING — should send progress update
+	// Step 2: RUNNING - should send progress update
 	printer.SetState(bambulab.MergedState{
 		GcodeState:    bambulab.StateRunning,
 		SubtaskName:   "Benchy.3mf",
@@ -218,7 +218,7 @@ func TestProcess_PrepareToRunningToFinish(t *testing.T) {
 		t.Errorf("remaining = %v, want 3600", runUpdate.Content.RemainingTime)
 	}
 
-	// Step 3: FINISH — should trigger two-phase end
+	// Step 3: FINISH - should trigger two-phase end
 	printer.SetState(bambulab.MergedState{
 		GcodeState:    bambulab.StateFinish,
 		SubtaskName:   "Benchy.3mf",
@@ -450,7 +450,7 @@ func TestProcess_NoTrackingIgnoresIdle(t *testing.T) {
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	tr := newTestTracker(printer, client, cfg)
 
-	// IDLE when not tracking — should do nothing
+	// IDLE when not tracking - should do nothing
 	printer.SetState(bambulab.MergedState{
 		GcodeState: bambulab.StateIdle,
 	})
@@ -468,7 +468,7 @@ func TestProcess_NoTrackingIgnoresFinish(t *testing.T) {
 	client := pushward.NewClient(srv.URL, "hlk_test")
 	tr := newTestTracker(printer, client, cfg)
 
-	// FINISH when not tracking — should do nothing
+	// FINISH when not tracking - should do nothing
 	printer.SetState(bambulab.MergedState{
 		GcodeState: bambulab.StateFinish,
 	})
@@ -536,7 +536,7 @@ func TestProcess_DuplicateFinishIgnored(t *testing.T) {
 
 	callsAfterFirst := len(testutil.GetCalls(calls, mu))
 
-	// Second FINISH — lastState is now FINISH, so it should be a no-op
+	// Second FINISH - lastState is now FINISH, so it should be a no-op
 	// (tracking is already false, so process returns early)
 	tr.process(ctx)
 
@@ -634,7 +634,7 @@ func TestFinishActivity_TwoPhaseEnd(t *testing.T) {
 	tr.finishActivity(context.Background(), state)
 
 	// Should immediately reset tracking so the MQTT event loop is unblocked.
-	// (lastState is intentionally not reset here — in production process()
+	// (lastState is intentionally not reset here - in production process()
 	// overwrites it with the terminal state on the same tick.)
 	if tr.tracking {
 		t.Error("finishActivity should reset tracking immediately")
@@ -901,7 +901,7 @@ func TestScheduleTwoPhaseEnd_GenGuardBlocksStaleEnd(t *testing.T) {
 	tr.process(ctx)
 
 	// Simulate a new session starting before phase 1 fires. startTracking and
-	// endActivity bump gen exactly like this — the in-flight callback must bail
+	// endActivity bump gen exactly like this - the in-flight callback must bail
 	// on the generation mismatch and emit neither the ONGOING nor the ENDED
 	// "Complete" frame.
 	tr.gen.Add(1)

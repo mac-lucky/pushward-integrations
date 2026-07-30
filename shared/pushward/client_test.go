@@ -517,7 +517,7 @@ func TestPatchActivity_OmitsEmptyContent(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL, "hlk_test")
-	// State-only patch — no Content block at all.
+	// State-only patch - no Content block at all.
 	if err := c.PatchActivity(context.Background(), "x", PatchRequest{State: StateEnded}); err != nil {
 		t.Fatalf("expected nil, got %v", err)
 	}
@@ -587,7 +587,7 @@ func TestHTTPError_LegacyErrorBodyFallback(t *testing.T) {
 // --- UpdateRequest serialisation ---
 
 // State has json:"state,omitempty" so a content-only update (zero State value)
-// must not emit "state":"" — the new server enum rejects empty strings under
+// must not emit "state":"" - the new server enum rejects empty strings under
 // additionalProperties:false validation.
 func TestUpdateRequest_OmitsEmptyState(t *testing.T) {
 	body, err := json.Marshal(UpdateRequest{
@@ -763,7 +763,7 @@ func TestDoWithRetry_HalfOpenProbe_ConflictClosesBreaker(t *testing.T) {
 }
 
 // Sustained 429 throttling is backpressure from a reachable backend, not a
-// health fault — exhausting retries on 429 must NOT open the breaker, and the
+// health fault - exhausting retries on 429 must NOT open the breaker, and the
 // returned error must be a typed *HTTPError carrying status 429 (regressions
 // for breaker-429-counts-as-failure and client-429-untyped-error).
 func TestDoWithRetry_429Exhaustion_DoesNotTripBreaker_TypedError(t *testing.T) {
@@ -805,7 +805,7 @@ func TestDoWithRetry_429Exhaustion_DoesNotTripBreaker_TypedError(t *testing.T) {
 // for breaker-half-open-wedge on ctx cancel during retry backoff).
 func TestDoWithRetry_ContextCancelDuringBackoff_DoesNotWedgeHalfOpen(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusServiceUnavailable) // 5xx → retryable, schedules a backoff
+		w.WriteHeader(http.StatusServiceUnavailable) // 5xx -> retryable, schedules a backoff
 	}))
 	defer srv.Close()
 
@@ -861,7 +861,7 @@ func TestDoWithRetry_InterleavedClientError_DoesNotResetFaultStreak(t *testing.T
 		t.Fatal("breaker should still be closed after 1 fault (threshold 2)")
 	}
 
-	// The 4xx goes through doWithRetry — the path under test. It must be a typed
+	// The 4xx goes through doWithRetry - the path under test. It must be a typed
 	// HTTPError (proving it took the 4xx branch) and must not reset the streak.
 	err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", "", nil, nil)
 	var he *HTTPError
@@ -872,7 +872,7 @@ func TestDoWithRetry_InterleavedClientError_DoesNotResetFaultStreak(t *testing.T
 		t.Fatal("a single 4xx must not open the breaker")
 	}
 
-	// The second genuine fault hits the threshold — but only if the interleaved
+	// The second genuine fault hits the threshold - but only if the interleaved
 	// 4xx left the streak intact. Had the 4xx been recorded as a success, the
 	// streak would have reset to 0 and this would leave the breaker closed.
 	cb.RecordFailure()

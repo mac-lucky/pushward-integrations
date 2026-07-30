@@ -226,7 +226,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 			_ = resp.Body.Close()
 			if done, cerr := handleConflict(respBody); done {
-				// Backend answered (409) — it is reachable but this is not a
+				// Backend answered (409) - it is reachable but this is not a
 				// success, so it must not zero the closed-state failure streak.
 				c.recordResult(ctx, operation, attempts, start, cerr, breakerReachable)
 				return cerr
@@ -245,7 +245,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 
 		// Read body for error diagnostics. Problem bodies routinely exceed
 		// a few hundred bytes (type URL + detail + errors array), so cap at
-		// 64 KiB — enough for any realistic Problem, still bounded.
+		// 64 KiB - enough for any realistic Problem, still bounded.
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 		_ = resp.Body.Close()
 
@@ -278,7 +278,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 		lastThrottled = false
 		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 			// 4xx client errors are not retryable, and the backend is clearly
-			// reachable, so this must not trip the breaker — but it is not a
+			// reachable, so this must not trip the breaker - but it is not a
 			// success either, so it must not zero the closed-state streak.
 			c.recordResult(ctx, operation, attempts, start, lastErr, breakerReachable)
 			return lastErr
@@ -289,7 +289,7 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 		err = fmt.Errorf("retry budget %s exhausted after %d attempts: %w", c.retryBudget, attempts, lastErr)
 	}
 	// Sustained 429 throttling is backpressure from a reachable backend, not a
-	// health fault — it must not open the (relay-wide shared) breaker. Only
+	// health fault - it must not open the (relay-wide shared) breaker. Only
 	// 5xx/network exhaustion counts as a fault. 429 is reachable-not-success, so
 	// it un-wedges a half-open probe without zeroing the closed-state streak.
 	signal := breakerFault
@@ -376,7 +376,7 @@ type HTTPError struct {
 	Type         string // Problem.type (typically "about:blank")
 	Title        string // Problem.title
 	Detail       string // Problem.detail
-	Code         string // Problem.code — stable programmatic identifier
+	Code         string // Problem.code - stable programmatic identifier
 	RetryAfterMs int64  // Problem.retry_after_ms (populated on 409/429)
 }
 
@@ -453,12 +453,12 @@ const (
 	// half-open probe.
 	breakerHealthy breakerSignal = iota
 	// breakerReachable: a response came back proving the backend is up but the
-	// request itself failed — a non-retryable 4xx, a resolved 409 conflict, or
+	// request itself failed - a non-retryable 4xx, a resolved 409 conflict, or
 	// sustained 429 throttling. Closes a half-open probe (the backend recovered)
 	// but leaves the closed-state failure streak intact, so it neither counts as
 	// a fault nor zeroes a climbing streak of real 5xx/network faults.
 	breakerReachable
-	// breakerFault: the backend is unreachable or unhealthy — 5xx or network
+	// breakerFault: the backend is unreachable or unhealthy - 5xx or network
 	// errors that survived all retries. Counts toward the open threshold and
 	// re-opens a half-open probe.
 	breakerFault
@@ -472,7 +472,7 @@ const (
 // reaching recordResult (it calls c.onResult directly at the Allow() guard), and
 // a probe admitted by Allow() that never reaches the backend must call
 // breaker.Abort() directly, not recordResult, so it does not register a fake
-// success — see the early-return paths in doWithRetry.
+// success - see the early-return paths in doWithRetry.
 func (c *Client) recordResult(ctx context.Context, operation string, attempts int, start time.Time, err error, signal breakerSignal) {
 	if c.breaker != nil {
 		switch signal {
@@ -497,7 +497,7 @@ func (c *Client) recordResult(ctx context.Context, operation string, attempts in
 // CreateActivity creates (or refreshes) an activity via POST /activities.
 // The server upserts and always returns 201 with an X-Resource-Action header
 // distinguishing created vs. updated, so duplicate slugs are no longer a 409.
-// A 409 now signals only activity.limit_exceeded — surfaced as a typed error.
+// A 409 now signals only activity.limit_exceeded - surfaced as a typed error.
 func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority, endedTTL, staleTTL int) error {
 	return c.doWithRetry(ctx, "create", http.MethodPost, fmt.Sprintf("%s/activities", c.baseURL), "",
 		CreateActivityRequest{
@@ -583,7 +583,7 @@ func (c *Client) SendNotification(ctx context.Context, req SendNotificationReque
 
 // CreateWidget creates (or upserts) a widget via POST /widgets. The server
 // upserts on (user, slug) so idempotent calls at startup are safe. A 409
-// signals widget.limit_exceeded — surfaced as a typed *HTTPError with that
+// signals widget.limit_exceeded - surfaced as a typed *HTTPError with that
 // stable Code.
 func (c *Client) CreateWidget(ctx context.Context, req CreateWidgetRequest) error {
 	return c.doWithRetry(ctx, "widget.create", http.MethodPost,

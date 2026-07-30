@@ -39,7 +39,7 @@ func TestBuildSpecs_StatListChangeMask(t *testing.T) {
 	if got := specs[0].StatChangeMask; len(got) != 2 || !got[0] || got[1] {
 		t.Errorf("mask = %v, want [true false]", got)
 	}
-	// All rows default to trigger:true → nil mask (fast path preserved).
+	// All rows default to trigger:true -> nil mask (fast path preserved).
 	if specs[1].StatChangeMask != nil {
 		t.Errorf("all-default widget mask = %v, want nil", specs[1].StatChangeMask)
 	}

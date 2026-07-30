@@ -70,7 +70,7 @@ type alertState struct {
 	lastSeen     time.Time
 	fingerprints map[string]struct{}
 	// lastValues records the series keys + values most recently sent to the
-	// server. Reused on resolve to keep keys stable across the firing→end
+	// server. Reused on resolve to keep keys stable across the firing->end
 	// transition so the server's AccumulateHistory preserves accumulated
 	// history instead of pruning it as an orphaned series.
 	lastValues map[string]float64
@@ -227,7 +227,7 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 		}
 		logger.Info("activity created")
 
-		// Re-check entry exists before writing — a concurrent resolved webhook
+		// Re-check entry exists before writing - a concurrent resolved webhook
 		// could have deleted the entry between the unlock above and this lock.
 		h.mu.Lock()
 		if state, ok := h.active[mapKey]; ok {
@@ -258,7 +258,7 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 			"expr_resolved", expr != "", "refID", refID)
 		if isNew && expr != "" {
 			// Hand the timeline template/styling to the poller so it seeds the
-			// activity on its first tick that yields values — otherwise the
+			// activity on its first tick that yields values - otherwise the
 			// activity would be left on the generic template while ONGOING.
 			// (A timeline seed with empty values would be rejected 422, so we
 			// can't seed here.)
@@ -281,7 +281,7 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 		return
 	}
 
-	// Only seed lastValues from the initial history fetch — values from the
+	// Only seed lastValues from the initial history fetch - values from the
 	// webhook payload use Grafana ref-ID keys that differ from the poller's
 	// metric-derived keys. Letting a re-fire overwrite would drop accumulated
 	// history on resolve.
@@ -330,7 +330,7 @@ func (h *Handler) handleResolved(ctx context.Context, a alert) {
 		return
 	}
 
-	// All instances resolved — capture state and clean up.
+	// All instances resolved - capture state and clean up.
 	refID := state.refID
 	seriesLabel := state.seriesLabel
 	expr := state.expr
@@ -432,14 +432,14 @@ func (h *Handler) resolveValues(a alert, preferredRefID, seriesLabel string) map
 		label = "Value"
 	}
 
-	// Single ref ID match — use alertname as key for backward compatibility.
+	// Single ref ID match - use alertname as key for backward compatibility.
 	if preferredRefID != "" {
 		if v, ok := a.Values[preferredRefID]; ok {
 			return map[string]float64{label: v}
 		}
 	}
 
-	// Single value — use alertname as key.
+	// Single value - use alertname as key.
 	if len(a.Values) == 1 {
 		for _, v := range a.Values {
 			return map[string]float64{label: v}
@@ -621,7 +621,7 @@ func (h *Handler) checkAlertStates(ctx context.Context) {
 			continue
 		}
 
-		// Alert is no longer firing — end the activity.
+		// Alert is no longer firing - end the activity.
 		h.mu.Lock()
 		cur, stillActive := h.active[e.name]
 		// Only end if the entry hasn't been refreshed since our snapshot: a

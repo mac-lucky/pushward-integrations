@@ -44,7 +44,7 @@ const (
 
 // ActivitySound is a Live Activity alert-sound identifier. The typed alias
 // stops the value being confused with other string arguments at call sites.
-// Any string is accepted by the SDK — the server is the source of truth for
+// Any string is accepted by the SDK - the server is the source of truth for
 // the allowlist (it returns 400 on unrecognised values), so clients don't
 // mirror it and avoid drift as new sounds are added server-side.
 type ActivitySound string
@@ -81,9 +81,9 @@ type Threshold struct {
 // the server's model.TapAction and NotificationAction routing fields, so iOS
 // dispatches a tap the same way across notifications and Live Activities. The
 // behavior is inferred from the URL scheme + Foreground flag:
-//   - custom scheme (e.g. youtube://, homeassistant://) → opens that app
-//   - http(s) + Foreground=true → opens the URL in Safari / in-app browser
-//   - http(s) + Foreground=false → silent webhook (Method/Headers/Body honored)
+//   - custom scheme (e.g. youtube://, homeassistant://) -> opens that app
+//   - http(s) + Foreground=true -> opens the URL in Safari / in-app browser
+//   - http(s) + Foreground=false -> silent webhook (Method/Headers/Body honored)
 //
 // Title and Icon are only meaningful when the action is rendered as a button
 // (url_action / secondary_url_action); the widget-wide tap_action ignores them.
@@ -175,7 +175,7 @@ type Content struct {
 	// patching content.alarm to explicit null. iOS 26+ only.
 	Alarm *bool `json:"alarm,omitempty"`
 	// SnoozeSeconds sets how far POST /activities/{slug}/snooze extends end_date
-	// (and the iOS AlarmKit snooze window). 60–3600; server defaults to 300 when
+	// (and the iOS AlarmKit snooze window). 60-3600; server defaults to 300 when
 	// omitted. Only meaningful with Alarm set.
 	SnoozeSeconds *int `json:"snooze_seconds,omitempty"`
 
@@ -227,7 +227,7 @@ type CreateActivityRequest struct {
 // ContentPatch.
 //
 // The three TTLs are top-level merge-patch fields on the server (omit = keep,
-// null = clear, number = set). With omitempty a nil pointer means "keep" —
+// null = clear, number = set). With omitempty a nil pointer means "keep" -
 // this client cannot express the null-clear form, same as ContentPatch.
 type UpdateRequest struct {
 	State        string        `json:"state,omitempty"`
@@ -243,8 +243,8 @@ type UpdateRequest struct {
 // fields are omitted and preserved server-side under RFC 7396 merge-patch
 // semantics. Use with Client.PatchActivity.
 //
-// Every pointer field MUST carry `json:",omitempty"` — without it a nil
-// pointer marshals as JSON null, which per RFC 7396 §2 instructs the server
+// Every pointer field MUST carry `json:",omitempty"` - without it a nil
+// pointer marshals as JSON null, which per RFC 7396 section 2 instructs the server
 // to delete the field. Adding a new pointer field without omitempty is a
 // silent correctness bug.
 type ContentPatch struct {
@@ -370,7 +370,7 @@ type WidgetContent struct {
 	// Trend annotates value/gauge widgets with a directional arrow. One of
 	// "up" / "down" / "flat". Ignored for other templates.
 	Trend string `json:"trend,omitempty"`
-	// StatRows powers the stat_list template — a 1-6 row label/value list.
+	// StatRows powers the stat_list template - a 1-6 row label/value list.
 	// Required when template == stat_list, ignored otherwise.
 	StatRows []StatRow `json:"stat_rows,omitempty"`
 	// Tap-action routing on a widget. tap_action overrides the whole-widget tap

@@ -115,7 +115,7 @@ func TestCircuitBreaker_AbortReArmsHalfOpenProbe(t *testing.T) {
 	}
 	now = now.Add(6 * time.Second)
 	if !cb.Allow() {
-		t.Error("expected a new probe to be allowed after the re-armed cooldown — breaker wedged")
+		t.Error("expected a new probe to be allowed after the re-armed cooldown -- breaker wedged")
 	}
 }
 
@@ -137,14 +137,14 @@ func TestCircuitBreaker_ReachableDoesNotZeroClosedStreak(t *testing.T) {
 	// reachable-but-erroring outcomes (4xx/409/429). At 10k-tenant scale the
 	// breaker is shared, so routine per-tenant 4xx must not perpetually reset it.
 	cb.RecordFailure()
-	cb.RecordReachable() // 4xx between faults — must NOT zero the streak
+	cb.RecordReachable() // 4xx between faults - must NOT zero the streak
 	cb.RecordFailure()
 	cb.RecordReachable()
 	if cb.IsOpen() {
 		t.Fatal("expected breaker still closed after 2 faults + interleaved reachables")
 	}
 
-	cb.RecordFailure() // 3rd genuine fault — streak preserved, hits threshold
+	cb.RecordFailure() // 3rd genuine fault - streak preserved, hits threshold
 	if !cb.IsOpen() {
 		t.Error("expected breaker to open: RecordReachable must not have reset the fault streak")
 	}

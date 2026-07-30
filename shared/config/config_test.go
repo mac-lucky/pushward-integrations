@@ -146,7 +146,7 @@ func TestApplyEnvOverrides_NoVars(t *testing.T) {
 
 func TestApplyEnvOverrides_InvalidPriority(t *testing.T) {
 	// strconv.Atoi rejects trailing garbage that the old fmt.Sscanf silently
-	// accepted (parsing "5x"→5, "0x10"→0). "not-a-number" fails under both
+	// accepted (parsing "5x"->5, "0x10"->0). "not-a-number" fails under both
 	// implementations, so only the trailing-garbage cases pin the fix. Each
 	// must return an error AND leave Priority untouched.
 	for _, value := range []string{"not-a-number", "5x", "0x10"} {

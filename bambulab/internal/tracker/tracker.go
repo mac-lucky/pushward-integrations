@@ -17,8 +17,8 @@ import (
 
 const slugPrefix = "bambu"
 
-// detachedEndTimeout bounds each detached, time-limited end send — the two
-// two-phase-end phases and the shutdown-path final ENDED send — so a stuck
+// detachedEndTimeout bounds each detached, time-limited end send - the two
+// two-phase-end phases and the shutdown-path final ENDED send - so a stuck
 // PushWard call cannot block endTimers.Wait at shutdown indefinitely.
 const detachedEndTimeout = 30 * time.Second
 
@@ -60,7 +60,7 @@ type Tracker struct {
 	// gen identifies the current print session. startTracking/endActivity bump
 	// it so an in-flight two-phase-end callback (which can re-arm its own phase 2
 	// after a Stop) bails out instead of ending a newly started print's activity.
-	// Read from AfterFunc goroutines, written from the main loop — hence atomic.
+	// Read from AfterFunc goroutines, written from the main loop - hence atomic.
 	gen atomic.Uint64
 }
 
@@ -95,7 +95,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 			t.endTimers.Close()
 			if t.tracking {
 				// ctx is already cancelled here, so the final ENDED frame must
-				// run on a fresh detached, time-bounded context — otherwise the
+				// run on a fresh detached, time-bounded context - otherwise the
 				// "Interrupted" send aborts immediately and the Live Activity is
 				// left stuck until the server-side stale timeout.
 				endCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), detachedEndTimeout)
@@ -106,7 +106,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 			return nil
 
 		case <-t.bambu.UpdateCh():
-			// MQTT pushed new state — process immediately so transitions
+			// MQTT pushed new state - process immediately so transitions
 			// (finish/fail/cancel) are reported in real time. Same-state
 			// progress ticks are debounced in process() to the poll interval.
 			t.process(ctx)
@@ -121,7 +121,7 @@ func (t *Tracker) process(ctx context.Context) {
 	state := t.bambu.State()
 
 	if !t.tracking {
-		// Not tracking — watch for print start. StatePause is included so a
+		// Not tracking - watch for print start. StatePause is included so a
 		// bridge that (re)starts while a print is paused begins tracking once
 		// the first MQTT push_status arrives (State() is the zero value until
 		// then, so the synchronous startup check in Run cannot catch it).
@@ -133,7 +133,7 @@ func (t *Tracker) process(ctx context.Context) {
 		return
 	}
 
-	// Currently tracking — handle state transitions
+	// Currently tracking - handle state transitions
 	switch state.GcodeState {
 	case bambulab.StateFinish:
 		if t.lastState != bambulab.StateFinish {
@@ -334,7 +334,7 @@ func (t *Tracker) sendSeed(ctx context.Context, f frame, activityState string) e
 }
 
 // send emits a merge-patch tick. Must be called after a successful sendSeed in
-// the same session — the server-side Content baseline is what merge-patch
+// the same session - the server-side Content baseline is what merge-patch
 // preserves.
 func (t *Tracker) send(ctx context.Context, f frame, activityState string) {
 	contentPatch := &pushward.ContentPatch{

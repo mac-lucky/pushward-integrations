@@ -446,7 +446,7 @@ func TestIntegration_AutoExtract(t *testing.T) {
 	webhookURL := hostWebhookURL(handlerSrv.URL, "/webhook")
 	dsUID := setupGrafana(t, sharedEnv, webhookURL, "Prometheus-AutoExtract")
 
-	// NO pushward_query annotation — handler must auto-extract from Grafana API
+	// NO pushward_query annotation - handler must auto-extract from Grafana API
 	createAlertRule(t, sharedEnv.grafanaURL, dsUID, "auto_extract_metric", "AutoExtractAlert", map[string]string{
 		"summary": "Auto extracted query test",
 	})
@@ -503,7 +503,7 @@ func TestIntegration_Resolved(t *testing.T) {
 	// Write 0 to resolve (classic_conditions checks > 0)
 	writeMetric(t, sharedEnv.vmURL, `resolve_metric{job="test"} 0`)
 
-	// Wait for ENDED state specifically — Grafana needs multiple eval cycles
+	// Wait for ENDED state specifically - Grafana needs multiple eval cycles
 	deadline := time.Now().Add(120 * time.Second)
 	var up *pushward.UpdateRequest
 	for time.Now().Before(deadline) {

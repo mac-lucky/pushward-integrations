@@ -55,7 +55,7 @@ func (cb *CircuitBreaker) Allow() bool {
 			return true // allow one probe
 		}
 		return false
-	default: // stateHalfOpen — already probing
+	default: // stateHalfOpen - already probing
 		return false
 	}
 }
@@ -71,7 +71,7 @@ func (cb *CircuitBreaker) RecordSuccess() {
 }
 
 // RecordReachable records an outcome that proves the backend is reachable but is
-// not itself a success — a non-retryable 4xx, a resolved 409, or sustained 429
+// not itself a success - a non-retryable 4xx, a resolved 409, or sustained 429
 // throttling. In half-open it closes the probe (the backend responded, so it has
 // recovered). In the closed state it deliberately leaves the failure streak
 // intact: a reachable-but-erroring response is neither a success nor a fault, so
@@ -110,7 +110,7 @@ func (cb *CircuitBreaker) RecordFailure() {
 // request body failed to marshal, the request could not be built, or the
 // context was cancelled during retry backoff). Without this, a probe admitted
 // by Allow() that bypasses both RecordSuccess and RecordFailure would leave the
-// breaker wedged in half-open forever — Allow() returns false for every
+// breaker wedged in half-open forever - Allow() returns false for every
 // subsequent caller and the circuit never recovers without a restart. Aborting
 // returns the breaker to open with a fresh cooldown so a later probe can run.
 // It is a no-op in the closed state: a local/transport hiccup must not count

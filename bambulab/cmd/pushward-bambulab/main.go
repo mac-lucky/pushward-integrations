@@ -49,7 +49,7 @@ func main() {
 	defer cancel()
 
 	// 3D printers are frequently powered off when idle, and paho's
-	// auto-reconnect only engages after the first successful connection — so a
+	// auto-reconnect only engages after the first successful connection - so a
 	// hard exit here would crashloop the pod (with growing k8s backoff) and miss
 	// the print-start event. Retry the initial connect until the printer appears
 	// or we're asked to shut down.

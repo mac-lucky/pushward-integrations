@@ -339,7 +339,7 @@ type matrixResult struct {
 }
 
 // parseValues converts the Prometheus [timestamp, "value"] pairs to HistoryPoints.
-// Values are JSON strings (e.g. "87.3", "NaN", "+Inf") — NaN and Inf are skipped.
+// Values are JSON strings (e.g. "87.3", "NaN", "+Inf") - NaN and Inf are skipped.
 func parseValues(values [][]json.RawMessage) []pushward.HistoryPoint {
 	points := make([]pushward.HistoryPoint, 0, len(values))
 	for _, pair := range values {

@@ -29,7 +29,7 @@ func (p *Periodic) Start(ctx context.Context, interval time.Duration, fn func(co
 	p.started = true
 	// Assign cancel/done under the lock so a concurrent Stop() either sees a
 	// fully-initialised Periodic (and cancels it) or sees the zero value (and
-	// no-ops cleanly) — never a torn half-assigned state.
+	// no-ops cleanly) - never a torn half-assigned state.
 	runCtx, cancel := context.WithCancel(ctx)
 	p.cancel = cancel
 	p.done = make(chan struct{})

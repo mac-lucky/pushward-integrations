@@ -17,7 +17,7 @@ import (
 
 func TestStartStop(t *testing.T) {
 	// Verify start/stop lifecycle without real HTTP calls.
-	// metricsClient and pwClient are nil — the goroutine will tick but
+	// metricsClient and pwClient are nil - the goroutine will tick but
 	// poll() will panic if called, so we stop before the first tick.
 	p := New(nil, nil, 1*time.Hour) // long interval so it won't tick
 	p.Start("test-slug", "up", "TestAlert")
@@ -26,7 +26,7 @@ func TestStartStop(t *testing.T) {
 		t.Fatalf("ActiveCount = %d, want 1", p.ActiveCount())
 	}
 
-	// Start again — should be a no-op
+	// Start again - should be a no-op
 	p.Start("test-slug", "up", "TestAlert")
 	if p.ActiveCount() != 1 {
 		t.Fatalf("ActiveCount = %d after duplicate start, want 1", p.ActiveCount())
@@ -72,7 +72,7 @@ type pwCall struct {
 // pwRecorder is a minimal PushWard mock that records method+path+body and
 // replies with a fixed status. The poller never calls CreateActivity, so the
 // contract-validating testutil.MockPushWardServer (which 404s a PATCH for an
-// uncreated slug) is unsuitable here — we only need to observe the raw calls.
+// uncreated slug) is unsuitable here - we only need to observe the raw calls.
 type pwRecorder struct {
 	server *httptest.Server
 	status int
@@ -142,7 +142,7 @@ const instantOnePoint = `{"status":"success","data":{"resultType":"vector","resu
 
 // TestPoll_SeedThenPatch pins the StartWithSeed state machine: the first poll
 // with a non-nil seed and seeded=false sends a FULL UpdateActivity (carrying the
-// timeline template) and flips seeded→true; the next poll (seeded=true) sends a
+// timeline template) and flips seeded->true; the next poll (seeded=true) sends a
 // value-only merge-patch that omits the template. Both land on
 // PATCH /activities/{slug}; the template's presence/absence in the body is the
 // discriminator. If the seed branch were removed, the first body would lack the
@@ -162,7 +162,7 @@ func TestPoll_SeedThenPatch(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	// First tick: seeded=false → full UpdateActivity establishing the template.
+	// First tick: seeded=false -> full UpdateActivity establishing the template.
 	seeded := p.poll(ctx, logger, "grafana-abc", "up", "instance", seed, false)
 	if !seeded {
 		t.Fatal("first poll should return seeded=true after a successful seed")
@@ -185,7 +185,7 @@ func TestPoll_SeedThenPatch(t *testing.T) {
 	}
 	assertValueKey(t, seedContent, "node-1", 42.5)
 
-	// Second tick: seeded=true → value-only merge-patch (template NOT re-sent).
+	// Second tick: seeded=true -> value-only merge-patch (template NOT re-sent).
 	seeded = p.poll(ctx, logger, "grafana-abc", "up", "instance", seed, true)
 	if !seeded {
 		t.Fatal("second poll should keep seeded=true")

@@ -26,7 +26,7 @@ const (
 	seriesKey = "Speed" // timeline values/units/history map key
 
 	// Mode keys for the change-detection guard. These are the semantic dedup
-	// keys — different from the human-readable state string passed to send(),
+	// keys - different from the human-readable state string passed to send(),
 	// which for downloads is "%.1f MB/s" and would defeat speed bucketing.
 	modeDownloading = "downloading"
 	modePaused      = "paused"
@@ -151,7 +151,7 @@ func (t *Tracker) Wait() {
 }
 
 // WebhookHandler returns the HTTP handler for POST /webhook. The returned
-// handler launches tracking goroutines on the provided lifecycle context — not
+// handler launches tracking goroutines on the provided lifecycle context - not
 // the request context, which is cancelled when the HTTP response completes.
 func (t *Tracker) WebhookHandler(lifecycleCtx context.Context) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -227,7 +227,7 @@ func timelineSample(value *float64) float64 {
 
 // buildSeedHistory returns a bootstrap history for the first non-zero sample,
 // or nil when history has already been seeded or sample is 0. It does NOT flip
-// t.historySent — callers commit that only after the send succeeds, so a failed
+// t.historySent - callers commit that only after the send succeeds, so a failed
 // first tick doesn't consume the one-shot seed without ever delivering it.
 func (t *Tracker) buildSeedHistory(sample float64) map[string][]pushward.HistoryPoint {
 	if t.historySent || sample <= 0 {
@@ -364,7 +364,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	}
 
 	// Phase 1: Wait for SABnzbd to start downloading. The "Starting..." frame
-	// is the session seed — subsequent ticks merge-patch against it.
+	// is the session seed - subsequent ticks merge-patch against it.
 	slog.Info("waiting for download to start")
 	if err := t.sendSeed(ctx, 0.0, "Starting...", "arrow.down.circle", pushward.ColorBlue, nil, "", pushward.StateOngoing, nil); err != nil {
 		slog.Error("failed to seed activity", "error", err)
@@ -374,7 +374,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	if !t.waitForQueueActive(ctx, 12) {
 		// The queue can be idle because the item is already in post-processing
 		// (resumed mid-unpack); waitForQueueActive only inspects the queue. Only
-		// give up when there is also no active post-processing — otherwise fall
+		// give up when there is also no active post-processing - otherwise fall
 		// through to the main loop, which tracks the unpack and ends with the
 		// real completion summary.
 		if pp, _ := t.getPPStatus(ctx); pp == "" {
@@ -387,7 +387,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 
 	var totalPPElapsed time.Duration
 
-	// Main loop: download → post-processing → check for more
+	// Main loop: download -> post-processing -> check for more
 	for {
 		// Download phase
 		t.trackDownloads(ctx)
@@ -434,7 +434,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	// Keep the "Speed" series so the server retains the accumulated download
 	// history. Switching series keys here would cause AccumulateHistory to
 	// prune the prior series and leave the chart with only the final points.
-	// Download is done, so the final sample is 0 — chart tapers to zero.
+	// Download is done, so the final sample is 0 - chart tapers to zero.
 	finalContent := pushward.Content{
 		Template:    t.cfg.SABnzbd.Template,
 		Progress:    1.0,
@@ -450,7 +450,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 	// downloading tick so the completed frame renders a static full bar.
 	finalContent.LiveProgress, finalContent.EndDate = liveProgress(t.cfg.SABnzbd.Template, nil)
 
-	// Two-phase end: ONGOING with final content → short display → ENDED
+	// Two-phase end: ONGOING with final content -> short display -> ENDED
 	if resumed {
 		req := pushward.UpdateRequest{State: pushward.StateEnded, Content: finalContent}
 		if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
@@ -795,7 +795,7 @@ func (t *Tracker) getCompletedSummary(ctx context.Context, sessionStart time.Tim
 		for _, slot := range history.Slots {
 			// History is newest-first and Failed/Deleted slots also carry a
 			// Completed timestamp, so use the timestamp (not just Completed
-			// status) as the cutoff — otherwise a run of leading terminal-but-
+			// status) as the cutoff - otherwise a run of leading terminal-but-
 			// not-Completed slots would page through the entire history. The
 			// `!= 0` guard still skips genuinely in-progress slots (no end time).
 			if slot.Completed != 0 && slot.Completed < cutoff {
@@ -852,7 +852,7 @@ func formatSize(mb float64) string {
 	return fmt.Sprintf("%.0f MB", mb)
 }
 
-// backoffDuration returns an exponentially increasing duration with ±10% jitter,
+// backoffDuration returns an exponentially increasing duration with +/-10% jitter,
 // capped at maxBackoff. n is the number of consecutive errors (1-indexed).
 func backoffDuration(n int, base, maxBackoff time.Duration) time.Duration {
 	shift := n - 1

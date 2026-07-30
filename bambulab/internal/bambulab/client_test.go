@@ -72,7 +72,7 @@ func TestTLSConfig_InsecureSkipVerify(t *testing.T) {
 	c := &Client{insecureSkipVerify: true}
 	cfg := c.tlsConfig(nil)
 	if cfg.VerifyConnection != nil {
-		t.Fatal("no fingerprint → no VerifyConnection callback expected")
+		t.Fatal("no fingerprint -> no VerifyConnection callback expected")
 	}
 	if !cfg.InsecureSkipVerify {
 		t.Fatal("expected InsecureSkipVerify=true fallback")
