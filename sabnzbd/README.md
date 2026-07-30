@@ -220,7 +220,7 @@ docker logs -f pushward-sabnzbd
 |---|---|
 | `sabnzbd.url is required` / `sabnzbd.api_key is required` | Set `PUSHWARD_SABNZBD_URL` / `PUSHWARD_SABNZBD_API_KEY` (or the YAML keys). |
 | `polling.interval must be at least 1s` | Raise `PUSHWARD_POLL_INTERVAL` to `1s` or more. |
-| `webhook secret not configured - webhook endpoint is unauthenticated` | Expected when no secret is set; set `PUSHWARD_SABNZBD_WEBHOOK_SECRET` to require `X-Webhook-Secret`. |
+| `webhook secret not configured -- webhook endpoint is unauthenticated` | Expected when no secret is set; set `PUSHWARD_SABNZBD_WEBHOOK_SECRET` to require `X-Webhook-Secret`. |
 | Webhook returns `401 unauthorized` | A secret is configured but the request's `X-Webhook-Secret` is missing or wrong. |
 | `SABnzbd never started downloading, giving up` | The queue stayed idle after the bounded wait and nothing was post-processing - check that SABnzbd actually queued the NZB and isn't paused. |
 | No Live Activity on the phone | Confirm the iOS app is subscribed to the `sabnzbd` slug, the `hlk_` key is valid, and `PUSHWARD_URL` points at your server. |
