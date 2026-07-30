@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"time"
 
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
@@ -423,11 +422,7 @@ func (cfg *Config) applyEnvOverrides() error {
 		cfg.Telemetry.SampleRate = rate
 	}
 	if v := os.Getenv("PUSHWARD_TRUSTED_PROXY_CIDRS"); v != "" {
-		parts := strings.Split(v, ",")
-		for i, p := range parts {
-			parts[i] = strings.TrimSpace(p)
-		}
-		cfg.TrustedProxyCIDRs = parts
+		cfg.TrustedProxyCIDRs = sharedconfig.SplitList(v)
 	}
 
 	// Provider Enabled overrides

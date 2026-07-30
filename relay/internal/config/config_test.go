@@ -1,9 +1,40 @@
 package config
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
+
+// relayEnvVars is every variable applyEnvOverrides reads. Clearing the whole set
+// rather than the one under test keeps a developer shell that exports any of them
+// from failing a test for a reason the test is not about.
+var relayEnvVars = []string{
+	"PUSHWARD_DATABASE_DSN",
+	"PUSHWARD_DATABASE_PASSWORD_FILE",
+	"PUSHWARD_OTEL_ENDPOINT",
+	"PUSHWARD_OTEL_TLS_CERT_PATH",
+	"PUSHWARD_OTEL_TLS_KEY_PATH",
+	"PUSHWARD_OTEL_SAMPLE_RATE",
+	"PUSHWARD_TRUSTED_PROXY_CIDRS",
+	"PUSHWARD_GRAFANA_ENABLED",
+	"PUSHWARD_ARGOCD_ENABLED",
+	"PUSHWARD_STARR_ENABLED",
+	"PUSHWARD_STARR_MODE",
+	"PUSHWARD_GITEA_ENABLED",
+	"PUSHWARD_ARGOCD_URL",
+	"PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD",
+	"PUSHWARD_SYNC_GRACE_PERIOD",
+}
+
+// clearRelayEnv makes a test independent of the shell it runs in. Call it before
+// a test sets its own values.
+func clearRelayEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range relayEnvVars {
+		t.Setenv(name, "")
+	}
+}
 
 // validConfig returns a Config whose provider list passes both
 // validateProviderTimeouts and validatePriorities: a couple of enabled
@@ -21,6 +52,65 @@ func validConfig() *Config {
 	cfg.Providers.ArgoCD.StaleTimeout = 30 * time.Minute
 	cfg.Providers.ArgoCD.SyncGracePeriod = 10 * time.Second
 	return cfg
+}
+
+// Subtests here deliberately do not call t.Parallel: t.Setenv panics in a test
+// with a parallel ancestor.
+func TestApplyEnvOverrides_TrustedProxyCIDRs(t *testing.T) {
+	const fromYAML = "192.168.0.0/16"
+
+	tests := []struct {
+		name string
+		env  string
+		want []string
+	}{
+		{
+			name: "unset leaves the YAML value",
+			env:  "",
+			want: []string{fromYAML},
+		},
+		{
+			name: "a list becomes one entry per CIDR",
+			env:  "10.0.0.0/8,172.16.0.0/12",
+			want: []string{"10.0.0.0/8", "172.16.0.0/12"},
+		},
+		{
+			// The regression this test exists for. A trailing comma used to leave
+			// an empty entry, which reached net.ParseCIDR("") in
+			// ratelimit.SetTrustedProxyCIDRs and exited the process at startup.
+			name: "a trailing comma does not leave a blank entry",
+			env:  "10.0.0.0/8,",
+			want: []string{"10.0.0.0/8"},
+		},
+		{
+			name: "surrounding whitespace is trimmed",
+			env:  " 10.0.0.0/8 , 172.16.0.0/12 ",
+			want: []string{"10.0.0.0/8", "172.16.0.0/12"},
+		},
+		{
+			// All-blank must come out empty, not a slice of empty strings: main
+			// gates on len() to choose between configuring the proxies and warning
+			// that none are set, and a non-empty slice of blanks fails the parse.
+			name: "an all-blank value comes out empty",
+			env:  ",, ,",
+			want: []string{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearRelayEnv(t)
+			t.Setenv("PUSHWARD_TRUSTED_PROXY_CIDRS", tt.env)
+
+			cfg := &Config{TrustedProxyCIDRs: []string{fromYAML}}
+			if err := cfg.applyEnvOverrides(); err != nil {
+				t.Fatalf("applyEnvOverrides() error = %v", err)
+			}
+			if !reflect.DeepEqual(cfg.TrustedProxyCIDRs, tt.want) {
+				t.Errorf("TrustedProxyCIDRs = %#v, want %#v", cfg.TrustedProxyCIDRs, tt.want)
+			}
+		})
+	}
 }
 
 func TestValidateProviderTimeouts(t *testing.T) {
