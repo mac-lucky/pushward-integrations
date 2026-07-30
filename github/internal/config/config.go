@@ -24,7 +24,7 @@ func Load(path string) (*Config, error) {
 	cfg := &Config{
 		PushWard: sharedconfig.DefaultPushWardConfig(),
 		Polling:  sharedconfig.DefaultPollingConfig(),
-		Render:  sharedconfig.DefaultRenderConfig(),
+		Render:   sharedconfig.DefaultRenderConfig(),
 	}
 
 	if err := sharedconfig.LoadYAML(path, cfg); err != nil {
