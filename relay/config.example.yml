@@ -22,8 +22,8 @@ providers:
   grafana:
     enabled: true
     priority: 5
-    cleanup_delay: 15m                     # → ended_ttl
-    stale_timeout: 24h                    # → stale_ttl
+    cleanup_delay: 15m                     # -> ended_ttl
+    stale_timeout: 24h                    # -> stale_ttl
 
   argocd:
     enabled: true

@@ -14,30 +14,30 @@ Polls the GitHub Actions API for in-progress workflow runs and pushes their live
 ## How it works
 
 ```
-GitHub Actions API ──poll──> pushward-github ──POST/PATCH /activities──> PushWard server ──APNs──> iOS Live Activity
+GitHub Actions API --poll--> pushward-github --POST/PATCH /activities--> PushWard server --APNs--> iOS Live Activity
 ```
 
-1. **Discover** — if `github.owner` is set, every non-archived, non-disabled repo under that owner is listed and refreshed every 5 minutes; any `github.repos` you list are merged in and de-duplicated.
-2. **Detect** — each repo is polled (default every 60s, `polling.idle_interval`) for in-progress runs via `GET /repos/{owner}/{repo}/actions/runs?status=in_progress`; the most recently created run is tracked. Repos with no workflows are skipped, and the probe is a conditional request, so an unchanged answer costs no rate limit at all.
-3. **Create** — a Live Activity is created (`POST /activities`) and seeded with the `steps` template, triggering a push-to-start Live Activity on subscribed iPhones.
-4. **Update** — a run already in flight is advanced on its own faster interval (default 15s, `polling.interval`): the bridge fetches the run's jobs, groups matrix/reusable-workflow jobs by base name into steps, and sends `PATCH /activities/{slug}` only when something changed (or a heartbeat is due).
-5. **End** — on completion it runs a two-phase end: a final `ONGOING` frame (green for success, red for failure/cancel) so the result lands on the Dynamic Island, then `ENDED` to dismiss the activity.
+1. **Discover** - if `github.owner` is set, every non-archived, non-disabled repo under that owner is listed and refreshed every 5 minutes; any `github.repos` you list are merged in and de-duplicated.
+2. **Detect** - each repo is polled (default every 60s, `polling.idle_interval`) for in-progress runs via `GET /repos/{owner}/{repo}/actions/runs?status=in_progress`; the most recently created run is tracked. Repos with no workflows are skipped, and the probe is a conditional request, so an unchanged answer costs no rate limit at all.
+3. **Create** - a Live Activity is created (`POST /activities`) and seeded with the `steps` template, triggering a push-to-start Live Activity on subscribed iPhones.
+4. **Update** - a run already in flight is advanced on its own faster interval (default 15s, `polling.interval`): the bridge fetches the run's jobs, groups matrix/reusable-workflow jobs by base name into steps, and sends `PATCH /activities/{slug}` only when something changed (or a heartbeat is due).
+5. **End** - on completion it runs a two-phase end: a final `ONGOING` frame (green for success, red for failure/cancel) so the result lands on the Dynamic Island, then `ENDED` to dismiss the activity.
 
 ## Features
 
-- **Repo auto-discovery** — set `github.owner` and all of that account's non-archived, non-disabled repos are monitored automatically, refreshed every 5 minutes.
-- **Stable step total** — GitHub creates jobs lazily (behind `needs:`/`if:`), so a fresh scan can't know the final count. The `X/N` denominator is seeded from a prior finished run of the same workflow + branch (last success preferred), giving a steady total from the first frame; falls back to a live scan when there is no prior run.
-- **Matrix & reusable-workflow grouping** — parallel matrix jobs (`Build (ubuntu, node-16)`) collapse into one step with per-shard `step_rows`; reusable caller prefixes (`ci-cd / Build` → `Build`) are stripped for clean labels.
+- **Repo auto-discovery** - set `github.owner` and all of that account's non-archived, non-disabled repos are monitored automatically, refreshed every 5 minutes.
+- **Stable step total** - GitHub creates jobs lazily (behind `needs:`/`if:`), so a fresh scan can't know the final count. The `X/N` denominator is seeded from a prior finished run of the same workflow + branch (last success preferred), giving a steady total from the first frame; falls back to a live scan when there is no prior run.
+- **Matrix & reusable-workflow grouping** - parallel matrix jobs (`Build (ubuntu, node-16)`) collapse into one step with per-shard `step_rows`; reusable caller prefixes (`ci-cd / Build` -> `Build`) are stripped for clean labels.
 - **Duration-sized, color-coded pills (opt-in)** - both off by default, and independent of each other. `PUSHWARD_GITHUB_STEP_WEIGHTS=true` sizes each pill (`step_weights`) by how long that group took in the previous run (the longest job, for a matrix group), so a long build reads wider than a quick lint; widths stay equal when there is no prior run. `PUSHWARD_GITHUB_STEP_COLORS=true` tints pills (`step_colors`) by job type (tests, lint, build, docker, deploy, security). With both off, the bridge sends the plain `step_rows` / `step_labels` layout.
 - **Self-filling step with a live ETA (on by default)** - the running step's pill fills on the phone between polls and its ETA counts down there, so a ten-minute build reads as motion instead of a frozen bar. The window runs from when the job actually started to that plus however long the same job took in the previous run, so a poll landing mid-step picks the bar up where it already is. A step with no measurement to draw on (a job added since the last run, or a first run on a branch) keeps the static bar and the `X/N` counter, and a step that outlasts its estimate stops at full rather than racing ahead. Set `PUSHWARD_GITHUB_LIVE_PROGRESS=false` to send the plain static bar instead.
-- **Monotonic progress** — the total step count only ever clamps upward across polls; it never decreases mid-run.
-- **Two-phase end** — a final result frame is held for `end_display_time` before the activity is dismissed; the last frame forces `N/N` so an over-counted seed self-heals to a full bar.
-- **Accent colors & deep links** — green while running, red on failure; each update carries the workflow-run URL and a secondary link to the repository.
-- **Eviction guards** — a tracked run is evicted if its jobs endpoint goes silent for longer than `stale_timeout + 30s`, and any run wedged `in_progress` is reclaimed after an absolute 12-hour lifetime so it never blocks new-run detection.
+- **Monotonic progress** - the total step count only ever clamps upward across polls; it never decreases mid-run.
+- **Two-phase end** - a final result frame is held for `end_display_time` before the activity is dismissed; the last frame forces `N/N` so an over-counted seed self-heals to a full bar.
+- **Accent colors & deep links** - green while running, red on failure; each update carries the workflow-run URL and a secondary link to the repository.
+- **Eviction guards** - a tracked run is evicted if its jobs endpoint goes silent for longer than `stale_timeout + 30s`, and any run wedged `in_progress` is reclaimed after an absolute 12-hour lifetime so it never blocks new-run detection.
 - **Two polling tiers** - detecting a new run costs a request per watched repo, while advancing one already in flight costs a request per *run*. They are separate knobs because of that: `idle_interval` buys detection latency and sets the idle request rate, `interval` is what someone watching the card sees and stays cheap however many repos there are.
 - **Conditional requests and a workflow filter** - the detection probe sends `If-None-Match`, and GitHub does not charge a `304` against the primary rate limit, so polling an idle repo is effectively free. Repos with no workflows at all (or with Actions disabled) are written off for half an hour at a time rather than probed every pass.
-- **GitHub rate-limit handling** — detection paces itself to fit the allowance left in the current window, dropping repo discovery first and never the runs it is already tracking, so a card on your lock screen keeps moving even when the budget is thin. Rate-limited responses (`429`, or `403` with rate-limit headers) are retried honoring `Retry-After` / `X-RateLimit-Reset`; only a rate-limit response carrying no usable timing at all backs off exponentially from a minute, which is what GitHub's own guidance prescribes for a secondary limit. Other 4xx fail fast.
-- **Server-managed cleanup** — `cleanup_delay` and `stale_timeout` are passed to the server as `ended_ttl` / `stale_ttl`, so finished and stalled activities are auto-deleted server-side.
+- **GitHub rate-limit handling** - detection paces itself to fit the allowance left in the current window, dropping repo discovery first and never the runs it is already tracking, so a card on your lock screen keeps moving even when the budget is thin. Rate-limited responses (`429`, or `403` with rate-limit headers) are retried honoring `Retry-After` / `X-RateLimit-Reset`; only a rate-limit response carrying no usable timing at all backs off exponentially from a minute, which is what GitHub's own guidance prescribes for a secondary limit. Other 4xx fail fast.
+- **Server-managed cleanup** - `cleanup_delay` and `stale_timeout` are passed to the server as `ended_ttl` / `stale_ttl`, so finished and stalled activities are auto-deleted server-side.
 
 ## Prerequisites
 
@@ -94,8 +94,8 @@ Settings come from a YAML file and/or environment variables. **Environment varia
 ```yaml
 github:
   token: ""                        # or PUSHWARD_GITHUB_TOKEN
-  owner: "your-github-username"    # or PUSHWARD_GITHUB_OWNER — auto-discovers all repos
-  repos:                           # or PUSHWARD_GITHUB_REPOS (comma-separated) — optional when owner is set
+  owner: "your-github-username"    # or PUSHWARD_GITHUB_OWNER - auto-discovers all repos
+  repos:                           # or PUSHWARD_GITHUB_REPOS (comma-separated) - optional when owner is set
     # - "other-org/some-repo"      # add repos outside owner if needed
 
 pushward:
@@ -118,12 +118,12 @@ render:
 
 | Env Variable | Config Key | Description | Required | Default |
 |---|---|---|---|---|
-| `PUSHWARD_GITHUB_TOKEN` | `github.token` | GitHub PAT (`actions:read`; add `repo` for private repos). Sent as `Authorization: Bearer`. | Yes | — |
-| `PUSHWARD_GITHUB_OWNER` | `github.owner` | GitHub user/org login. When set, all non-archived, non-disabled repos are discovered and refreshed every 5 min. | One of owner/repos | — |
-| `PUSHWARD_GITHUB_REPOS` | `github.repos` | Explicit `owner/repo` list (env: comma-separated), merged with discovered repos. | One of owner/repos | — |
-| `PUSHWARD_URL` | `pushward.url` | PushWard server base URL. Required in config, but the official image pre-sets `https://api.pushward.app`. | Yes¹ | — (image: `https://api.pushward.app`) |
-| `PUSHWARD_API_KEY` | `pushward.api_key` | PushWard integration key (`hlk_` prefix). | Yes | — |
-| `PUSHWARD_PRIORITY` | `pushward.priority` | Activity priority sent to the server (validated 0–10). | No | `1` |
+| `PUSHWARD_GITHUB_TOKEN` | `github.token` | GitHub PAT (`actions:read`; add `repo` for private repos). Sent as `Authorization: Bearer`. | Yes | - |
+| `PUSHWARD_GITHUB_OWNER` | `github.owner` | GitHub user/org login. When set, all non-archived, non-disabled repos are discovered and refreshed every 5 min. | One of owner/repos | - |
+| `PUSHWARD_GITHUB_REPOS` | `github.repos` | Explicit `owner/repo` list (env: comma-separated), merged with discovered repos. | One of owner/repos | - |
+| `PUSHWARD_URL` | `pushward.url` | PushWard server base URL. Required in config, but the official image pre-sets `https://api.pushward.app`. | Yes[1] | - (image: `https://api.pushward.app`) |
+| `PUSHWARD_API_KEY` | `pushward.api_key` | PushWard integration key (`hlk_` prefix). | Yes | - |
+| `PUSHWARD_PRIORITY` | `pushward.priority` | Activity priority sent to the server (validated 0-10). | No | `1` |
 | `PUSHWARD_CLEANUP_DELAY` | `pushward.cleanup_delay` | Passed as `ended_ttl`: how long the server keeps an activity after it ends. | No | `15m` |
 | `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Passed as `stale_ttl`; also drives the heartbeat interval (`/2`) and the stale-run eviction guard (`+30s`). | No | `30m` |
 | `PUSHWARD_END_DELAY` | `pushward.end_delay` | Wait after run completion before the final `ONGOING` frame (two-phase end, phase 1). | No | `5s` |
@@ -136,7 +136,7 @@ render:
 
 Turning `live_progress` off stops the bridge sending the field at all, which keeps the payload identical to one from before the feature existed. Updates are merge-patches, so an activity that is mid-animation when you switch it off keeps animating until it ends or `stale_timeout` reaps it; the next run starts clean.
 
-¹ Required at the config layer; effectively optional when running the official image, which sets `PUSHWARD_URL` to the public API.
+[1] Required at the config layer; effectively optional when running the official image, which sets `PUSHWARD_URL` to the public API.
 
 > Note: the comment in `config.example.yml` lists `stale_timeout: 60m`, but the in-code default is `30m` (shown above). Set it explicitly if you depend on a specific value.
 
@@ -164,11 +164,11 @@ Raising `idle_interval` is the lever if you want more headroom; it only delays n
 
 Each tracked run becomes one PushWard activity:
 
-- **Slug** — `gh-<8 hex chars>`, derived from `SHA-256(owner/repo)` (e.g. `gh-1a2b3c4d`), stable per repository across runs.
-- **Display name** — `GitHub: <repo-name>`.
-- **Template** — `steps`, with `progress`, `current_step`/`total_steps`, `step_rows`, and `step_labels`. `step_colors` and `step_weights` are added only when their opt-in flags are set. `live_progress` plus a `start_date`/`end_date` pair rides along on the update that advances `current_step`, and the result frames switch it back off.
-- **Accent color** — green while running, red on failure/cancel.
-- **Links** — primary URL is the workflow run's `html_url`; secondary URL is `https://github.com/<owner>/<repo>`.
+- **Slug** - `gh-<8 hex chars>`, derived from `SHA-256(owner/repo)` (e.g. `gh-1a2b3c4d`), stable per repository across runs.
+- **Display name** - `GitHub: <repo-name>`.
+- **Template** - `steps`, with `progress`, `current_step`/`total_steps`, `step_rows`, and `step_labels`. `step_colors` and `step_weights` are added only when their opt-in flags are set. `live_progress` plus a `start_date`/`end_date` pair rides along on the update that advances `current_step`, and the result frames switch it back off.
+- **Accent color** - green while running, red on failure/cancel.
+- **Links** - primary URL is the workflow run's `html_url`; secondary URL is `https://github.com/<owner>/<repo>`.
 
 ## Development
 
@@ -208,11 +208,11 @@ Bridges are versioned independently. The per-bridge workflow `.github/workflows/
 
 | Trigger | GHCR tags published |
 |---|---|
-| Pull request | _(none — tests + analysis only)_ |
+| Pull request | _(none - tests + analysis only)_ |
 | Push to `main` | `:main`, `:main-<short-sha>` |
 | Git tag `github/v<X.Y.Z>` | `:X.Y.Z`, `:X.Y`, `:latest` (and `:X` once `X >= 1`) |
 
-`:latest` moves only on tagged releases — never on a `main` push.
+`:latest` moves only on tagged releases - never on a `main` push.
 
 ```bash
 # Cut a release
@@ -224,7 +224,7 @@ The release pipeline (`.github/workflows/release.yml`) produces a per-bridge Git
 
 ## Server compatibility
 
-This bridge targets the [pushward-server](https://pushward.app) REST surface — `POST /activities` (create) and `PATCH /activities/{slug}` (seed / update / end) — via the hand-written shared `pushward.Client`. The contract (routes, JSON keys, auth headers) is owned by pushward-server's `openapi.yaml`; the bridge tracks it at `MAJOR.MINOR`, and patch releases are bridge-only fixes that need no coordinated server bump. Released iOS clients can't be hot-fixed, so the activity slug, template, and `ContentState` shape are part of the contract.
+This bridge targets the [pushward-server](https://pushward.app) REST surface - `POST /activities` (create) and `PATCH /activities/{slug}` (seed / update / end) - via the hand-written shared `pushward.Client`. The contract (routes, JSON keys, auth headers) is owned by pushward-server's `openapi.yaml`; the bridge tracks it at `MAJOR.MINOR`, and patch releases are bridge-only fixes that need no coordinated server bump. Released iOS clients can't be hot-fixed, so the activity slug, template, and `ContentState` shape are part of the contract.
 
 ## Troubleshooting
 

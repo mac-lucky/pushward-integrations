@@ -7,7 +7,7 @@
 
 # PushWard Relay
 
-Self-hostable, multi-tenant webhook gateway that turns webhooks from your homelab and infrastructure tools — Grafana, ArgoCD, the \*arr suite, Proxmox, Jellyfin, and more — into **PushWard Live Activities and push notifications** on iPhone (Dynamic Island + Lock Screen). One binary serves many tenants: each request is authenticated by its own `hlk_` integration key, so there is **no per-service API key in config**.
+Self-hostable, multi-tenant webhook gateway that turns webhooks from your homelab and infrastructure tools - Grafana, ArgoCD, the \*arr suite, Proxmox, Jellyfin, and more - into **PushWard Live Activities and push notifications** on iPhone (Dynamic Island + Lock Screen). One binary serves many tenants: each request is authenticated by its own `hlk_` integration key, so there is **no per-service API key in config**.
 
 > **New to PushWard?** PushWard delivers real-time Live Activities to your iPhone's Dynamic Island and Lock Screen. Learn more at [pushward.app](https://pushward.app) and download the app from the [App Store](https://apps.apple.com/app/id6759689999).
 
@@ -30,7 +30,7 @@ Self-hostable, multi-tenant webhook gateway that turns webhooks from your homela
 ## How it works
 
 ```
-external service ──POST /<provider>──▶ pushward-relay ──REST API──▶ pushward-server ──APNs──▶ iOS
+external service --POST /<provider>--> pushward-relay --REST API--> pushward-server --APNs--> iOS
    (hlk_ key in Authorization)        (auth + rate limit)        (api.pushward.app)        (Live Activity / push)
 ```
 
@@ -38,24 +38,24 @@ A service POSTs its native webhook to a per-provider route (e.g. `POST /grafana`
 
 ## Features
 
-- **Multi-tenant by design** — tenants are identified by their `hlk_` integration key, extracted from every request by shared auth middleware. No per-service key configuration; one relay serves many users.
+- **Multi-tenant by design** - tenants are identified by their `hlk_` integration key, extracted from every request by shared auth middleware. No per-service key configuration; one relay serves many users.
 - **20 webhook routes** across **16 configurable provider blocks** (the `starr` block serves Radarr, Sonarr, and Prowlarr; the `gitea` block serves Gitea and Forgejo). See [Providers](#providers).
-- **Two-phase end lifecycle** — completion events send a final `ONGOING` update (so the result shows on the Dynamic Island), then `ENDED` after a short display delay. Used by ArgoCD, Radarr, Sonarr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest, Gitea, Forgejo, Komodo, and TrueNAS. Grafana, Prowlarr, Bazarr, and Changedetection are fire-and-forget.
-- **Push notifications** — one-shot APNs alerts for events that don't fit a Live Activity (Grafana alerts, Bazarr subtitle downloads, Prowlarr grabs).
-- **Cross-provider notification threads** — Radarr/Sonarr/Overseerr/Jellyfin notifications about the same movie (TMDB id) or show (TVDB id) collapse into one iOS notification thread.
-- **PostgreSQL state store** — persistent alert grouping, sync tracking, and download dedup with a background TTL sweep every 30s.
-- **Per-tenant client pool** — LRU pool of PushWard API clients keyed by `hlk_` hash (up to 1,000 concurrent tenants), wrapped in a shared circuit breaker.
-- **Dual-layer rate limiting** — per-IP (5 req/s, burst 20) and per-key (1 req/s, burst 10) token buckets.
-- **Live credential rotation** — optional DB `password_file` watched via fsnotify; the connection pool resets automatically when the file changes.
-- **Built-in observability** — auto-generated OpenAPI 3.1 spec (`/openapi.json`) + interactive docs (`/docs`), Prometheus `/metrics` on a separate internal listener, and optional OpenTelemetry OTLP/gRPC tracing.
-- **Graceful shutdown** — flushes pending two-phase ENDED timers and waits for in-flight callbacks on SIGINT/SIGTERM.
+- **Two-phase end lifecycle** - completion events send a final `ONGOING` update (so the result shows on the Dynamic Island), then `ENDED` after a short display delay. Used by ArgoCD, Radarr, Sonarr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest, Gitea, Forgejo, Komodo, and TrueNAS. Grafana, Prowlarr, Bazarr, and Changedetection are fire-and-forget.
+- **Push notifications** - one-shot APNs alerts for events that don't fit a Live Activity (Grafana alerts, Bazarr subtitle downloads, Prowlarr grabs).
+- **Cross-provider notification threads** - Radarr/Sonarr/Overseerr/Jellyfin notifications about the same movie (TMDB id) or show (TVDB id) collapse into one iOS notification thread.
+- **PostgreSQL state store** - persistent alert grouping, sync tracking, and download dedup with a background TTL sweep every 30s.
+- **Per-tenant client pool** - LRU pool of PushWard API clients keyed by `hlk_` hash (up to 1,000 concurrent tenants), wrapped in a shared circuit breaker.
+- **Dual-layer rate limiting** - per-IP (5 req/s, burst 20) and per-key (1 req/s, burst 10) token buckets.
+- **Live credential rotation** - optional DB `password_file` watched via fsnotify; the connection pool resets automatically when the file changes.
+- **Built-in observability** - auto-generated OpenAPI 3.1 spec (`/openapi.json`) + interactive docs (`/docs`), Prometheus `/metrics` on a separate internal listener, and optional OpenTelemetry OTLP/gRPC tracing.
+- **Graceful shutdown** - flushes pending two-phase ENDED timers and waits for in-flight callbacks on SIGINT/SIGTERM.
 
 ## Prerequisites
 
 - A running **PushWard server** (`https://api.pushward.app`, or your own deployment)
 - A **PostgreSQL** database for the relay state store
 - The **PushWard iOS app** ([App Store](https://apps.apple.com/app/id6759689999)) subscribed to the slugs you push to
-- One **PushWard integration key** (`hlk_` prefix) per tenant — created in the PushWard app
+- One **PushWard integration key** (`hlk_` prefix) per tenant - created in the PushWard app
 
 ## Quickstart (Docker)
 
@@ -99,7 +99,7 @@ Settings come from a YAML config file (`-config` flag, default `config.yml`) **o
 
 | Env Variable | Config Key | Description | Required |
 |---|---|---|---|
-| `PUSHWARD_URL` | _(none)_ — also `-pushward-url` flag | PushWard server base URL the relay calls to create/update/end activities and send notifications. The `-pushward-url` flag wins over the env var. | Yes |
+| `PUSHWARD_URL` | _(none)_ - also `-pushward-url` flag | PushWard server base URL the relay calls to create/update/end activities and send notifications. The `-pushward-url` flag wins over the env var. | Yes |
 | `PUSHWARD_DATABASE_DSN` | `database.dsn` | PostgreSQL connection string (pgx DSN). Config load fails if empty. | Yes |
 
 ### Server & runtime
@@ -140,13 +140,13 @@ All 16 provider blocks default to `enabled: true`. Env toggles exist **only** fo
 
 ### Per-provider tuning (YAML only)
 
-Each provider block accepts these keys (defaults vary per provider — see [`config.example.yml`](./config.example.yml)):
+Each provider block accepts these keys (defaults vary per provider - see [`config.example.yml`](./config.example.yml)):
 
 | Config Key | Description | Typical default |
 |---|---|---|
-| `priority` | PushWard activity priority `0`–`10`. | varies (grafana `10` compiled-in but `5` in `config.example.yml`, uptimekuma/gatus `5`, proxmox `4`, argocd `3`, changedetection/backrest `2`, most `1`) |
+| `priority` | PushWard activity priority `0`-`10`. | varies (grafana `10` compiled-in but `5` in `config.example.yml`, uptimekuma/gatus `5`, proxmox `4`, argocd `3`, changedetection/backrest `2`, most `1`) |
 | `cleanup_delay` | Maps to the activity's ended TTL (how long an ended activity lingers). | `15m` |
-| `stale_timeout` | State-store stale TTL. Must be `> 0` for any enabled provider — a non-positive TTL writes rows that are never cleaned up (config load fails). | varies (`24h` / `1h` / `30m`) |
+| `stale_timeout` | State-store stale TTL. Must be `> 0` for any enabled provider - a non-positive TTL writes rows that are never cleaned up (config load fails). | varies (`24h` / `1h` / `30m`) |
 | `end_delay` | Delay before the final `ONGOING` (phase-1) update; `ENDED` then follows `end_display_time` later. Unused by grafana/changedetection. | `5s` |
 | `end_display_time` | How long the final completion content shows before `ENDED`. Unused by grafana/changedetection. | `4s` |
 
@@ -200,11 +200,11 @@ All webhook routes require an `hlk_` key (Bearer, HTTP Basic password, or the Op
 | POST | `/komodo` | Komodo Custom-alerter webhooks |
 | POST | `/truenas/v2/alerts` | TrueNAS OpsGenie create-alert calls |
 | DELETE | `/truenas/v2/alerts/{id}` | TrueNAS OpsGenie close-alert calls |
-| GET | `/health` | Liveness — returns `ok` |
-| GET | `/ready` | Readiness — `ready`, or `503` if the DB ping fails |
+| GET | `/health` | Liveness - returns `ok` |
+| GET | `/ready` | Readiness - `ready`, or `503` if the DB ping fails |
 | GET | `/openapi.json` | Auto-generated OpenAPI 3.1 spec |
 | GET | `/docs` | Interactive API docs |
-| GET | `/metrics` | Prometheus metrics — served on the **separate** internal listener (`:9090`), not on `:8090` |
+| GET | `/metrics` | Prometheus metrics - served on the **separate** internal listener (`:9090`), not on `:8090` |
 
 ## Providers
 
@@ -269,7 +269,7 @@ Receives Grafana alert webhooks. Groups alerts by `alertname` into one push noti
 | Route | `POST /grafana` · Auth Bearer |
 | CollapseID | `grafana-<sha256(alertname)[:12]>` (first 6 bytes = 12 hex chars) |
 
-**Events:** `firing` → active push, `resolved` → passive push (notification `Level`). Fire-and-forget (no two-phase end). Severity is recorded only in the notification metadata — no color or icon mapping is applied.
+**Events:** `firing` -> active push, `resolved` -> passive push (notification `Level`). Fire-and-forget (no two-phase end). Severity is recorded only in the notification metadata - no color or icon mapping is applied.
 
 **Setup:** In Grafana, go to **Alerts & IRM > Alerting > Notification configuration** and open the **Contact points** tab. Add a contact point with integration type **Webhook**. Set the URL to `https://relay.pushward.app/grafana`. Under *Optional settings*, set the Authorization header scheme to `Bearer` and credentials to your `hlk_` key. Adding a `severity` label (`critical`/`warning`/`info`) to alert rules records the severity in the notification metadata.
 
@@ -282,11 +282,11 @@ Receives ArgoCD sync webhooks via argocd-notifications. Maps sync progress to a 
 | Route | `POST /argocd` · Template `steps` · Auth Bearer |
 | Slug | `argocd-<sanitized-app-name>` |
 
-**Events:** `sync-running` → Step 1/3 Syncing, `sync-succeeded` → Step 2/3 Rolling out, `deployed` → Step 3/3 Deployed, `sync-failed` → Sync Failed, `health-degraded` → Degraded (transient warning during rollout).
+**Events:** `sync-running` -> Step 1/3 Syncing, `sync-succeeded` -> Step 2/3 Rolling out, `deployed` -> Step 3/3 Deployed, `sync-failed` -> Sync Failed, `health-degraded` -> Degraded (transient warning during rollout).
 
 **Grace period:** `sync_grace_period` (default `10s`) defers activity creation for fast syncs that complete before the window expires, suppressing no-op notifications.
 
-**Setup:** Configure `argocd-notifications-cm` with a webhook service pointing to `POST /argocd`, Go-templated bodies per event, and trigger expressions. Store the `hlk_` key in `argocd-notifications-secret` and reference it as `$KEY_NAME` in the `Authorization: Bearer` header. Use `oncePer: app.status.operationState.startedAt` so every sync fires all events. See the [ArgoCD webhook docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/services/webhook/). The webhook body needs only: `{"app":"…","event":"…","revision":"…","repo_url":"…"}`. Set `providers.argocd.url` to build deep links.
+**Setup:** Configure `argocd-notifications-cm` with a webhook service pointing to `POST /argocd`, Go-templated bodies per event, and trigger expressions. Store the `hlk_` key in `argocd-notifications-secret` and reference it as `$KEY_NAME` in the `Authorization: Bearer` header. Use `oncePer: app.status.operationState.startedAt` so every sync fires all events. See the [ArgoCD webhook docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/services/webhook/). The webhook body needs only: `{"app":"...","event":"...","revision":"...","repo_url":"..."}`. Set `providers.argocd.url` to build deep links.
 
 ### Radarr / Sonarr
 
@@ -315,7 +315,7 @@ Push notification events (no Live Activity, no template):
 
 In the default `activity` mode, `Grab` and `Download` also write a notification record (not pushed) alongside the Live Activity; in `notify`/`smart` mode they are delivered as standalone push notifications instead.
 
-Routing is governed by `starr.mode`: `activity` (default, all events → Live Activity), `notify` (all → push), or `smart` (handler decides per event).
+Routing is governed by `starr.mode`: `activity` (default, all events -> Live Activity), `notify` (all -> push), or `smart` (handler decides per event).
 
 **Setup:** In Radarr/Sonarr, go to **Settings > Connect > + > Webhook**. Set the URL to `https://relay.pushward.app/radarr` (or `/sonarr`). Leave Username as any value, set Password to your `hlk_` key (Basic Auth). Enable triggers: On Grab, On Import, On Health Issue, On Health Restored. Click Test, then Save.
 
@@ -328,7 +328,7 @@ Receives Prowlarr webhooks. All events are **push notifications**: indexer grabs
 | Route | `POST /prowlarr` · Auth Basic |
 | Thread | `prowlarr-<release-base-title>` (grabs) |
 
-**Events:** `Grab` → push notification with indexer, size, and categories · `Health` / `HealthRestored` · `ApplicationUpdate` · `Test`.
+**Events:** `Grab` -> push notification with indexer, size, and categories · `Health` / `HealthRestored` · `ApplicationUpdate` · `Test`.
 
 > A Prowlarr `Test` event logs `unknown provider: prowlarr` instead of rendering a sample activity (Prowlarr has no self-test fixture). Its real `Grab` / `Health` events work normally.
 
@@ -403,7 +403,7 @@ Receives document consumption webhooks. The JSON body is built from a Jinja2 tem
 |---|---|---|---|
 | `added` | Processed | `doc.text.fill` | green |
 | `updated` | Updated | `doc.text.fill` | green |
-| `consumption_started` | Processing… | `arrow.triangle.2.circlepath` | blue |
+| `consumption_started` | Processing... | `arrow.triangle.2.circlepath` | blue |
 
 **Setup:** In Paperless-ngx, go to **Settings > Workflows** and create a workflow per event type. Action **Webhook**, URL `https://relay.pushward.app/paperless`, encoding JSON, body type Text, header `Authorization: Bearer hlk_...`.
 
@@ -428,7 +428,7 @@ Receives page-change notifications. The JSON body is a custom Jinja2 template in
 | Route | `POST /changedetection` · Template `alert` · Auth Bearer |
 | Slug | `cd-<sha256(url)[:8]>` |
 
-**Events:** single event — page changed. Creates a fire-and-forget alert (ONGOING + immediate ENDED). Icon `eye.fill`, color `#FF9500`, links `diff_url` and `preview_url`.
+**Events:** single event - page changed. Creates a fire-and-forget alert (ONGOING + immediate ENDED). Icon `eye.fill`, color `#FF9500`, links `diff_url` and `preview_url`.
 
 **Setup:** Set the notification URL to:
 
@@ -474,10 +474,10 @@ Receives Proxmox VE notification webhooks for backup, replication, fencing, pack
 
 | Event | State | Icon | Color |
 |---|---|---|---|
-| `vzdump` (start) | Backing up… | `externaldrive.fill.badge.timemachine` | blue |
+| `vzdump` (start) | Backing up... | `externaldrive.fill.badge.timemachine` | blue |
 | `vzdump` (complete) | Backup Complete | `checkmark.circle.fill` | green |
 | `vzdump` (failed) | Backup Failed | `xmark.circle.fill` | red |
-| `replication` (start) | Replicating… | `arrow.triangle.2.circlepath` | blue |
+| `replication` (start) | Replicating... | `arrow.triangle.2.circlepath` | blue |
 | `replication` (complete) | Replication Complete | `checkmark.circle.fill` | green |
 | `replication` (failed) | Replication Failed | `xmark.circle.fill` | red |
 | `fencing` | (title) | `exclamationmark.octagon.fill` | red |
@@ -521,9 +521,9 @@ Receives media request webhooks. Tracks the request lifecycle from pending to av
 | `MEDIA_PENDING` | Requested | 1/4 | orange |
 | `MEDIA_APPROVED` / `MEDIA_AUTO_APPROVED` | Approved | 2/4 | blue |
 | `MEDIA_AVAILABLE` | Available | 4/4 | green |
-| `MEDIA_DECLINED` | Declined | – | red |
-| `MEDIA_FAILED` | Failed | – | red |
-| `TEST_NOTIFICATION` | test notification | – | varies |
+| `MEDIA_DECLINED` | Declined | - | red |
+| `MEDIA_FAILED` | Failed | - | red |
+| `TEST_NOTIFICATION` | test notification | - | varies |
 
 **Setup:** In Overseerr/Jellyseerr, go to **Settings > Notifications > Webhook**. Set the Webhook URL to `https://relay.pushward.app/overseerr`, the Authorization Header to `Bearer hlk_...`, and the JSON Payload to:
 
@@ -554,7 +554,7 @@ Receives monitor status webhooks. Maps monitor heartbeat status to alert notific
 |---|---|---|---|
 | `0` (DOWN) | (heartbeat message or "Monitor Down") | `exclamationmark.triangle.fill` | red |
 | `1` (UP) | Resolved | `checkmark.circle.fill` | green |
-| `2` (PENDING) | Checking… | `hourglass` | orange |
+| `2` (PENDING) | Checking... | `hourglass` | orange |
 | `3` (MAINTENANCE) | test notification | varies | varies |
 
 **Setup:** In Uptime Kuma, go to **Settings > Notifications > Setup Notification**. Type **Webhook**, Post URL `https://relay.pushward.app/uptimekuma`, Request Body JSON. In *Additional Headers*: `{"Authorization": "Bearer hlk_..."}`. Check *Default Enabled* to apply to all monitors.
@@ -811,7 +811,7 @@ Images publish to **GHCR** (`ghcr.io/mac-lucky/pushward-relay`). The image-tag c
 | Push to `main` | `:main`, `:main-<short-sha>` | Rolling latest + immutable per-commit pin |
 | Git tag `relay/v<X.Y.Z>` | `:X.Y.Z`, `:X.Y`, `:latest` (and `:X` once `X >= 1`) | Stable release |
 
-`:latest` moves only on a tagged release — never on a `main` push.
+`:latest` moves only on a tagged release - never on a `main` push.
 
 ```bash
 # Single-bridge release
@@ -821,7 +821,7 @@ git push origin relay/v0.4.1
 
 ## Server compatibility
 
-The relay calls the [pushward-server](https://pushward.app) REST API to create/update/end **activities** (`POST /activities`, `PATCH /activities/{slug}`) and to send notifications — the server then delivers via APNs to the iOS app. The API contract (endpoints, JSON shape, auth headers) is owned by pushward-server's `openapi.yaml`. The relay targets that surface at its `MAJOR.MINOR`; patch releases (`relay/v*.*.X`) are bridge-only fixes that need no coordinated server bump.
+The relay calls the [pushward-server](https://pushward.app) REST API to create/update/end **activities** (`POST /activities`, `PATCH /activities/{slug}`) and to send notifications - the server then delivers via APNs to the iOS app. The API contract (endpoints, JSON shape, auth headers) is owned by pushward-server's `openapi.yaml`. The relay targets that surface at its `MAJOR.MINOR`; patch releases (`relay/v*.*.X`) are bridge-only fixes that need no coordinated server bump.
 
 ## Troubleshooting
 
@@ -835,7 +835,7 @@ Logs are structured JSON on stdout (`slog`). View them with `docker logs <contai
 | `config load` fails: `metrics_address must differ from address` | `server.metrics_address` equals `server.address`. | Use different ports (defaults `:8090` / `:9090`), or set `metrics_address` empty to disable metrics. |
 | `config load` fails: `stale_timeout must be > 0` | A provider has a non-positive `stale_timeout`. | Set a positive duration (a non-positive TTL writes state rows that are never cleaned up). |
 | `/ready` returns `503` | DB ping check failed. | Verify `PUSHWARD_DATABASE_DSN` / `password_file` and that PostgreSQL is reachable. |
-| Prowlarr `Test` logs `unknown provider: prowlarr` | Prowlarr has no self-test fixture. | Expected — real `Grab`/`Health` events still work. |
+| Prowlarr `Test` logs `unknown provider: prowlarr` | Prowlarr has no self-test fixture. | Expected - real `Grab`/`Health` events still work. |
 | Upstream `401`/`403`/`429` surfaced to the sender | The PushWard server rejected the `hlk_` key or rate-limited. | Check the key is valid and has capacity; the relay forwards these statuses so the source app reports the real cause. |
 
 ## Requirements & License
@@ -844,4 +844,4 @@ Logs are structured JSON on stdout (`slog`). View them with `docker logs <contai
 - **PostgreSQL** for the state store.
 - A running **PushWard server** and a per-tenant `hlk_` integration key.
 
-Part of the public [`pushward-integrations`](https://github.com/mac-lucky/pushward-integrations) repository — see the repository root for license terms.
+Part of the public [`pushward-integrations`](https://github.com/mac-lucky/pushward-integrations) repository - see the repository root for license terms.

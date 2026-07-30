@@ -20,7 +20,7 @@ pushward:
   cleanup_delay: 15m
   stale_timeout: 24h
 
-# Prometheus or VictoriaMetrics — queried directly for metric history
+# Prometheus or VictoriaMetrics - queried directly for metric history
 metrics:
   url: "http://prometheus:9090"
   # Optional auth (uncomment if your Prometheus/VM requires it):
@@ -57,7 +57,7 @@ timeline:
 #   pushward_ref_id:    Which values{} key to use (default: first)
 #
 # If grafana.url + grafana.api_token are set, the query is
-# auto-extracted from the alert rule — no annotations needed.
+# auto-extracted from the alert rule - no annotations needed.
 
 # --- Widgets ---
 #
@@ -118,11 +118,11 @@ timeline:
 #       max_value: 1
 #       severity: "info"
 #
-#   # stat_list: 1–4 rows of pre-formatted values, polled independently.
-#   # Server caps: 4 rows, label ≤32 chars, value ≤32 chars, unit ≤16 chars.
+#   # stat_list: 1-4 rows of pre-formatted values, polled independently.
+#   # Server caps: 4 rows, label <=32 chars, value <=32 chars, unit <=16 chars.
 #   # Per row, `trigger` (default true) controls whether that row's value
 #   # change can PATCH the widget. Set trigger:false to display a volatile row
-#   # without letting it drive updates — the card then only refreshes when a
+#   # without letting it drive updates - the card then only refreshes when a
 #   # trigger row changes, at which point every row re-renders with current
 #   # values. Under update_mode:on_change at least one row must stay a trigger.
 #   - slug: "homelab-stats"
