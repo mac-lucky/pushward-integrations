@@ -76,7 +76,14 @@ func (p *Poller) Run(ctx context.Context) error {
 	}()
 
 	if err := p.refreshRepos(ctx); err != nil {
-		return fmt.Errorf("initial repo discovery: %w", err)
+		// Only fatal when discovery is the only source of repos. With an explicit
+		// list configured there is still work to do, and a token that cannot
+		// enumerate an owner should not take the whole bridge down with it.
+		if len(p.cfg.Forgejo.Repos) == 0 {
+			return fmt.Errorf("initial repo discovery: %w", err)
+		}
+		slog.Error("repo discovery failed, continuing with the configured repos",
+			"repos", p.cfg.Forgejo.Repos, "error", err)
 	}
 
 	// First check immediately on startup.

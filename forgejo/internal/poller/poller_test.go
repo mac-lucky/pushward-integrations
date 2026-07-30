@@ -943,3 +943,39 @@ func TestNew(t *testing.T) {
 		t.Errorf("tracked = %v", p.tracked)
 	}
 }
+
+// TestRun_DiscoveryFailureIsNotFatalWithExplicitRepos: a token that cannot
+// enumerate an owner should not take the bridge down when there is an explicit
+// list to watch.
+func TestRun_DiscoveryFailureIsNotFatalWithExplicitRepos(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+	p, _, _ := newPoller(t, testConfig(), mux)
+	p.cfg.Forgejo.Owner = "acme"
+	p.cfg.Forgejo.Repos = []string{testRepo}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := p.Run(ctx); err != nil {
+		t.Errorf("Run returned %v; an explicit repo list must survive a discovery failure", err)
+	}
+}
+
+// TestRun_DiscoveryFailureIsFatalWithoutRepos: with nothing else to watch, a
+// failure is worth exiting on so the operator sees it.
+func TestRun_DiscoveryFailureIsFatalWithoutRepos(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	})
+	p, _, _ := newPoller(t, testConfig(), mux)
+	p.cfg.Forgejo.Owner = "acme"
+	p.cfg.Forgejo.Repos = nil
+	p.repos = nil
+
+	if err := p.Run(context.Background()); err == nil {
+		t.Error("expected an error when discovery is the only source of repos")
+	}
+}

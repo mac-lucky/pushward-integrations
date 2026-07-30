@@ -462,14 +462,34 @@ func (c *Client) GetVersion(ctx context.Context) (string, error) {
 // ListRepos discovers the repos to watch for an owner, skipping archived and
 // empty ones.
 //
-// When owner is the token's own login, /user/repos is used: it returns every
-// repo the token can reach, including ones owned by others. Otherwise the org
-// endpoint is tried first and the user endpoint is the fallback - and the org
-// attempt must tolerate 403 as well as 404, because a token without the
-// read:organization scope is refused rather than told the org does not exist.
+// /user/repos is tried first and unconditionally. It lists every repo the token
+// can reach - including repos owned by someone else, which is the normal shape
+// of a self-hosted instance where one account owns the repos and another holds
+// the token - and it needs no scope beyond the token's own. The owner-scoped
+// endpoints do: /orgs/{owner}/repos wants read:organization, and even
+// /users/{owner}/repos is refused outright by a narrowly-scoped token. Reaching
+// for those first is what made a restricted token fail discovery entirely and
+// crashloop the bridge.
+//
+// When owner is the token's own login, everything reachable counts. Otherwise
+// the result is narrowed to that owner, and only if that leaves nothing do the
+// owner-scoped endpoints get a turn.
 func (c *Client) ListRepos(ctx context.Context, owner string) ([]string, error) {
-	if login, err := c.authenticatedLogin(ctx); err == nil && login != "" && login == owner {
-		return c.listReposPaged(ctx, c.apiBase+"/user/repos")
+	reachable, reachErr := c.listReposPaged(ctx, c.apiBase+"/user/repos")
+	if reachErr == nil {
+		// A failed login lookup is not fatal here: it only decides whether to
+		// narrow, and an unnarrowed list is still a usable answer.
+		if login, err := c.authenticatedLogin(ctx); err == nil && login != "" && login == owner {
+			return reachable, nil
+		}
+		if scoped := filterByOwner(reachable, owner); len(scoped) > 0 {
+			return scoped, nil
+		}
+		slog.Debug("owner has no repos among those the token can reach, trying the owner endpoints",
+			"owner", owner, "reachable", len(reachable))
+	} else {
+		slog.Warn("could not list the token's own repos, trying the owner endpoints",
+			"error", reachErr)
 	}
 
 	repos, err := c.listReposPaged(ctx, fmt.Sprintf("%s/orgs/%s/repos", c.apiBase, url.PathEscape(owner)))
@@ -480,9 +500,32 @@ func (c *Client) ListRepos(ctx context.Context, owner string) ([]string, error) 
 	if errors.As(err, &ce) && (ce.status == http.StatusNotFound || ce.status == http.StatusForbidden) {
 		slog.Debug("org repo listing unavailable, falling back to user repos",
 			"owner", owner, "status", ce.status)
-		return c.listReposPaged(ctx, fmt.Sprintf("%s/users/%s/repos", c.apiBase, url.PathEscape(owner)))
+		repos, err = c.listReposPaged(ctx, fmt.Sprintf("%s/users/%s/repos", c.apiBase, url.PathEscape(owner)))
+		if err == nil {
+			return repos, nil
+		}
+	}
+	// Every route failed. Surface the /user/repos error when there was one -
+	// it is the one whose cause (token scope) the operator can act on.
+	if reachErr != nil {
+		return nil, fmt.Errorf("listing repos for %q failed on every endpoint; the token may lack the scope to read repositories: %w", owner, reachErr)
 	}
 	return nil, err
+}
+
+// filterByOwner narrows a reachable-repo list to one owner.
+func filterByOwner(repos []string, owner string) []string {
+	if owner == "" {
+		return nil
+	}
+	prefix := owner + "/"
+	var out []string
+	for _, r := range repos {
+		if strings.HasPrefix(r, prefix) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 func (c *Client) listReposPaged(ctx context.Context, endpoint string) ([]string, error) {

@@ -473,3 +473,99 @@ func TestAuthenticatedLoginIsCached(t *testing.T) {
 		t.Errorf("made %d requests, want 1", n)
 	}
 }
+
+// TestListReposWorksWithARestrictedToken reproduces the failure a real
+// deployment hit: a token that cannot call /user at all. Discovery used to gate
+// /user/repos behind that lookup, so it fell through to the owner-scoped
+// endpoints, got 403 from both, and crashlooped the bridge at startup.
+func TestListReposWorksWithARestrictedToken(t *testing.T) {
+	var triedOwnerEndpoints bool
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/user", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusForbidden) // no read:user scope
+	})
+	mux.HandleFunc("/api/v1/user/repos", serveFixture(t, "repos_page.json"))
+	mux.HandleFunc("/api/v1/orgs/", func(w http.ResponseWriter, _ *http.Request) {
+		triedOwnerEndpoints = true
+		w.WriteHeader(http.StatusForbidden)
+	})
+	mux.HandleFunc("/api/v1/users/", func(w http.ResponseWriter, _ *http.Request) {
+		triedOwnerEndpoints = true
+		w.WriteHeader(http.StatusForbidden)
+	})
+	c := testClient(t, mux)
+
+	repos, err := c.ListRepos(context.Background(), "acme")
+	if err != nil {
+		t.Fatalf("discovery failed for a token that can read its own repos: %v", err)
+	}
+	want := []string{"acme/app", "acme/infra"} // archived and empty dropped
+	if len(repos) != len(want) {
+		t.Fatalf("repos = %v, want %v", repos, want)
+	}
+	if triedOwnerEndpoints {
+		t.Error("owner-scoped endpoints were queried even though /user/repos answered")
+	}
+}
+
+// TestListReposNarrowsToTheRequestedOwner: /user/repos returns everything the
+// token can reach, which on a self-hosted instance routinely includes other
+// people's repos.
+func TestListReposNarrowsToTheRequestedOwner(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/user", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"login":"tokenowner"}`)) // not the requested owner
+	})
+	mux.HandleFunc("/api/v1/user/repos", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"full_name":"acme/app"},{"full_name":"other/thing"}]`))
+	})
+	c := testClient(t, mux)
+
+	repos, err := c.ListRepos(context.Background(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 1 || repos[0] != "acme/app" {
+		t.Errorf("repos = %v, want just acme/app", repos)
+	}
+}
+
+// TestListReposOwnLoginKeepsEverything: when the owner IS the token's login,
+// every reachable repo counts - including repos another account owns, which is
+// exactly the homelab shape (one account owns the repos, another holds the
+// token).
+func TestListReposOwnLoginKeepsEverything(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/user", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"login":"tokenowner"}`))
+	})
+	mux.HandleFunc("/api/v1/user/repos", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"full_name":"someoneelse/app"},{"full_name":"someoneelse/infra"}]`))
+	})
+	c := testClient(t, mux)
+
+	repos, err := c.ListRepos(context.Background(), "tokenowner")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repos) != 2 {
+		t.Errorf("repos = %v, want both repos the token can reach", repos)
+	}
+}
+
+func TestFilterByOwner(t *testing.T) {
+	in := []string{"acme/app", "acme/infra", "other/thing"}
+	if got := filterByOwner(in, "acme"); len(got) != 2 {
+		t.Errorf("filterByOwner(acme) = %v", got)
+	}
+	if got := filterByOwner(in, "nobody"); got != nil {
+		t.Errorf("filterByOwner(nobody) = %v, want nil", got)
+	}
+	if got := filterByOwner(in, ""); got != nil {
+		t.Errorf("filterByOwner(empty) = %v, want nil", got)
+	}
+	// A prefix match must not treat "acme2" as "acme".
+	if got := filterByOwner([]string{"acme2/app"}, "acme"); got != nil {
+		t.Errorf("filterByOwner matched a longer owner: %v", got)
+	}
+}
