@@ -72,12 +72,8 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("PUSHWARD_BAMBULAB_CERT_FINGERPRINT"); v != "" {
 		cfg.BambuLab.TLS.CertFingerprintSHA256 = v
 	}
-	if v := os.Getenv("PUSHWARD_POLL_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("parsing PUSHWARD_POLL_INTERVAL: %w", err)
-		}
-		cfg.Polling.UpdateInterval = d
+	if err := sharedconfig.EnvDuration("PUSHWARD_POLL_INTERVAL", &cfg.Polling.UpdateInterval); err != nil {
+		return nil, err
 	}
 
 	// Shared PushWard env overrides

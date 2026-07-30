@@ -76,12 +76,8 @@ func Load(path string) (*Config, error) {
 		decimals := 0
 		cfg.SABnzbd.Timeline.Decimals = &decimals
 	}
-	if v := os.Getenv("PUSHWARD_POLL_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return nil, fmt.Errorf("parsing PUSHWARD_POLL_INTERVAL: %w", err)
-		}
-		cfg.Polling.Interval = d
+	if err := sharedconfig.EnvDuration("PUSHWARD_POLL_INTERVAL", &cfg.Polling.Interval); err != nil {
+		return nil, err
 	}
 
 	// Shared PushWard env overrides

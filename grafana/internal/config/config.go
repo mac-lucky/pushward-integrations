@@ -345,12 +345,8 @@ func applyEnvOverrides(cfg *Config) error {
 	if v := os.Getenv("PUSHWARD_METRICS_BEARER_TOKEN"); v != "" {
 		cfg.Metrics.BearerToken = v
 	}
-	if v := os.Getenv("PUSHWARD_METRICS_TIMEOUT"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return fmt.Errorf("invalid PUSHWARD_METRICS_TIMEOUT %q: %w", v, err)
-		}
-		cfg.Metrics.Timeout = d
+	if err := sharedconfig.EnvDuration("PUSHWARD_METRICS_TIMEOUT", &cfg.Metrics.Timeout); err != nil {
+		return err
 	}
 	if v := os.Getenv("PUSHWARD_GRAFANA_URL"); v != "" {
 		cfg.Grafana.URL = v
@@ -358,26 +354,14 @@ func applyEnvOverrides(cfg *Config) error {
 	if v := os.Getenv("PUSHWARD_GRAFANA_API_TOKEN"); v != "" {
 		cfg.Grafana.APIToken = v
 	}
-	if v := os.Getenv("PUSHWARD_ALERT_CHECK_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return fmt.Errorf("invalid PUSHWARD_ALERT_CHECK_INTERVAL %q: %w", v, err)
-		}
-		cfg.Grafana.AlertCheckInterval = d
+	if err := sharedconfig.EnvDuration("PUSHWARD_ALERT_CHECK_INTERVAL", &cfg.Grafana.AlertCheckInterval); err != nil {
+		return err
 	}
-	if v := os.Getenv("PUSHWARD_HISTORY_WINDOW"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return fmt.Errorf("invalid PUSHWARD_HISTORY_WINDOW %q: %w", v, err)
-		}
-		cfg.Timeline.HistoryWindow = d
+	if err := sharedconfig.EnvDuration("PUSHWARD_HISTORY_WINDOW", &cfg.Timeline.HistoryWindow); err != nil {
+		return err
 	}
-	if v := os.Getenv("PUSHWARD_POLL_INTERVAL"); v != "" {
-		d, err := time.ParseDuration(v)
-		if err != nil {
-			return fmt.Errorf("invalid PUSHWARD_POLL_INTERVAL %q: %w", v, err)
-		}
-		cfg.Timeline.PollInterval = d
+	if err := sharedconfig.EnvDuration("PUSHWARD_POLL_INTERVAL", &cfg.Timeline.PollInterval); err != nil {
+		return err
 	}
 	if v := os.Getenv("PUSHWARD_WEBHOOK_TOKEN"); v != "" {
 		cfg.WebhookToken = v

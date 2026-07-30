@@ -1,0 +1,70 @@
+package config
+
+import (
+	"strings"
+	"testing"
+	"time"
+)
+
+// applyEnvOverrides is exercised directly rather than through Load: it takes the
+// whole Config, so a test needs no otherwise-valid file or credential set.
+func TestApplyEnvOverridesDurations(t *testing.T) {
+	t.Setenv("PUSHWARD_METRICS_TIMEOUT", "20s")
+	t.Setenv("PUSHWARD_ALERT_CHECK_INTERVAL", "1m")
+	t.Setenv("PUSHWARD_HISTORY_WINDOW", "2h")
+	t.Setenv("PUSHWARD_POLL_INTERVAL", "45s")
+
+	var cfg Config
+	if err := applyEnvOverrides(&cfg); err != nil {
+		t.Fatalf("applyEnvOverrides: %v", err)
+	}
+	if cfg.Metrics.Timeout != 20*time.Second {
+		t.Errorf("metrics.timeout = %s, want 20s", cfg.Metrics.Timeout)
+	}
+	if cfg.Grafana.AlertCheckInterval != time.Minute {
+		t.Errorf("grafana.alert_check_interval = %s, want 1m0s", cfg.Grafana.AlertCheckInterval)
+	}
+	if cfg.Timeline.HistoryWindow != 2*time.Hour {
+		t.Errorf("timeline.history_window = %s, want 2h0m0s", cfg.Timeline.HistoryWindow)
+	}
+	if cfg.Timeline.PollInterval != 45*time.Second {
+		t.Errorf("timeline.poll_interval = %s, want 45s", cfg.Timeline.PollInterval)
+	}
+}
+
+// An unset variable leaves whatever the YAML and defaults produced, so an empty
+// environment must not zero a configured duration.
+func TestApplyEnvOverridesLeavesUnsetDurationsAlone(t *testing.T) {
+	cfg := Config{}
+	cfg.Timeline.PollInterval = 30 * time.Second
+
+	if err := applyEnvOverrides(&cfg); err != nil {
+		t.Fatalf("applyEnvOverrides: %v", err)
+	}
+	if cfg.Timeline.PollInterval != 30*time.Second {
+		t.Errorf("timeline.poll_interval = %s, want it untouched at 30s", cfg.Timeline.PollInterval)
+	}
+}
+
+// A typo in a manifest must not quietly leave the default in place.
+func TestApplyEnvOverridesRejectsUnparseableDurations(t *testing.T) {
+	for _, name := range []string{
+		"PUSHWARD_METRICS_TIMEOUT",
+		"PUSHWARD_ALERT_CHECK_INTERVAL",
+		"PUSHWARD_HISTORY_WINDOW",
+		"PUSHWARD_POLL_INTERVAL",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, "30")
+
+			var cfg Config
+			err := applyEnvOverrides(&cfg)
+			if err == nil {
+				t.Fatal("expected an error")
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error should name the variable, got %v", err)
+			}
+		})
+	}
+}
