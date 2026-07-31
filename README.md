@@ -136,6 +136,7 @@ Configuration is layered: a YAML file (optional - a missing file is tolerated an
 | `PUSHWARD_END_DELAY` | `pushward.end_delay` | Two-phase end: delay before the final ONGOING frame | No (`5s`) |
 | `PUSHWARD_END_DISPLAY_TIME` | `pushward.end_display_time` | Two-phase end: how long the final frame shows before ENDED | No (`4s`) |
 | `PUSHWARD_SERVER_ADDRESS` | `server.address` | HTTP listen address (webhook bridges + relay) | No (`:8090`) |
+| `PUSHWARD_LOG_LEVEL` | _(env only)_ | `debug`, `info`, `warn` or `error`. Read before the config file, so it works even when config loading is what failed. An unrecognised value warns and stays at `info` rather than refusing to start | No (`info`) |
 
 ### Relay-only essentials
 

@@ -40,6 +40,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/truenas"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/uptimekuma"
+	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/server"
 	"github.com/mac-lucky/pushward-integrations/shared/syncx"
@@ -50,7 +51,7 @@ func main() {
 	pushwardURL := flag.String("pushward-url", "", "PushWard server URL (overrides config)")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := sharedconfig.NewLogger()
 	slog.SetDefault(logger)
 
 	cfg, err := config.Load(*configPath)

@@ -111,6 +111,7 @@ All settings come from a YAML config file and/or environment variables. **Enviro
 | `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Server-side `stale_ttl`: auto-expiry for stuck/abandoned activities (Go duration). | No (default: `60m`) |
 | `PUSHWARD_END_DELAY` | `pushward.end_delay` | Delay before phase 1 (terminal `ONGOING` frame) of the two-phase end (Go duration). | No (default: `5s`) |
 | `PUSHWARD_END_DISPLAY_TIME` | `pushward.end_display_time` | How long the terminal frame shows before the `ENDED` frame is sent (Go duration). | No (default: `4s`) |
+| `PUSHWARD_LOG_LEVEL` | _(env only)_ | `debug`, `info`, `warn` or `error`. Read before the config file, so it works even when config loading is what failed. | No (default: `info`) |
 
 ### Polling
 

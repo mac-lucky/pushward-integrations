@@ -107,6 +107,7 @@ Settings come from a YAML config file **or** environment variables. **Env vars o
 | `PUSHWARD_ALERT_CHECK_INTERVAL` | `grafana.alert_check_interval` | How often to poll Grafana for missed `resolved` webhooks; disabled when `0`/unset (needs `grafana.url` + `api_token`) | No |
 | `PUSHWARD_WEBHOOK_TOKEN` | `webhook_token` | Shared secret; when set, `/webhook` requires `Authorization: Bearer <token>`. **Recommended** - endpoint is unauthenticated if unset | No |
 | `PUSHWARD_SERVER_ADDRESS` | `server.address` | HTTP listen address (default `:8090`) | No |
+| `PUSHWARD_LOG_LEVEL` | _(env only)_ | `debug`, `info`, `warn` or `error` (default `info`). Read before the config file, so it works even when config loading is what failed | No |
 | `PUSHWARD_PRIORITY` | `pushward.priority` | Activity priority, validated to `0`-`10` (default `5`) | No |
 | `PUSHWARD_CLEANUP_DELAY` | `pushward.cleanup_delay` | Sent to the server as `ended_ttl`: grace period after resolve before the activity row is deleted and the iOS Lock Screen entry is dismissed (default `15m`; Apple caps Lock Screen dismissal at 4h) | No |
 | `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Time before the in-memory sweeper drops an unresolved alert; also passed to the server (default `24h`; sweeper ticks every `stale_timeout/2`) | No |

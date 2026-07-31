@@ -12,6 +12,7 @@ import (
 	brclient "github.com/mac-lucky/pushward-integrations/backrest/internal/backrest"
 	"github.com/mac-lucky/pushward-integrations/backrest/internal/config"
 	"github.com/mac-lucky/pushward-integrations/backrest/internal/poller"
+	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
@@ -31,7 +32,7 @@ func main() {
 	configPath := flag.String("config", "config.yml", "path to config file")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := sharedconfig.NewLogger()
 	slog.SetDefault(logger)
 
 	cfg, err := config.Load(*configPath)

@@ -16,6 +16,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/poller"
 	grafanawidgets "github.com/mac-lucky/pushward-integrations/grafana/internal/widgets"
 	sharedauth "github.com/mac-lucky/pushward-integrations/shared/auth"
+	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/server"
 	sharedwidgets "github.com/mac-lucky/pushward-integrations/shared/widgets"
@@ -25,7 +26,7 @@ func main() {
 	configPath := flag.String("config", "config.yml", "path to config file")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := sharedconfig.NewLogger()
 	slog.SetDefault(logger)
 
 	cfg, err := config.Load(*configPath)

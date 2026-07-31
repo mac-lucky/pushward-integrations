@@ -133,8 +133,11 @@ render:
 | `PUSHWARD_GITHUB_STEP_COLORS` | `render.step_colors` | Send `step_colors` so pills are tinted by job type. Off sends no colors and pills take the accent color. | No | `false` |
 | `PUSHWARD_GITHUB_STEP_WEIGHTS` | `render.step_weights` | Send `step_weights` so pills are sized by the previous run's per-group duration. Off sends no weights and pills render equal-width. | No | `false` |
 | `PUSHWARD_GITHUB_LIVE_PROGRESS` | `render.live_progress` | Send `live_progress` with a `start_date`/`end_date` window so the running step's pill fills and its ETA counts down on the phone between polls. Off sends none of the three and the pill only moves on a push. | No | `true` |
+| `PUSHWARD_LOG_LEVEL` | _(env only)_ | `debug`, `info`, `warn` or `error`. Read before the config file, so it works even when config loading is what failed. | No | `info` |
 
 Turning `live_progress` off stops the bridge sending the field at all, which keeps the payload identical to one from before the feature existed. Updates are merge-patches, so an activity that is mid-animation when you switch it off keeps animating until it ends or `stale_timeout` reaps it; the next run starts clean.
+
+When a step's pill is not animating, run with `PUSHWARD_LOG_LEVEL=debug`. The bridge then logs `live progress not anchored` with the reason: no step running, no measured duration for this step group (the usual one - no prior finished run of that workflow on that branch), the forge has not stamped a start, or the estimate is already spent. A group that finishes in under five seconds never animates by design.
 
 [1] Required at the config layer; effectively optional when running the official image, which sets `PUSHWARD_URL` to the public API.
 

@@ -117,6 +117,7 @@ Settings come from a YAML file (`-config`) and/or environment variables. **Env v
 | `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Server-side stale TTL (`staleTTL`) for the activity; 30s heartbeats keep it from auto-ending mid-download. | No (`30m`) |
 | `PUSHWARD_END_DELAY` | `pushward.end_delay` | Delay before phase 1 of the two-phase end (ONGOING with final content). | No (`5s`) |
 | `PUSHWARD_END_DISPLAY_TIME` | `pushward.end_display_time` | How long the completion frame shows before phase 2 (ENDED dismiss). | No (`4s`) |
+| `PUSHWARD_LOG_LEVEL` | _(env only)_ | `debug`, `info`, `warn` or `error`. Read before the config file, so it works even when config loading is what failed. | No (`info`) |
 | `PUSHWARD_POLL_INTERVAL` | `polling.interval` | SABnzbd poll interval during tracking; validated to be at least `1s`. | No (`5s`) |
 
 ### Timeline display (template: `timeline` only)

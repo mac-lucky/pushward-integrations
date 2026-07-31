@@ -107,6 +107,7 @@ Settings come from a YAML config file (`-config` flag, default `config.yml`) **o
 | Env Variable | Config Key | Description | Default |
 |---|---|---|---|
 | `PUSHWARD_SERVER_ADDRESS` | `server.address` | Listen address for the main webhook HTTP server. | `:8090` |
+| `PUSHWARD_LOG_LEVEL` | _(none)_ | `debug`, `info`, `warn` or `error`. Read before the config file, so it works even when config loading is what failed. An unrecognised value warns and stays at `info`. | `info` |
 | `PUSHWARD_SERVER_METRICS_ADDRESS` | `server.metrics_address` | Listen address for the internal-only Prometheus metrics server (`GET /metrics`). Must differ from `server.address` or config load fails. Set empty to disable. | `:9090` |
 | `PUSHWARD_DATABASE_PASSWORD_FILE` | `database.password_file` | Path to a file holding the DB password; overrides the password in the DSN and is watched via fsnotify for live rotation (pool resets on change). | _(empty)_ |
 | `PUSHWARD_TRUSTED_PROXY_CIDRS` | `trusted_proxy_cidrs` | CIDRs of trusted reverse proxies. Only when `RemoteAddr` falls in one of these are `CF-Connecting-IP` / `X-Real-IP` / `X-Forwarded-For` honored for per-IP rate limiting. Comma-separated as env; a YAML list in the file. | _(empty)_ |

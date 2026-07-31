@@ -90,6 +90,7 @@ Environment variables always win over the YAML file.
 | `PUSHWARD_FORGEJO_STEP_COLORS` | `render.step_colors` | Tint step pills by job type | `false` |
 | `PUSHWARD_FORGEJO_STEP_WEIGHTS` | `render.step_weights` | Size step pills by prior-run duration | `false` |
 | `PUSHWARD_FORGEJO_LIVE_PROGRESS` | `render.live_progress` | Fill the running step and count its ETA down | `true` |
+| `PUSHWARD_LOG_LEVEL` | _(env only)_ | `debug`, `info`, `warn` or `error`. `debug` names which gate declined a live-progress window | `info` |
 
 One of `forgejo.owner` or `forgejo.repos` is required. The shared `pushward.*` block (`url`,
 `api_key`, `priority`, `cleanup_delay`, `stale_timeout`, `end_delay`, `end_display_time`) is

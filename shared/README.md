@@ -80,6 +80,12 @@ server:
 
 `PushWardConfig.Validate()` requires `url` and `api_key` and rejects a priority outside `0`-`10`.
 
+### Logging (`NewLogger`, env only)
+
+`NewLogger` builds the JSON `slog` handler every bridge installs as its default, at the level named by `PUSHWARD_LOG_LEVEL` (`debug`, `info`, `warn`/`warning`, `error`; case and surrounding whitespace are ignored). It has no config key on purpose: a bridge installs the logger before it loads config, so the level is available to report a config load that fails.
+
+Unlike the `Env*` helpers, an unrecognised value does not abort startup. It warns through the logger it just built and stays at `info` - refusing to boot over a diagnostics knob fails hardest at the moment someone is reaching for it, and the warning is the first line in the log, so the fallback is not silent.
+
 ### `ServerConfig` (`yaml: server`)
 
 | Env Variable | Config Key | Description | Required |

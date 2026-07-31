@@ -12,6 +12,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/forgejo/internal/config"
 	fjclient "github.com/mac-lucky/pushward-integrations/forgejo/internal/forgejo"
 	"github.com/mac-lucky/pushward-integrations/forgejo/internal/poller"
+	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
@@ -20,7 +21,7 @@ func main() {
 	configPath := flag.String("config", "config.yml", "path to config file")
 	flag.Parse()
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := sharedconfig.NewLogger()
 	slog.SetDefault(logger)
 
 	cfg, err := config.Load(*configPath)

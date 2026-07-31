@@ -77,6 +77,7 @@ version.
 | `PUSHWARD_PRIORITY` | `pushward.priority` | Activity priority, 0-10 | `1` |
 | `PUSHWARD_CLEANUP_DELAY` | `pushward.cleanup_delay` | The activity's `ended_ttl`: how long a finished card lingers, and how long it stays on the Lock Screen | `10m` |
 | `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Silence after which the server ends the activity itself. The keep-alive is half of it | `30m` |
+| `PUSHWARD_LOG_LEVEL` | _(env only)_ | `debug`, `info`, `warn` or `error`. Read before the config file, so it works even when config loading is what failed | `info` |
 | `PUSHWARD_POLL_INTERVAL` | `polling.interval` | Poll interval while something is running | `5s` |
 | `PUSHWARD_POLL_IDLE` | `polling.idle_interval` | Poll interval while idle | `30s` |
 | `PUSHWARD_BACKREST_LAST_N` | `polling.last_n` | Operations requested per poll | `50` |
