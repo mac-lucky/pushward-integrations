@@ -848,7 +848,7 @@ Images publish to **GHCR** (`ghcr.io/mac-lucky/pushward-relay`). The image-tag c
 | Trigger | Tags published | Purpose |
 |---|---|---|
 | Pull request | _(none)_ | Tests + analysis only |
-| Push to `main` | `:main`, `:main-<short-sha>` | Rolling latest + immutable per-commit pin |
+| Push to `main` | _(none)_ | Tests + analysis only (the `:main` dev channel was retired 2026-07-31; Talos follows release tags) |
 | Git tag `relay/v<X.Y.Z>` | `:X.Y.Z`, `:X.Y`, `:latest` (and `:X` once `X >= 1`) | Stable release |
 
 `:latest` moves only on a tagged release - never on a `main` push.

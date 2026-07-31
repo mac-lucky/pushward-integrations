@@ -211,7 +211,7 @@ docker build --build-arg GO_VERSION=1.26.5 -f bambulab/Dockerfile -t pushward-ba
 | Trigger | Tags published |
 |---|---|
 | Pull request | none (build only) |
-| Push to `main` | `:main`, `:main-<sha>` |
+| Push to `main` | none (build only) |
 | Git tag `bambulab/v<X.Y.Z>` | `:X.Y.Z`, `:X.Y`, `:latest` (and `:X` once X >= 1) |
 
 `:latest` only moves on a tagged release.

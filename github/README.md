@@ -212,7 +212,7 @@ Bridges are versioned independently. The per-bridge workflow `.github/workflows/
 | Trigger | GHCR tags published |
 |---|---|
 | Pull request | _(none - tests + analysis only)_ |
-| Push to `main` | `:main`, `:main-<short-sha>` |
+| Push to `main` | _(none - tests + analysis only)_ |
 | Git tag `github/v<X.Y.Z>` | `:X.Y.Z`, `:X.Y`, `:latest` (and `:X` once `X >= 1`) |
 
 `:latest` moves only on tagged releases - never on a `main` push.

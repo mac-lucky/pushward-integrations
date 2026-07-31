@@ -27,7 +27,6 @@ jobs:
       ghcr_image: "ghcr.io/mac-lucky/pushward-relay"
       dockerhub_image: "maclucky/pushward-relay"
       push_to_dockerhub: false
-      enable_main_dev_tag: true
       main_branch: "main"
       build_context: "."
       dockerfile_path: "./relay/Dockerfile"

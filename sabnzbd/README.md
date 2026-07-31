@@ -200,7 +200,7 @@ Bridges in this repo are versioned independently. Tag format is `sabnzbd/v<X.Y.Z
 | Trigger | Tags published |
 |---|---|
 | Pull request | none (build/test only) |
-| Push to `main` | `:main`, `:main-<sha>` |
+| Push to `main` | none (build/test only) |
 | Tag `sabnzbd/v<X.Y.Z>` | `:X.Y.Z`, `:X.Y`, `:latest` (and `:X` once X >= 1) |
 
 `:latest` only moves on a tagged release.

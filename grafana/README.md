@@ -243,7 +243,7 @@ CI runs via [`grafana-ci-cd.yml`](../.github/workflows/grafana-ci-cd.yml) on PRs
 | Trigger | GHCR tags | Purpose |
 |---|---|---|
 | Pull request | _(none)_ | Tests + analysis only |
-| Push to `main` | `:main`, `:main-<short-sha>` | Rolling unstable + immutable per-commit pin |
+| Push to `main` | _(none)_ | Tests + analysis only |
 | Git tag `grafana/v<X.Y.Z>` | `:X.Y.Z`, `:X.Y`, `:latest` (and `:X` once `X >= 1`) | Stable release |
 
 `:latest` only moves on a tagged release - never on a `main` push. Bridges are versioned independently; tag format is `grafana/v<X.Y.Z>`:
