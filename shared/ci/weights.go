@@ -20,7 +20,9 @@ const StepWeightFloor = 1.0
 // index) so ProjectWeights can re-attach them to the current run's labels even
 // if the forge reveals the groups in a different order. Returns nil when no
 // group has a measurable duration (the run never finished, or timestamps are
-// missing) so callers omit step_weights and fall back to equal-width pills.
+// missing), which is the signal that there is nothing to size pills by - not a
+// signal to omit the wire field, which is never safe on a reused slug. See
+// UniformWeights.
 func GroupWeights(jobs []Job) map[string]float64 {
 	weights := make(map[string]float64)
 	measured := false
@@ -49,10 +51,14 @@ func GroupWeights(jobs []Job) map[string]float64 {
 // ProjectWeights builds a per-step weight slice aligned to labels, looking each
 // label up in the name-keyed historical weights. A label with no history (a job
 // added since the prior run) gets the mean of the known weights, a neutral
-// estimate. The result is always len(labels), so step_weights never desyncs from
-// total_steps, and each weight tracks its own label regardless of group order.
-// Returns nil when there is no history, so callers omit step_weights and pills
-// render equal-width.
+// estimate. Each weight tracks its own label regardless of group order.
+//
+// The result is len(labels), which is NOT the same as total_steps: a caller that
+// has a total but no labels yet (a seed built after the jobs endpoint failed)
+// gets a zero-length slice here, and omitempty drops that from the JSON just as
+// it drops nil. Size the wire field against total_steps and treat this as an
+// estimate to accept only when it already fits - see cipoll's payloadWeights.
+// Returns nil when there is no history at all.
 func ProjectWeights(labels []string, byName map[string]float64) []float64 {
 	if len(byName) == 0 {
 		return nil

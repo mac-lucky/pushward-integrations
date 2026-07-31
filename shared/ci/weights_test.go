@@ -126,7 +126,8 @@ func TestProjectWeights(t *testing.T) {
 		t.Errorf("unknown-label projection = %v, want %v", got, want)
 	}
 
-	// No history -> nil so the send omits step_weights (equal-width pills).
+	// No history -> nil. What the send does with that is the caller's call, and
+	// on a reused slug omitting the field is the one wrong answer.
 	if got := ProjectWeights([]string{"Lint", "Build"}, nil); got != nil {
 		t.Errorf("ProjectWeights(nil map) = %v, want nil", got)
 	}

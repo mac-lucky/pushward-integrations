@@ -894,10 +894,12 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		// Size the pills from the prior run's durations, keyed by group name so
 		// each weight tracks its label regardless of the order the forge reveals
 		// the groups in (jobs can be added/reordered between runs). The result is
-		// len(step_labels), so it never desyncs from total_steps; unknown groups
-		// get the mean; no history yields nil (equal-width pills). Derived out here
-		// rather than under p.mu: the map is immutable once published, and p.mu
-		// serialises every repo, so the projection has no business holding it.
+		// always total_steps long, so it cannot desync from the total on the same
+		// frame; unknown groups get the mean, and no history at all gets equal
+		// weights rather than nothing - see payloadWeights for why omitting is
+		// the one thing that is not safe here. Derived out here rather than under
+		// p.mu: the map is immutable once published, and p.mu serialises every
+		// repo, so the projection has no business holding it.
 		stepWeights := p.payloadWeights(info.TotalSteps, info.StepLabels, weightsByName)
 
 		repoShort := repoName(repo)
