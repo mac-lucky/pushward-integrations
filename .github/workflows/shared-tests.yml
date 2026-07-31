@@ -1,0 +1,38 @@
+name: Shared Module Tests
+
+# The per-bridge workflows run go test rooted at their own module, so nothing
+# ever executed the shared module's suite; this fills that gap.
+
+on:
+  push:
+    branches: [main]
+    paths: ['shared/**', '.github/workflows/shared-tests.yml']
+  pull_request:
+    branches: [main]
+    paths: ['shared/**', '.github/workflows/shared-tests.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test shared module
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: shared
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: shared/go.mod
+          cache-dependency-path: shared/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test -race -count=1 ./...

@@ -56,7 +56,7 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
-      release_notes_path_filter: "./backrest"
+      release_notes_path_filter: "./backrest ./shared"
     secrets: inherit
 
   bambulab:
@@ -76,7 +76,7 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
-      release_notes_path_filter: "./bambulab"
+      release_notes_path_filter: "./bambulab ./shared"
     secrets: inherit
 
   forgejo:
@@ -96,7 +96,7 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
-      release_notes_path_filter: "./forgejo"
+      release_notes_path_filter: "./forgejo ./shared"
     secrets: inherit
 
   github:
@@ -116,7 +116,7 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
-      release_notes_path_filter: "./github"
+      release_notes_path_filter: "./github ./shared"
     secrets: inherit
 
   grafana:
@@ -136,7 +136,7 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
-      release_notes_path_filter: "./grafana"
+      release_notes_path_filter: "./grafana ./shared"
     secrets: inherit
 
   relay:
@@ -156,7 +156,7 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
-      release_notes_path_filter: "./relay"
+      release_notes_path_filter: "./relay ./shared"
     secrets: inherit
 
   sabnzbd:
@@ -176,5 +176,5 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
-      release_notes_path_filter: "./sabnzbd"
+      release_notes_path_filter: "./sabnzbd ./shared"
     secrets: inherit
