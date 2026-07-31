@@ -14,7 +14,7 @@ COPY shared/ ./shared/
 COPY forgejo/ ./forgejo/
 RUN cd forgejo && CGO_ENABLED=0 go build -ldflags="-s -w" -o /pushward-forgejo ./cmd/pushward-forgejo
 
-FROM alpine:3.23
+FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
 
 LABEL org.opencontainers.image.title="pushward-forgejo" \
       org.opencontainers.image.description="Forgejo Actions Live Activity bridge for PushWard" \
