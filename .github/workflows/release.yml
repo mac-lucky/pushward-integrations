@@ -18,6 +18,8 @@ concurrency:
 permissions:
   contents: write
   packages: write
+  security-events: write
+  actions: read
 
 jobs:
   parse:
@@ -41,20 +43,11 @@ jobs:
     needs: parse
     if: needs.parse.outputs.bridge == 'backrest'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
-    permissions:
-      # write, not read: the reusable workflow attaches the generated SBOM to
-      # the release, and a job-level block overrides the top-level grant.
-      contents: write
-      packages: write
-      security-events: write
-      actions: read
     with:
       app_name: "pushward-backrest"
       ghcr_image: "ghcr.io/mac-lucky/pushward-backrest"
       dockerhub_image: "maclucky/pushward-backrest"
       push_to_dockerhub: false
-      release_on_tag: true
-      enable_auto_version: false
       main_branch: "main"
       build_context: "."
       dockerfile_path: "./backrest/Dockerfile"
@@ -63,26 +56,18 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
+      release_notes_path_filter: "./backrest"
     secrets: inherit
 
   bambulab:
     needs: parse
     if: needs.parse.outputs.bridge == 'bambulab'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
-    permissions:
-      # write, not read: the reusable workflow attaches the generated SBOM to
-      # the release, and a job-level block overrides the top-level grant.
-      contents: write
-      packages: write
-      security-events: write
-      actions: read
     with:
       app_name: "pushward-bambulab"
       ghcr_image: "ghcr.io/mac-lucky/pushward-bambulab"
       dockerhub_image: "maclucky/pushward-bambulab"
       push_to_dockerhub: false
-      release_on_tag: true
-      enable_auto_version: false
       main_branch: "main"
       build_context: "."
       dockerfile_path: "./bambulab/Dockerfile"
@@ -91,26 +76,18 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
+      release_notes_path_filter: "./bambulab"
     secrets: inherit
 
   forgejo:
     needs: parse
     if: needs.parse.outputs.bridge == 'forgejo'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
-    permissions:
-      # write, not read: the reusable workflow attaches the generated SBOM to
-      # the release, and a job-level block overrides the top-level grant.
-      contents: write
-      packages: write
-      security-events: write
-      actions: read
     with:
       app_name: "pushward-forgejo"
       ghcr_image: "ghcr.io/mac-lucky/pushward-forgejo"
       dockerhub_image: "maclucky/pushward-forgejo"
       push_to_dockerhub: false
-      release_on_tag: true
-      enable_auto_version: false
       main_branch: "main"
       build_context: "."
       dockerfile_path: "./forgejo/Dockerfile"
@@ -119,26 +96,18 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
+      release_notes_path_filter: "./forgejo"
     secrets: inherit
 
   github:
     needs: parse
     if: needs.parse.outputs.bridge == 'github'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
-    permissions:
-      # write, not read: the reusable workflow attaches the generated SBOM to
-      # the release, and a job-level block overrides the top-level grant.
-      contents: write
-      packages: write
-      security-events: write
-      actions: read
     with:
       app_name: "pushward-github"
       ghcr_image: "ghcr.io/mac-lucky/pushward-github"
       dockerhub_image: "maclucky/pushward-github"
       push_to_dockerhub: false
-      release_on_tag: true
-      enable_auto_version: false
       main_branch: "main"
       build_context: "."
       dockerfile_path: "./github/Dockerfile"
@@ -147,26 +116,18 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
+      release_notes_path_filter: "./github"
     secrets: inherit
 
   grafana:
     needs: parse
     if: needs.parse.outputs.bridge == 'grafana'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
-    permissions:
-      # write, not read: the reusable workflow attaches the generated SBOM to
-      # the release, and a job-level block overrides the top-level grant.
-      contents: write
-      packages: write
-      security-events: write
-      actions: read
     with:
       app_name: "pushward-grafana"
       ghcr_image: "ghcr.io/mac-lucky/pushward-grafana"
       dockerhub_image: "maclucky/pushward-grafana"
       push_to_dockerhub: false
-      release_on_tag: true
-      enable_auto_version: false
       main_branch: "main"
       build_context: "."
       dockerfile_path: "./grafana/Dockerfile"
@@ -175,26 +136,18 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
+      release_notes_path_filter: "./grafana"
     secrets: inherit
 
   relay:
     needs: parse
     if: needs.parse.outputs.bridge == 'relay'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
-    permissions:
-      # write, not read: the reusable workflow attaches the generated SBOM to
-      # the release, and a job-level block overrides the top-level grant.
-      contents: write
-      packages: write
-      security-events: write
-      actions: read
     with:
       app_name: "pushward-relay"
       ghcr_image: "ghcr.io/mac-lucky/pushward-relay"
       dockerhub_image: "maclucky/pushward-relay"
       push_to_dockerhub: false
-      release_on_tag: true
-      enable_auto_version: false
       main_branch: "main"
       build_context: "."
       dockerfile_path: "./relay/Dockerfile"
@@ -203,26 +156,18 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
+      release_notes_path_filter: "./relay"
     secrets: inherit
 
   sabnzbd:
     needs: parse
     if: needs.parse.outputs.bridge == 'sabnzbd'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
-    permissions:
-      # write, not read: the reusable workflow attaches the generated SBOM to
-      # the release, and a job-level block overrides the top-level grant.
-      contents: write
-      packages: write
-      security-events: write
-      actions: read
     with:
       app_name: "pushward-sabnzbd"
       ghcr_image: "ghcr.io/mac-lucky/pushward-sabnzbd"
       dockerhub_image: "maclucky/pushward-sabnzbd"
       push_to_dockerhub: false
-      release_on_tag: true
-      enable_auto_version: false
       main_branch: "main"
       build_context: "."
       dockerfile_path: "./sabnzbd/Dockerfile"
@@ -231,42 +176,5 @@ jobs:
       go_test_args: "-race -count=1 -v"
       enable_container_tests: false
       enable_kubernetes_tests: false
+      release_notes_path_filter: "./sabnzbd"
     secrets: inherit
-
-  github-release:
-    name: Create GitHub Release
-    # Every bridge job must be listed. A missing one is not a failure, it is a
-    # skip, so this job stops waiting for it and publishes the release while
-    # that bridge is still building - which also lets the SBOM step find a
-    # release to attach to and trip on it.
-    needs: [parse, backrest, bambulab, forgejo, github, grafana, relay, sabnzbd]
-    if: ${{ !cancelled() && !contains(needs.*.result, 'failure') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
-          BRIDGE: ${{ needs.parse.outputs.bridge }}
-          VERSION: ${{ needs.parse.outputs.version }}
-        run: |
-          AUTO_BODY=$(gh api "repos/$GH_REPO/releases/generate-notes" \
-            -f tag_name="$TAG" --jq .body)
-          {
-            cat <<EOF
-          **Image:** \`ghcr.io/mac-lucky/pushward-${BRIDGE}:${VERSION}\`
-
-          \`\`\`
-          docker pull ghcr.io/mac-lucky/pushward-${BRIDGE}:${VERSION}
-          \`\`\`
-
-          EOF
-            printf '%s\n' "$AUTO_BODY"
-          } > /tmp/release-notes.md
-          gh release create "$TAG" \
-            --title "$BRIDGE v$VERSION" \
-            --verify-tag \
-            --notes-file /tmp/release-notes.md
