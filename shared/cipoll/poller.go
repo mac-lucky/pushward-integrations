@@ -597,7 +597,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		initialStepRows := shape.StepRows
 		initialStepLabels := shape.StepLabels
 		initialStepColors := shape.StepColors
-		initialStepWeights := p.payloadWeights(initialStepLabels, weightsByName)
+		initialStepWeights := p.payloadWeights(initialTotalSteps, initialStepLabels, weightsByName)
 
 		p.mu.Lock()
 		if t, ok := p.tracked[repo]; ok {
@@ -730,11 +730,29 @@ func (p *Poller) liveProgressOff() *bool {
 // duration-sized pills are switched off. The durations behind them are gathered
 // whenever either consumer needs them, so this gates the wire field alone and
 // leaves the live-progress anchors their measurements.
-func (p *Poller) payloadWeights(labels []string, byName map[string]float64) []float64 {
+//
+// With the pills switched on the result is always exactly total long, never nil,
+// even with nothing measured to size them by. The slug is per-repo and the
+// server merges content, so omitting the array leaves the PREVIOUS run's weights
+// on the activity against this run's total_steps - which the server rejects,
+// taking the step counter, the live window and the end frames down with it. An
+// unmeasured run therefore ships equal weights rather than no weights; see
+// ci.UniformWeights for what that costs.
+//
+// The length is measured against total, not against labels, and the projection
+// is accepted only when it already matches. Those are the same number on any
+// shape ComputeSteps built, but the seed falls back to a bare TotalSteps: 1 with
+// no labels at all when the forge cannot be reached, and a projection sized off
+// the labels would be empty there - which omitempty drops from the JSON, putting
+// the run straight back into the wedge this exists to prevent.
+func (p *Poller) payloadWeights(total int, labels []string, byName map[string]float64) []float64 {
 	if !p.opts.Render.StepWeights {
 		return nil
 	}
-	return ci.ProjectWeights(labels, byName)
+	if w := ci.ProjectWeights(labels, byName); len(w) == total {
+		return w
+	}
+	return ci.UniformWeights(total)
 }
 
 // baselineShape returns the step shape of a prior run of the same workflow on
@@ -880,7 +898,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		// get the mean; no history yields nil (equal-width pills). Derived out here
 		// rather than under p.mu: the map is immutable once published, and p.mu
 		// serialises every repo, so the projection has no business holding it.
-		stepWeights := p.payloadWeights(info.StepLabels, weightsByName)
+		stepWeights := p.payloadWeights(info.TotalSteps, info.StepLabels, weightsByName)
 
 		repoShort := repoName(repo)
 

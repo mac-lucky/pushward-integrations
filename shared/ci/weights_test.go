@@ -136,3 +136,21 @@ func TestProjectWeights(t *testing.T) {
 		t.Errorf("clamp = %v, want [0.5 %v]", got, StepWeightFloor)
 	}
 }
+
+func TestUniformWeights(t *testing.T) {
+	// Every entry at the floor: positive, so the server's per-entry check passes,
+	// and all equal, so the client draws the same equal-width pills it would for
+	// an absent array. The length is the point - it is what an omission cannot
+	// promise once the server merges the previous run's array forward.
+	if got, want := UniformWeights(3), []float64{StepWeightFloor, StepWeightFloor, StepWeightFloor}; !reflect.DeepEqual(got, want) {
+		t.Errorf("UniformWeights(3) = %v, want %v", got, want)
+	}
+	// A shape with no steps has no array to send; an empty non-nil slice would be
+	// dropped by omitempty anyway, so say nil and mean it.
+	if got := UniformWeights(0); got != nil {
+		t.Errorf("UniformWeights(0) = %v, want nil", got)
+	}
+	if got := UniformWeights(-1); got != nil {
+		t.Errorf("UniformWeights(-1) = %v, want nil", got)
+	}
+}

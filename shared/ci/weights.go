@@ -76,6 +76,33 @@ func ProjectWeights(labels []string, byName map[string]float64) []float64 {
 	return out
 }
 
+// UniformWeights returns n weights at the floor: the wire form of "no history".
+// Unlike omitting step_weights it keeps the array the same length as
+// total_steps, and that is the whole point. A poller reuses one slug across runs
+// and the server merges content per RFC 7396, so an omitted array is not "no
+// weights" - it is the PREVIOUS run's weights carried onto a new total. The
+// server then rejects the whole payload for a length it was never sent, and
+// keeps rejecting it until some run happens to have the old step count.
+//
+// The pills stay equal-width, since the client normalizes, but note this is not
+// byte-for-byte the old rendering: a valid weights array of the right length is
+// also what selects the client's segmented layout over its matrix one. A run
+// with fan-out lands on the weighted matrix and keeps its stacked rows; a run
+// without fan-out draws the segmented bar instead of the matrix. Equal widths
+// either way, and it is the same layout a measured run of that workflow already
+// gets, so the card stops changing shape depending on whether the last run
+// happened to be measurable.
+func UniformWeights(n int) []float64 {
+	if n <= 0 {
+		return nil
+	}
+	out := make([]float64, n)
+	for i := range out {
+		out[i] = StepWeightFloor
+	}
+	return out
+}
+
 // jobDuration returns a finished job's wall-clock duration, or 0 when either
 // timestamp is missing or the span is non-positive (clock skew).
 func jobDuration(job Job) time.Duration {

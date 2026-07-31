@@ -927,6 +927,108 @@ func TestPollIdle_SeedsWeightsFromPriorRun(t *testing.T) {
 	}
 }
 
+// TestPollIdle_NoHistoryStillSendsWeights covers the case that froze cards in
+// production. The slug is per-repo and the server merges content, so an omitted
+// step_weights is not "no weights" - it is the PREVIOUS run's array measured
+// against this run's total_steps. The server rejects that length mismatch, and
+// since the client fails fast on 4xx, the seed, every tick and both end frames
+// die with it until some later run happens to have the old step count.
+//
+// So with the pills on, a run with nothing measured still ships an array the
+// same length as total_steps.
+func TestPollIdle_NoHistoryStillSendsWeights(t *testing.T) {
+	tests := []struct {
+		name    string
+		weights bool
+	}{
+		{name: "pills on", weights: true},
+		// Opted out, so the field stays off the wire exactly as before - the bridge
+		// that never sends weights cannot have left stale ones behind either.
+		{name: "pills off"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeForge(t)
+			f.activeRuns = func(string) ([]Run, error) { return []Run{activeRun(42, "CI", "main")}, nil }
+			f.liveJobs = func(string, int64) ([]ci.Job, error) {
+				return []ci.Job{
+					job("Lint", ci.StatusInProgress, ""),
+					job("Build", ci.StatusQueued, ""),
+					job("Test", ci.StatusQueued, ""),
+				}, nil
+			}
+			// baseline left nil: no prior finished run of this workflow on this
+			// branch, which is what a first run on a new branch looks like.
+			p, calls, mu := newTestPoller(t, testOptionsRender(true, tc.weights), f)
+			if err := p.pollIdle(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+
+			req, body := seedFrame(t, calls, mu)
+			content := req.Content
+			if content.TotalSteps == nil {
+				t.Fatal("the seed must set total_steps")
+			}
+			if !tc.weights {
+				if content.StepWeights != nil {
+					t.Errorf("step_weights = %v, want none when the pills are off", content.StepWeights)
+				}
+				if bytes.Contains(body, []byte(`"step_weights"`)) {
+					t.Errorf("an opted-out field must be absent from the JSON; body: %s", body)
+				}
+				return
+			}
+			if len(content.StepWeights) != *content.TotalSteps {
+				t.Fatalf("step_weights length %d must equal total_steps %d",
+					len(content.StepWeights), *content.TotalSteps)
+			}
+			for i, w := range content.StepWeights {
+				if w != ci.StepWeightFloor {
+					t.Errorf("step_weights[%d] = %v, want the floor %v - nothing measured these",
+						i, w, ci.StepWeightFloor)
+				}
+			}
+		})
+	}
+}
+
+// TestPollIdle_UnreachableForgeStillSendsWeights covers the shape the seed falls
+// back to when the jobs endpoint is down: TotalSteps 1 with no labels at all. A
+// weights array sized off the labels is empty there, omitempty drops an empty
+// array exactly as it drops a nil one, and the run lands right back in the wedge
+// - with the previous run's array still on the activity. The array has to be
+// sized against total_steps for that reason, not against the labels.
+func TestPollIdle_UnreachableForgeStillSendsWeights(t *testing.T) {
+	f := newFakeForge(t)
+	f.activeRuns = func(string) ([]Run, error) { return []Run{activeRun(42, "CI", "main")}, nil }
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		return nil, errors.New("jobs endpoint unreachable")
+	}
+	// A prior run measured one group, so weightsByName is populated while the
+	// live scan produced no labels to project it onto.
+	f.baseline = func(string, Run, bool) (Baseline, error) {
+		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+		return Baseline{Jobs: []ci.Job{doneJob("Lint", base, base.Add(12*time.Second))}, RunID: 41}, nil
+	}
+	p, calls, mu := newTestPoller(t, testOptionsRender(true, true), f)
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	req, body := seedFrame(t, calls, mu)
+	content := req.Content
+	if content.TotalSteps == nil {
+		t.Fatal("the seed must set total_steps")
+	}
+	if len(content.StepWeights) != *content.TotalSteps {
+		t.Fatalf("step_weights length %d must equal total_steps %d",
+			len(content.StepWeights), *content.TotalSteps)
+	}
+	if !bytes.Contains(body, []byte(`"step_weights"`)) {
+		t.Errorf("step_weights must reach the wire, not be dropped as empty; body: %s", body)
+	}
+}
+
 // TestPollIdle_AssumesAnimationUntilProven pins the pessimistic start. The seed
 // frame is what clears an animation carried over from the last run on this repo's
 // slug, but the seed can fail, and the tracked entry is inserted before it is
@@ -1741,6 +1843,45 @@ func TestPollActive_EndFramesStopLiveProgress(t *testing.T) {
 	}
 }
 
+// TestPollActive_EndFramesCarryMatchingWeights pins the length invariant on the
+// two frames that used to fail last and loudest: production logged "failed to
+// update activity (end phase 1)" and "failed to end activity (end phase 2)"
+// against a stale array, so the card never showed its result and never
+// dismissed. Both frames set total_steps, so both must carry a weights array
+// that matches it - here with an unmeasured prior run, the case that had none.
+func TestPollActive_EndFramesCarryMatchingWeights(t *testing.T) {
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		return []ci.Job{
+			job("Lint", ci.StatusCompleted, ci.ConclusionSuccess),
+			job("Build", ci.StatusCompleted, ci.ConclusionSuccess),
+		}, nil
+	}
+	f.getRun = func(_ string, runID int64) (*Run, error) {
+		return terminalRun(runID, ci.ConclusionSuccess), nil
+	}
+	p, patches := trackedPoller(t, testOptionsRender(true, true), f, liveTrackedRun(nil))
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := patches(2)
+	if len(got) != 2 {
+		t.Fatalf("expected both end frames, got %d PATCH calls", len(got))
+	}
+	for i, call := range got {
+		var req pushward.UpdateRequest
+		testutil.UnmarshalBody(t, call.Body, &req)
+		if req.Content.TotalSteps == nil {
+			t.Fatalf("end frame %d must set total_steps", i)
+		}
+		if len(req.Content.StepWeights) != *req.Content.TotalSteps {
+			t.Errorf("end frame %d (%s): step_weights length %d must equal total_steps %d",
+				i, req.State, len(req.Content.StepWeights), *req.Content.TotalSteps)
+		}
+	}
+}
+
 // --- scheduleEnd ---
 
 func TestScheduleEnd_TwoPhase(t *testing.T) {
@@ -2153,6 +2294,54 @@ func TestPollActive_ShapeGrowthResendsTheLadder(t *testing.T) {
 	tt := p.tracked[testRepo]
 	if tt.maxTotalSteps != 4 || tt.shapeSent != 4 {
 		t.Errorf("cached shape = %d/%d sent, want 4/4", tt.maxTotalSteps, tt.shapeSent)
+	}
+}
+
+// TestPollActive_ShapeGrowthResendsWeights is the growth half of the freeze:
+// total_steps climbs mid-run, and the tick that carries it must carry a weights
+// array of the new length. Sending the higher total while leaving the shorter
+// array in place is the same length mismatch the seed avoids, and it wedges the
+// rest of the run just as thoroughly.
+func TestPollActive_ShapeGrowthResendsWeights(t *testing.T) {
+	tick := 0
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		tick++
+		jobs := []ci.Job{
+			job("Lint", ci.StatusCompleted, ci.ConclusionSuccess),
+			job("Build", ci.StatusInProgress, ""),
+		}
+		if tick > 1 {
+			jobs = append(jobs, job("Publish", ci.StatusQueued, ""))
+		}
+		return jobs, nil
+	}
+	// nil durations: the run this superseded was never measured.
+	tracked := liveTrackedRun(nil)
+	tracked.maxTotalSteps = 2
+	tracked.maxStepRows = []int{1, 1}
+	tracked.maxStepLabels = []string{"Lint", "Build"}
+	tracked.shapeSent = 2
+	tracked.liveSent = false
+	p, patches := trackedPoller(t, testOptionsRender(true, true), f, tracked)
+
+	for i := 0; i < 2; i++ {
+		if err := p.pollActive(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got := patches(2)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 PATCH calls, got %d", len(got))
+	}
+	var grown pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &grown)
+	if want := 3; stepValue(grown.Content.TotalSteps) != want {
+		t.Fatalf("total_steps = %d, want %d", stepValue(grown.Content.TotalSteps), want)
+	}
+	if len(grown.Content.StepWeights) != 3 {
+		t.Errorf("step_weights = %v, want one per step after the new wave", grown.Content.StepWeights)
 	}
 }
 
