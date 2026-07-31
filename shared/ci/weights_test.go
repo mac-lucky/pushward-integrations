@@ -139,9 +139,10 @@ func TestProjectWeights(t *testing.T) {
 
 func TestUniformWeights(t *testing.T) {
 	// Every entry at the floor: positive, so the server's per-entry check passes,
-	// and all equal, so the client draws the same equal-width pills it would for
-	// an absent array. The length is the point - it is what an omission cannot
-	// promise once the server merges the previous run's array forward.
+	// and all equal, so the pills come out the same width. The length is the
+	// point - it is what an omission cannot promise once the server merges the
+	// previous run's array forward. Equal-width is not the same as absent
+	// though; see UniformWeights for the layout that trades away.
 	if got, want := UniformWeights(3), []float64{StepWeightFloor, StepWeightFloor, StepWeightFloor}; !reflect.DeepEqual(got, want) {
 		t.Errorf("UniformWeights(3) = %v, want %v", got, want)
 	}
