@@ -14,7 +14,7 @@ COPY shared/ ./shared/
 COPY relay/ ./relay/
 RUN cd relay && CGO_ENABLED=0 go build -ldflags="-s -w" -o /pushward-relay ./cmd/pushward-relay
 
-FROM alpine:3.23@sha256:fd791d74b68913cbb027c6546007b3f0d3bc45125f797758156952bc2d6daf40
+FROM alpine:3.24@sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b
 
 LABEL org.opencontainers.image.title="pushward-relay" \
       org.opencontainers.image.description="Multi-tenant webhook gateway for PushWard Live Activities" \
