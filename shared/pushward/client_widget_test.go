@@ -6,7 +6,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 )
 
 // CreateWidget sends application/json and the right body.
@@ -119,6 +121,101 @@ func TestDeleteWidget(t *testing.T) {
 	}
 	if gotMethod != http.MethodDelete || gotPath != "/widgets/abc" {
 		t.Errorf("method=%q path=%q, want DELETE /widgets/abc", gotMethod, gotPath)
+	}
+}
+
+// The widget content fields added for the 1.6 templates survive a JSON
+// round-trip under their server-side names. Re-marshalling the decoded value
+// and comparing bytes checks every field without a time.Time DeepEqual.
+func TestWidgetContent_TemplateFieldsRoundTrip(t *testing.T) {
+	start := time.Date(2026, 8, 8, 6, 0, 0, 0, time.UTC)
+	end := time.Date(2026, 8, 9, 18, 30, 0, 0, time.UTC)
+	in := WidgetContent{
+		Template:       WidgetTemplateFlow,
+		Unit:           "W",
+		Points:         []float64{1, 2.5, 3},
+		StartDate:      &start,
+		EndDate:        &end,
+		ExpiredText:    "Out now",
+		SubtitleTimer:  &TimerValue{Date: end, Style: TimerStyleRelative},
+		StatRows:       []StatRow{{Label: "Next", Value: "12m", Timer: &TimerValue{Date: end}}},
+		BatteryDevices: []BatteryDevice{{Name: "Vacuum", Level: Float64Ptr(64), Charging: true, Icon: "robotic.vacuum"}},
+		Periods:        []SchedulePeriod{{Start: start, Value: Float64Ptr(0.42), Level: ScheduleLevelLow}},
+		Flow: &WidgetFlow{
+			Inputs:   []FlowNode{{Name: "Solar", Rate: Float64Ptr(2400), Total: Float64Ptr(12.5)}},
+			Output:   &FlowNode{Rate: Float64Ptr(900)},
+			Storage:  &FlowNode{Rate: Float64Ptr(-300), Level: Float64Ptr(78)},
+			Exchange: &FlowNode{Rate: Float64Ptr(-1200)},
+		},
+	}
+
+	first, err := json.Marshal(in)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var out WidgetContent
+	if err := json.Unmarshal(first, &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	second, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("re-marshal: %v", err)
+	}
+	if string(first) != string(second) {
+		t.Errorf("round-trip changed the payload:\n first  = %s\n second = %s", first, second)
+	}
+
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(first, &keys); err != nil {
+		t.Fatalf("key decode: %v", err)
+	}
+	for _, k := range []string{"points", "start_date", "end_date", "expired_text", "subtitle_timer", "devices", "periods", "flow"} {
+		if _, ok := keys[k]; !ok {
+			t.Errorf("missing wire key %q in %s", k, first)
+		}
+	}
+	if d := out.BatteryDevices[0].Level; d == nil || *d != 64 {
+		t.Errorf("devices[0].level = %v, want 64", d)
+	}
+	if l := out.Flow.Storage.Level; l == nil || *l != 78 {
+		t.Errorf("flow.storage.level = %v, want 78", l)
+	}
+	if ts := out.StatRows[0].Timer; ts == nil || !ts.Date.Equal(end) {
+		t.Errorf("stat_rows[0].timer = %v, want date %v", ts, end)
+	}
+}
+
+// The required-but-pointer element fields carry no omitempty on purpose: an
+// unset level/value/rate must reach the server as an explicit null and be
+// rejected, not disappear from the payload. Adding omitempty to any of these
+// would turn a caller's bug into a silently half-built element.
+func TestWidgetContent_RequiredElementFieldsMarshalNull(t *testing.T) {
+	cases := map[string]any{
+		`"level":null`: BatteryDevice{Name: "Vacuum"},
+		`"value":null`: SchedulePeriod{Start: time.Now()},
+		`"rate":null`:  FlowNode{Name: "Solar"},
+	}
+	for want, v := range cases {
+		b, err := json.Marshal(v)
+		if err != nil {
+			t.Fatalf("marshal %T: %v", v, err)
+		}
+		if !strings.Contains(string(b), want) {
+			t.Errorf("%T marshalled as %s, want it to contain %s", v, b, want)
+		}
+	}
+}
+
+// A zero WidgetContent must not emit any of the new keys. UpdateWidget is an
+// RFC 7396 merge patch, so a key that leaks in with a zero value overwrites
+// whatever the widget already had.
+func TestWidgetContent_ZeroValueOmitsTemplateFields(t *testing.T) {
+	b, err := json.Marshal(WidgetContent{})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if got := string(b); got != "{}" {
+		t.Errorf("zero WidgetContent = %s, want {}", got)
 	}
 }
 

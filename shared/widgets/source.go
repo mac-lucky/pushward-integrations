@@ -29,6 +29,20 @@ type MultiValueSource interface {
 	Values(ctx context.Context) ([]LabeledValue, error)
 }
 
+// PointSource is an optional extra a ValueSource may implement to supply the
+// trend template's sparkline history. When a scalar spec's Source implements
+// it, the manager reads Points() right after each Value() call and attaches the
+// result to that tick's content, so a source that buffers its own readings can
+// drive a trend widget the generic manager could not otherwise build. Points
+// must return 2-48 samples, oldest first, or the server rejects the payload -
+// a source with fewer buffered samples should return ErrNoData from Value()
+// until it has enough, which keeps the widget's creation deferred.
+//
+// Called from the spec's own polling goroutine, immediately after Value().
+type PointSource interface {
+	Points() []float64
+}
+
 // StatListSource produces a list of pre-formatted (Label, Value, Unit) rows
 // for a single stat_list widget. The server caps the list at 4 rows; sources
 // that return more rows have the tail dropped at the manager.

@@ -27,6 +27,24 @@ func TestStatRowsEqual(t *testing.T) {
 	}
 }
 
+func TestStatRowsEqual_TimerComparedByValue(t *testing.T) {
+	at := time.Date(2026, 8, 8, 9, 0, 0, 0, time.UTC)
+	row := func(ts time.Time) []pushward.StatRow {
+		return []pushward.StatRow{{Label: "eta", Value: "5m", Timer: &pushward.TimerValue{Date: ts}}}
+	}
+	// Same instant behind two different pointers: a source rebuilding the timer
+	// each tick must not look like a change and PATCH forever.
+	if !statRowsEqual(row(at), row(at)) {
+		t.Error("equal timers behind different pointers should compare equal")
+	}
+	if statRowsEqual(row(at), row(at.Add(time.Minute))) {
+		t.Error("a moved timer date should count as changed")
+	}
+	if statRowsEqual(row(at), []pushward.StatRow{{Label: "eta", Value: "5m"}}) {
+		t.Error("a dropped timer should count as changed")
+	}
+}
+
 func TestStatRowsEqualMasked(t *testing.T) {
 	base := []pushward.StatRow{{Label: "u", Value: "1"}, {Label: "a", Value: "2"}}
 

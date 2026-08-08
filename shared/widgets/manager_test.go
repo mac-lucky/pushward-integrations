@@ -8,6 +8,8 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -158,6 +160,45 @@ func TestManager_ScalarCreateAndUpdate(t *testing.T) {
 
 	if updates := stub.updates.Load(); updates < 1 {
 		t.Errorf("expected at least 1 update PATCH, got %d", updates)
+	}
+}
+
+// Both per-widget tuning knobs ride the create body. Neither is re-sent on a
+// PATCH, so a create that drops one leaves the widget untuned for its lifetime.
+func TestManager_CreateCarriesThrottleAndStaleAfter(t *testing.T) {
+	stub, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	src := ValueSourceFunc(func(_ context.Context) (float64, error) { return 3.0, nil })
+	m, err := New(client, []Spec{{
+		Slug:         "tuned",
+		Name:         "Tuned",
+		Source:       src,
+		Interval:     time.Hour, // no tick fires; only the synchronous create runs
+		PushThrottle: pushward.IntPtr(30),
+		StaleAfter:   pushward.IntPtr(300),
+	}}, quietLogger())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	cancel()
+	m.Wait()
+
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if len(stub.gotCreate) != 1 {
+		t.Fatalf("creates = %d, want 1", len(stub.gotCreate))
+	}
+	got := stub.gotCreate[0]
+	if got.PushThrottle == nil || *got.PushThrottle != 30 {
+		t.Errorf("push_throttle = %v, want 30", got.PushThrottle)
+	}
+	if got.StaleAfter == nil || *got.StaleAfter != 300 {
+		t.Errorf("stale_after = %v, want 300", got.StaleAfter)
 	}
 }
 
@@ -609,6 +650,297 @@ func TestStart_FailsFastOnWidgetLimit(t *testing.T) {
 		t.Errorf("error should mention cap, got %v", err)
 	}
 }
+
+// A flat metric under on_change would otherwise never PATCH again, so a widget
+// carrying stale_after ages out on the device. The heartbeat re-sends the same
+// content; the server turns that into a touch.
+func TestManager_HeartbeatResendsUnchangedValue(t *testing.T) {
+	stub, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	src := ValueSourceFunc(func(_ context.Context) (float64, error) { return 42.0, nil })
+	m, err := New(client, []Spec{{
+		Slug:       "flat",
+		Name:       "Flat",
+		Source:     src,
+		Interval:   15 * time.Millisecond,
+		StaleAfter: pushward.IntPtr(120),
+		Heartbeat:  40 * time.Millisecond,
+	}}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = m.Start(ctx)
+
+	waitFor(t, time.Second, func() bool { return stub.updates.Load() >= 2 })
+	cancel()
+	m.Wait()
+
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if got := stub.gotPatch[0].Content; got == nil || got.Value == nil || *got.Value != 42 {
+		t.Errorf("heartbeat PATCH should carry the unchanged value, got %+v", got)
+	}
+}
+
+func TestManager_NoHeartbeatWhenUnset(t *testing.T) {
+	stub, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	src := ValueSourceFunc(func(_ context.Context) (float64, error) { return 42.0, nil })
+	m, err := New(client, []Spec{{
+		Slug:     "flat",
+		Name:     "Flat",
+		Source:   src,
+		Interval: 10 * time.Millisecond,
+	}}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = m.Start(ctx)
+	time.Sleep(120 * time.Millisecond)
+	cancel()
+	m.Wait()
+
+	if got := stub.updates.Load(); got != 0 {
+		t.Errorf("PATCHes without a heartbeat = %d, want 0", got)
+	}
+}
+
+// pointSourceStub is a ValueSource that also keeps a sparkline buffer, the
+// shape a trend widget needs.
+type pointSourceStub struct{ pts []float64 }
+
+func (p *pointSourceStub) Value(_ context.Context) (float64, error) {
+	return p.pts[len(p.pts)-1], nil
+}
+func (p *pointSourceStub) Points() []float64 { return p.pts }
+
+// growingPointSource models the trap: a buffer that grows on every poll even
+// though the reading never moves.
+type growingPointSource struct{ pts []float64 }
+
+func (p *growingPointSource) Value(_ context.Context) (float64, error) {
+	p.pts = append(p.pts, 7)
+	return 7, nil
+}
+func (p *growingPointSource) Points() []float64 { return slices.Clone(p.pts) }
+
+// The heartbeat exists to re-stamp updated_at, and the server only skips the
+// APNs push when the merged content equals what it stored. A PointSource whose
+// buffer moves every poll would break that on every single beat - a real push
+// and a quota slot each time - unless the heartbeat re-sends stored content.
+func TestManager_HeartbeatPayloadMatchesStoredContent(t *testing.T) {
+	stub, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	src := &growingPointSource{pts: []float64{1, 2}} // older, differing samples
+	m, err := New(client, []Spec{{
+		Slug:       "trend",
+		Name:       "Trend",
+		Template:   pushward.WidgetTemplateTrend,
+		Source:     src,
+		Interval:   15 * time.Millisecond,
+		StaleAfter: pushward.IntPtr(120),
+		Heartbeat:  20 * time.Millisecond,
+	}}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return stub.updates.Load() >= 2 })
+	cancel()
+	m.Wait()
+
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	stored := stub.gotCreate[0].Content
+	for i, patch := range stub.gotPatch {
+		if patch.Content == nil {
+			t.Fatalf("patch %d carried no content", i)
+		}
+		// Points is the field that matters most: merge-patch replaces an array
+		// wholesale, so a grown buffer can never compare equal server-side.
+		if !slices.Equal(patch.Content.Points, stored.Points) {
+			t.Errorf("heartbeat %d points = %v, want the stored %v; the server would push instead of touching",
+				i, patch.Content.Points, stored.Points)
+		}
+		// And the whole payload, judged the way the server judges it: apply the
+		// patch to the stored content and check nothing moved. Modelling the
+		// merge matters because absent keys are preserved, so a struct-to-struct
+		// comparison would flag fields the server never even looks at.
+		body, err := json.Marshal(patch.Content)
+		if err != nil {
+			t.Fatalf("marshal patch %d: %v", i, err)
+		}
+		merged := stored
+		if err := json.Unmarshal(body, &merged); err != nil {
+			t.Fatalf("merge patch %d: %v", i, err)
+		}
+		if !reflect.DeepEqual(merged, stored) {
+			t.Errorf("heartbeat %d changes stored content:\n merged %+v\n stored %+v", i, merged, stored)
+		}
+	}
+}
+
+// A real move must still publish the current buffer, heartbeat or not.
+func TestManager_ChangedValueSendsFreshPoints(t *testing.T) {
+	stub, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	var n atomic.Int64
+	src := &countingPointSource{next: func() float64 { return float64(n.Add(1)) }}
+	src.pts = []float64{0}
+	m, err := New(client, []Spec{{
+		Slug: "trend", Name: "Trend", Template: pushward.WidgetTemplateTrend,
+		Source: src, Interval: 15 * time.Millisecond,
+	}}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitFor(t, time.Second, func() bool { return stub.updates.Load() >= 1 })
+	cancel()
+	m.Wait()
+
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	got := stub.gotPatch[0].Content
+	if got == nil || len(got.Points) < 2 {
+		t.Fatalf("changed value should publish the live buffer, got %+v", got)
+	}
+}
+
+type countingPointSource struct {
+	pts  []float64
+	next func() float64
+}
+
+func (p *countingPointSource) Value(_ context.Context) (float64, error) {
+	v := p.next()
+	p.pts = append(p.pts, v)
+	return v, nil
+}
+func (p *countingPointSource) Points() []float64 { return slices.Clone(p.pts) }
+
+// A trend spec whose points can never be filled must fail at construction, not
+// with a 422 on the first create that takes the whole manager down.
+func TestNew_RejectsTrendWithoutPointSource(t *testing.T) {
+	_, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	multi := MultiValueSourceFunc(func(_ context.Context) ([]LabeledValue, error) { return nil, nil })
+	_, err := New(client, []Spec{{
+		Slug: "t", Template: pushward.WidgetTemplateTrend,
+		MultiSource: multi, SlugTemplate: "t-{{.instance}}",
+	}}, quietLogger())
+	if err == nil {
+		t.Fatal("expected trend + MultiSource to be rejected")
+	}
+
+	plain := ValueSourceFunc(func(_ context.Context) (float64, error) { return 1, nil })
+	if _, err := New(client, []Spec{{
+		Slug: "t", Template: pushward.WidgetTemplateTrend, Source: plain,
+	}}, quietLogger()); err == nil {
+		t.Fatal("expected trend + plain ValueSource with no seeded points to be rejected")
+	}
+
+	// Pre-seeded static points are the documented escape hatch.
+	if _, err := New(client, []Spec{{
+		Slug: "t", Template: pushward.WidgetTemplateTrend, Source: plain,
+		Content: pushward.WidgetContent{Points: []float64{1, 2}},
+	}}, quietLogger()); err != nil {
+		t.Errorf("seeded Content.Points should be accepted: %v", err)
+	}
+}
+
+func TestHeartbeatFor(t *testing.T) {
+	if got := HeartbeatFor(nil); got != 0 {
+		t.Errorf("HeartbeatFor(nil) = %v, want 0", got)
+	}
+	if got := HeartbeatFor(pushward.IntPtr(60)); got != 30*time.Second {
+		t.Errorf("HeartbeatFor(60) = %v, want the 30s floor", got)
+	}
+	if got := HeartbeatFor(pushward.IntPtr(3600)); got != 30*time.Minute {
+		t.Errorf("HeartbeatFor(3600) = %v, want half the window", got)
+	}
+}
+
+func TestManager_PointSourceFeedsTrendContent(t *testing.T) {
+	stub, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	src := &pointSourceStub{pts: []float64{1, 2, 3}}
+	m, err := New(client, []Spec{{
+		Slug:     "trend",
+		Name:     "Trend",
+		Template: pushward.WidgetTemplateTrend,
+		Source:   src,
+		Interval: time.Hour,
+	}}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	cancel()
+	m.Wait()
+
+	stub.mu.Lock()
+	defer stub.mu.Unlock()
+	if len(stub.gotCreate) != 1 {
+		t.Fatalf("creates = %d, want 1", len(stub.gotCreate))
+	}
+	if got := stub.gotCreate[0].Content.Points; len(got) != 3 || got[2] != 3 {
+		t.Errorf("create points = %v, want [1 2 3]", got)
+	}
+}
+
+// A source that has not buffered enough samples returns ErrNoData, which must
+// keep the trend widget's creation deferred rather than posting 1 point.
+func TestManager_TrendCreateDeferredWithoutPoints(t *testing.T) {
+	stub, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+
+	src := &emptyPointSource{}
+	m, err := New(client, []Spec{{
+		Slug:     "trend",
+		Name:     "Trend",
+		Template: pushward.WidgetTemplateTrend,
+		Source:   src,
+		Interval: time.Hour,
+	}}, quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := m.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	cancel()
+	m.Wait()
+
+	if got := stub.creates.Load(); got != 0 {
+		t.Errorf("creates = %d, want 0 while the source has no points yet", got)
+	}
+}
+
+// emptyPointSource is a PointSource still filling its buffer: it withholds a
+// value until it has enough samples to draw a line.
+type emptyPointSource struct{}
+
+func (emptyPointSource) Value(_ context.Context) (float64, error) { return 0, ErrNoData }
+func (emptyPointSource) Points() []float64                        { return nil }
 
 // --- utilities ---
 

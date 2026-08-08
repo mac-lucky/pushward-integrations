@@ -1,5 +1,7 @@
 package pushward
 
+import "time"
+
 // Activity state constants.
 const (
 	StateOngoing = "ongoing"
@@ -333,12 +335,42 @@ type PatchRequest struct {
 type WidgetTemplate string
 
 const (
-	WidgetTemplateValue    WidgetTemplate = "value"
-	WidgetTemplateProgress WidgetTemplate = "progress"
-	WidgetTemplateStatus   WidgetTemplate = "status"
-	WidgetTemplateGauge    WidgetTemplate = "gauge"
-	WidgetTemplateStatList WidgetTemplate = "stat_list"
+	WidgetTemplateValue     WidgetTemplate = "value"
+	WidgetTemplateProgress  WidgetTemplate = "progress"
+	WidgetTemplateStatus    WidgetTemplate = "status"
+	WidgetTemplateGauge     WidgetTemplate = "gauge"
+	WidgetTemplateStatList  WidgetTemplate = "stat_list"
+	WidgetTemplateTrend     WidgetTemplate = "trend"
+	WidgetTemplateCountdown WidgetTemplate = "countdown"
+	WidgetTemplateBattery   WidgetTemplate = "battery"
+	WidgetTemplateSchedule  WidgetTemplate = "schedule"
+	WidgetTemplateFlow      WidgetTemplate = "flow"
 )
+
+// Timer style constants pick how a TimerValue renders. Mirrors the server's
+// timer style enum; an empty style behaves as TimerStyleTimer.
+const (
+	TimerStyleTimer    = "timer"
+	TimerStyleRelative = "relative"
+)
+
+// Schedule level constants band one period of a schedule widget. Mirrors the
+// server's schedule level enum; empty leaves the banding to the client, which
+// derives it from the posted range.
+const (
+	ScheduleLevelLow    = "low"
+	ScheduleLevelMedium = "medium"
+	ScheduleLevelHigh   = "high"
+)
+
+// TimerValue turns a text slot into a self-updating timer rendered on device.
+// A past Date counts up, a future one counts down, and WidgetKit re-renders the
+// text itself - no repeat pushes. Style is TimerStyleTimer (default, ticks like
+// 01:23:45) or TimerStyleRelative (coarse units, "2 min").
+type TimerValue struct {
+	Date  time.Time `json:"date"`
+	Style string    `json:"style,omitempty"`
+}
 
 // StatRow is a single row of a stat_list widget. Value is pre-formatted by
 // the integration (server does not localize / round); Unit is optional and
@@ -347,6 +379,58 @@ type StatRow struct {
 	Label string `json:"label"`
 	Value string `json:"value"`
 	Unit  string `json:"unit,omitempty"`
+	// Timer renders the row's trailing text as a live timer where the client
+	// supports it. Value stays required as the fallback on older builds.
+	Timer *TimerValue `json:"timer,omitempty"`
+}
+
+// BatteryDevice is one ring of a battery widget (1-8 per widget), rendered in
+// the Apple Batteries idiom. Level is the required 0-100 charge percentage; it
+// deliberately carries no omitempty, mirroring the server, so an unset level
+// arrives as an explicit null and is rejected instead of vanishing from the
+// payload and being read as a preserved older value.
+type BatteryDevice struct {
+	Name     string   `json:"name"`
+	Level    *float64 `json:"level"`
+	Charging bool     `json:"charging,omitempty"`
+	Icon     string   `json:"icon,omitempty"`
+	Color    string   `json:"color,omitempty"`
+}
+
+// SchedulePeriod is one period of a schedule widget timeline - an hourly energy
+// tariff, a delivery window, a shift. 1-48 periods per widget, strictly
+// increasing by Start; each period runs until the next one starts and the
+// client highlights the one containing now. Value is unit-agnostic, labelled by
+// the content-level Unit. Level is one of ScheduleLevelLow/Medium/High.
+type SchedulePeriod struct {
+	Start time.Time `json:"start"`
+	Value *float64  `json:"value"`
+	Level string    `json:"level,omitempty"`
+}
+
+// FlowNode is one endpoint of a flow widget. The template is domain-agnostic:
+// energy is the motivating case (solar in, grid exchange, battery storage,
+// house draw), but water, data or money fit the same slots. Sign convention
+// depends on the slot - exchange Rate is positive inbound and negative
+// outbound, storage Rate is positive while filling and negative while
+// draining. Level is the 0-100 fill and only means anything on storage.
+type FlowNode struct {
+	Name  string   `json:"name,omitempty"`
+	Rate  *float64 `json:"rate"`
+	Total *float64 `json:"total,omitempty"`
+	Level *float64 `json:"level,omitempty"`
+	Icon  string   `json:"icon,omitempty"`
+	Color string   `json:"color,omitempty"`
+}
+
+// WidgetFlow groups a flow widget's nodes into slots: what comes in, what
+// buffers it, what is traded with the outside, and what consumes it. At least
+// one slot must be set; Inputs holds at most 3.
+type WidgetFlow struct {
+	Inputs   []FlowNode `json:"inputs,omitempty"`
+	Output   *FlowNode  `json:"output,omitempty"`
+	Storage  *FlowNode  `json:"storage,omitempty"`
+	Exchange *FlowNode  `json:"exchange,omitempty"`
 }
 
 // WidgetContent mirrors the server's widget content model. All fields are
@@ -373,6 +457,29 @@ type WidgetContent struct {
 	// StatRows powers the stat_list template - a 1-6 row label/value list.
 	// Required when template == stat_list, ignored otherwise.
 	StatRows []StatRow `json:"stat_rows,omitempty"`
+	// Points powers the trend template - 2-48 sparkline samples, oldest first,
+	// alongside a required Value. Chart bounds come from MinValue/MaxValue when
+	// set, otherwise the client auto-scales.
+	Points []float64 `json:"points,omitempty"`
+	// StartDate / EndDate drive the countdown template (EndDate required) and
+	// self-advancing progress: a progress widget carrying both dates advances
+	// its bar on device without further pushes.
+	StartDate *time.Time `json:"start_date,omitempty"`
+	EndDate   *time.Time `json:"end_date,omitempty"`
+	// ExpiredText replaces the countdown once EndDate passes. Without it the
+	// client counts up from EndDate instead.
+	ExpiredText string `json:"expired_text,omitempty"`
+	// BatteryDevices powers the battery template - 1-8 device rings. Required
+	// when template == battery, ignored otherwise.
+	BatteryDevices []BatteryDevice `json:"devices,omitempty"`
+	// Periods powers the schedule template - 1-48 periods in strictly
+	// increasing start order. Required when template == schedule.
+	Periods []SchedulePeriod `json:"periods,omitempty"`
+	// Flow powers the flow template. Required when template == flow.
+	Flow *WidgetFlow `json:"flow,omitempty"`
+	// SubtitleTimer renders the subtitle slot as a live timer on any template;
+	// the static Subtitle is what older clients fall back to.
+	SubtitleTimer *TimerValue `json:"subtitle_timer,omitempty"`
 	// Tap-action routing on a widget. tap_action overrides the whole-widget tap
 	// target; url_action / secondary_url_action render as routed buttons. Mirrors
 	// the same slots on activity Content.
@@ -388,6 +495,10 @@ type CreateWidgetRequest struct {
 	Name         string        `json:"name"`
 	Content      WidgetContent `json:"content"`
 	PushThrottle *int          `json:"push_throttle,omitempty"`
+	// StaleAfter is how many seconds after the last update clients start
+	// rendering the widget as stale (60-604800). Nil means never demoted, so
+	// set it a little above the polling interval on anything that can go quiet.
+	StaleAfter *int `json:"stale_after,omitempty"`
 }
 
 // UpdateWidgetRequest is the body for PATCH /widgets/{slug}. The server
@@ -404,6 +515,10 @@ type UpdateWidgetRequest struct {
 	Name         string         `json:"name,omitempty"`
 	Content      *WidgetContent `json:"content,omitempty"`
 	PushThrottle *int           `json:"push_throttle,omitempty"`
+	// StaleAfter re-tunes the staleness window (60-604800). Nil is omitted and
+	// preserves the stored value; as with the other pointers here, omitempty
+	// means this client cannot express the null-clear form.
+	StaleAfter *int `json:"stale_after,omitempty"`
 }
 
 // MediaAttachment is a rich media attachment (image, video, or audio)

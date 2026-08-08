@@ -71,6 +71,28 @@ type Spec struct {
 	UpdateMode   UpdateMode
 	MinChange    float64
 	PushThrottle *int
+	// StaleAfter is passed straight through to CreateWidget: seconds after the
+	// last update before the client renders the widget as stale (60-604800),
+	// nil for never. Only applied at create time, like PushThrottle - the
+	// manager's PATCHes carry content and never re-tune the widget's config.
+	StaleAfter *int
+	// Heartbeat re-sends the last published content once a widget has gone this
+	// long without a PATCH, so a StaleAfter window does not expire while the
+	// metric sits flat. The server treats a PATCH whose merged content matches
+	// what it stored as a touch - it re-stamps updated_at without pushing and
+	// refunds the quota slot - so the cost is one request.
+	//
+	// Re-sending the LAST content rather than re-rendering is what makes that
+	// hold. A freshly rendered payload can differ even when the value did not:
+	// a PointSource's buffer grows and shifts on every poll, so a re-render
+	// would defeat the server's equality check and turn every heartbeat into a
+	// real APNs push plus a quota slot.
+	//
+	// Zero disables it, and it is redundant under UpdateAlways. Sends ride the
+	// poll ticker, so the real gap between PATCHes is up to one Interval longer
+	// than this - see HeartbeatFor for the interval ratio that keeps the gap
+	// inside the window.
+	Heartbeat time.Duration
 
 	// Content holds the static fields applied to every PATCH (icon, unit,
 	// severity, accent colors, min_value, max_value, ...). The Value field is
@@ -192,6 +214,18 @@ func prepare(s *Spec) error {
 	}
 	if s.StatListSource != nil && s.Template != pushward.WidgetTemplateStatList {
 		return fmt.Errorf("StatListSource only valid with template stat_list, got %q", s.Template)
+	}
+	// Points reach the payload only through attachPoints, which reads the
+	// scalar Source. Left unchecked, a trend spec on any other source shape
+	// would build a pointless payload, get a 422 on create and fail Start -
+	// taking every other widget in the manager down with it.
+	if s.Template == pushward.WidgetTemplateTrend {
+		if s.Source == nil {
+			return errors.New("template trend requires a scalar Source; MultiSource and StatListSource cannot supply Content.Points")
+		}
+		if _, ok := s.Source.(PointSource); !ok && len(s.Content.Points) == 0 {
+			return errors.New("template trend requires a Source implementing PointSource, or pre-seeded Content.Points")
+		}
 	}
 	if s.MaxStatRows == 0 {
 		s.MaxStatRows = DefaultMaxStatRows
@@ -315,13 +349,14 @@ func (m *Manager) startScalar(ctx context.Context, spec *Spec) error {
 		m.wg.Add(1)
 		go func() {
 			defer m.wg.Done()
-			m.runScalar(ctx, spec, logger, math.NaN(), true)
+			m.runScalar(ctx, spec, logger, scalarState{lastValue: math.NaN(), needsCreate: true})
 		}()
 		return nil
 	}
 	content := renderContent(spec.Content, spec.parsedLabelTpl, valueData{Value: initial, Unit: spec.Content.Unit})
 	if ok {
 		content.Value = pushward.Float64Ptr(initial)
+		attachPoints(spec, &content)
 	}
 	if err := m.createWidget(ctx, spec, spec.Slug, spec.Name, content); err != nil {
 		return err
@@ -335,24 +370,74 @@ func (m *Manager) startScalar(ctx context.Context, spec *Spec) error {
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		m.runScalar(ctx, spec, logger, lastValue, false)
+		m.runScalar(ctx, spec, logger, scalarState{lastValue: lastValue, lastSent: time.Now(), lastContent: content})
 	}()
 	return nil
 }
 
+// scalarState is the per-widget loop state runScalar carries across ticks.
+// lastContent is what the server currently holds, so a heartbeat can re-send it
+// byte for byte instead of re-rendering.
+type scalarState struct {
+	lastValue   float64
+	lastSent    time.Time
+	lastContent pushward.WidgetContent
+	needsCreate bool
+}
+
+// attachPoints copies the sparkline history off a source that keeps one, so a
+// trend widget gets its Points alongside the tick's Value. Sources that do not
+// implement PointSource leave the content untouched.
+func attachPoints(spec *Spec, content *pushward.WidgetContent) {
+	if ps, ok := spec.Source.(PointSource); ok {
+		content.Points = ps.Points()
+	}
+}
+
+// heartbeatDue reports whether an otherwise-unchanged widget has gone long
+// enough without a PATCH to need one. A zero lastSent means nothing has been
+// sent yet, which is the deferred-create case - there is no stale window to
+// keep open until the widget exists.
+func heartbeatDue(spec *Spec, lastSent time.Time) bool {
+	return spec.Heartbeat > 0 && !lastSent.IsZero() && time.Since(lastSent) >= spec.Heartbeat
+}
+
+// HeartbeatFor derives a Spec.Heartbeat from a stale_after window: half the
+// window, floored at 30s so the shortest legal window (60s) cannot turn the
+// heartbeat into a tight request loop. A nil window means no heartbeat.
+//
+// Callers must keep their poll Interval at or below staleAfter/3. Sends ride
+// the poll ticker, so the worst-case gap between two PATCHes is Heartbeat plus
+// one Interval; at that ratio the gap tops out at five sixths of the window and
+// the widget never dims. An Interval of staleAfter/2 would instead land the
+// refresh exactly on the boundary and dim the widget once per cycle.
+func HeartbeatFor(staleAfter *int) time.Duration {
+	if staleAfter == nil {
+		return 0
+	}
+	return max(30*time.Second, time.Duration(*staleAfter)*time.Second/2)
+}
+
 // requiresInitialValue reports whether the server's widget-create validation
-// demands a non-nil Value for this template. Value/status accept nil; gauge
-// and progress require a number alongside the bounds.
+// demands a non-nil Value for this template. Value/status accept nil; gauge and
+// progress require a number alongside the bounds, and trend requires one
+// alongside its points.
+//
+// A trend widget also needs Content.Points, which the plain source interfaces
+// do not produce: either the Source implements PointSource, or the caller seeds
+// the points in the spec's static Content. Without either, the create is
+// rejected. A PointSource that is still filling its buffer should return
+// ErrNoData, which holds the create here until it has enough samples.
 func requiresInitialValue(t pushward.WidgetTemplate) bool {
 	switch t {
-	case pushward.WidgetTemplateGauge, pushward.WidgetTemplateProgress:
+	case pushward.WidgetTemplateGauge, pushward.WidgetTemplateProgress, pushward.WidgetTemplateTrend:
 		return true
 	default:
 		return false
 	}
 }
 
-func (m *Manager) runScalar(ctx context.Context, spec *Spec, logger *slog.Logger, lastValue float64, needsCreate bool) {
+func (m *Manager) runScalar(ctx context.Context, spec *Spec, logger *slog.Logger, st scalarState) {
 	waitJitter(ctx, spec.Interval)
 	if ctx.Err() != nil {
 		return
@@ -370,27 +455,42 @@ func (m *Manager) runScalar(ctx context.Context, spec *Spec, logger *slog.Logger
 			}
 			content := renderContent(spec.Content, spec.parsedLabelTpl, valueData{Value: v, Unit: spec.Content.Unit})
 			content.Value = pushward.Float64Ptr(v)
-			if needsCreate {
+			attachPoints(spec, &content)
+			if st.needsCreate {
 				if err := m.createWidget(ctx, spec, spec.Slug, spec.Name, content); err != nil {
 					if !errors.Is(err, context.Canceled) {
 						logger.Warn("deferred widget create failed", "error", err)
 					}
 					continue
 				}
-				needsCreate = false
-				lastValue = v
+				st.needsCreate = false
+				st.lastValue, st.lastContent, st.lastSent = v, content, time.Now()
 				continue
 			}
-			if !math.IsNaN(lastValue) && spec.UpdateMode != UpdateAlways && !valueChanged(lastValue, v, spec.MinChange) {
+			unchanged := !math.IsNaN(st.lastValue) && spec.UpdateMode != UpdateAlways &&
+				!valueChanged(st.lastValue, v, spec.MinChange)
+			if unchanged && !heartbeatDue(spec, st.lastSent) {
 				continue
 			}
-			if err := m.pwClient.UpdateWidget(ctx, spec.Slug, pushward.UpdateWidgetRequest{Content: &content}); err != nil {
+			// On a heartbeat the payload is the stored content, not the tick's:
+			// the value did not move, so anything different in a re-render (a
+			// grown PointSource buffer) would read as a real change server-side
+			// and cost a push. lastValue also stays put, because it names the
+			// value the server actually holds.
+			send := content
+			if unchanged {
+				send = st.lastContent
+			}
+			if err := m.pwClient.UpdateWidget(ctx, spec.Slug, pushward.UpdateWidgetRequest{Content: &send}); err != nil {
 				if !errors.Is(err, context.Canceled) {
 					logger.Warn("widget update failed", "error", err)
 				}
 				continue
 			}
-			lastValue = v
+			if !unchanged {
+				st.lastValue, st.lastContent = v, content
+			}
+			st.lastSent = time.Now()
 		}
 	}
 }
@@ -413,12 +513,12 @@ func (m *Manager) startStatList(ctx context.Context, spec *Spec) error {
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		m.runStatList(ctx, spec, logger, rows)
+		m.runStatList(ctx, spec, logger, rows, time.Now())
 	}()
 	return nil
 }
 
-func (m *Manager) runStatList(ctx context.Context, spec *Spec, logger *slog.Logger, lastRows []pushward.StatRow) {
+func (m *Manager) runStatList(ctx context.Context, spec *Spec, logger *slog.Logger, lastRows []pushward.StatRow, lastSent time.Time) {
 	waitJitter(ctx, spec.Interval)
 	if ctx.Err() != nil {
 		return
@@ -438,18 +538,29 @@ func (m *Manager) runStatList(ctx context.Context, spec *Spec, logger *slog.Logg
 				continue
 			}
 			rows = trimStatRows(rows, spec.MaxStatRows)
-			if spec.UpdateMode != UpdateAlways && statRowsEqualMasked(lastRows, rows, spec.StatChangeMask) {
+			unchanged := spec.UpdateMode != UpdateAlways && statRowsEqualMasked(lastRows, rows, spec.StatChangeMask)
+			if unchanged && !heartbeatDue(spec, lastSent) {
 				continue
 			}
 			content := spec.Content
+			// A heartbeat re-sends the stored rows. Under a StatChangeMask
+			// "unchanged" only means no triggering row moved, so the fresh rows
+			// can still differ in a display-only column - sending those would
+			// cost a push the mask exists to avoid.
 			content.StatRows = rows
+			if unchanged {
+				content.StatRows = lastRows
+			}
 			if err := m.pwClient.UpdateWidget(ctx, spec.Slug, pushward.UpdateWidgetRequest{Content: &content}); err != nil {
 				if !errors.Is(err, context.Canceled) {
 					logger.Warn("widget update failed", "error", err)
 				}
 				continue
 			}
-			lastRows = rows
+			if !unchanged {
+				lastRows = rows
+			}
+			lastSent = time.Now()
 		}
 	}
 }
@@ -478,14 +589,27 @@ func trimStatRows(rows []pushward.StatRow, maxRows int) []pushward.StatRow {
 	return rows[:maxRows]
 }
 
-// statRowsEqual reports whether two stat-row slices are byte-identical
-// label/value/unit by position. Returns true for two nil slices.
+// statRowEqual compares one row's rendered fields. Timer is compared by value
+// rather than pointer identity, so a source that rebuilds the timer every tick
+// does not read as changed on every poll.
+func statRowEqual(a, b pushward.StatRow) bool {
+	if a.Label != b.Label || a.Value != b.Value || a.Unit != b.Unit {
+		return false
+	}
+	if a.Timer == nil || b.Timer == nil {
+		return a.Timer == b.Timer
+	}
+	return a.Timer.Style == b.Timer.Style && a.Timer.Date.Equal(b.Timer.Date)
+}
+
+// statRowsEqual reports whether two stat-row slices carry identical rows by
+// position. Returns true for two nil slices.
 func statRowsEqual(a, b []pushward.StatRow) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i] != b[i] {
+		if !statRowEqual(a[i], b[i]) {
 			return false
 		}
 	}
@@ -509,7 +633,7 @@ func statRowsEqualMasked(a, b []pushward.StatRow, mask []bool) bool {
 		if i < len(mask) && !mask[i] {
 			continue // display-only row
 		}
-		if a[i] != b[i] {
+		if !statRowEqual(a[i], b[i]) {
 			return false
 		}
 	}
@@ -589,19 +713,23 @@ func (m *Manager) applyMulti(ctx context.Context, spec *Spec, logger *slog.Logge
 				logger.Warn("failed to create widget for new series", "slug", slug, "error", err)
 				continue
 			}
-			spec.seriesState[slug] = seriesState{lastValue: lv.Value, hasValue: true}
+			spec.seriesState[slug] = seriesState{lastValue: lv.Value, hasValue: true, lastSent: time.Now()}
 			continue
 		}
 
+		// No stored-content dance here, unlike the scalar and stat_list loops:
+		// multi content is a pure function of the value, the labels and the
+		// static Content, and attachPoints never runs on this path, so an
+		// unchanged value re-renders to a byte-identical payload already.
 		changed := !state.hasValue || valueChanged(state.lastValue, lv.Value, spec.MinChange)
-		if spec.UpdateMode == UpdateAlways || changed {
+		if spec.UpdateMode == UpdateAlways || changed || heartbeatDue(spec, state.lastSent) {
 			if err := m.pwClient.UpdateWidget(ctx, slug, pushward.UpdateWidgetRequest{Content: &content}); err != nil {
 				if !errors.Is(err, context.Canceled) {
 					logger.Warn("widget update failed", "slug", slug, "error", err)
 				}
 				continue
 			}
-			spec.seriesState[slug] = seriesState{lastValue: lv.Value, hasValue: true}
+			spec.seriesState[slug] = seriesState{lastValue: lv.Value, hasValue: true, lastSent: time.Now()}
 		} else if state.missCount != 0 {
 			// Seen but unchanged: clear any accumulated miss streak so a prior
 			// transient gap doesn't later trigger a premature prune.
@@ -647,6 +775,7 @@ func (m *Manager) createWidget(ctx context.Context, spec *Spec, slug, name strin
 		Name:         name,
 		Content:      content,
 		PushThrottle: spec.PushThrottle,
+		StaleAfter:   spec.StaleAfter,
 	}
 	if err := m.pwClient.CreateWidget(ctx, req); err != nil {
 		var herr *pushward.HTTPError
@@ -777,5 +906,6 @@ func renderSlugName(spec *Spec, labels map[string]string) (string, string, error
 type seriesState struct {
 	lastValue float64
 	hasValue  bool
-	missCount int // consecutive ticks this series has been absent; reset when seen
+	missCount int       // consecutive ticks this series has been absent; reset when seen
+	lastSent  time.Time // when this series last PATCHed, for Spec.Heartbeat
 }
