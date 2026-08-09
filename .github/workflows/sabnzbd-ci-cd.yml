@@ -35,6 +35,8 @@ jobs:
       go_module_path: "./sabnzbd"
       enable_go_tests: true
       go_test_args: "-race -count=1 -v"
+      # golangci-lint.yml runs govet and staticcheck on the same events
+      code_analysis_tools: '["govulncheck", "gosec"]'
       enable_container_tests: false
       enable_kubernetes_tests: false
     secrets: inherit
