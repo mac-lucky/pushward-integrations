@@ -26,6 +26,8 @@ var relayEnvVars = []string{
 	"PUSHWARD_ARGOCD_URL",
 	"PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD",
 	"PUSHWARD_SYNC_GRACE_PERIOD",
+	"PUSHWARD_POSTER_ENABLED",
+	"PUSHWARD_POSTER_ALLOW_PRIVATE_HOSTS",
 }
 
 // clearRelayEnv makes a test independent of the shell it runs in. Call it before
@@ -52,6 +54,11 @@ func validConfig() *Config {
 	cfg.Providers.ArgoCD.Priority = 3
 	cfg.Providers.ArgoCD.StaleTimeout = 30 * time.Minute
 	cfg.Providers.ArgoCD.SyncGracePeriod = 10 * time.Second
+
+	cfg.Poster = PosterConfig{
+		FetchTimeout: 3 * time.Second,
+		InlineWait:   600 * time.Millisecond,
+	}
 	return cfg
 }
 
@@ -376,4 +383,112 @@ func TestValidatePriorities(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidatePoster(t *testing.T) {
+	falseVal, trueVal := false, true
+	tests := []struct {
+		name    string
+		mutate  func(*Config)
+		wantErr bool
+	}{
+		{
+			name:   "valid poster block passes",
+			mutate: func(*Config) {},
+		},
+		{
+			name:   "unset enabled is on and still validated",
+			mutate: func(c *Config) { c.Poster.Enabled = nil },
+		},
+		{
+			name:   "explicitly enabled",
+			mutate: func(c *Config) { c.Poster.Enabled = &trueVal },
+		},
+		{
+			// A relay that turned the feature off must boot even with a stale
+			// or empty block underneath it.
+			name:   "disabled skips validation entirely",
+			mutate: func(c *Config) { c.Poster = PosterConfig{Enabled: &falseVal} },
+		},
+		{
+			name:    "zero fetch timeout errors",
+			mutate:  func(c *Config) { c.Poster.FetchTimeout = 0 },
+			wantErr: true,
+		},
+		{
+			name:    "zero inline wait errors",
+			mutate:  func(c *Config) { c.Poster.InlineWait = 0 },
+			wantErr: true,
+		},
+		{
+			name:    "inline wait past the fetch timeout errors",
+			mutate:  func(c *Config) { c.Poster.InlineWait = 5 * time.Second },
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := validConfig()
+			tt.mutate(cfg)
+			err := cfg.validatePoster()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validatePoster() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// An absent `enabled` key leaves posters on; only an explicit false turns them
+// off, which is what the *bool is for.
+func TestPosterIsEnabled(t *testing.T) {
+	falseVal, trueVal := false, true
+	if !(PosterConfig{}).IsEnabled() {
+		t.Error("an unset enabled must read as on")
+	}
+	if !(PosterConfig{Enabled: &trueVal}).IsEnabled() {
+		t.Error("enabled: true must read as on")
+	}
+	if (PosterConfig{Enabled: &falseVal}).IsEnabled() {
+		t.Error("enabled: false must read as off")
+	}
+}
+
+func TestApplyEnvOverrides_Poster(t *testing.T) {
+	t.Run("env can turn posters off", func(t *testing.T) {
+		clearRelayEnv(t)
+		t.Setenv("PUSHWARD_POSTER_ENABLED", "false")
+		cfg := validConfig()
+		if err := cfg.applyEnvOverrides(); err != nil {
+			t.Fatalf("applyEnvOverrides: %v", err)
+		}
+		if cfg.Poster.IsEnabled() {
+			t.Error("expected posters to be disabled")
+		}
+	})
+
+	t.Run("env can allow private hosts", func(t *testing.T) {
+		clearRelayEnv(t)
+		t.Setenv("PUSHWARD_POSTER_ALLOW_PRIVATE_HOSTS", "true")
+		cfg := validConfig()
+		if err := cfg.applyEnvOverrides(); err != nil {
+			t.Fatalf("applyEnvOverrides: %v", err)
+		}
+		if !cfg.Poster.AllowPrivateHosts {
+			t.Error("expected allow_private_hosts to be on")
+		}
+	})
+
+	t.Run("private hosts stay off by default", func(t *testing.T) {
+		clearRelayEnv(t)
+		cfg := validConfig()
+		if err := cfg.applyEnvOverrides(); err != nil {
+			t.Fatalf("applyEnvOverrides: %v", err)
+		}
+		if cfg.Poster.AllowPrivateHosts {
+			t.Error("allow_private_hosts must stay off unless asked for")
+		}
+		if !cfg.Poster.IsEnabled() {
+			t.Error("posters must stay on by default")
+		}
+	})
 }

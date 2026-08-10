@@ -41,6 +41,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/uptimekuma"
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
+	"github.com/mac-lucky/pushward-integrations/shared/poster"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/server"
 	"github.com/mac-lucky/pushward-integrations/shared/syncx"
@@ -161,6 +162,26 @@ func main() {
 	api.UseMiddleware(humautil.OverridesMiddleware(api))
 	api.UseMiddleware(humautil.KeyRateLimitMiddleware(api))
 
+	// Poster image resolution. Providers hold a poster.Source unconditionally,
+	// so turning the feature off swaps in a no-op rather than adding a branch to
+	// every content build.
+	var posters poster.Source = poster.Disabled{}
+	if cfg.Poster.IsEnabled() {
+		posters = poster.NewResolver(poster.Config{
+			AllowPrivateHosts: cfg.Poster.AllowPrivateHosts,
+			FetchTimeout:      cfg.Poster.FetchTimeout,
+			InlineWait:        cfg.Poster.InlineWait,
+			OnResult: func(result string) {
+				metrics.PosterFetchTotal.WithLabelValues(result).Inc()
+			},
+		})
+		slog.Info("poster images enabled",
+			"allow_private_hosts", cfg.Poster.AllowPrivateHosts,
+			"inline_wait", cfg.Poster.InlineWait)
+	} else {
+		slog.Info("poster images disabled")
+	}
+
 	// Provider handlers
 	var enders []*lifecycle.Ender
 
@@ -187,13 +208,13 @@ func main() {
 	}
 
 	if cfg.Providers.Starr.Enabled {
-		sh := starr.RegisterRoutes(api, store, clients, &cfg.Providers.Starr)
+		sh := starr.RegisterRoutes(api, store, clients, &cfg.Providers.Starr, posters)
 		collectEnder(sh)
 		slog.Info("enabled provider", "provider", "starr")
 	}
 
 	if cfg.Providers.Jellyfin.Enabled {
-		jh := jellyfin.RegisterRoutes(api, store, clients, &cfg.Providers.Jellyfin)
+		jh := jellyfin.RegisterRoutes(api, store, clients, &cfg.Providers.Jellyfin, posters)
 		collectEnder(jh)
 		jh.StartCleanup(ctx)
 		slog.Info("enabled provider", "provider", "jellyfin")
@@ -228,7 +249,7 @@ func main() {
 	}
 
 	if cfg.Providers.Overseerr.Enabled {
-		oh := overseerr.RegisterRoutes(api, store, clients, &cfg.Providers.Overseerr)
+		oh := overseerr.RegisterRoutes(api, store, clients, &cfg.Providers.Overseerr, posters)
 		collectEnder(oh)
 		slog.Info("enabled provider", "provider", "overseerr")
 	}

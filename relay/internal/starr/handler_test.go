@@ -13,6 +13,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
+	"github.com/mac-lucky/pushward-integrations/shared/poster"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
@@ -38,7 +39,7 @@ func newTestAPI(t *testing.T, cfg *config.StarrConfig) (http.Handler, *Handler, 
 	pool := client.NewPool(srv.URL, nil)
 
 	mux, api := humautil.NewTestAPI()
-	h := RegisterRoutes(api, store, pool, cfg)
+	h := RegisterRoutes(api, store, pool, cfg, poster.Static(testutil.Thumbhash))
 
 	return mux, h, calls, mu
 }

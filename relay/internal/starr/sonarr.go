@@ -13,6 +13,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
+	"github.com/mac-lucky/pushward-integrations/shared/poster"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
@@ -215,6 +216,8 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 			TotalSteps:  &total,
 		},
 	}
+	poster.Apply(ctx, h.posters, &req.Content, posterURL(p.Series.Images), pushward.ImageShapePoster)
+
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
 		return err
@@ -323,6 +326,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 		CurrentStep: &step,
 		TotalSteps:  &total,
 	}
+	poster.Apply(ctx, h.posters, &content, posterURL(p.Series.Images), pushward.ImageShapePoster)
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	log.Info("download complete", "slug", slug, "state", state, "series", p.Series.Title)

@@ -84,6 +84,16 @@ var (
 		Buckets:   prometheus.DefBuckets,
 	}, []string{"provider", "operation"})
 
+	// PosterFetchTotal counts artwork fetches by outcome. "refused" and
+	// "timeout" are ordinary against a LAN media server; a sustained shift into
+	// "error" is the signal, and the result set is closed so it stays a usable
+	// label.
+	PosterFetchTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "pushward_relay",
+		Name:      "poster_fetch_total",
+		Help:      "Artwork fetches for activity thumbhashes, by outcome.",
+	}, []string{"result"})
+
 	CircuitBreakerOpen = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: "pushward_relay",
 		Name:      "circuit_breaker_open",

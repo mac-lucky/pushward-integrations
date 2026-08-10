@@ -16,6 +16,26 @@ circuit_breaker:
   threshold: 5                              # consecutive API failures before opening the breaker
   cooldown: 30s                             # how long the breaker stays open before allowing a probe
 
+# Poster images on Radarr/Sonarr, Jellyfin and Overseerr cards. The relay sends
+# the artwork URL for the phone to load, and fetches the image itself once to
+# build a thumbhash - a ~30-character blurred placeholder that renders even when
+# the phone cannot reach the URL, which is the usual case for a LAN media server.
+poster:
+  enabled: true                             # false disables the whole trio: no URL, no shape, no thumbhash
+  allow_private_hosts: false                # see below before turning this on
+  fetch_timeout: 3s                         # total budget for one artwork fetch
+  inline_wait: 600ms                        # how long a webhook waits for a cache miss before answering without a hash
+  # allow_private_hosts lets thumbhash fetches reach loopback, RFC 1918, CGNAT
+  # and link-local addresses, and re-allows cleartext http. Keep it false on any
+  # relay that accepts webhooks from someone else: the payloads carry the URL,
+  # so an unguarded fetcher becomes an SSRF probe of whatever the relay can
+  # reach. Set it true only on a self-hosted relay that should pull artwork off
+  # a LAN Jellyfin or Overseerr.
+  #
+  # The response cap (2 MiB), decode budget, cache size (512) and negative TTL
+  # (15m) are fixed: they bound memory on a multi-tenant process rather than
+  # expressing a preference.
+
 trusted_proxy_cidrs: []                   # CIDRs of trusted reverse proxies (e.g. ["10.0.0.0/8", "172.16.0.0/12"])
 
 providers:

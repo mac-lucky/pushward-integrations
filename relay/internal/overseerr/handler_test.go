@@ -16,6 +16,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
+	"github.com/mac-lucky/pushward-integrations/shared/poster"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -42,7 +43,7 @@ func newHandler(t *testing.T, cfg *config.OverseerrConfig) (http.Handler, *[]tes
 	pool := client.NewPool(srv.URL, nil)
 
 	mux, api := humautil.NewTestAPI()
-	RegisterRoutes(api, store, pool, cfg)
+	RegisterRoutes(api, store, pool, cfg, poster.Static(testutil.Thumbhash))
 
 	return mux, calls, mu
 }
@@ -56,7 +57,7 @@ func newHandlerRejecting(t *testing.T, cfg *config.OverseerrConfig, status int) 
 	srv, calls, mu := testutil.MockPushWardServerRejecting(t, status, status)
 
 	mux, api := humautil.NewTestAPI()
-	RegisterRoutes(api, state.NewMemoryStore(), client.NewPool(srv.URL, nil), cfg)
+	RegisterRoutes(api, state.NewMemoryStore(), client.NewPool(srv.URL, nil), cfg, poster.Static(testutil.Thumbhash))
 	return mux, calls, mu
 }
 

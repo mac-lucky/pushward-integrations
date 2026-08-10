@@ -20,6 +20,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
+	"github.com/mac-lucky/pushward-integrations/shared/poster"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
@@ -29,14 +30,16 @@ type Handler struct {
 	clients *client.Pool
 	config  *config.OverseerrConfig
 	ender   *lifecycle.Ender
+	posters poster.Source
 }
 
 // RegisterRoutes registers the Overseerr webhook endpoint and returns the Handler.
-func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.OverseerrConfig) *Handler {
+func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.OverseerrConfig, posters poster.Source) *Handler {
 	h := &Handler{
 		store:   store,
 		clients: clients,
 		config:  cfg,
+		posters: posters,
 		ender: lifecycle.NewEnder(clients, store, "overseerr", lifecycle.EndConfig{
 			EndDelay:       cfg.EndDelay,
 			EndDisplayTime: cfg.EndDisplayTime,
@@ -152,7 +155,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 		// screen until the stale TTL. Non-terminal events must not: the activity
 		// is meant to stay open for the rest of the request's lifecycle.
 		if spec.terminal && reason == "" {
-			h.ender.EndIfTracked(ctx, log, userKey, h.mapKey(mediaType, tmdbID), h.slug(mediaType, tmdbID), h.content(p, spec))
+			h.ender.EndIfTracked(ctx, log, userKey, h.mapKey(mediaType, tmdbID), h.slug(mediaType, tmdbID), h.content(ctx, p, spec))
 		}
 		log.Info("overseerr event", "type", spec.state)
 		// The caller asked for notification-only, so the push was the sole
@@ -172,7 +175,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 
 	slug := h.slug(mediaType, tmdbID)
 	mapKey := h.mapKey(mediaType, tmdbID)
-	content := h.content(p, spec)
+	content := h.content(ctx, p, spec)
 
 	// Cancel any pending two-phase end from a prior terminal event so a new
 	// event for the same media (e.g. a re-request) isn't ended out from under us.
@@ -322,7 +325,7 @@ func (h *Handler) mapKey(mediaType, tmdbID string) string {
 	return fmt.Sprintf("overseerr:%s:%s", mediaType, tmdbID)
 }
 
-func (h *Handler) content(p *overseerrPayload, spec eventSpec) pushward.Content {
+func (h *Handler) content(ctx context.Context, p *overseerrPayload, spec eventSpec) pushward.Content {
 	total := 4
 	c := pushward.Content{
 		Template:    pushward.TemplateSteps,
@@ -336,6 +339,9 @@ func (h *Handler) content(p *overseerrPayload, spec eventSpec) pushward.Content 
 	if spec.step > 0 {
 		c.Progress = float64(spec.step) / float64(total)
 	}
+	// p.Image is the TMDB backdrop/poster Overseerr resolved for the request,
+	// which is a public https URL the device can load on its own.
+	poster.Apply(ctx, h.posters, &c, p.Image, pushward.ImageShapePoster)
 	return c
 }
 

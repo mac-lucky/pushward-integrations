@@ -150,8 +150,10 @@ The relay has **no** `pushward.api_key` (it extracts a `hlk_` key per request). 
 | `PUSHWARD_SERVER_METRICS_ADDRESS` | `server.metrics_address` | Internal Prometheus metrics listener; must differ from `server.address` | No (`:9090`) |
 | `PUSHWARD_TRUSTED_PROXY_CIDRS` | `trusted_proxy_cidrs` | CIDRs of trusted reverse proxies so `CF-Connecting-IP`/`X-Forwarded-For` is honored for per-IP rate limiting | No |
 | `PUSHWARD_STARR_MODE` | `providers.starr.mode` | Radarr/Sonarr routing: `activity` (default), `notify`, or `smart` | No |
+| `PUSHWARD_POSTER_ENABLED` | `poster.enabled` | Poster images on Radarr/Sonarr, Jellyfin and Overseerr cards | No (`true`) |
+| `PUSHWARD_POSTER_ALLOW_PRIVATE_HOSTS` | `poster.allow_private_hosts` | Let poster fetches reach LAN addresses. **Keep this off on any relay that accepts webhooks from someone else** - the payload carries the URL, so an unguarded fetcher becomes an SSRF probe. Turn it on only when self-hosting and pulling artwork off a LAN media server | No (`false`) |
 
-Per-provider knobs (`providers.<name>.enabled`, `priority`, `cleanup_delay`, `stale_timeout`, `end_delay`, `end_display_time`) plus the circuit-breaker and OpenTelemetry blocks are documented in the [relay README](./relay/) and [`relay/config.example.yml`](./relay/config.example.yml). All providers default to `enabled: true`.
+Per-provider knobs (`providers.<name>.enabled`, `priority`, `cleanup_delay`, `stale_timeout`, `end_delay`, `end_display_time`) plus the circuit-breaker, poster and OpenTelemetry blocks are documented in the [relay README](./relay/) and [`relay/config.example.yml`](./relay/config.example.yml). All providers default to `enabled: true`.
 
 ## Endpoints
 

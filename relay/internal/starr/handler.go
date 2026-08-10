@@ -18,6 +18,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
+	"github.com/mac-lucky/pushward-integrations/shared/poster"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
@@ -32,15 +33,17 @@ type Handler struct {
 	clients *client.Pool
 	config  *config.StarrConfig
 	ender   *lifecycle.Ender
+	posters poster.Source
 }
 
 // RegisterRoutes registers the Radarr, Sonarr, and Prowlarr webhook endpoints
 // and returns the Handler so the caller can collect the Ender for graceful shutdown.
-func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.StarrConfig) *Handler {
+func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.StarrConfig, posters poster.Source) *Handler {
 	h := &Handler{
 		store:   store,
 		clients: clients,
 		config:  cfg,
+		posters: posters,
 		ender: lifecycle.NewEnder(clients, store, "starr", lifecycle.EndConfig{
 			EndDelay:       cfg.EndDelay,
 			EndDisplayTime: cfg.EndDisplayTime,

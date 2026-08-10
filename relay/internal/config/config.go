@@ -6,6 +6,7 @@ import (
 	"time"
 
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
+	"github.com/mac-lucky/pushward-integrations/shared/poster"
 )
 
 // Config holds the relay gateway configuration.
@@ -14,9 +15,32 @@ type Config struct {
 	Database          DatabaseConfig            `yaml:"database"`
 	Telemetry         TelemetryConfig           `yaml:"telemetry"`
 	CircuitBreaker    CircuitBreakerConfig      `yaml:"circuit_breaker"`
+	Poster            PosterConfig              `yaml:"poster"`
 	TrustedProxyCIDRs []string                  `yaml:"trusted_proxy_cidrs"`
 	Providers         ProvidersConfig           `yaml:"providers"`
 }
+
+// PosterConfig controls activity poster images: the image_url / image_shape /
+// image_thumbhash trio the Starr, Jellyfin and Overseerr handlers attach to
+// their cards. The response cap, cache size and negative TTL are deliberately
+// not settable - they are memory limits on a multi-tenant process, not
+// per-deployment taste.
+type PosterConfig struct {
+	// Enabled is a pointer so an explicit `enabled: false` is distinguishable
+	// from an absent key, which stays on. Read it through IsEnabled.
+	Enabled *bool `yaml:"enabled"`
+	// AllowPrivateHosts lets thumbhash fetches reach LAN addresses over
+	// cleartext http. Off by default: the hosted relay's webhook payloads are
+	// attacker-controlled, so an unguarded fetcher is an SSRF probe of the
+	// cluster. Self-hosted relays that want artwork off a LAN Jellyfin turn it
+	// on.
+	AllowPrivateHosts bool          `yaml:"allow_private_hosts"`
+	FetchTimeout      time.Duration `yaml:"fetch_timeout"`
+	InlineWait        time.Duration `yaml:"inline_wait"`
+}
+
+// IsEnabled reads Enabled, treating an absent key as on.
+func (p PosterConfig) IsEnabled() bool { return p.Enabled == nil || *p.Enabled }
 
 // CircuitBreakerConfig controls the circuit breaker for outbound PushWard API calls.
 type CircuitBreakerConfig struct {
@@ -186,6 +210,10 @@ func Load(path string) (*Config, error) {
 		CircuitBreaker: CircuitBreakerConfig{
 			Threshold: 5,
 			Cooldown:  30 * time.Second,
+		},
+		Poster: PosterConfig{
+			FetchTimeout: poster.DefaultFetchTimeout,
+			InlineWait:   poster.DefaultInlineWait,
 		},
 		// SampleRate default lives here (not in telemetry.Init) so an explicit
 		// sample_rate: 0 in YAML can mean "sample nothing" while an unset value
@@ -383,6 +411,10 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
+	if err := cfg.validatePoster(); err != nil {
+		return nil, err
+	}
+
 	if cfg.CircuitBreaker.Threshold < 1 {
 		return nil, fmt.Errorf("circuit_breaker.threshold must be >= 1, got %d", cfg.CircuitBreaker.Threshold)
 	}
@@ -418,6 +450,17 @@ func (cfg *Config) applyEnvOverrides() error {
 	}
 	if v := os.Getenv("PUSHWARD_TRUSTED_PROXY_CIDRS"); v != "" {
 		cfg.TrustedProxyCIDRs = sharedconfig.SplitList(v)
+	}
+
+	// Poster overrides. Only the two operational switches get env names; the
+	// timing and size knobs stay YAML-only, as the per-provider ones do.
+	posterEnabled := cfg.Poster.IsEnabled()
+	if err := sharedconfig.EnvBool("PUSHWARD_POSTER_ENABLED", &posterEnabled); err != nil {
+		return err
+	}
+	cfg.Poster.Enabled = &posterEnabled
+	if err := sharedconfig.EnvBool("PUSHWARD_POSTER_ALLOW_PRIVATE_HOSTS", &cfg.Poster.AllowPrivateHosts); err != nil {
+		return err
 	}
 
 	// Provider Enabled overrides
@@ -509,6 +552,26 @@ func (cfg *Config) validatePriorities() error {
 		if p.base.Priority < 0 || p.base.Priority > 10 {
 			return fmt.Errorf("providers.%s.priority: must be 0-10, got %d", p.name, p.base.Priority)
 		}
+	}
+	return nil
+}
+
+// validatePoster rejects a poster block that would either never produce a hash
+// or hold a webhook open. It only runs when the feature is on, so a deployment
+// that turned it off is not blocked from booting by a stale value.
+func (cfg *Config) validatePoster() error {
+	if !cfg.Poster.IsEnabled() {
+		return nil
+	}
+	p := cfg.Poster
+	if p.FetchTimeout <= 0 {
+		return fmt.Errorf("poster.fetch_timeout must be > 0, got %s", p.FetchTimeout)
+	}
+	if p.InlineWait <= 0 {
+		return fmt.Errorf("poster.inline_wait must be > 0, got %s", p.InlineWait)
+	}
+	if p.InlineWait > p.FetchTimeout {
+		return fmt.Errorf("poster.inline_wait (%s) must not exceed poster.fetch_timeout (%s): the extra wait can never be rewarded", p.InlineWait, p.FetchTimeout)
 	}
 	return nil
 }

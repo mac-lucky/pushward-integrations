@@ -13,6 +13,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
+	"github.com/mac-lucky/pushward-integrations/shared/poster"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
@@ -238,6 +239,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 			TotalSteps:  &total,
 		},
 	}
+	poster.Apply(ctx, h.posters, &req.Content, posterURL(p.Movie.Images), pushward.ImageShapePoster)
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
@@ -342,6 +344,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 		CurrentStep: &step,
 		TotalSteps:  &total,
 	}
+	poster.Apply(ctx, h.posters, &content, posterURL(p.Movie.Images), pushward.ImageShapePoster)
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	log.Info("scheduled end", "slug", slug, "state", state)

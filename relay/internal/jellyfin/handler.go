@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/selftest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
+	"github.com/mac-lucky/pushward-integrations/shared/poster"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
@@ -39,6 +41,7 @@ type Handler struct {
 	clients      *client.Pool
 	config       *config.JellyfinConfig
 	ender        *lifecycle.Ender
+	posters      poster.Source
 	mu           sync.Mutex
 	pauseTimers  map[string]*pauseTimer // debounceKey -> pause auto-end timer + its generation
 	pauseSeq     uint64                 // monotonic generation source for pause timers
@@ -48,11 +51,12 @@ type Handler struct {
 }
 
 // RegisterRoutes registers the Jellyfin webhook endpoint and returns the Handler.
-func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.JellyfinConfig) *Handler {
+func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.JellyfinConfig, posters poster.Source) *Handler {
 	h := &Handler{
 		store:   store,
 		clients: clients,
 		config:  cfg,
+		posters: posters,
 		ender: lifecycle.NewEnder(clients, store, "jellyfin", lifecycle.EndConfig{
 			EndDelay:       cfg.EndDelay,
 			EndDisplayTime: cfg.EndDisplayTime,
@@ -128,6 +132,80 @@ func playbackSubtitle(p *jellyfinPayload) string {
 		return fmt.Sprintf("Jellyfin · %d · %s", p.ProductionYear, p.UserName)
 	}
 	return fmt.Sprintf("Jellyfin · %s", p.UserName)
+}
+
+// primaryImageURL is the item's poster on the user's own Jellyfin server. It is
+// the URL the device is told to load, and for the usual self-hosted setup the
+// device will not reach it - which is what makes the thumbhash the real image
+// here rather than a placeholder.
+func primaryImageURL(p *jellyfinPayload) string {
+	base := strings.TrimRight(p.ServerURL, "/")
+	if base == "" || !validItemID(p.ItemID) {
+		return ""
+	}
+	return base + "/Items/" + p.ItemID + "/Images/Primary"
+}
+
+// validItemID reports whether id is a Jellyfin item GUID, dashed or bare. The
+// id is pasted into a URL the relay then fetches, so anything else is refused:
+// a "?" or "#" in it would truncate the path meant to be requested and hand the
+// rest of the URL to whoever sent the webhook.
+func validItemID(id string) bool {
+	if id == "" {
+		return false
+	}
+	for _, c := range id {
+		switch {
+		case c >= '0' && c <= '9', c >= 'a' && c <= 'f', c >= 'A' && c <= 'F', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// primaryImageFetchURL is what the relay downloads to build the thumbhash.
+// Jellyfin transcodes server-side, so asking for a small JPEG guarantees a
+// format the standard library can decode (the stored art is often WebP) and
+// keeps the transfer to a few KB.
+func primaryImageFetchURL(p *jellyfinPayload) string {
+	raw := primaryImageURL(p)
+	if raw == "" {
+		return ""
+	}
+	return raw + "?format=Jpg&maxWidth=256&quality=90"
+}
+
+// primaryImageShape frames a movie as a portrait poster and an episode as a
+// square: episode art is a 16:9 still, which loses its subject when cropped
+// into a poster frame.
+func primaryImageShape(p *jellyfinPayload) pushward.ImageShape {
+	if p.SeriesName == "" {
+		return pushward.ImageShapePoster
+	}
+	return pushward.ImageShapeSquare
+}
+
+// playbackImage is an item's artwork identity, captured from the payload so the
+// pause auto-end frame can still carry the poster long after that payload is
+// gone. Deriving it is pure string work - no fetch happens until applyImage.
+type playbackImage struct {
+	displayURL string
+	fetchURL   string
+	shape      pushward.ImageShape
+}
+
+func imageOf(p *jellyfinPayload) playbackImage {
+	return playbackImage{
+		displayURL: primaryImageURL(p),
+		fetchURL:   primaryImageFetchURL(p),
+		shape:      primaryImageShape(p),
+	}
+}
+
+// applyImage attaches the poster trio to one content frame.
+func (h *Handler) applyImage(ctx context.Context, c *pushward.Content, img playbackImage) {
+	poster.ApplyFetchURL(ctx, h.posters, c, img.displayURL, img.fetchURL, img.shape)
 }
 
 func playbackProgress(p *jellyfinPayload) float64 {
@@ -261,6 +339,7 @@ func (h *Handler) handlePlaybackStart(ctx context.Context, userKey string, log *
 		req.Content.LiveProgress = pushward.BoolPtr(true)
 		req.Content.EndDate = pushward.Int64Ptr(time.Now().Unix() + int64(remaining))
 	}
+	h.applyImage(ctx, &req.Content, imageOf(p))
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
@@ -307,12 +386,7 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 		if h.config.PauseTimeout > 0 {
 			if prev, ok := h.lastProgress[debounceKey]; ok && progress != prev {
 				h.lastProgress[debounceKey] = progress
-				deviceName := p.DeviceName
-				userName := p.UserName
-				subtitle := playbackSubtitle(p)
-				h.armPauseTimer(debounceKey, func(gen uint64) {
-					h.endPaused(userKey, mapKey, slug, deviceName, userName, subtitle, progress, debounceKey, gen)
-				})
+				h.armPauseEnd(userKey, mapKey, slug, debounceKey, p, progress)
 			}
 		}
 		h.mu.Unlock()
@@ -331,12 +405,7 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 
 	// Start pause timer on play->pause or initial pause
 	if p.IsPaused && h.config.PauseTimeout > 0 && (stateChanged || !hasPrev) {
-		deviceName := p.DeviceName
-		userName := p.UserName
-		subtitle := playbackSubtitle(p)
-		h.armPauseTimer(debounceKey, func(gen uint64) {
-			h.endPaused(userKey, mapKey, slug, deviceName, userName, subtitle, progress, debounceKey, gen)
-		})
+		h.armPauseEnd(userKey, mapKey, slug, debounceKey, p, progress)
 	}
 	h.mu.Unlock()
 
@@ -401,6 +470,7 @@ func (h *Handler) handlePlaybackProgress(ctx context.Context, userKey string, lo
 	} else {
 		req.Content.LiveProgress = pushward.BoolPtr(false)
 	}
+	h.applyImage(ctx, &req.Content, imageOf(p))
 
 	if err := cl.UpdateActivity(ctx, slug, req); err != nil {
 		log.Error("failed to update activity", "slug", slug, "error", err)
@@ -445,6 +515,7 @@ func (h *Handler) handlePlaybackStop(ctx context.Context, userKey string, log *s
 		// counting toward a stale end_date on this "Watched" content.
 		LiveProgress: pushward.BoolPtr(false),
 	}
+	h.applyImage(ctx, &content, imageOf(p))
 
 	// The pause-timer and progress bookkeeping above runs either way: it is local
 	// state, and the debounce entries are cleaned up by the end callback, which
@@ -584,18 +655,37 @@ func (h *Handler) cleanupDebounce(userKey, slug string) func() {
 	}
 }
 
-// armPauseTimer stops any existing pause timer for debounceKey and arms a fresh
-// one carrying a new generation. fn receives that generation so it can forward
-// it to endPaused for the race-free staleness check. The caller must hold h.mu.
-func (h *Handler) armPauseTimer(debounceKey string, fn func(gen uint64)) {
+// pausedFrame is what the pause auto-end will show, captured while the payload
+// is still in hand: the timer fires long after the webhook that armed it was
+// answered and the payload is gone by then.
+type pausedFrame struct {
+	state    string
+	subtitle string
+	progress float64
+	img      playbackImage
+}
+
+// armPauseEnd stops any existing pause timer for debounceKey and arms a fresh
+// one carrying a new generation, so a timer that had already started running
+// when it was stopped can tell it has been superseded. The caller must hold
+// h.mu.
+func (h *Handler) armPauseEnd(userKey, mapKey, slug, debounceKey string, p *jellyfinPayload, progress float64) {
 	if pt, ok := h.pauseTimers[debounceKey]; ok {
 		pt.timer.Stop()
 	}
 	h.pauseSeq++
 	gen := h.pauseSeq
+	frame := pausedFrame{
+		state:    "Paused on " + p.DeviceName + " by " + p.UserName,
+		subtitle: playbackSubtitle(p),
+		progress: progress,
+		img:      imageOf(p),
+	}
 	h.pauseTimers[debounceKey] = &pauseTimer{
-		gen:   gen,
-		timer: time.AfterFunc(h.config.PauseTimeout, func() { fn(gen) }),
+		gen: gen,
+		timer: time.AfterFunc(h.config.PauseTimeout, func() {
+			h.endPaused(userKey, mapKey, slug, debounceKey, gen, frame)
+		}),
 	}
 }
 
@@ -606,7 +696,7 @@ func (h *Handler) armPauseTimer(debounceKey string, fn func(gen uint64)) {
 // but this AfterFunc had already started in its own goroutine and so Stop
 // returned false), bail out so a just-resumed activity is not ended. gen is a
 // value, so the check is race-free.
-func (h *Handler) endPaused(userKey, mapKey, slug, deviceName, userName, subtitle string, progress float64, debounceKey string, gen uint64) {
+func (h *Handler) endPaused(userKey, mapKey, slug, debounceKey string, gen uint64, frame pausedFrame) {
 	h.mu.Lock()
 	if pt, ok := h.pauseTimers[debounceKey]; !ok || pt.gen != gen {
 		h.mu.Unlock()
@@ -617,15 +707,18 @@ func (h *Handler) endPaused(userKey, mapKey, slug, deviceName, userName, subtitl
 
 	content := pushward.Content{
 		Template:    "generic",
-		Progress:    progress,
-		State:       "Paused on " + deviceName + " by " + userName,
+		Progress:    frame.progress,
+		State:       frame.state,
 		Icon:        "pause.circle.fill",
-		Subtitle:    subtitle,
+		Subtitle:    frame.subtitle,
 		AccentColor: pushward.ColorBlue,
 		// Keep interpolation off on the auto-end frame even if the pause frame
 		// that should have cleared it never landed (failed UpdateActivity).
 		LiveProgress: pushward.BoolPtr(false),
 	}
+	// No request context here: this runs from a timer goroutine long after the
+	// webhook that armed it was answered.
+	h.applyImage(context.Background(), &content, frame.img)
 
 	h.scheduleEnd(userKey, mapKey, slug, content)
 	slog.Info("auto-ending paused activity", "slug", slug)
