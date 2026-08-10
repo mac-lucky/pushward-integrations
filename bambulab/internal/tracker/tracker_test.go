@@ -594,6 +594,58 @@ func TestProcess_StartTrackingWithSubtaskName(t *testing.T) {
 	}
 }
 
+func TestProcess_StartTrackingPrefersGcodeFile(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	printer := newMockPrinter()
+	client := pushward.NewClient(srv.URL, "hlk_test")
+	tr := newTestTracker(printer, client, cfg)
+
+	// The printer reports the slicer process preset as the subtask name; the
+	// file is what the user recognises.
+	printer.SetState(bambulab.MergedState{
+		GcodeState:  bambulab.StatePrepare,
+		SubtaskName: "0.2mm layer, 6 walls, 20% infill",
+		GcodeFile:   "/sdcard/model/Benchy.gcode.3mf",
+	})
+	tr.process(context.Background())
+
+	recorded := testutil.GetCalls(calls, mu)
+	var createReq pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
+	if createReq.Name != "Benchy" {
+		t.Errorf("name = %q, want Benchy", createReq.Name)
+	}
+}
+
+func TestPrintName(t *testing.T) {
+	tests := []struct {
+		name    string
+		subtask string
+		gcode   string
+		want    string
+	}{
+		{"file wins over preset", "0.2mm layer, 6 walls, 20% infill", "/sdcard/Benchy.gcode.3mf", "Benchy"},
+		{"plain 3mf", "", "/sdcard/model/Cable Clip.3mf", "Cable Clip"},
+		{"bare gcode", "", "/sdcard/bracket.gcode", "bracket"},
+		{"no extension", "", "/sdcard/raw", "raw"},
+		{"studio plate falls back", "Lamp Shade", "/data/Metadata/plate_1.gcode", "Lamp Shade"},
+		{"plate without separator", "Lamp Shade", "Metadata/plate1.gcode", "Lamp Shade"},
+		{"no file falls back", "Lamp Shade", "", "Lamp Shade"},
+		{"nothing at all", "", "", "BambuLab Print"},
+		{"long file truncated", "", "/sdcard/An Extremely Long Model File Name That Runs On.3mf", "An Extremely Long Model File Name Tha..."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := &bambulab.MergedState{SubtaskName: tt.subtask, GcodeFile: tt.gcode}
+			if got := printName(state); got != tt.want {
+				t.Errorf("printName = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestProcess_StartTrackingWithoutSubtaskName(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()

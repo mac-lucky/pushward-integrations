@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -182,12 +183,7 @@ func (t *Tracker) startTracking(ctx context.Context, state *bambulab.MergedState
 	endedTTL := int(t.cfg.PushWard.CleanupDelay.Seconds())
 	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
 
-	name := "BambuLab Print"
-	if state.SubtaskName != "" {
-		name = text.Truncate(state.SubtaskName, 40)
-	}
-
-	if err := t.pw.CreateActivity(ctx, t.slug, name, t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
+	if err := t.pw.CreateActivity(ctx, t.slug, printName(state), t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
 		slog.Error("failed to create activity", "error", err)
 		return
 	}
@@ -204,6 +200,37 @@ func (t *Tracker) startTracking(ctx context.Context, state *bambulab.MergedState
 	// interval past the seed and identical content isn't immediately re-pushed.
 	t.lastTickAt = time.Now()
 	t.lastFrame = f
+}
+
+// printName is the activity title: the sliced file's base name. subtask_name is
+// only a fallback because the printer often reports the slicer process preset
+// there ("0.2mm layer, 6 walls, 20% infill") instead of anything the user named.
+// Plates sent straight from Studio arrive as "/data/Metadata/plate_1.gcode",
+// which says no more than the preset does, so those fall back too.
+func printName(state *bambulab.MergedState) string {
+	if n := fileBaseName(state.GcodeFile); n != "" && !genericPlate.MatchString(n) {
+		return text.Truncate(n, 40)
+	}
+	if state.SubtaskName != "" {
+		return text.Truncate(state.SubtaskName, 40)
+	}
+	return "BambuLab Print"
+}
+
+var genericPlate = regexp.MustCompile(`(?i)^plate[_ -]?\d+$`)
+
+// fileBaseName strips the directory and the slicer extension from a printer
+// file path: "/sdcard/Benchy.gcode.3mf" -> "Benchy".
+func fileBaseName(p string) string {
+	if i := strings.LastIndexAny(p, `/\`); i >= 0 {
+		p = p[i+1:]
+	}
+	for _, ext := range []string{".gcode.3mf", ".gcode", ".3mf"} {
+		if len(p) > len(ext) && strings.EqualFold(p[len(p)-len(ext):], ext) {
+			return p[:len(p)-len(ext)]
+		}
+	}
+	return p
 }
 
 func deriveFrame(state *bambulab.MergedState) frame {

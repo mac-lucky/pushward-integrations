@@ -162,6 +162,8 @@ polling:
 
 Each `gcode_state` maps to one frame of the `generic` Live Activity template. The subtitle combines the print filename and nozzle temperature (`NN/NN°C`) joined by ` · `.
 
+The activity title is the sliced file's base name, taken from `gcode_file` with the directory and the `.gcode`/`.3mf`/`.gcode.3mf` extension stripped. `subtask_name` is the fallback, because printers frequently report the slicer process preset there ("0.2mm layer, 6 walls, 20% infill") rather than the model name. Plates sent straight from Bambu Studio arrive as `/data/Metadata/plate_1.gcode` and fall back too, since a plate number says no more than the preset does.
+
 | Printer state | Activity state | State text | Icon | Color |
 |---|---|---|---|---|
 | `PREPARE` | `ongoing` | `Preparing...` | `arrow.triangle.2.circlepath` | blue |
