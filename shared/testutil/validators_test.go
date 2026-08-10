@@ -365,6 +365,126 @@ func TestValidateURLAnyTemplate(t *testing.T) {
 	}
 }
 
+// stdHash / paddedHash are real thumbhashes. stdHash carries a "/", which is
+// what separates the standard alphabet from the URL-safe one; paddedHash needs
+// "==", which is what separates padded from raw.
+const (
+	stdHash    = "WfcJhRqPdTeXeIhXiXiYd3BmB/eH"
+	paddedHash = "GoeGJQg4gIyPdLc3eISACIiIB1eHiIB4WA=="
+)
+
+func TestValidateImageFields(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "full trio on generic",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_url":"https://image.tmdb.org/t/p/w500/a.jpg","image_shape":"poster","image_thumbhash":"` + stdHash + `"}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "full trio on steps",
+			body:       `{"state":"ongoing","content":{"template":"steps","progress":0.5,"current_step":1,"total_steps":2,"image_url":"https://image.tmdb.org/t/p/w500/a.jpg","image_shape":"square","image_thumbhash":"` + paddedHash + `"}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "thumbhash alone on generic",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_thumbhash":"` + stdHash + `"}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "lan https url is accepted",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_url":"https://jellyfin.lan:8096/Items/1/Images/Primary"}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "circle shape",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_url":"https://example.com/a.jpg","image_shape":"circle"}}`,
+			wantStatus: 200,
+		},
+		{
+			// Under merge-patch a tick may omit the template; the mock is
+			// stateless and leaves that case to the real server.
+			name:       "template-less patch passes the gate",
+			body:       `{"content":{"progress":0.5,"image_url":"https://example.com/a.jpg","image_thumbhash":"` + stdHash + `"}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "image on alert rejected",
+			body:       `{"state":"ongoing","content":{"template":"alert","progress":0.5,"severity":"warning","image_url":"https://example.com/a.jpg"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "shape alone on countdown rejected",
+			body:       `{"state":"ongoing","content":{"template":"countdown","progress":0.5,"end_date":1800000000,"image_shape":"poster"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "thumbhash alone on timeline rejected",
+			body:       `{"state":"ongoing","content":{"template":"timeline","progress":0.5,"value":{"CPU":1},"image_thumbhash":"` + stdHash + `"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "http image_url rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_url":"http://example.com/a.jpg"}}`,
+			wantStatus: 400,
+		},
+		{
+			// Assembled from parts: a literal userinfo URL reads as a hardcoded
+			// credential to the security linter, and this one is neither.
+			name:       "image_url with userinfo rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_url":"https://` + "u" + `:` + "p" + `@example.com/a.jpg"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "hostless image_url rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_url":"https:///a.jpg"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "image_url over 2048 runes rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_url":"https://example.com/` + strings.Repeat("a", 2049-20) + `"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "unknown shape rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_url":"https://example.com/a.jpg","image_shape":"banner"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "raw (unpadded) base64 thumbhash rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_thumbhash":"` + strings.TrimRight(paddedHash, "=") + `"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "url-alphabet base64 thumbhash rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_thumbhash":"` + strings.ReplaceAll(stdHash, "/", "_") + `"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "non-base64 thumbhash rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_thumbhash":"not base64!!"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "thumbhash over 64 chars rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"image_thumbhash":"` + strings.Repeat("A", 68) + `"}}`,
+			wantStatus: 400,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "image-app", "Image App")
+			if got := patchActivity(t, srv.URL, "image-app", tt.body); got != tt.wantStatus {
+				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+}
+
 func postNotification(t *testing.T, url, body string) int {
 	t.Helper()
 	resp, err := http.Post(url+"/notifications", "application/json", strings.NewReader(body))

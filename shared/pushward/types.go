@@ -20,6 +20,17 @@ const (
 	TemplateLog       = "log"
 )
 
+// ImageShape names the frame the iOS client draws an activity's poster image
+// in. Mirrors the server's image shape enum; an omitted value is stored
+// verbatim and rendered as ImageShapeSquare.
+type ImageShape string
+
+const (
+	ImageShapePoster ImageShape = "poster" // 2:3 portrait, e.g. movie/series art
+	ImageShapeSquare ImageShape = "square" // 1:1, the default when omitted
+	ImageShapeCircle ImageShape = "circle" // 1:1 clipped to a circle, e.g. avatars
+)
+
 // Trend direction constants annotate a board tile (and value/gauge widget)
 // with a directional arrow. Mirrors the server's TrendDirection enum.
 const (
@@ -166,6 +177,22 @@ type Content struct {
 	// step, across start_date..end_date.
 	LiveProgress *bool `json:"live_progress,omitempty"`
 
+	// Activity image (generic and steps templates only - the server answers 422
+	// for any other template). ImageURL must be https with a host and no
+	// userinfo, at most 2048 runes; the server never fetches it, the device
+	// does, and the device additionally refuses private/LAN hosts, so a LAN URL
+	// is accepted by the API but never renders. ImageThumbhash is a padded
+	// standard-alphabet base64 thumbhash (at most 64 chars) rendered as a
+	// blurred placeholder, and is the only tier that shows when the URL is
+	// unreachable - for a LAN media server it IS the image. ImageShape defaults
+	// to ImageShapeSquare when omitted. Switching to a template that has no
+	// image slot clears all three server-side, so a merge-patch never has to
+	// null them; a generic <-> steps switch keeps them. Sending one of the
+	// three on a template without a slot is a 422 either way.
+	ImageURL       string     `json:"image_url,omitempty"`
+	ImageShape     ImageShape `json:"image_shape,omitempty"`
+	ImageThumbhash string     `json:"image_thumbhash,omitempty"`
+
 	// Countdown template
 	Duration          *string `json:"duration,omitempty"`
 	EndDate           *int64  `json:"end_date,omitempty"`
@@ -284,6 +311,15 @@ type ContentPatch struct {
 	StepColors  []string  `json:"step_colors,omitempty"`
 
 	LiveProgress *bool `json:"live_progress,omitempty"`
+
+	// Activity image (generic and steps templates only). Same rules as the
+	// matching Content fields; pointers here so an unset slot is omitted and
+	// preserved server-side rather than deleted. Switching to a template with
+	// no image slot clears all three server-side on its own; generic <-> steps
+	// keeps them.
+	ImageURL       *string     `json:"image_url,omitempty"`
+	ImageShape     *ImageShape `json:"image_shape,omitempty"`
+	ImageThumbhash *string     `json:"image_thumbhash,omitempty"`
 
 	// Countdown template
 	Duration          *string `json:"duration,omitempty"`

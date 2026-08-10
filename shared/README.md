@@ -17,7 +17,7 @@ A bridge turns an external event into a PushWard API call; this library is the l
 
 ```
 external event -> bridge handler -> shared/pushward.Client -> pushward-server (api.pushward.app) -> APNs -> iOS Live Activity / widget
-                  (provider logic)   (retry · breaker · auth)        (REST)
+                  (provider logic)   (retry - breaker - auth)        (REST)
 ```
 
 The client speaks the public pushward-server REST surface (`/activities`, `/notifications`, `/widgets`) and surfaces RFC 9457 Problem details as typed errors. Everything else in the module is supporting infrastructure the bridges share.
@@ -32,6 +32,7 @@ The client speaks the public pushward-server REST surface (`/activities`, `/noti
 | `ci` | `.../shared/ci` | The CI steps ladder: job to step-group folding (matrix legs and reusable-workflow prefixes), step colors, prior-run duration weights, live-progress anchors |
 | `cipoll` | `.../shared/cipoll` | The whole poll-a-forge orchestration on top of `ci`: one activity per repo, the total-steps clamp, redundant-tick suppression, live-progress anchoring, the two-phase end. A forge plugs in through the `Forge` interface |
 | `widgets` | `.../shared/widgets` | Generic background poller publishing numeric values to the widget API; `ValueSource` / `MultiValueSource` / `StatListSource` |
+| `poster` | `.../shared/poster` | Activity poster images: `ValidImageURL` for the `image_url` rules, a `Source` that resolves artwork to a ThumbHash (SSRF-guarded fetch, decode-size budget, LRU cache, inline-wait budget), and `Apply` / `ApplyFetchURL` to set the trio on a `Content` |
 | `auth` | `.../shared/auth` | Constant-time, fail-closed header auth middleware + inline check |
 | `syncx` | `.../shared/syncx` | Small concurrency primitives: `DropCounter`, `Periodic`, `TimerGroup` |
 | `text` | `.../shared/text` | `FormatBytes`, `Truncate`/`TruncateHard`, `Slug`/`SlugHash`/`HashHex`, `SanitizeURL` |
@@ -169,6 +170,22 @@ client.PatchActivity(ctx, "build-42", pushward.PatchRequest{
 
 **Models & constants:** `Content` (superset for full updates) vs `ContentPatch` (all-pointer, every field keeps `json:",omitempty"` per RFC 7396); template constants `TemplateGeneric` / `Alert` / `Steps` / `Countdown` / `Gauge` / `Timeline` / `Board` / `Log`; the `board` template carries `[]BoardTile` (1-4 tiles), `log` carries `[]LogLine` (1-20 lines, newest-first); trend constants `TrendUp` / `TrendDown` / `TrendFlat` (board tiles); log-level constants `LogInfo` / `LogWarn` / `LogError`; `TapAction` routing on every template/widget via `tap_action` / `url_action` / `secondary_url_action` (richer than the legacy `url` / `secondary_url` strings - adds method/headers/body for silent webhooks); notification levels `LevelActive` / `LevelPassive`; widget templates `WidgetTemplateValue` / `Progress` / `Status` / `Gauge` / `StatList` / `Trend` / `Countdown` / `Battery` / `Schedule` / `Flow`; severities `SeverityCritical` / `Warning` / `Info`; accent colors `ColorRed` / `Orange` / `Green` / `Blue` (matching iOS system colors). Helpers: `BoolPtr` / `IntPtr` / `Int64Ptr` / `Float64Ptr` / `StringPtr`, `SeverityColor` / `SeverityIcon`, `DisplayNameFor` / `(SendNotificationRequest).FillSourceDisplayName`, `MediaImage(url)`.
 
+**Activity images:** `generic` and `steps` carry an optional poster image - `image_url` + `image_shape` (`ImageShapePoster` / `Square` / `Circle`, square when omitted) + `image_thumbhash`. The server answers **422 on every other template**, so never set them on `alert`, `countdown`, `gauge`, `timeline`, `board` or `log`. Switching *to* one of those templates clears an inherited trio server-side, so a merge-patch never has to null them; a `generic` <-> `steps` switch keeps them, because both have the slot. `image_url` must be https with a host and no userinfo (max 2048 runes). The **device** fetches it, not the server, and it also refuses private/LAN hosts - so a LAN URL is accepted by the API and never renders. `image_thumbhash` is padded standard-alphabet base64 (max 64 chars) and is the only tier that survives an unreachable URL, so for a self-hosted media server it *is* the image. Widgets have no image support. See the [`poster`](#packages) package for building all three from a provider's artwork URL.
+
+### Poster images (`poster`)
+
+`ValidImageURL(raw)` applies the server's syntactic `image_url` rules and nothing else - no IP filtering, because dropping a LAN URL here would also drop the thumbhash the card could still show.
+
+`Source` resolves a URL to a thumbhash. `Disabled{}` always returns `""`, so a provider holds a `Source` unconditionally and never branches on whether the feature is on; `Static(hash)` is the canned Source for tests. `NewResolver(Config{})` builds the real one: it fetches in the background under a 2-slot semaphore, waits at most `InlineWait` (default 600ms) before answering, and caches results in a relay-wide 512-entry LRU - positives forever, failures for 15 minutes, and timeouts not at all (a deadline is a statement about load, not about the URL, and the cache is keyed by URL alone, so a poisoned CDN entry would take every tenant with it). A miss returns `""` now and lands for the next frame, which on a stream of Live Activity pushes is invisible; a webhook that blocked for the full fetch would not be. Nothing here returns an error or panics: every failure is an empty hash. `Config.OnResult` is the optional hook that reports each fetch as `ok` / `refused` / `timeout` / `error`, which is how the relay counts them without this package importing a metrics library.
+
+Fetches are bounded on every axis a webhook payload could otherwise choose: at most 2 MiB on the wire, 8M pixels, and roughly 24 MiB of decoded frame buffer - estimated from the image header, because a 64 KB 16-bit PNG that passes a pixel cap still asks for over 100 MB, which is more than a relay pod is allowed. URLs longer than `MaxImageURLRunes` are refused before they can become cache keys, and userinfo is refused outright (Go forwards `user:pass@` as an `Authorization` header).
+
+`AllowPrivateHosts` is **off by default**. The hosted relay is multi-tenant and its webhook payloads are attacker-controlled, so with it off the resolver fetches `https` only, and the dialer refuses loopback, RFC 1918, CGNAT/Tailscale, link-local, multicast and the other special-purpose ranges - including every IPv6 spelling of a v4 address (v4-mapped, v4-compatible, NAT64, 6to4), checked on the *resolved* address per dial, which is what makes it DNS-rebinding safe and what catches a public host redirecting to a private one. A self-hosted relay that should reach a LAN media server turns it on, which also re-allows cleartext `http`.
+
+`Apply(ctx, src, &content, url, shape)` sets all three fields at once, writing the shape only when a URL or hash survived. A `Disabled` source writes none of them: off has to mean the card carries no image fields, since `image_url` alone would still publish the media server's hostname. `ApplyFetchURL` is the variant for a provider whose fetch URL differs from what the device should render (Jellyfin asks for a small transcoded JPEG).
+
+The encoder is a vendored, encode-only port of [ThumbHash](https://github.com/evanw/thumbhash) (MIT), decoding through the standard library only - `image/jpeg`, `image/png`, `image/gif`. **WebP and AVIF do not decode and yield no hash**, deliberately: no new module dependency is worth a placeholder, and a new `require` in `shared/go.mod` ripples `go.sum` churn into all seven modules.
+
 ### Resilience
 
 Every call goes through one retry/backoff path (`doWithRetry`):
@@ -217,7 +234,7 @@ All are zero-value-or-constructor ready and concurrency-safe.
 
 ### Test utilities (`testutil`)
 
-`MockPushWardServer(t)` starts an `httptest` server that records calls **and validates them against the public API contract** (slug pattern, name/field length caps, per-template required fields, color/URL rules), returning proper `201`/`200`/`400`/`404` with RFC 9457 Problem bodies - not a blind `200 OK`. Also `MockPushWardServerFailingPatches` (drives update-failure paths), `GetCalls`, `CountPath`, `UnmarshalBody`, `RequireValueMap`, and the `APICall` struct.
+`MockPushWardServer(t)` starts an `httptest` server that records calls **and validates them against the public API contract** (slug pattern, name/field length caps, per-template required fields, color/URL rules, the generic/steps-only activity-image trio), returning proper `201`/`200`/`400`/`404` with RFC 9457 Problem bodies - not a blind `200 OK`. Also `MockPushWardServerFailingPatches` (drives update-failure paths), `GetCalls`, `CountPath`, `UnmarshalBody`, `RequireValueMap`, and the `APICall` struct.
 
 ## Development
 

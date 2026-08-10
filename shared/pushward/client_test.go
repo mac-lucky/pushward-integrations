@@ -1485,3 +1485,147 @@ func TestQuotaExceededError_UnwrapContract(t *testing.T) {
 		}
 	})
 }
+
+// --- Activity image trio ---
+
+// The trio has to survive UpdateActivity verbatim: image_url is what the device
+// fetches and image_thumbhash is what it draws until that lands, so a dropped
+// or renamed key is a blank card.
+func TestUpdateActivity_ImageTrioRoundTrip(t *testing.T) {
+	const (
+		imageURL = "https://image.tmdb.org/t/p/w500/poster.jpg"
+		hash     = "WfcJhRqPdTeXeIhXiXiYd3BmB/eH"
+	)
+	var raw map[string]any
+	var typed UpdateRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &raw)
+		_ = json.Unmarshal(body, &typed)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	err := c.UpdateActivity(context.Background(), "radarr-1", UpdateRequest{
+		State: StateOngoing,
+		Content: Content{
+			Template:       TemplateGeneric,
+			Progress:       0.5,
+			ImageURL:       imageURL,
+			ImageShape:     ImageShapePoster,
+			ImageThumbhash: hash,
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+
+	if typed.Content.ImageURL != imageURL {
+		t.Errorf("image_url = %q, want %q", typed.Content.ImageURL, imageURL)
+	}
+	if typed.Content.ImageShape != ImageShapePoster {
+		t.Errorf("image_shape = %q, want poster", typed.Content.ImageShape)
+	}
+	if typed.Content.ImageThumbhash != hash {
+		t.Errorf("image_thumbhash = %q, want %q", typed.Content.ImageThumbhash, hash)
+	}
+
+	// Snake_case on the wire, not the Go field names.
+	content, ok := raw["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a content object, got %#v", raw)
+	}
+	for _, key := range []string{"image_url", "image_shape", "image_thumbhash"} {
+		if _, present := content[key]; !present {
+			t.Errorf("expected %s on the wire, got %#v", key, content)
+		}
+	}
+}
+
+// An activity with no image must not carry the keys at all: they are only legal
+// on generic and steps, so an empty image_url on a gauge would be a 422.
+func TestUpdateActivity_OmitsUnsetImageFields(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	err := c.UpdateActivity(context.Background(), "gauge-1", UpdateRequest{
+		State:   StateOngoing,
+		Content: Content{Template: TemplateGauge, Progress: 0.5, Value: 42.0},
+	})
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	for _, key := range []string{"image_url", "image_shape", "image_thumbhash"} {
+		if bytes.Contains(body, []byte(`"`+key+`"`)) {
+			t.Errorf("expected %s to be omitted, got %s", key, string(body))
+		}
+	}
+}
+
+// Every ContentPatch image field is a pointer with omitempty, so patching one
+// leaves the other two untouched server-side. Without omitempty a nil pointer
+// would marshal as null and RFC 7396 would delete the stored value - here, the
+// poster URL of a card that is only refreshing its placeholder.
+func TestPatchActivity_ImageFieldsAreIndependentlyOmitted(t *testing.T) {
+	var body []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	err := c.PatchActivity(context.Background(), "radarr-1", PatchRequest{
+		Content: &ContentPatch{ImageThumbhash: StringPtr("WfcJhRqPdTeXeIhXiXiYd3BmB/eH")},
+	})
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if !bytes.Contains(body, []byte(`"image_thumbhash"`)) {
+		t.Errorf("expected image_thumbhash in the patch body, got %s", string(body))
+	}
+	for _, key := range []string{"image_url", "image_shape"} {
+		if bytes.Contains(body, []byte(`"`+key+`"`)) {
+			t.Errorf("unset %s must be absent, not null: %s", key, string(body))
+		}
+	}
+}
+
+// A patch that does set the URL and shape must send them, so a provider can
+// swap artwork mid-session.
+func TestPatchActivity_ImageTrioRoundTrip(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	shape := ImageShapeCircle
+	c := NewClient(srv.URL, "hlk_test")
+	err := c.PatchActivity(context.Background(), "radarr-1", PatchRequest{
+		Content: &ContentPatch{
+			ImageURL:   StringPtr("https://cdn.example.com/a.jpg"),
+			ImageShape: &shape,
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	content, ok := got["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected a content object, got %#v", got)
+	}
+	if content["image_url"] != "https://cdn.example.com/a.jpg" {
+		t.Errorf("image_url = %v", content["image_url"])
+	}
+	if content["image_shape"] != string(ImageShapeCircle) {
+		t.Errorf("image_shape = %v, want circle", content["image_shape"])
+	}
+}

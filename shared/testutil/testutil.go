@@ -1,11 +1,13 @@
 package testutil
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"regexp"
 	"strings"
 	"sync"
@@ -34,6 +36,17 @@ var (
 	validTapMethods = map[string]bool{"": true, "GET": true, "POST": true, "PUT": true, "PATCH": true, "DELETE": true, "HEAD": true}
 	validStates     = map[string]bool{pushward.StateOngoing: true, pushward.StateEnded: true}
 	validSeverities = map[string]bool{"critical": true, "warning": true, "info": true}
+	// validImageShapes includes "" because image_shape is optional; the server
+	// stores an omitted shape verbatim and the client renders it as square.
+	validImageShapes = map[string]bool{
+		"":                                true,
+		string(pushward.ImageShapePoster): true,
+		string(pushward.ImageShapeSquare): true,
+		string(pushward.ImageShapeCircle): true,
+	}
+	// imageTemplates are the only two templates the server accepts an activity
+	// image on; anything else is a 422.
+	imageTemplates = map[string]bool{pushward.TemplateGeneric: true, pushward.TemplateSteps: true}
 )
 
 type createRequest struct {
@@ -89,6 +102,9 @@ type apiContent struct {
 	TapAction          *testTapAction  `json:"tap_action,omitempty"`
 	URLAction          *testTapAction  `json:"url_action,omitempty"`
 	SecondaryURLAction *testTapAction  `json:"secondary_url_action,omitempty"`
+	ImageURL           string          `json:"image_url,omitempty"`
+	ImageShape         string          `json:"image_shape,omitempty"`
+	ImageThumbhash     string          `json:"image_thumbhash,omitempty"`
 }
 
 type testThreshold struct {
@@ -403,6 +419,42 @@ func UnmarshalBody(t *testing.T, raw json.RawMessage, v any) {
 	}
 }
 
+// Thumbhash is a real ThumbHash (of a 32x48 gradient), so a payload carrying it
+// survives the base64 validation MockPushWardServer applies to image_thumbhash.
+// Pair it with poster.Static to give a handler artwork without a network fetch.
+const Thumbhash = "WfcJhRqPdTeXeIhXiXiYd3BmB/eH"
+
+// LastActivityUpdate returns the content of the last PATCH /activities call,
+// which is the frame that actually reaches the Lock Screen.
+func LastActivityUpdate(t *testing.T, calls []APICall) pushward.Content {
+	t.Helper()
+	for i := len(calls) - 1; i >= 0; i-- {
+		if calls[i].Method == "PATCH" {
+			var update pushward.UpdateRequest
+			UnmarshalBody(t, calls[i].Body, &update)
+			return update.Content
+		}
+	}
+	t.Fatal("no PATCH /activities call recorded")
+	return pushward.Content{}
+}
+
+// AssertImageTrio checks the three activity image fields together: a shape
+// without a URL or a hash renders nothing, so they are only ever meaningful as
+// a set.
+func AssertImageTrio(t *testing.T, c pushward.Content, wantURL, wantHash string, wantShape pushward.ImageShape) {
+	t.Helper()
+	if c.ImageURL != wantURL {
+		t.Errorf("image_url = %q, want %q", c.ImageURL, wantURL)
+	}
+	if c.ImageThumbhash != wantHash {
+		t.Errorf("image_thumbhash = %q, want %q", c.ImageThumbhash, wantHash)
+	}
+	if c.ImageShape != wantShape {
+		t.Errorf("image_shape = %q, want %q", c.ImageShape, wantShape)
+	}
+}
+
 func recordCall(calls *[]APICall, mu *sync.Mutex, r *http.Request) json.RawMessage {
 	body, _ := io.ReadAll(r.Body)
 	mu.Lock()
@@ -512,6 +564,9 @@ func validateContent(c *apiContent) error {
 		return err
 	}
 	if err := validateTapAction(c.SecondaryURLAction, "secondary_url_action"); err != nil {
+		return err
+	}
+	if err := validateImageFields(c); err != nil {
 		return err
 	}
 
@@ -819,6 +874,52 @@ func validateLog(c *apiContent) error {
 		}
 		if !validLogLevels[line.Level] {
 			return fmt.Errorf("lines[%d].level must be one of info, warn, error", i)
+		}
+	}
+	return nil
+}
+
+// validateImageFields mirrors the server's activity-image rules. It is
+// deliberately stricter than validateURL and does not reuse it: an activity
+// image is https-only with a host and no userinfo, while url / secondary_url
+// still accept plain http.
+//
+// The template gate only fires when the template is present. Under merge-patch
+// a tick may omit it, and the mock is stateless - it cannot know the stored
+// template - so a template-less patch carrying image fields passes here and is
+// left to the real server.
+func validateImageFields(c *apiContent) error {
+	hasImage := c.ImageURL != "" || c.ImageShape != "" || c.ImageThumbhash != ""
+	if hasImage && c.Template != "" && !imageTemplates[c.Template] {
+		return fmt.Errorf("image_url, image_shape and image_thumbhash are only valid on the generic and steps templates, got %q", c.Template)
+	}
+	if c.ImageURL != "" {
+		if utf8.RuneCountInString(c.ImageURL) > 2048 {
+			return fmt.Errorf("image_url must be at most 2048 runes")
+		}
+		u, err := url.Parse(c.ImageURL)
+		if err != nil {
+			return fmt.Errorf("image_url is not a valid URL: %w", err)
+		}
+		if u.Scheme != "https" {
+			return fmt.Errorf("image_url must use https")
+		}
+		if u.Host == "" {
+			return fmt.Errorf("image_url must have a host")
+		}
+		if u.User != nil {
+			return fmt.Errorf("image_url must not carry userinfo")
+		}
+	}
+	if !validImageShapes[c.ImageShape] {
+		return fmt.Errorf("image_shape must be one of poster, square, circle")
+	}
+	if c.ImageThumbhash != "" {
+		if len(c.ImageThumbhash) > 64 {
+			return fmt.Errorf("image_thumbhash must be at most 64 characters")
+		}
+		if _, err := base64.StdEncoding.DecodeString(c.ImageThumbhash); err != nil {
+			return fmt.Errorf("image_thumbhash must be padded standard-alphabet base64: %w", err)
 		}
 	}
 	return nil
