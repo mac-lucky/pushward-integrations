@@ -433,6 +433,26 @@ type BatteryDevice struct {
 	Color    string   `json:"color,omitempty"`
 }
 
+// DeviceSortKey is one ordering key the server applies to a battery widget's
+// BatteryDevices before storing them. At most two keys, applied in order, so a
+// second key only breaks a tie the first left. Field is one of
+// DeviceSortFieldLevel/Name, Direction one of DeviceSortAsc/Desc; an empty
+// direction is read as ascending.
+type DeviceSortKey struct {
+	Field     string `json:"field"`
+	Direction string `json:"direction,omitempty"`
+}
+
+// Allowed DeviceSortKey field and direction values (mirror pushward-server's
+// validDeviceSortFields / validDeviceSortDirections).
+const (
+	DeviceSortFieldLevel = "level"
+	DeviceSortFieldName  = "name"
+
+	DeviceSortAsc  = "asc"
+	DeviceSortDesc = "desc"
+)
+
 // SchedulePeriod is one period of a schedule widget timeline - an hourly energy
 // tariff, a delivery window, a shift. 1-48 periods per widget, strictly
 // increasing by Start; each period runs until the next one starts and the
@@ -508,6 +528,11 @@ type WidgetContent struct {
 	// BatteryDevices powers the battery template - 1-8 device rings. Required
 	// when template == battery, ignored otherwise.
 	BatteryDevices []BatteryDevice `json:"devices,omitempty"`
+	// DeviceSort reorders BatteryDevices server-side before they are stored, so
+	// the prefix each widget family renders (2 small, 4 medium, 8 large) holds
+	// the devices that matter. Empty keeps the order as sent. Applies to the
+	// battery template, ignored for the others.
+	DeviceSort []DeviceSortKey `json:"device_sort,omitempty"`
 	// Periods powers the schedule template - 1-48 periods in strictly
 	// increasing start order. Required when template == schedule.
 	Periods []SchedulePeriod `json:"periods,omitempty"`
