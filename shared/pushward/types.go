@@ -1,6 +1,10 @@
 package pushward
 
-import "time"
+import (
+	"time"
+
+	"github.com/mac-lucky/pushward-integrations/shared/text"
+)
 
 // Activity state constants.
 const (
@@ -19,6 +23,44 @@ const (
 	TemplateBoard     = "board"
 	TemplateLog       = "log"
 )
+
+// Steps-template wire bounds, mirroring the server's per-entry validation.
+//
+// The server checks these per ENTRY and rejects the WHOLE payload on the first
+// violation. Since a poller reuses one slug across runs, that rejection takes the
+// step counter, the live window and both end frames with it: the card freezes on
+// whatever frame last succeeded, and keeps freezing until some run happens to
+// produce a shape that validates.
+const (
+	MaxStepLabelLen = 32 // runes per step_labels entry
+	MinStepRows     = 1  // jobs per step_rows entry
+	MaxStepRows     = 10
+)
+
+// ClampStepShape returns rows and labels clamped to the wire bounds above. It is
+// the one place those bounds are applied, so a new emitter cannot ship a shape
+// the server will reject.
+//
+// Call it at the assignment to the payload and nowhere earlier. Callers key their
+// own bookkeeping on the FULL label - name-keyed weight lookups, step realignment
+// between two label lists, the tracked shape - and truncating upstream would make
+// every long-named group miss its own entry. Clamping rows early would corrupt the
+// fan-out count the same way.
+//
+// Two labels that differ only past the bound clamp to the same text. They stay two
+// entries: the clamp is cosmetic, and folding them would under-count total_steps
+// and mis-attribute progress.
+func ClampStepShape(rows []int, labels []string) ([]int, []string) {
+	outRows := make([]int, len(rows))
+	for i, r := range rows {
+		outRows[i] = min(max(r, MinStepRows), MaxStepRows)
+	}
+	outLabels := make([]string, len(labels))
+	for i, l := range labels {
+		outLabels[i] = text.TruncateHard(l, MaxStepLabelLen)
+	}
+	return outRows, outLabels
+}
 
 // ImageShape names the frame the iOS client draws an activity's poster image
 // in. Mirrors the server's image shape enum; an omitted value is stored

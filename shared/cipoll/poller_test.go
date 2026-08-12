@@ -386,6 +386,59 @@ func TestShapeStepColorsDisabled(t *testing.T) {
 	}
 }
 
+// TestPollActive_ClampsShapeToTheServerBounds is the 422 that froze
+// pushward-grafana-plugin's card in production: "e2e test
+// grafana-enterprise@nightly" is 35 runes against a bound of 32, and the server
+// rejects the WHOLE payload - so both end frames failed too and the activity
+// never left its last good frame.
+//
+// It asserts on the payload rather than on the helper, so the shape-growth site
+// is covered end to end. Two things it does NOT buy, so nobody reads more into it:
+// pollActive logs and continues on a failed PATCH, so the mock's own validation
+// cannot fail this test - the explicit assertions below are load-bearing - and the
+// seed and end-frame sites go through the same pushward.ClampStepShape but are not
+// driven here.
+func TestPollActive_ClampsShapeToTheServerBounds(t *testing.T) {
+	const long = "e2e test grafana-enterprise@nightly" // 35 runes, the production label
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		// An 11-way matrix folds into one group, putting step_rows over its 1-10
+		// bound in the same payload the long label overruns.
+		jobs := []ci.Job{job(long, ci.StatusInProgress, "")}
+		for i := 0; i < 11; i++ {
+			jobs = append(jobs, job(fmt.Sprintf("Build (shard-%d)", i), ci.StatusQueued, ""))
+		}
+		return jobs, nil
+	}
+	tracked := liveTrackedRun(nil)
+	tracked.maxTotalSteps = 1
+	tracked.maxStepRows = []int{1}
+	tracked.maxStepLabels = []string{"seed"}
+	tracked.shapeSent = 1 // force the growth branch, which re-sends the ladder
+	p, patches := trackedPoller(t, testOptionsRender(true, false), f, tracked)
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := patches(1)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH call, got %d", len(got))
+	}
+	var sent pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &sent)
+
+	// Exact values, not just "within bounds": the long label keeps its first 32
+	// runes, and the 11-shard group clamps to 10 rather than being merged away.
+	wantLabels := []string{"e2e test grafana-enterprise@nigh", "Build"}
+	if !reflect.DeepEqual(sent.Content.StepLabels, wantLabels) {
+		t.Errorf("step_labels = %q, want %q", sent.Content.StepLabels, wantLabels)
+	}
+	if want := []int{1, 10}; !reflect.DeepEqual(sent.Content.StepRows, want) {
+		t.Errorf("step_rows = %v, want %v (11 shards clamped, not merged)", sent.Content.StepRows, want)
+	}
+}
+
 // --- pollIdle ---
 
 func TestPollIdle_DiscoversAndTracksRun(t *testing.T) {

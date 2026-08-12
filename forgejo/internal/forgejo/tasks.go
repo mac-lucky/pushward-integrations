@@ -17,7 +17,17 @@ const (
 	// maxTaskPages bounds the historic walk. The task list is repo-wide and
 	// newest-first, so a recent run's rows are almost always on page 1; this caps
 	// the damage when they are not.
-	maxTaskPages = 3
+	//
+	// The extra pages only cost anything on the runs that would otherwise come back
+	// short, since the walk stops as soon as every task_id is matched - and such a
+	// run loses its duration-sized pills and its live ETA together.
+	//
+	// A page count is a proxy for the real question, "have we walked past the run
+	// yet?", because the endpoint takes no run filter to ask directly (see the
+	// README's API notes). So a run whose task row was pruned can never satisfy
+	// matched == want and pays the full cap on every discovery; the Warn below is
+	// what makes that visible.
+	maxTaskPages = 6
 )
 
 // listTasks fetches one page of the repo's action tasks.
@@ -117,10 +127,35 @@ func (c *Client) stampHistoricTimings(ctx context.Context, repo string, jobs []J
 		}
 	}
 	if matched < want {
-		slog.Debug("some jobs had no matching task row",
-			"repo", repo, "run", indexInRepo, "matched", matched, "want", want)
+		// Warn, not Debug: these groups keep a floored pill for the whole run, and
+		// a run that matches nothing loses its live ETA outright. At the deployed
+		// log level a Debug line made that indistinguishable from a pipeline that
+		// is simply too short to animate.
+		slog.Warn("some jobs had no matching task row, they stay unmeasured",
+			"repo", repo, "run", indexInRepo, "want", want,
+			"jobs", unmatchedNames(jobs))
 	}
 	return jobs
+}
+
+// unmatchedNames lists the jobs the tasks walk never found a row for.
+//
+// The test is the START stamp, deliberately NOT Duration() == 0. Duration is also
+// zero for a job whose row was found but is still running, and for one that
+// finished inside a second - both routine, and naming them here would make this
+// warn fire on healthy repos full of fast jobs, which is the noise the promotion
+// from Debug was meant to avoid. joinTasks sets StartedAt on every row it
+// matches, so a zero start means no row was found. (A matched-but-unstarted task
+// carries the epoch, which reads as zero; it is genuinely unmeasured, so listing
+// it is right even though it was technically matched.)
+func unmatchedNames(jobs []Job) []string {
+	var out []string
+	for _, j := range jobs {
+		if j.TaskID != 0 && j.StartedAt.IsZero() {
+			out = append(out, j.Name)
+		}
+	}
+	return out
 }
 
 // joinTasks copies timings onto the jobs whose task_id matches a task id, and

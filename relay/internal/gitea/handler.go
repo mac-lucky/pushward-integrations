@@ -508,27 +508,15 @@ func conclusionState(conclusion string) (string, string) {
 	}
 }
 
-// stepRowsLabels returns the clamped step rows and truncated labels for the
-// steps template, or nil slices when the group count exceeds the 4KB payload
-// cap (the template renders without labels in that case). Row counts are
-// clamped to 1-10 to satisfy the server's per-group job-count bound.
+// stepRowsLabels returns the wire-clamped step rows and labels, or nil slices
+// when the group count exceeds the 4KB payload cap (the template renders without
+// labels in that case). That cap is this handler's own APNs budget; the per-entry
+// bounds it delegates are the server's, and are shared with the bridges.
 func stepRowsLabels(info ci.StepInfo) ([]int, []string) {
 	if info.TotalSteps < 1 || info.TotalSteps > maxStepGroups {
 		return nil, nil
 	}
-	rows := make([]int, len(info.StepRows))
-	labels := make([]string, len(info.StepLabels))
-	for i := range info.StepRows {
-		v := info.StepRows[i]
-		if v < 1 {
-			v = 1
-		} else if v > 10 {
-			v = 10
-		}
-		rows[i] = v
-		labels[i] = text.TruncateHard(info.StepLabels[i], 32)
-	}
-	return rows, labels
+	return pushward.ClampStepShape(info.StepRows, info.StepLabels)
 }
 
 func parseRun(group map[string]json.RawMessage) *runRecord {

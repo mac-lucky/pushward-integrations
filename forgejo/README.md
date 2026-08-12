@@ -27,7 +27,9 @@ Forgejo Actions --> pushward-forgejo --> pushward-server --> APNs --> PushWard i
 - **Duration-sized step pills** (`step_weights`, opt-in). Each group's pill is sized by how long
   it ran last time.
 - **A live ETA on the running step** (`live_progress`, on by default). iOS fills the current
-  pill and counts it down between polls, anchored to when the step actually started.
+  pill and counts it down between polls, anchored to when the step actually started. A step the
+  prior run did not measure counts down toward the run's average instead - the same estimate its
+  pill is already drawn at - so a partial tasks join costs accuracy rather than the whole ETA.
 - **Color-coded steps** (`step_colors`, opt-in): tests one hue, build another, deploy another.
 - **Two-phase end.** The result lands as a final ongoing frame so it is visible on the Dynamic
   Island, then the activity is dismissed a few seconds later.
@@ -146,6 +148,10 @@ GitHub's in ways that matter, and they are all covered by tests and by the fixtu
 - Job objects carry no timestamps at all. Per-job timing comes from `/actions/tasks`, joined on
   `task_id`. When that join misses, the step pills fall back to equal width and the ETA is simply
   not shown - nothing breaks.
+- `/actions/tasks` takes only `page`, `limit` and `status` - there is no `run_id`, `workflow_id`
+  or `ref` filter, so a run's own rows can only be found by walking the repo-wide list. That
+  absence is why the join is page-bounded rather than a single targeted request; re-check it
+  before assuming the walk can be removed.
 - `workflow_id` is a filename string, and there is no workflow display name anywhere in the API.
 - Runs held for approval (`blocked`) are not tracked: they may never execute.
 
@@ -156,7 +162,7 @@ GitHub's in ways that matter, and they are all covered by tests and by the fixtu
 | No activity ever appears | Token cannot see the repo, or `owner`/`repos` names a repo that does not exist. Startup logs the instance version and the resolved repo list |
 | Steps show as `1/1` | The bridge could not read the run's jobs; check the token's repo access |
 | Pills are all the same width | `step_weights` is off, or no prior successful run of that workflow and branch exists yet |
-| No ETA countdown | Expected on the first run of a workflow - there is nothing measured to count down from |
+| No ETA countdown | Expected on the first run of a workflow - nothing has been measured yet, not even an average to estimate from. After that, expected on any step that finishes in under a few seconds. Run with `PUSHWARD_LOG_LEVEL=debug` and the `live progress not anchored` line names which |
 | Two cards per build | The relay's `/forgejo` webhook is configured as well; see above |
 | Connection timeouts | The instance is not reachable from the container's network |
 

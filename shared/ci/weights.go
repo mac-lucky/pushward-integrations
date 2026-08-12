@@ -48,20 +48,19 @@ func GroupWeights(jobs []Job) map[string]float64 {
 	return weights
 }
 
-// ProjectWeights builds a per-step weight slice aligned to labels, looking each
-// label up in the name-keyed historical weights. A label with no history (a job
-// added since the prior run) gets the mean of the known weights, a neutral
-// estimate. Each weight tracks its own label regardless of group order.
+// meanWeight is the neutral duration estimate for a group the prior run did not
+// measure: the mean of every weight in byName, floored. ok is false when there is
+// no history to average at all, which lets ProjectWeights tell "no history" apart
+// from "the mean happens to be small" - LiveAnchor does not need the distinction,
+// since an absent history averages to zero and fails its floor check anyway.
 //
-// The result is len(labels), which is NOT the same as total_steps: a caller that
-// has a total but no labels yet (a seed built after the jobs endpoint failed)
-// gets a zero-length slice here, and omitempty drops that from the JSON just as
-// it drops nil. Size the wire field against total_steps and treat this as an
-// estimate to accept only when it already fits - see cipoll's payloadWeights.
-// Returns nil when there is no history at all.
-func ProjectWeights(labels []string, byName map[string]float64) []float64 {
+// Floor entries are deliberately included in the average. GroupWeights seeds every
+// group it saw to the floor, so excluding them would compute the mean of only the
+// slow groups and hand an unmeasured group an estimate biased high; counting them
+// keeps it the mean of the run.
+func meanWeight(byName map[string]float64) (float64, bool) {
 	if len(byName) == 0 {
-		return nil
+		return 0, false
 	}
 	sum := 0.0
 	for _, w := range byName {
@@ -70,6 +69,25 @@ func ProjectWeights(labels []string, byName map[string]float64) []float64 {
 	mean := sum / float64(len(byName))
 	if mean < StepWeightFloor {
 		mean = StepWeightFloor
+	}
+	return mean, true
+}
+
+// ProjectWeights builds a per-step weight slice aligned to labels, looking each
+// label up in the name-keyed historical weights. A label with no history (a job
+// added since the prior run) gets meanWeight, a neutral estimate. Each weight
+// tracks its own label regardless of group order.
+//
+// The result is len(labels), which is NOT the same as total_steps: a caller that
+// has a total but no labels yet (a seed built after the jobs endpoint failed)
+// gets a zero-length slice here, and omitempty drops that from the JSON just as
+// it drops nil. Size the wire field against total_steps and treat this as an
+// estimate to accept only when it already fits - see cipoll's payloadWeights.
+// Returns nil when there is no history at all.
+func ProjectWeights(labels []string, byName map[string]float64) []float64 {
+	mean, ok := meanWeight(byName)
+	if !ok {
+		return nil
 	}
 	out := make([]float64, len(labels))
 	for i, l := range labels {

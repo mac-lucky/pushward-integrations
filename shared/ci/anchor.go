@@ -13,18 +13,23 @@ import (
 const minLiveWindow = 5 * time.Second
 
 // AnchorDecline says which gate stopped LiveAnchor from anchoring. It exists for
-// logs: all four causes produce an identical payload (no window), so without a
+// logs: every cause produces an identical payload (no window), so without a
 // reason the only way to tell them apart is to re-derive the conditions at the
 // call site or to run the bridge against a live forge and guess.
 type AnchorDecline string
 
 const (
-	// DeclineNoStepRunning means no group is in progress - the queued placeholder,
-	// or a run whose jobs have all finished.
+	// DeclineNoStepRunning means no group is in progress at all: a run whose jobs
+	// have all finished, or one that has revealed none yet.
 	DeclineNoStepRunning AnchorDecline = "no step running"
-	// DeclineUnmeasured means no prior run measured this group, so there is no
-	// duration to animate toward. The usual cause for a workflow that rarely runs:
-	// BaselineJobs found no finished run of it on this branch.
+	// DeclineQueued means the run is sitting on QueuedStepName. It has a step index,
+	// so it is not DeclineNoStepRunning, but nothing is executing under the
+	// placeholder and no forge measured it - see QueuedStepName.
+	DeclineQueued AnchorDecline = "queued, nothing running under the placeholder"
+	// DeclineUnmeasured means the prior run measured NOTHING anywhere, so there is
+	// not even a mean to estimate from. A group unmeasured on its own falls back to
+	// meanWeight and does not reach here. The usual cause for a workflow that rarely
+	// runs: BaselineJobs found no finished run of it on this branch.
 	DeclineUnmeasured AnchorDecline = "no measured duration for this step group"
 	// DeclineNoStart means the forge has not stamped the running group's start.
 	DeclineNoStart AnchorDecline = "forge has not stamped a start"
@@ -38,11 +43,15 @@ const (
 // a poll landing mid-step picks the bar up where it already is instead of
 // restarting it.
 //
-// ok is false when there is nothing trustworthy to animate toward: no step
-// running, no start stamped, no measurement for the group, or an estimate
-// already spent; why names which one. iOS renders the static bar in exactly those
-// cases anyway, so a window sent regardless would buy nothing and cost a
-// high-priority push.
+// ok is false when there is nothing to animate toward, and why names which gate
+// stopped it. iOS renders the static bar in exactly those cases anyway, so a
+// window sent regardless would buy nothing and cost a high-priority push.
+//
+// A group the prior run did not measure is NOT one of those cases: it animates
+// toward meanWeight, the same neutral estimate ProjectWeights already draws its
+// pill at. The two must agree - refusing only the ETA put a counter that would not
+// guess above a pill already sized by that guess - and on a forge whose durations
+// arrive incomplete, most groups take this path.
 //
 // Note what this means for a short group: an anchor is only worth sending while
 // more than minLiveWindow of the estimate is still ahead, so a group that
@@ -58,12 +67,21 @@ func LiveAnchor(info StepInfo, byName map[string]float64, now time.Time, maxWind
 	if info.CurrentStep < 1 {
 		return 0, 0, false, DeclineNoStepRunning
 	}
-	// GroupWeights seeds every group it saw to StepWeightFloor, measured or not,
-	// so a floor value carries no duration information: it means "draw a thin
-	// pill", not "this took a second". Anything at or below it is unmeasured.
+	// GroupWeights seeds every group it saw to StepWeightFloor, measured or not, so
+	// a floor value carries no duration information: it means "draw a thin pill",
+	// not "this took a second".
 	secs, known := byName[info.CurrentStepName]
 	if !known || secs <= StepWeightFloor {
-		return 0, 0, false, DeclineUnmeasured
+		if info.CurrentStepName == QueuedStepName {
+			return 0, 0, false, DeclineQueued
+		}
+		// A mean at or below the floor means every group came back seeded, or there
+		// is no history at all - which averages to zero and fails the same check.
+		mean, _ := meanWeight(byName)
+		if mean <= StepWeightFloor {
+			return 0, 0, false, DeclineUnmeasured
+		}
+		secs = mean
 	}
 	// A corrupt prior-run timestamp can yield a duration of years. Left alone it
 	// would put end_date past the server's 5-year ceiling, and since the client

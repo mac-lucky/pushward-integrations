@@ -599,6 +599,8 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		initialStepColors := shape.StepColors
 		initialStepWeights := p.payloadWeights(initialTotalSteps, initialStepLabels, weightsByName)
 
+		seedRows, seedLabels := pushward.ClampStepShape(initialStepRows, initialStepLabels)
+
 		p.mu.Lock()
 		if t, ok := p.tracked[repo]; ok {
 			t.maxTotalSteps = initialTotalSteps
@@ -626,8 +628,8 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 				AccentColor: pushward.ColorGreen,
 				CurrentStep: pushward.IntPtr(0),
 				TotalSteps:  pushward.IntPtr(initialTotalSteps),
-				StepRows:    initialStepRows,
-				StepLabels:  initialStepLabels,
+				StepRows:    seedRows,
+				StepLabels:  seedLabels,
 				StepColors:  initialStepColors,
 				StepWeights: initialStepWeights,
 				// The slug is per-repo, so this content merge-patches over whatever
@@ -927,6 +929,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			// The run's own outcome is authoritative; the ladder's AnyFailed only
 			// covers a run that reports nothing usable of its own.
 			state, color := p.forge.Outcome(*run, info.AnyFailed)
+			endRows, endLabels := pushward.ClampStepShape(info.StepRows, info.StepLabels)
 			p.log.Info("workflow completed",
 				"repo", repo, "run_id", tRunID, "slug", tSlug,
 				"status", run.RawStatus, "state", state)
@@ -939,8 +942,8 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				AccentColor: color,
 				CurrentStep: pushward.IntPtr(info.TotalSteps),
 				TotalSteps:  pushward.IntPtr(info.TotalSteps),
-				StepRows:    info.StepRows,
-				StepLabels:  info.StepLabels,
+				StepRows:    endRows,
+				StepLabels:  endLabels,
 				StepColors:  info.StepColors,
 				StepWeights: stepWeights,
 				// Stop the animation on the result frames. Content updates are
@@ -1004,8 +1007,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			TotalSteps:  pushward.IntPtr(info.TotalSteps),
 		}
 		if shapeChanged {
-			contentPatch.StepRows = info.StepRows
-			contentPatch.StepLabels = info.StepLabels
+			contentPatch.StepRows, contentPatch.StepLabels = pushward.ClampStepShape(info.StepRows, info.StepLabels)
 			contentPatch.StepColors = info.StepColors
 			contentPatch.StepWeights = stepWeights
 		}

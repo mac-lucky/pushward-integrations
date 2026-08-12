@@ -47,10 +47,12 @@ func TestLiveAnchor(t *testing.T) {
 			wantWhy: DeclineNoStepRunning,
 		},
 		{
+			// Without the explicit guard the mean fallback would happily count the
+			// placeholder down, and the log would blame the wrong gate.
 			name:    "queued placeholder never matches a measured group",
-			info:    StepInfo{CurrentStep: 2, CurrentStepName: "Queued", CurrentStepStartedAt: startedAt},
+			info:    StepInfo{CurrentStep: 2, CurrentStepName: QueuedStepName, CurrentStepStartedAt: startedAt},
 			weights: weights,
-			wantWhy: DeclineUnmeasured,
+			wantWhy: DeclineQueued,
 		},
 		{
 			// The single-job smoke-test case: a workflow that has not finished on
@@ -68,13 +70,55 @@ func TestLiveAnchor(t *testing.T) {
 			wantWhy: DeclineEstimateSpent,
 		},
 		{
-			// GroupWeights seeds unmeasurable groups to the floor, so a floor
-			// value is a pill width, not a duration. Anchoring on it would
-			// fabricate a countdown out of a number nothing measured.
+			// GroupWeights seeds unmeasurable groups to the floor, so a floor value
+			// is a pill width, not a duration - and here it is the ONLY value, so
+			// the run measured nothing and there is no mean to fall back to either.
 			name:    "floor weight is not a measurement",
 			info:    StepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: startedAt},
 			weights: map[string]float64{"Build": StepWeightFloor},
 			wantWhy: DeclineUnmeasured,
+		},
+		{
+			// The Forgejo case: its durations come from a lossy tasks join, so most
+			// groups come back at the floor while a couple are measured. The pill is
+			// already drawn at the mean; the ETA now agrees with it instead of
+			// leaving the card static for the whole run.
+			name: "unmeasured group animates toward the mean of the run",
+			info: StepInfo{
+				CurrentStep: 2, CurrentStepName: "build",
+				CurrentStepStartedAt: now.Add(-5 * time.Second),
+			},
+			weights: map[string]float64{
+				"build": StepWeightFloor, "unit-tests": StepWeightFloor,
+				"nginx-behaviour": 77, "unit-tests-1": 55,
+			},
+			wantOK: true,
+			start:  now.Add(-5 * time.Second).Unix(),
+			// (1 + 1 + 77 + 55) / 4 = 33.5, rounded to 34.
+			end: now.Add(-5*time.Second).Unix() + 34,
+		},
+		{
+			// A group the prior run never revealed at all - a job added since - gets
+			// the same neutral estimate rather than a static bar.
+			name:    "group absent from the prior run falls back too",
+			info:    StepInfo{CurrentStep: 2, CurrentStepName: "Deploy", CurrentStepStartedAt: startedAt},
+			weights: map[string]float64{"Build": 300, "Test": 100},
+			wantOK:  true,
+			start:   startedAt.Unix(),
+			end:     startedAt.Unix() + 200,
+		},
+		{
+			// The fallback is an estimate, not an excuse to skip the ceiling. The
+			// multi-entry map matters: it makes the mean a value no direct lookup
+			// could have produced, so this cannot pass on the measured path.
+			name: "mean fallback is clamped to the tracking ceiling",
+			info: StepInfo{CurrentStep: 2, CurrentStepName: "Deploy", CurrentStepStartedAt: startedAt},
+			weights: map[string]float64{
+				"Build": 200 * 365 * 24 * 3600, "Test": 100,
+			},
+			wantOK: true,
+			start:  startedAt.Unix(),
+			end:    startedAt.Unix() + int64(testMaxWindow.Seconds()),
 		},
 		{
 			// A duration long enough to push end_date past the server's 5-year

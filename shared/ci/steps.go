@@ -84,6 +84,13 @@ func JobFailed(conclusion string) bool {
 	return false
 }
 
+// QueuedStepName is the placeholder ComputeSteps reports when a run has revealed
+// jobs but none of them is running yet. It is not a job group: no forge measured
+// it and nothing is executing under it, so LiveAnchor refuses to animate it even
+// when the rest of the run is measured. The step labels themselves are clamped to
+// the server's bounds at the wire, by pushward.ClampStepShape.
+const QueuedStepName = "Queued"
+
 // ComputeSteps groups jobs by base name (folding matrix strategies into one
 // group) and computes step progress.
 func ComputeSteps(jobs []Job) StepInfo {
@@ -152,7 +159,7 @@ func ComputeSteps(jobs []Job) StepInfo {
 	}
 
 	if currentStepName == "" && !allCompleted {
-		currentStepName = "Queued"
+		currentStepName = QueuedStepName
 		for i, s := range steps {
 			if s.completed < s.count {
 				currentStep = i + 1

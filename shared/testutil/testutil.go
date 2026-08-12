@@ -632,8 +632,8 @@ func validateSteps(c *apiContent) error {
 			return fmt.Errorf("step_rows length must equal total_steps")
 		}
 		for i, v := range c.StepRows {
-			if v < 1 || v > 10 {
-				return fmt.Errorf("step_rows[%d] must be 1-10", i)
+			if v < pushward.MinStepRows || v > pushward.MaxStepRows {
+				return fmt.Errorf("step_rows[%d] must be %d-%d", i, pushward.MinStepRows, pushward.MaxStepRows)
 			}
 		}
 	}
@@ -642,8 +642,8 @@ func validateSteps(c *apiContent) error {
 			return fmt.Errorf("step_labels length must equal total_steps")
 		}
 		for i, label := range c.StepLabels {
-			if utf8.RuneCountInString(label) > 32 {
-				return fmt.Errorf("step_labels[%d] must be at most 32 runes", i)
+			if utf8.RuneCountInString(label) > pushward.MaxStepLabelLen {
+				return fmt.Errorf("step_labels[%d] must be at most %d runes", i, pushward.MaxStepLabelLen)
 			}
 		}
 	}

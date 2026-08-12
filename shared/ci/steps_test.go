@@ -73,7 +73,7 @@ func TestComputeSteps_AllQueued(t *testing.T) {
 	if info.TotalSteps != 3 {
 		t.Errorf("expected TotalSteps=3, got %d", info.TotalSteps)
 	}
-	if info.CurrentStepName != "Queued" {
+	if info.CurrentStepName != QueuedStepName {
 		t.Errorf("expected CurrentStepName=Queued, got %s", info.CurrentStepName)
 	}
 	if info.CurrentStep != 1 {
@@ -103,7 +103,7 @@ func TestComputeSteps_UnknownStatusIsPending(t *testing.T) {
 		if info.AllCompleted {
 			t.Errorf("status %q: expected AllCompleted=false", status)
 		}
-		if info.CurrentStepName != "Queued" || info.CurrentStep != 2 {
+		if info.CurrentStepName != QueuedStepName || info.CurrentStep != 2 {
 			t.Errorf("status %q: expected the queued fallback on step 2, got %q (step %d)",
 				status, info.CurrentStepName, info.CurrentStep)
 		}

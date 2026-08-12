@@ -206,11 +206,7 @@ func TestStampHistoricTimingsStopsWhenAllMatched(t *testing.T) {
 // TestStampHistoricTimingsPageCap bounds the walk when the rows never turn up.
 func TestStampHistoricTimingsPageCap(t *testing.T) {
 	var calls atomic.Int32
-	rows := make([]string, taskPageSize)
-	for i := range rows {
-		rows[i] = fmt.Sprintf(`{"id":%d,"name":"other","status":"success"}`, 10000+i)
-	}
-	full := `{"total_count":9999,"workflow_runs":[` + strings.Join(rows, ",") + `]}`
+	full := noisePage()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/repos/acme/app/actions/tasks", func(w http.ResponseWriter, _ *http.Request) {
@@ -227,6 +223,38 @@ func TestStampHistoricTimingsPageCap(t *testing.T) {
 	}
 	if !jobs[0].StartedAt.IsZero() {
 		t.Error("an unmatched job must stay unstamped")
+	}
+}
+
+// TestStampHistoricTimingsReachesBuriedRows covers the run a page-1-only walk
+// gives up on - a busy repo, or a workflow whose prior run other workflows have
+// buried. Such a run comes back fully unmeasured, costing it both duration-sized
+// pills and, since LiveAnchor then has nothing to estimate from, its live ETA.
+func TestStampHistoricTimingsReachesBuriedRows(t *testing.T) {
+	noise := noisePage()
+
+	var calls atomic.Int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/repos/acme/app/actions/tasks", func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		// The row we want sits well past page 1, but inside the cap.
+		if r.URL.Query().Get("page") == "4" {
+			_, _ = w.Write(fixture(t, "tasks_page.json"))
+			return
+		}
+		_, _ = w.Write([]byte(noise))
+	})
+	c := testClient(t, mux)
+
+	jobs := []Job{{ID: 1, TaskID: 84, Name: "checks", Status: ci.StatusCompleted, RawStatus: StatusSuccess}}
+	jobs = c.stampHistoricTimings(context.Background(), "acme/app", jobs, 33)
+
+	if got := jobs[0].Duration(); got != 4*time.Second {
+		t.Fatalf("checks duration = %v, want 4s from the page-4 row", got)
+	}
+	// It must also stop as soon as it has what it came for, not walk to the cap.
+	if n := calls.Load(); n != 4 {
+		t.Errorf("made %d page requests, want 4", n)
 	}
 }
 
@@ -269,6 +297,17 @@ func TestJoinTasksHandlesEmptyInputs(t *testing.T) {
 	if n := joinTasks([]Job{{TaskID: 0}}, []wireTask{{ID: 0}}, 0); n != 1 {
 		t.Logf("task id 0 joined; harmless, but the caller does not count it as wanted")
 	}
+}
+
+// noisePage is a full page of task rows matching none of the ids under test: it
+// is what pushes a run's own rows onto a later page. Full-length on purpose, so
+// the walk does not stop early on a short page.
+func noisePage() string {
+	rows := make([]string, taskPageSize)
+	for i := range rows {
+		rows[i] = fmt.Sprintf(`{"id":%d,"name":"other","status":"success"}`, 10000+i)
+	}
+	return `{"total_count":9999,"workflow_runs":[` + strings.Join(rows, ",") + `]}`
 }
 
 // newStubServer returns a server URL that counts every request.

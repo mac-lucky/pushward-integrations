@@ -108,6 +108,54 @@ func TestGroupWeights_ClockSkew(t *testing.T) {
 	}
 }
 
+func TestMeanWeight(t *testing.T) {
+	tests := []struct {
+		name   string
+		byName map[string]float64
+		want   float64
+		wantOK bool
+	}{
+		{
+			name:   "mean of the run",
+			byName: map[string]float64{"Lint": 5, "Build": 300, "Deploy": 40},
+			want:   115,
+			wantOK: true,
+		},
+		{
+			// Floored groups count toward the average on purpose; see the doc comment.
+			name:   "floored groups are part of the average",
+			byName: map[string]float64{"build": StepWeightFloor, "test": StepWeightFloor, "deploy": 100},
+			want:   34,
+			wantOK: true,
+		},
+		{
+			// The value still has to be a legal pill width.
+			name:   "sub-floor mean is clamped up",
+			byName: map[string]float64{"Lint": 0.5},
+			want:   StepWeightFloor,
+			wantOK: true,
+		},
+		{
+			// Distinguishable from "the mean is small": callers decline outright. An
+			// empty map takes the same branch - len does not tell it from nil.
+			name:   "no history at all",
+			byName: nil,
+			wantOK: false,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := meanWeight(tc.byName)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if ok && got != tc.want {
+				t.Errorf("meanWeight = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestProjectWeights(t *testing.T) {
 	byName := map[string]float64{"Lint": 5, "Build": 300, "Deploy": 40}
 
