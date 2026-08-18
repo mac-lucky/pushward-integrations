@@ -3,8 +3,10 @@ package testutil_test
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
@@ -314,6 +316,201 @@ func TestValidateLog(t *testing.T) {
 	}
 }
 
+func TestValidateMedia(t *testing.T) {
+	now := strconv.FormatInt(time.Now().Unix(), 10)
+	ahead := func(d time.Duration) string { return strconv.FormatInt(time.Now().Add(d).Unix(), 10) }
+	// media wraps the extra fields into a full media-template content object.
+	media := func(fields string) string {
+		body := `{"state":"ongoing","content":{"template":"media","progress":0.2`
+		if fields != "" {
+			body += "," + fields
+		}
+		return body + `}}`
+	}
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{
+			name: "full contract",
+			body: media(`"media_title":"Snooze","subtitle":"SZA","playback_state":"playing","position_seconds":47.5,"duration_seconds":214,"position_at":` + now + `,"volume":0.35,"favorite":true,` +
+				`"image_url":"https://example.com/art.jpg","image_shape":"square","image_thumbhash":"` + stdHash + `",` +
+				`"controls":{"previous":{"url":"https://ha.example/api/webhook/pw-prev"},"play_pause":{"url":"https://ha.example/api/webhook/pw-toggle","method":"POST"},` +
+				`"play":{"url":"https://ha.example/api/webhook/pw-play"},"pause":{"url":"https://ha.example/api/webhook/pw-pause"},"next":{"url":"https://ha.example/api/webhook/pw-next"},` +
+				`"stop":{"url":"https://ha.example/api/webhook/pw-stop"},"favorite":{"url":"https://ha.example/api/webhook/pw-fav"},` +
+				`"volume_down":{"url":"https://ha.example/api/webhook/pw-vdown"},"volume_up":{"url":"https://ha.example/api/webhook/pw-vup"},` +
+				`"extra":[{"url":"https://ha.example/api/webhook/pw-shuffle","icon":"shuffle","title":"Shuffle"},{"url":"https://ha.example/api/webhook/pw-repeat","icon":"repeat"},{"url":"spotify://queue","icon":"list.bullet"}]}`),
+			wantStatus: 200,
+		},
+		{
+			name:       "template alone",
+			body:       media(""),
+			wantStatus: 200,
+		},
+		{
+			name:       "indeterminate duration",
+			body:       media(`"media_title":"Radio 357","playback_state":"playing","position_seconds":120`),
+			wantStatus: 200,
+		},
+		{
+			name:       "custom-scheme control",
+			body:       media(`"controls":{"play_pause":{"url":"spotify://toggle"}}`),
+			wantStatus: 200,
+		},
+		{
+			name:       "control with headers and body",
+			body:       media(`"controls":{"next":{"url":"https://api.example/next","method":"PUT","headers":{"Authorization":"Bearer x"},"body":"{}"}}`),
+			wantStatus: 200,
+		},
+		{
+			name:       "media_title at the bound",
+			body:       media(`"media_title":"` + strings.Repeat("t", 128) + `"`),
+			wantStatus: 200,
+		},
+		{
+			name:       "position_at within the skew allowance",
+			body:       media(`"position_seconds":1,"position_at":` + ahead(4*time.Minute)),
+			wantStatus: 200,
+		},
+		{
+			name:       "duration at the bound",
+			body:       media(`"duration_seconds":604800`),
+			wantStatus: 200,
+		},
+		{
+			name:       "volume at both bounds",
+			body:       media(`"volume":0`) + "\n" + media(`"volume":1`),
+			wantStatus: 200,
+		},
+		{
+			// Under merge-patch a position tick may omit the template; the mock
+			// is stateless and leaves the gate to the real server.
+			name:       "template-less position tick passes the gate",
+			body:       `{"content":{"progress":0.3,"position_seconds":63,"position_at":` + now + `}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "template-less tick still bounds-checked",
+			body:       `{"content":{"progress":0.3,"position_seconds":-1}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "media_title over the bound",
+			body:       media(`"media_title":"` + strings.Repeat("t", 129) + `"`),
+			wantStatus: 400,
+		},
+		{
+			name:       "unknown playback_state",
+			body:       media(`"playback_state":"seeking"`),
+			wantStatus: 400,
+		},
+		{
+			name:       "negative position_seconds",
+			body:       media(`"position_seconds":-0.5`),
+			wantStatus: 400,
+		},
+		{
+			name:       "zero duration_seconds",
+			body:       media(`"duration_seconds":0`),
+			wantStatus: 400,
+		},
+		{
+			name:       "duration_seconds over 7 days",
+			body:       media(`"duration_seconds":604801`),
+			wantStatus: 400,
+		},
+		{
+			name:       "volume over 1",
+			body:       media(`"volume":1.01`),
+			wantStatus: 400,
+		},
+		{
+			name:       "negative volume",
+			body:       media(`"volume":-0.1`),
+			wantStatus: 400,
+		},
+		{
+			name:       "zero position_at",
+			body:       media(`"position_seconds":1,"position_at":0`),
+			wantStatus: 400,
+		},
+		{
+			name:       "position_at too far in the future",
+			body:       media(`"position_seconds":1,"position_at":` + ahead(10*time.Minute)),
+			wantStatus: 400,
+		},
+		{
+			name:       "control without url",
+			body:       media(`"controls":{"play_pause":{"icon":"playpause"}}`),
+			wantStatus: 400,
+		},
+		{
+			name:       "http control asking for the foreground",
+			body:       media(`"controls":{"next":{"url":"https://ha.example/api/webhook/pw-next","foreground":true}}`),
+			wantStatus: 400,
+		},
+		{
+			name:       "control with a blocked scheme",
+			body:       media(`"controls":{"stop":{"url":"javascript:alert(1)"}}`),
+			wantStatus: 400,
+		},
+		{
+			name:       "control with a bad method",
+			body:       media(`"controls":{"previous":{"url":"https://ha.example/prev","method":"FETCH"}}`),
+			wantStatus: 400,
+		},
+		{
+			name:       "four extra controls",
+			body:       media(`"controls":{"extra":[{"url":"https://x.example/1","icon":"a"},{"url":"https://x.example/2","icon":"b"},{"url":"https://x.example/3","icon":"c"},{"url":"https://x.example/4","icon":"d"}]}`),
+			wantStatus: 400,
+		},
+		{
+			name:       "extra control without icon",
+			body:       media(`"controls":{"extra":[{"url":"https://x.example/1","title":"Shuffle"}]}`),
+			wantStatus: 400,
+		},
+		{
+			name:       "extra control asking for the foreground",
+			body:       media(`"controls":{"extra":[{"url":"https://x.example/1","icon":"shuffle","foreground":true}]}`),
+			wantStatus: 400,
+		},
+		{
+			name:       "media_title on generic rejected",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"media_title":"Snooze"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "controls on steps rejected",
+			body:       `{"state":"ongoing","content":{"template":"steps","progress":0.5,"current_step":1,"total_steps":2,"controls":{"stop":{"url":"https://x.example/stop"}}}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "position_seconds on countdown rejected",
+			body:       `{"state":"ongoing","content":{"template":"countdown","progress":0.5,"end_date":1800000000,"position_seconds":10}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "favorite on board rejected",
+			body:       `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1"}],"favorite":true}}`,
+			wantStatus: 400,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "media-app", "Media App")
+			// A case may carry several bodies separated by a newline; each
+			// must answer the same status.
+			for _, body := range strings.Split(tt.body, "\n") {
+				if got := patchActivity(t, srv.URL, "media-app", body); got != tt.wantStatus {
+					t.Errorf("got status %d, want %d for %s", got, tt.wantStatus, body)
+				}
+			}
+		})
+	}
+}
+
 // TestValidateURLAnyTemplate asserts the relaxed rule: url / tap-action routing
 // is accepted on every template now, not just steps/alert (the server moved tap
 // routing into the shared content base).
@@ -387,6 +584,11 @@ func TestValidateImageFields(t *testing.T) {
 		{
 			name:       "full trio on steps",
 			body:       `{"state":"ongoing","content":{"template":"steps","progress":0.5,"current_step":1,"total_steps":2,"image_url":"https://image.tmdb.org/t/p/w500/a.jpg","image_shape":"square","image_thumbhash":"` + paddedHash + `"}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "full trio on media",
+			body:       `{"state":"ongoing","content":{"template":"media","progress":0.5,"media_title":"Snooze","image_url":"https://example.com/art.jpg","image_shape":"square","image_thumbhash":"` + stdHash + `"}}`,
 			wantStatus: 200,
 		},
 		{

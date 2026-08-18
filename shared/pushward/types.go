@@ -22,6 +22,7 @@ const (
 	TemplateTimeline  = "timeline"
 	TemplateBoard     = "board"
 	TemplateLog       = "log"
+	TemplateMedia     = "media"
 )
 
 // Steps-template wire bounds, mirroring the server's per-entry validation.
@@ -87,6 +88,19 @@ const (
 	LogInfo  = "info"
 	LogWarn  = "warn"
 	LogError = "error"
+)
+
+// PlaybackState is the transport state of a media template. Mirrors the
+// server's playback state enum; an omitted value defaults to
+// PlaybackPaused server-side. Only PlaybackPlaying ticks the position on
+// the device; the other three freeze the bar at PositionSeconds.
+type PlaybackState string
+
+const (
+	PlaybackPlaying   PlaybackState = "playing"
+	PlaybackPaused    PlaybackState = "paused"
+	PlaybackStopped   PlaybackState = "stopped"
+	PlaybackBuffering PlaybackState = "buffering"
 )
 
 // Notification interruption level constants.
@@ -176,6 +190,29 @@ type LogLine struct {
 	Level string `json:"level,omitempty"`
 }
 
+// MediaControls are the transport buttons of a media template. Every slot is
+// optional and reuses TapAction. iOS picks Play or Pause by PlaybackState and
+// falls back to PlayPause (a toggle endpoint) when the split pair is absent;
+// Favorite is the heart, VolumeDown/VolumeUp bracket the volume bar. Extra
+// holds up to 3 more buttons and each of them needs an Icon.
+//
+// An http(s) slot is always a silent webhook: the server fills an empty Method
+// with POST at validation (stored and returned) and answers 422 to
+// Foreground=true. A custom scheme opens that app instead. The named slots
+// draw a fixed glyph, so Title and Icon matter only on Extra.
+type MediaControls struct {
+	Previous   *TapAction  `json:"previous,omitempty"`
+	PlayPause  *TapAction  `json:"play_pause,omitempty"`
+	Play       *TapAction  `json:"play,omitempty"`
+	Pause      *TapAction  `json:"pause,omitempty"`
+	Next       *TapAction  `json:"next,omitempty"`
+	Stop       *TapAction  `json:"stop,omitempty"`
+	Favorite   *TapAction  `json:"favorite,omitempty"`
+	VolumeDown *TapAction  `json:"volume_down,omitempty"`
+	VolumeUp   *TapAction  `json:"volume_up,omitempty"`
+	Extra      []TapAction `json:"extra,omitempty"`
+}
+
 // Content is the superset of all content fields used across integrations.
 // Unused fields use omitempty and won't appear in JSON.
 type Content struct {
@@ -219,18 +256,18 @@ type Content struct {
 	// step, across start_date..end_date.
 	LiveProgress *bool `json:"live_progress,omitempty"`
 
-	// Activity image (generic and steps templates only - the server answers 422
-	// for any other template). ImageURL must be https with a host and no
-	// userinfo, at most 2048 runes; the server never fetches it, the device
-	// does, and the device additionally refuses private/LAN hosts, so a LAN URL
-	// is accepted by the API but never renders. ImageThumbhash is a padded
-	// standard-alphabet base64 thumbhash (at most 64 chars) rendered as a
-	// blurred placeholder, and is the only tier that shows when the URL is
+	// Activity image (generic, steps and media templates only - the server
+	// answers 422 for any other template). ImageURL must be https with a host
+	// and no userinfo, at most 2048 runes; the server never fetches it, the
+	// device does, and the device additionally refuses private/LAN hosts, so a
+	// LAN URL is accepted by the API but never renders. ImageThumbhash is a
+	// padded standard-alphabet base64 thumbhash (at most 64 chars) rendered as
+	// a blurred placeholder, and is the only tier that shows when the URL is
 	// unreachable - for a LAN media server it IS the image. ImageShape defaults
 	// to ImageShapeSquare when omitted. Switching to a template that has no
 	// image slot clears all three server-side, so a merge-patch never has to
-	// null them; a generic <-> steps switch keeps them. Sending one of the
-	// three on a template without a slot is a 422 either way.
+	// null them; a switch between generic, steps and media keeps them. Sending
+	// one of the three on a template without a slot is a 422 either way.
 	ImageURL       string     `json:"image_url,omitempty"`
 	ImageShape     ImageShape `json:"image_shape,omitempty"`
 	ImageThumbhash string     `json:"image_thumbhash,omitempty"`
@@ -275,6 +312,28 @@ type Content struct {
 	// update. The server-accumulated log_backlog is read-only and omitted here
 	// (this client never reads it).
 	Lines []LogLine `json:"lines,omitempty"`
+
+	// Media template (all optional). MediaTitle is the big line, at most 128
+	// runes - the activity name is the source device ("Living Room") and
+	// Subtitle carries the artist / show / channel. PlaybackState defaults to
+	// PlaybackPaused. PositionSeconds (>= 0) is the playhead sampled at
+	// PositionAt (unix seconds; the server stamps its own receipt time when
+	// omitted and rejects a value more than 300s in the future), and the
+	// device ticks the bar from there while playing. DurationSeconds (> 0, at
+	// most 604800) omitted means indeterminate: no bar, elapsed still ticks.
+	// Volume is 0..1 and draws a thin bar between the volume buttons; Favorite
+	// fills the heart. Any of the eight on another template is a 422, and a
+	// switch away from media clears them server-side. url_action /
+	// secondary_url_action are accepted but not rendered on media; tap_action
+	// keeps working.
+	MediaTitle      string         `json:"media_title,omitempty"`
+	PlaybackState   PlaybackState  `json:"playback_state,omitempty"`
+	PositionSeconds *float64       `json:"position_seconds,omitempty"`
+	DurationSeconds *float64       `json:"duration_seconds,omitempty"`
+	PositionAt      *int64         `json:"position_at,omitempty"`
+	Volume          *float64       `json:"volume,omitempty"`
+	Favorite        *bool          `json:"favorite,omitempty"`
+	Controls        *MediaControls `json:"controls,omitempty"`
 }
 
 // CreateActivityRequest is the body for POST /activities.
@@ -354,11 +413,11 @@ type ContentPatch struct {
 
 	LiveProgress *bool `json:"live_progress,omitempty"`
 
-	// Activity image (generic and steps templates only). Same rules as the
-	// matching Content fields; pointers here so an unset slot is omitted and
-	// preserved server-side rather than deleted. Switching to a template with
-	// no image slot clears all three server-side on its own; generic <-> steps
-	// keeps them.
+	// Activity image (generic, steps and media templates only). Same rules as
+	// the matching Content fields; pointers here so an unset slot is omitted
+	// and preserved server-side rather than deleted. Switching to a template
+	// with no image slot clears all three server-side on its own; a switch
+	// between generic, steps and media keeps them.
 	ImageURL       *string     `json:"image_url,omitempty"`
 	ImageShape     *ImageShape `json:"image_shape,omitempty"`
 	ImageThumbhash *string     `json:"image_thumbhash,omitempty"`
@@ -397,6 +456,24 @@ type ContentPatch struct {
 	// Log template: 1-20 lines, newest-first. Sending the slice replaces the
 	// live line snapshot; omitting it preserves the stored lines.
 	Lines []LogLine `json:"lines,omitempty"`
+
+	// Media template. Same rules as the matching Content fields. A patch that
+	// re-sends PositionSeconds without PositionAt makes the server drop the
+	// stored PositionAt and stamp its receipt time, so a position tick never
+	// inherits a stale sample time; send both to keep your own clock. Controls
+	// deep-merges per RFC 7396 (a slot you send overwrites that slot, omitted
+	// slots are preserved; clearing one slot needs an explicit null, which nil
+	// pointers cannot express here), while Controls.Extra replaces wholesale.
+	// Ticks that carry only position_seconds / position_at go out as
+	// low-priority coalescable pushes; every other media field is structural.
+	MediaTitle      *string        `json:"media_title,omitempty"`
+	PlaybackState   *PlaybackState `json:"playback_state,omitempty"`
+	PositionSeconds *float64       `json:"position_seconds,omitempty"`
+	DurationSeconds *float64       `json:"duration_seconds,omitempty"`
+	PositionAt      *int64         `json:"position_at,omitempty"`
+	Volume          *float64       `json:"volume,omitempty"`
+	Favorite        *bool          `json:"favorite,omitempty"`
+	Controls        *MediaControls `json:"controls,omitempty"`
 }
 
 // PatchRequest is the typed body for PATCH /activities/{slug}. State is a

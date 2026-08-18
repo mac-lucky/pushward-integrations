@@ -28,7 +28,7 @@ type APICall struct {
 var (
 	slugPattern    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 	hexColor       = regexp.MustCompile(`^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$`)
-	validTemplates = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true, "timeline": true, "board": true, "log": true}
+	validTemplates = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true, "timeline": true, "board": true, "log": true, "media": true}
 	// validTrends / validLogLevels include "" because trend and level are
 	// optional - an omitted value is valid; only a non-empty unknown value fails.
 	validTrends     = map[string]bool{"": true, pushward.TrendUp: true, pushward.TrendDown: true, pushward.TrendFlat: true}
@@ -44,9 +44,27 @@ var (
 		string(pushward.ImageShapeSquare): true,
 		string(pushward.ImageShapeCircle): true,
 	}
-	// imageTemplates are the only two templates the server accepts an activity
-	// image on; anything else is a 422.
-	imageTemplates = map[string]bool{pushward.TemplateGeneric: true, pushward.TemplateSteps: true}
+	// imageTemplates are the only three templates the server accepts an
+	// activity image on; anything else is a 422.
+	imageTemplates = map[string]bool{pushward.TemplateGeneric: true, pushward.TemplateSteps: true, pushward.TemplateMedia: true}
+	// validPlaybackStates includes "" because playback_state is optional; the
+	// server defaults an omitted value to paused.
+	validPlaybackStates = map[string]bool{
+		"":                                 true,
+		string(pushward.PlaybackPlaying):   true,
+		string(pushward.PlaybackPaused):    true,
+		string(pushward.PlaybackStopped):   true,
+		string(pushward.PlaybackBuffering): true,
+	}
+)
+
+// Media template bounds, mirroring the server's validation. The clock-skew
+// allowance is the same one the server applies to fired_at and history points.
+const (
+	maxMediaTitleRunes      = 128
+	maxMediaDurationSeconds = 604800 // 7 days
+	maxMediaExtraControls   = 3
+	maxMediaClockSkew       = 300 * time.Second
 )
 
 type createRequest struct {
@@ -64,47 +82,55 @@ type updateRequest struct {
 }
 
 type apiContent struct {
-	Template           string          `json:"template"`
-	Progress           float64         `json:"progress"`
-	State              string          `json:"state,omitempty"`
-	Icon               string          `json:"icon,omitempty"`
-	Subtitle           string          `json:"subtitle,omitempty"`
-	AccentColor        string          `json:"accent_color,omitempty"`
-	BackgroundColor    string          `json:"background_color,omitempty"`
-	TextColor          string          `json:"text_color,omitempty"`
-	CurrentStep        *int            `json:"current_step,omitempty"`
-	TotalSteps         *int            `json:"total_steps,omitempty"`
-	StepRows           []int           `json:"step_rows,omitempty"`
-	StepLabels         []string        `json:"step_labels,omitempty"`
-	StepColors         []string        `json:"step_colors,omitempty"`
-	StepWeights        []float64       `json:"step_weights,omitempty"`
-	URL                string          `json:"url,omitempty"`
-	SecondaryURL       string          `json:"secondary_url,omitempty"`
-	Severity           string          `json:"severity,omitempty"`
-	FiredAt            *int64          `json:"fired_at,omitempty"`
-	SeverityLabel      string          `json:"severity_label,omitempty"`
-	RemainingTime      *int            `json:"remaining_time,omitempty"`
-	CompletionMessage  string          `json:"completion_message,omitempty"`
-	EndDate            *int64          `json:"end_date,omitempty"`
-	StartDate          *int64          `json:"start_date,omitempty"`
-	WarningThreshold   *int            `json:"warning_threshold,omitempty"`
-	Value              any             `json:"value,omitempty"`
-	MinValue           *float64        `json:"min_value,omitempty"`
-	MaxValue           *float64        `json:"max_value,omitempty"`
-	Unit               string          `json:"unit,omitempty"`
-	Scale              string          `json:"scale,omitempty"`
-	Decimals           *int            `json:"decimals,omitempty"`
-	Smoothing          *bool           `json:"smoothing,omitempty"`
-	Thresholds         []testThreshold `json:"thresholds,omitempty"`
-	Duration           *string         `json:"duration,omitempty"`
-	Tiles              []testBoardTile `json:"tiles,omitempty"`
-	Lines              []testLogLine   `json:"lines,omitempty"`
-	TapAction          *testTapAction  `json:"tap_action,omitempty"`
-	URLAction          *testTapAction  `json:"url_action,omitempty"`
-	SecondaryURLAction *testTapAction  `json:"secondary_url_action,omitempty"`
-	ImageURL           string          `json:"image_url,omitempty"`
-	ImageShape         string          `json:"image_shape,omitempty"`
-	ImageThumbhash     string          `json:"image_thumbhash,omitempty"`
+	Template           string             `json:"template"`
+	Progress           float64            `json:"progress"`
+	State              string             `json:"state,omitempty"`
+	Icon               string             `json:"icon,omitempty"`
+	Subtitle           string             `json:"subtitle,omitempty"`
+	AccentColor        string             `json:"accent_color,omitempty"`
+	BackgroundColor    string             `json:"background_color,omitempty"`
+	TextColor          string             `json:"text_color,omitempty"`
+	CurrentStep        *int               `json:"current_step,omitempty"`
+	TotalSteps         *int               `json:"total_steps,omitempty"`
+	StepRows           []int              `json:"step_rows,omitempty"`
+	StepLabels         []string           `json:"step_labels,omitempty"`
+	StepColors         []string           `json:"step_colors,omitempty"`
+	StepWeights        []float64          `json:"step_weights,omitempty"`
+	URL                string             `json:"url,omitempty"`
+	SecondaryURL       string             `json:"secondary_url,omitempty"`
+	Severity           string             `json:"severity,omitempty"`
+	FiredAt            *int64             `json:"fired_at,omitempty"`
+	SeverityLabel      string             `json:"severity_label,omitempty"`
+	RemainingTime      *int               `json:"remaining_time,omitempty"`
+	CompletionMessage  string             `json:"completion_message,omitempty"`
+	EndDate            *int64             `json:"end_date,omitempty"`
+	StartDate          *int64             `json:"start_date,omitempty"`
+	WarningThreshold   *int               `json:"warning_threshold,omitempty"`
+	Value              any                `json:"value,omitempty"`
+	MinValue           *float64           `json:"min_value,omitempty"`
+	MaxValue           *float64           `json:"max_value,omitempty"`
+	Unit               string             `json:"unit,omitempty"`
+	Scale              string             `json:"scale,omitempty"`
+	Decimals           *int               `json:"decimals,omitempty"`
+	Smoothing          *bool              `json:"smoothing,omitempty"`
+	Thresholds         []testThreshold    `json:"thresholds,omitempty"`
+	Duration           *string            `json:"duration,omitempty"`
+	Tiles              []testBoardTile    `json:"tiles,omitempty"`
+	Lines              []testLogLine      `json:"lines,omitempty"`
+	TapAction          *testTapAction     `json:"tap_action,omitempty"`
+	URLAction          *testTapAction     `json:"url_action,omitempty"`
+	SecondaryURLAction *testTapAction     `json:"secondary_url_action,omitempty"`
+	ImageURL           string             `json:"image_url,omitempty"`
+	ImageShape         string             `json:"image_shape,omitempty"`
+	ImageThumbhash     string             `json:"image_thumbhash,omitempty"`
+	MediaTitle         string             `json:"media_title,omitempty"`
+	PlaybackState      string             `json:"playback_state,omitempty"`
+	PositionSeconds    *float64           `json:"position_seconds,omitempty"`
+	DurationSeconds    *float64           `json:"duration_seconds,omitempty"`
+	PositionAt         *int64             `json:"position_at,omitempty"`
+	Volume             *float64           `json:"volume,omitempty"`
+	Favorite           *bool              `json:"favorite,omitempty"`
+	Controls           *testMediaControls `json:"controls,omitempty"`
 }
 
 type testThreshold struct {
@@ -130,12 +156,28 @@ type testLogLine struct {
 }
 
 type testTapAction struct {
-	URL     string            `json:"url"`
-	Method  string            `json:"method,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Body    string            `json:"body,omitempty"`
-	Title   string            `json:"title,omitempty"`
-	Icon    string            `json:"icon,omitempty"`
+	URL        string            `json:"url"`
+	Foreground bool              `json:"foreground,omitempty"`
+	Method     string            `json:"method,omitempty"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Body       string            `json:"body,omitempty"`
+	Title      string            `json:"title,omitempty"`
+	Icon       string            `json:"icon,omitempty"`
+}
+
+// testMediaControls mirrors pushward.MediaControls: nine named slots plus up
+// to three extras.
+type testMediaControls struct {
+	Previous   *testTapAction  `json:"previous,omitempty"`
+	PlayPause  *testTapAction  `json:"play_pause,omitempty"`
+	Play       *testTapAction  `json:"play,omitempty"`
+	Pause      *testTapAction  `json:"pause,omitempty"`
+	Next       *testTapAction  `json:"next,omitempty"`
+	Stop       *testTapAction  `json:"stop,omitempty"`
+	Favorite   *testTapAction  `json:"favorite,omitempty"`
+	VolumeDown *testTapAction  `json:"volume_down,omitempty"`
+	VolumeUp   *testTapAction  `json:"volume_up,omitempty"`
+	Extra      []testTapAction `json:"extra,omitempty"`
 }
 
 // testNotificationAction mirrors pushward.NotificationAction. Unlike a tap
@@ -520,7 +562,7 @@ func validateContent(c *apiContent) error {
 	// Under merge-patch, template may be absent on ticks; only per-template
 	// required-field validation is gated on it.
 	if c.Template != "" && !validTemplates[c.Template] {
-		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, gauge, timeline, board, log")
+		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, gauge, timeline, board, log, media")
 	}
 	if c.Progress < 0 || c.Progress > 1 {
 		return fmt.Errorf("progress must be 0.0-1.0")
@@ -567,6 +609,9 @@ func validateContent(c *apiContent) error {
 		return err
 	}
 	if err := validateImageFields(c); err != nil {
+		return err
+	}
+	if err := validateMedia(c); err != nil {
 		return err
 	}
 
@@ -891,7 +936,7 @@ func validateLog(c *apiContent) error {
 func validateImageFields(c *apiContent) error {
 	hasImage := c.ImageURL != "" || c.ImageShape != "" || c.ImageThumbhash != ""
 	if hasImage && c.Template != "" && !imageTemplates[c.Template] {
-		return fmt.Errorf("image_url, image_shape and image_thumbhash are only valid on the generic and steps templates, got %q", c.Template)
+		return fmt.Errorf("image_url, image_shape and image_thumbhash are only valid on the generic, steps and media templates, got %q", c.Template)
 	}
 	if c.ImageURL != "" {
 		if utf8.RuneCountInString(c.ImageURL) > 2048 {
@@ -923,6 +968,107 @@ func validateImageFields(c *apiContent) error {
 		}
 	}
 	return nil
+}
+
+// validateMedia mirrors the server's media-template rules. Like
+// validateImageFields it runs on every payload rather than from the template
+// switch: the eight media fields are all optional, so the template case would
+// have nothing required to check, while a position tick under merge-patch may
+// omit the template and its bounds still matter. The template gate only fires
+// when the template is present; a template-less patch carrying media fields is
+// left to the real server, since the mock is stateless.
+//
+// Not reproduced: the server also defaults an empty method to POST on http(s)
+// controls (the mock does not echo content back) and rejects fields it does
+// not know (JSON here decodes leniently).
+func validateMedia(c *apiContent) error {
+	hasMedia := c.MediaTitle != "" || c.PlaybackState != "" || c.PositionSeconds != nil ||
+		c.DurationSeconds != nil || c.PositionAt != nil || c.Volume != nil || c.Favorite != nil ||
+		c.Controls != nil
+	if hasMedia && c.Template != "" && c.Template != pushward.TemplateMedia {
+		return fmt.Errorf("media_title, playback_state, position_seconds, duration_seconds, position_at, volume, favorite and controls are only valid on the media template, got %q", c.Template)
+	}
+	if utf8.RuneCountInString(c.MediaTitle) > maxMediaTitleRunes {
+		return fmt.Errorf("media_title must be at most %d runes", maxMediaTitleRunes)
+	}
+	if !validPlaybackStates[c.PlaybackState] {
+		return fmt.Errorf("playback_state must be one of playing, paused, stopped, buffering")
+	}
+	if c.PositionSeconds != nil && *c.PositionSeconds < 0 {
+		return fmt.Errorf("position_seconds must be >= 0")
+	}
+	if c.DurationSeconds != nil && (*c.DurationSeconds <= 0 || *c.DurationSeconds > maxMediaDurationSeconds) {
+		return fmt.Errorf("duration_seconds must be > 0 and at most %d", maxMediaDurationSeconds)
+	}
+	if c.Volume != nil && (*c.Volume < 0 || *c.Volume > 1) {
+		return fmt.Errorf("volume must be 0.0-1.0")
+	}
+	if c.PositionAt != nil {
+		if *c.PositionAt <= 0 {
+			return fmt.Errorf("position_at must be > 0")
+		}
+		if *c.PositionAt > time.Now().Add(maxMediaClockSkew).Unix() {
+			return fmt.Errorf("position_at must not be more than %s in the future", maxMediaClockSkew)
+		}
+	}
+	return validateMediaControls(c.Controls)
+}
+
+// validateMediaControls checks every control slot with the shared tap-action
+// rules plus the two media-only ones: an http(s) slot is a silent webhook and
+// may not ask for the foreground, and an extra button has no fixed glyph so
+// it must bring its own icon.
+func validateMediaControls(mc *testMediaControls) error {
+	if mc == nil {
+		return nil
+	}
+	slots := []struct {
+		name   string
+		action *testTapAction
+	}{
+		{"previous", mc.Previous},
+		{"play_pause", mc.PlayPause},
+		{"play", mc.Play},
+		{"pause", mc.Pause},
+		{"next", mc.Next},
+		{"stop", mc.Stop},
+		{"favorite", mc.Favorite},
+		{"volume_down", mc.VolumeDown},
+		{"volume_up", mc.VolumeUp},
+	}
+	for _, s := range slots {
+		if err := validateMediaControl(s.action, "controls."+s.name); err != nil {
+			return err
+		}
+	}
+	if len(mc.Extra) > maxMediaExtraControls {
+		return fmt.Errorf("controls.extra must have at most %d entries, got %d", maxMediaExtraControls, len(mc.Extra))
+	}
+	for i := range mc.Extra {
+		field := fmt.Sprintf("controls.extra[%d]", i)
+		if err := validateMediaControl(&mc.Extra[i], field); err != nil {
+			return err
+		}
+		if mc.Extra[i].Icon == "" {
+			return fmt.Errorf("%s.icon is required", field)
+		}
+	}
+	return nil
+}
+
+func validateMediaControl(a *testTapAction, field string) error {
+	if err := validateTapAction(a, field); err != nil {
+		return err
+	}
+	if a != nil && a.Foreground && isHTTPURL(a.URL) {
+		return fmt.Errorf("%s.foreground must not be true on an http(s) url: media controls are silent webhooks", field)
+	}
+	return nil
+}
+
+func isHTTPURL(raw string) bool {
+	lower := strings.ToLower(raw)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
 func validateURL(u, field string) error {
