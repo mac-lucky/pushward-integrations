@@ -91,7 +91,7 @@ func (s *alertGroupState) equals(other *alertGroupState) bool {
 	return slices.Equal(a, b)
 }
 
-// PushWard's metadata limits, all three of which the server enforces on
+// PushWard's metadata limits, all four of which the server enforces on
 // POST /notifications and any one of which rejects the whole request with a 400
 // - the notification is then simply lost, since the relay has nowhere to retry
 // a rejected payload to.
@@ -104,6 +104,7 @@ func (s *alertGroupState) equals(other *alertGroupState) bool {
 // readability cap on any single entry.
 const (
 	maxMetaEntries  = 20
+	maxMetaKeyLen   = 64
 	maxMetaValueLen = 512
 	maxMetaBytes    = 8 * 1024
 )
@@ -120,7 +121,15 @@ type metaMap struct {
 func newMetaMap() *metaMap { return &metaMap{m: make(map[string]string, maxMetaEntries)} }
 
 func (m *metaMap) add(k, v string) {
-	if len(m.m) >= maxMetaEntries || v == "" {
+	if v == "" || m.full() {
+		return
+	}
+	k = metaKey(k)
+	// Bail before TruncateHard, which walks the whole string and allocates a
+	// []rune over it: a kept value is at least one byte, so if the key alone
+	// does not fit there is nothing to truncate for. Grafana annotations are
+	// routinely kilobytes, and a big alert group drops far more than it keeps.
+	if m.bytes+len(k)+1 > maxMetaBytes {
 		return
 	}
 	v = text.TruncateHard(v, maxMetaValueLen)
@@ -133,10 +142,24 @@ func (m *metaMap) add(k, v string) {
 	m.bytes += cost
 }
 
+// full reports whether neither a slot nor a single byte remains. Entries are
+// only ever added, never evicted, so a caller looping over alerts can stop
+// building values once this is true.
+func (m *metaMap) full() bool {
+	return len(m.m) >= maxMetaEntries || m.bytes+1 > maxMetaBytes
+}
+
+// metaKey is the stored form of a key. buildGroupedMetadata synthesises keys
+// from Grafana labels (`instance (firing)`, `instance fingerprint`), which run
+// past the server's 64-rune key cap.
+func metaKey(k string) string { return text.TruncateHard(k, maxMetaKeyLen) }
+
 // has reports whether a key is already taken, so callers can disambiguate
-// before spending a slot on an entry that would overwrite another.
+// before spending a slot on an entry that would overwrite another. It applies
+// the same truncation `add` does - otherwise two keys that differ only past
+// rune 64 would look distinct here and collide in the map.
 func (m *metaMap) has(k string) bool {
-	_, ok := m.m[k]
+	_, ok := m.m[metaKey(k)]
 	return ok
 }
 
@@ -535,6 +558,12 @@ func (h *Handler) buildGroupedMetadata(g *alertGroup, representative alert) map[
 	// Disambiguate when the same instance appears in both firing and resolved
 	// (or twice with the same status) so one entry doesn't overwrite the other.
 	for _, a := range allAlerts {
+		// formatAlertDetail builds a whole string per alert; stop once nothing
+		// more can be stored rather than formatting a 500-alert group to throw
+		// ~485 of them away.
+		if meta.full() {
+			break
+		}
 		inst := a.Labels["instance"]
 		if inst == "" {
 			inst = a.Fingerprint

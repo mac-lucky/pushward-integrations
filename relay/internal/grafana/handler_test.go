@@ -1195,3 +1195,29 @@ func TestMetaMapKeepsEarliestEntries(t *testing.T) {
 		t.Errorf("fixed entries were evicted: %v", got)
 	}
 }
+
+// The fourth server limit: metadata keys are capped at 64 runes. Grouped
+// metadata synthesises its keys from Grafana `instance` labels, which routinely
+// run longer, so an over-long key is the ordinary case rather than an edge one.
+func TestMetaMapCapsKeyLength(t *testing.T) {
+	meta := newMetaMap()
+	meta.add(strings.Repeat("k", 200), "value")
+	for k := range meta.result() {
+		if n := utf8.RuneCountInString(k); n > maxMetaKeyLen {
+			t.Errorf("key is %d runes, server rejects above %d", n, maxMetaKeyLen)
+		}
+	}
+}
+
+// has() must apply the same truncation add() does. Two keys differing only past
+// rune 64 look distinct to a naive lookup but collide in the map, which would
+// silently defeat the firing/resolved disambiguation in buildGroupedMetadata.
+func TestMetaMapDisambiguationSeesTruncatedKeys(t *testing.T) {
+	long := strings.Repeat("i", 70)
+	meta := newMetaMap()
+	meta.add(long+"-firing", "first")
+	if !meta.has(long + "-resolved") {
+		t.Error("has() missed a key that truncates onto an existing one; " +
+			"the caller would overwrite instead of disambiguating")
+	}
+}
