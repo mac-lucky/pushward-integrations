@@ -20,7 +20,10 @@ LABEL org.opencontainers.image.title="pushward-github" \
       org.opencontainers.image.description="GitHub Actions Live Activity bridge for PushWard" \
       org.opencontainers.image.source="https://github.com/mac-lucky/pushward-integrations"
 
-RUN apk add --no-cache ca-certificates && adduser -D -u 1000 appuser
+# apk upgrade first: the digest-pinned base can lag Alpine package fixes, and
+# upgrading at build picks them up without waiting for a base-image rebuild.
+# Stale openssl failed the CI grype gate on 2026-08-27.
+RUN apk upgrade --no-cache && apk add --no-cache ca-certificates && adduser -D -u 1000 appuser
 
 COPY --from=builder /pushward-github /pushward-github
 
