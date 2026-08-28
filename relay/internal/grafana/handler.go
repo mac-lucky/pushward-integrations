@@ -91,26 +91,58 @@ func (s *alertGroupState) equals(other *alertGroupState) bool {
 	return slices.Equal(a, b)
 }
 
+// PushWard's metadata limits, all three of which the server enforces on
+// POST /notifications and any one of which rejects the whole request with a 400
+// - the notification is then simply lost, since the relay has nowhere to retry
+// a rejected payload to.
+//
+// maxMetaBytes is the one that actually binds. The per-value cap is 4096, but
+// twenty values at even 512 come to 10 KB, which is over the aggregate budget:
+// filling the slots with long Grafana annotations used to build a payload the
+// server refused. So the budget is tracked as it is spent rather than
+// approximated by a per-value constant, and maxMetaValueLen is now only a
+// readability cap on any single entry.
 const (
-	maxMetaEntries  = 20  // PushWard API limit on metadata key-value pairs.
-	maxMetaValueLen = 512 // PushWard API limit on metadata value length.
+	maxMetaEntries  = 20
+	maxMetaValueLen = 512
+	maxMetaBytes    = 8 * 1024
 )
 
-// metaMap is a capped metadata map that silently drops entries beyond the limit.
-type metaMap map[string]string
-
-func newMetaMap() metaMap { return make(metaMap, maxMetaEntries) }
-
-func (m metaMap) add(k, v string) {
-	if len(m) >= maxMetaEntries || v == "" {
-		return
-	}
-	m[k] = text.TruncateHard(v, maxMetaValueLen)
+// metaMap is a capped metadata map that silently drops entries once either the
+// slot count or the byte budget is exhausted. Dropping the tail is deliberate:
+// callers add the fixed, most useful entries first (see buildGroupedMetadata),
+// so what gets dropped is the least important detail rather than the alert.
+type metaMap struct {
+	m     map[string]string
+	bytes int
 }
 
-func (m metaMap) result() map[string]string {
-	if len(m) > 0 {
-		return m
+func newMetaMap() *metaMap { return &metaMap{m: make(map[string]string, maxMetaEntries)} }
+
+func (m *metaMap) add(k, v string) {
+	if len(m.m) >= maxMetaEntries || v == "" {
+		return
+	}
+	v = text.TruncateHard(v, maxMetaValueLen)
+	// Same accounting the server does: key plus value, in bytes not runes.
+	cost := len(k) + len(v)
+	if m.bytes+cost > maxMetaBytes {
+		return
+	}
+	m.m[k] = v
+	m.bytes += cost
+}
+
+// has reports whether a key is already taken, so callers can disambiguate
+// before spending a slot on an entry that would overwrite another.
+func (m *metaMap) has(k string) bool {
+	_, ok := m.m[k]
+	return ok
+}
+
+func (m *metaMap) result() map[string]string {
+	if len(m.m) > 0 {
+		return m.m
 	}
 	return nil
 }
@@ -508,9 +540,9 @@ func (h *Handler) buildGroupedMetadata(g *alertGroup, representative alert) map[
 			inst = a.Fingerprint
 		}
 		key := inst
-		if _, exists := meta[key]; exists {
+		if meta.has(key) {
 			key = inst + " (" + a.Status + ")"
-			if _, exists := meta[key]; exists {
+			if meta.has(key) {
 				key = inst + " " + a.Fingerprint
 			}
 		}

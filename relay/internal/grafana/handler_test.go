@@ -1,12 +1,14 @@
 package grafana
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
@@ -1143,5 +1145,53 @@ func TestSingleAlertPreservesCollapseID(t *testing.T) {
 	}
 	if !strings.Contains(req.Subtitle, "node1") {
 		t.Errorf("expected subtitle to contain instance, got %s", req.Subtitle)
+	}
+}
+
+// The relay has nowhere to retry a rejected payload to, so a metadata map that
+// exceeds any of PushWard's three limits does not degrade the notification, it
+// loses it. Twenty entries at the old 512-rune per-value cap came to 10 KB
+// against an 8 KB aggregate budget, so a group of alerts carrying long Grafana
+// annotations built a payload the server answered with a 400.
+func TestMetaMapStaysWithinServerLimits(t *testing.T) {
+	long := strings.Repeat("x", 4096)
+
+	meta := newMetaMap()
+	for i := range 40 {
+		meta.add(fmt.Sprintf("annotation_key_number_%02d", i), long)
+	}
+	got := meta.result()
+
+	if len(got) > maxMetaEntries {
+		t.Errorf("entries = %d, server rejects above %d", len(got), maxMetaEntries)
+	}
+	total := 0
+	for k, v := range got {
+		if n := utf8.RuneCountInString(v); n > maxMetaValueLen {
+			t.Errorf("value for %q is %d runes, cap is %d", k, n, maxMetaValueLen)
+		}
+		total += len(k) + len(v)
+	}
+	if total > maxMetaBytes {
+		t.Errorf("aggregate = %d bytes, server rejects above %d", total, maxMetaBytes)
+	}
+	// The budget must not be so tight that it starves a realistic alert group.
+	if len(got) < 10 {
+		t.Errorf("only %d entries fit; the budget is too tight to be useful", len(got))
+	}
+}
+
+// Entries are added fixed-first, so exhausting the budget must drop the tail
+// rather than evict something already accepted.
+func TestMetaMapKeepsEarliestEntries(t *testing.T) {
+	meta := newMetaMap()
+	meta.add("firing_count", "3")
+	meta.add("alertname", "HighErrorRate")
+	for i := range 40 {
+		meta.add(fmt.Sprintf("filler_%02d", i), strings.Repeat("y", 512))
+	}
+	got := meta.result()
+	if got["firing_count"] != "3" || got["alertname"] != "HighErrorRate" {
+		t.Errorf("fixed entries were evicted: %v", got)
 	}
 }
