@@ -29,7 +29,7 @@ Grafana POSTs a firing alert to `POST /webhook`. The bridge resolves the series'
 - **Auto query extraction** - when a Grafana service-account token is set, PromQL is pulled straight from the alert rule definition, so no per-rule annotations are needed.
 - **Missed-resolve recovery** - an optional background goroutine polls Grafana's alertmanager API on `alert_check_interval` to close out activities whose `resolved` webhook was dropped.
 - **Severity styling** - `critical` / `warning` / `info` drive the activity icon and accent color; resolved alerts switch to a green checkmark before dismissal.
-- **Widgets** - `value` / `progress` / `status` / `gauge` / `stat_list` widgets polled from PromQL, with multi-series fan-out via `query_all` + `slug_template`.
+- **Widgets** - `value` / `progress` / `status` / `gauge` / `stat_list` / `trend` / `countdown` widgets polled from PromQL, with multi-series fan-out via `query_all` + `slug_template`.
 - **Self-protecting** - webhooks are answered immediately and processed asynchronously (30s budget); in-memory tracking is capped at 500 active alerts and swept for stale entries.
 
 ## Prerequisites
@@ -157,10 +157,18 @@ Widgets are **independent of alerts**. Each entry in the `widgets:` list (or `PU
 | `progress` | `query` | Scalar; requires `content.min_value` + `content.max_value`. |
 | `gauge` | `query` | Scalar; requires `content.min_value` + `content.max_value`. |
 | `stat_list` | per-row `query` | 1-6 `stat_rows`, each with its own `query` + `value_template`. |
+| `trend` | `query` | Scalar plus a sparkline built from this bridge's own rolling buffer of the last 48 polls, so it needs no range query and appears after the second poll. No `query_all`: there is one buffer per widget. |
+| `countdown` | none | Renders from `content.end_date` on device; published once, so `query`, `query_all` and `stat_rows` are all rejected. |
+
+`battery`, `schedule` and `flow` are server widget templates this bridge does not offer: each needs several independent readings in one push, and the poller runs one query per widget.
 
 Multi-series fan-out: set `query_all` instead of `query` plus a required `slug_template` to publish one widget per result series.
 
 Server-mirrored validation runs at config load: `interval` defaults to `60s` and must be `>= 5s`; `update_mode` is `on_change` (default) or `always`; slug must match `^[a-z0-9_-]{1,128}$`; `stat_list` allows at most 6 rows, with row label <= 32 chars and row unit <= 16 chars. The per-user widget cap on the server is 50.
+
+`stale_after` (60-604800 seconds) is how long iOS waits before dimming a widget as out of date. Setting it also arms a heartbeat that re-sends the stored content every `max(30s, stale_after/2)`; the server records an unchanged re-send as a touch rather than a push, so a flat metric costs no notifications and the widget still looks alive. It must be at least three times the poll interval, because the heartbeat rides the poll ticker.
+
+Any widget can carry tap targets: `content.tap_action` retargets the whole widget, while `content.url_action` and `content.secondary_url_action` draw buttons, which iOS renders on the Home Screen families only.
 
 ```yaml
 widgets:

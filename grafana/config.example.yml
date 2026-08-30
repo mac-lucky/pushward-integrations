@@ -77,7 +77,7 @@ timeline:
 #   # Scalar example: number of registered users.
 #   - slug: "registered-users"
 #     name: "Registered Users"
-#     template: "value"           # value|progress|status|gauge
+#     template: "value"           # value|progress|status|gauge|stat_list|trend|countdown
 #     query: "pushward_users_total"
 #     interval: 60s               # default 60s; min 5s
 #     update_mode: "on_change"    # on_change (default) or always
@@ -145,3 +145,53 @@ timeline:
 #         value_template: "{{printf \"%.0f\" .Value}}"
 #         missing_value: "?"
 #         trigger: false             # displays but never triggers a PATCH
+#
+#   # trend: a sparkline from this bridge's own rolling buffer of the last 48
+#   # polls, so it needs no range query and appears after the second poll.
+#   # query_all fan-out is not supported - there is one buffer per widget.
+#   - slug: "api-latency"
+#     name: "API latency"
+#     template: "trend"
+#     query: 'histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))'
+#     interval: 60s
+#     stale_after: 3600           # 60-604800s; iOS dims the widget after this
+#     content:
+#       icon: "waveform.path.ecg"
+#       unit: "s"
+#       trend: "flat"             # optional arrow: up|down|flat
+#
+#   # countdown: no query at all. The phone counts down from its own dates, so
+#   # the widget is published once and stale_after is rejected.
+#   - slug: "cert-expiry"
+#     name: "Certificate expiry"
+#     template: "countdown"
+#     content:
+#       end_date: "2026-12-24T18:00:00Z"   # RFC 3339, required
+#       expired_text: "Expired"            # replaces the counter once it passes
+#       icon: "lock.shield"
+#
+# stale_after arms a heartbeat that re-sends the stored content every
+# max(30s, stale_after/2). The server records an unchanged re-send as a touch
+# rather than a push, so a metric that sits flat for hours costs no
+# notifications and the widget still looks alive. It must be at least three
+# times the poll interval: the heartbeat rides the poll ticker, so a shorter
+# window dims the widget between two healthy polls.
+#
+# Any widget can carry tap targets. tap_action retargets the whole widget;
+# url_action and secondary_url_action draw buttons, which iOS renders on the
+# Home Screen families only (the Lock Screen, StandBy and Apple Watch families
+# have no room for them and use the tap action instead).
+#
+#     content:
+#       tap_action:
+#         url: "https://grafana.example.com/d/abc123"
+#         foreground: true
+#       url_action:
+#         url: "https://grafana.example.com/d/abc123"
+#         foreground: true
+#         title: "Dashboard"
+#         icon: "chart.xyaxis.line"
+#
+# battery, schedule and flow are server widget templates this bridge does not
+# offer: each needs several independent readings in a single push, and the
+# poller runs one query per widget. Create those through the API or the iOS app.

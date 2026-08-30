@@ -59,6 +59,95 @@ func TestValidateWidgets_RejectsEmpty(t *testing.T) {
 			input:   WidgetConfig{Slug: "x", Query: "up", Interval: time.Second},
 			wantErr: "too short",
 		},
+		// battery, schedule and flow stay rejected on purpose: each needs several
+		// independent readings in one push, which one-query-per-widget cannot
+		// express, and a spec with no source crashes the process at startup.
+		{
+			name:    "battery still rejected",
+			input:   WidgetConfig{Slug: "x", Query: "up", Template: "battery"},
+			wantErr: "unknown template",
+		},
+		{
+			name:    "schedule still rejected",
+			input:   WidgetConfig{Slug: "x", Query: "up", Template: "schedule"},
+			wantErr: "unknown template",
+		},
+		{
+			name:    "flow still rejected",
+			input:   WidgetConfig{Slug: "x", Query: "up", Template: "flow"},
+			wantErr: "unknown template",
+		},
+		{
+			name:    "trend with query_all",
+			input:   WidgetConfig{Slug: "x", Template: "trend", QueryAll: "up", SlugTemplate: "x-{{.id}}"},
+			wantErr: "template trend requires `query`",
+		},
+		{
+			name:    "trend without query",
+			input:   WidgetConfig{Slug: "x", Template: "trend"},
+			wantErr: "template trend requires `query`",
+		},
+		{
+			name:    "countdown with a query",
+			input:   WidgetConfig{Slug: "x", Template: "countdown", Query: "up", Content: WidgetContentConfig{EndDate: soonRFC3339()}},
+			wantErr: "template countdown is static",
+		},
+		{
+			name:    "countdown without end_date",
+			input:   WidgetConfig{Slug: "x", Template: "countdown"},
+			wantErr: "requires content.end_date",
+		},
+		{
+			name:    "stale_after below the floor",
+			input:   WidgetConfig{Slug: "x", Query: "up", Interval: time.Minute, StaleAfter: pushward.IntPtr(90)},
+			wantErr: "below 3 times",
+		},
+		{
+			name:    "stale_after out of range",
+			input:   WidgetConfig{Slug: "x", Query: "up", StaleAfter: pushward.IntPtr(10)},
+			wantErr: "must be between 60 and 604800",
+		},
+		{
+			name:    "stale_after on a countdown",
+			input:   WidgetConfig{Slug: "x", Template: "countdown", StaleAfter: pushward.IntPtr(3600), Content: WidgetContentConfig{EndDate: soonRFC3339()}},
+			wantErr: "has nothing to refresh",
+		},
+		{
+			name:    "end_date not RFC 3339",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{EndDate: "tomorrow"}},
+			wantErr: "is not an RFC 3339 timestamp",
+		},
+		{
+			// The classic milliseconds-for-seconds mistake lands in 1970.
+			name:    "end_date before the floor",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{EndDate: "1970-01-01T00:00:00Z"}},
+			wantErr: "must fall between 2000-01-01",
+		},
+		{
+			name:    "expired_text too long",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{ExpiredText: strings.Repeat("x", 65)}},
+			wantErr: "expired_text exceeds 64",
+		},
+		{
+			name:    "bad timer style",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{SubtitleTimer: &TimerConfig{Date: soonRFC3339(), Style: "sundial"}}},
+			wantErr: "style must be one of timer, relative",
+		},
+		{
+			name:    "timer without a date",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{SubtitleTimer: &TimerConfig{}}},
+			wantErr: "date is required",
+		},
+		{
+			name:    "bad trend",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{Trend: "sideways"}},
+			wantErr: "trend must be one of",
+		},
+		{
+			name:    "tap action without a url",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{URLAction: &TapActionConfig{Title: "Open"}}},
+			wantErr: "url is required",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -313,3 +402,86 @@ func TestParseWidgetsJSON_Trigger(t *testing.T) {
 		t.Errorf("row 1 trigger = %v, want explicit false", rows[1].Trigger)
 	}
 }
+
+func TestValidateWidgets_TrendAndCountdownAccepted(t *testing.T) {
+	widgets := []WidgetConfig{
+		{Slug: "cpu", Template: "trend", Query: "up", Interval: time.Minute, StaleAfter: pushward.IntPtr(600)},
+		{Slug: "launch", Template: "countdown", Content: WidgetContentConfig{
+			EndDate:     soonRFC3339(),
+			ExpiredText: "Launched",
+		}},
+	}
+	if err := validateWidgets(widgets); err != nil {
+		t.Fatalf("expected trend and countdown to validate, got %v", err)
+	}
+	// The parsed date has to reach the wire content, not just pass validation.
+	content := widgets[1].Content.ToWidgetContent()
+	if content.EndDate == nil || !content.EndDate.After(time.Now()) {
+		t.Errorf("expected a parsed future end_date on the widget content, got %v", content.EndDate)
+	}
+	if content.ExpiredText != "Launched" {
+		t.Errorf("expected expired_text carried through, got %q", content.ExpiredText)
+	}
+}
+
+func TestValidateWidgets_ContentExtrasReachTheWire(t *testing.T) {
+	widgets := []WidgetConfig{{
+		Slug: "x", Query: "up", Interval: time.Minute,
+		Content: WidgetContentConfig{
+			Trend:         "up",
+			SubtitleTimer: &TimerConfig{Date: soonRFC3339(), Style: pushward.TimerStyleRelative},
+			TapAction:     &TapActionConfig{URL: "pushward://widgets"},
+			URLAction:     &TapActionConfig{URL: "https://grafana.example/d/abc", Foreground: true, Title: "Dashboard"},
+		},
+	}}
+	if err := validateWidgets(widgets); err != nil {
+		t.Fatalf("validateWidgets: %v", err)
+	}
+	c := widgets[0].Content.ToWidgetContent()
+	if c.Trend != "up" {
+		t.Errorf("expected trend up, got %q", c.Trend)
+	}
+	if c.SubtitleTimer == nil || c.SubtitleTimer.Style != pushward.TimerStyleRelative {
+		t.Errorf("expected a relative subtitle timer, got %+v", c.SubtitleTimer)
+	}
+	if c.TapAction == nil || c.TapAction.URL != "pushward://widgets" {
+		t.Errorf("expected the tap action carried through, got %+v", c.TapAction)
+	}
+	if c.URLAction == nil || c.URLAction.Title != "Dashboard" {
+		t.Errorf("expected the url action carried through, got %+v", c.URLAction)
+	}
+}
+
+// parseWidgetsJSON uses DisallowUnknownFields, so every new key needs a decode
+// test or it stays a YAML-only field that silently 400s the env-var form.
+func TestParseWidgetsJSON_ContentExtras(t *testing.T) {
+	raw := `[{"slug":"x","query":"up","stale_after":600,"interval":"1m","content":{
+		"start_date":"` + soonRFC3339() + `","end_date":"` + laterRFC3339() + `",
+		"expired_text":"done","trend":"flat",
+		"subtitle_timer":{"date":"` + soonRFC3339() + `","style":"relative"},
+		"tap_action":{"url":"pushward://widgets"},
+		"url_action":{"url":"https://example.com","foreground":true,"title":"Open"},
+		"secondary_url_action":{"url":"https://example.com/2","foreground":true}}}]`
+	widgets, err := parseWidgetsJSON(raw)
+	if err != nil {
+		t.Fatalf("parseWidgetsJSON: %v", err)
+	}
+	if err := validateWidgets(widgets); err != nil {
+		t.Fatalf("validateWidgets: %v", err)
+	}
+	if widgets[0].StaleAfter == nil || *widgets[0].StaleAfter != 600 {
+		t.Errorf("expected stale_after 600, got %v", widgets[0].StaleAfter)
+	}
+	c := widgets[0].Content.ToWidgetContent()
+	if c.StartDate == nil || c.EndDate == nil || c.SubtitleTimer == nil {
+		t.Errorf("expected the parsed dates and timer on the content, got %+v", c)
+	}
+	if c.SecondaryURLAction == nil || c.SecondaryURLAction.URL != "https://example.com/2" {
+		t.Errorf("expected the secondary url action, got %+v", c.SecondaryURLAction)
+	}
+}
+
+// The server (and this validator) reject a date more than 366 days out, so the
+// fixtures have to be relative rather than a fixed year.
+func soonRFC3339() string  { return time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339) }
+func laterRFC3339() string { return time.Now().Add(48 * time.Hour).UTC().Format(time.RFC3339) }

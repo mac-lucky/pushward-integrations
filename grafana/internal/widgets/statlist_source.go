@@ -28,6 +28,9 @@ type StatListRow struct {
 	ValueTemplate string
 	Unit          string
 	MissingValue  string
+	// Timer renders the row's trailing text as a live timer on clients that
+	// support it. The rendered ValueTemplate is still sent as the fallback.
+	Timer *pushward.TimerValue
 }
 
 // NewStatListSource pre-parses every value template so misconfigurations
@@ -58,7 +61,7 @@ func NewStatListSource(client *metrics.Client, rows []StatListRow) (sharedwidget
 			missing = defaultMissingValue
 		}
 		compiled[i] = compiledStatRow{
-			label: r.Label, query: r.Query, unit: r.Unit, missing: missing, tpl: tpl,
+			label: r.Label, query: r.Query, unit: r.Unit, missing: missing, tpl: tpl, timer: r.Timer,
 		}
 	}
 	return &statListSource{client: client, rows: compiled}, nil
@@ -67,6 +70,7 @@ func NewStatListSource(client *metrics.Client, rows []StatListRow) (sharedwidget
 type compiledStatRow struct {
 	label, query, unit, missing string
 	tpl                         *template.Template
+	timer                       *pushward.TimerValue
 }
 
 type statListSource struct {
@@ -103,7 +107,7 @@ func (s *statListSource) Rows(ctx context.Context) ([]pushward.StatRow, error) {
 func (s *statListSource) queryRow(ctx context.Context, row compiledStatRow, now time.Time) pushward.StatRow {
 	val, ok, err := queryPoint(ctx, s.client, row.query, now)
 	if err != nil {
-		return pushward.StatRow{Label: row.label, Value: row.missing, Unit: row.unit}
+		return pushward.StatRow{Label: row.label, Value: row.missing, Unit: row.unit, Timer: row.timer}
 	}
 	rendered := row.missing
 	if ok {
@@ -111,7 +115,7 @@ func (s *statListSource) queryRow(ctx context.Context, row compiledStatRow, now 
 			rendered = v
 		}
 	}
-	return pushward.StatRow{Label: row.label, Value: rendered, Unit: row.unit}
+	return pushward.StatRow{Label: row.label, Value: rendered, Unit: row.unit, Timer: row.timer}
 }
 
 func queryPoint(ctx context.Context, client *metrics.Client, expr string, ts time.Time) (float64, bool, error) {

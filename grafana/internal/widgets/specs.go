@@ -26,6 +26,8 @@ func BuildSpecs(cfgs []config.WidgetConfig, mc *metrics.Client) ([]sharedwidgets
 			MinChange:      w.MinChange,
 			PushThrottle:   w.PushThrottle,
 			Content:        w.Content.ToWidgetContent(),
+			StaleAfter:     w.StaleAfter,
+			Heartbeat:      sharedwidgets.HeartbeatFor(w.StaleAfter),
 			LabelTemplate:  w.LabelTemplate,
 			SlugTemplate:   w.SlugTemplate,
 			NameTemplate:   w.NameTemplate,
@@ -39,7 +41,7 @@ func BuildSpecs(cfgs []config.WidgetConfig, mc *metrics.Client) ([]sharedwidgets
 			for i, r := range w.StatRows {
 				rows = append(rows, StatListRow{
 					Label: r.Label, Query: r.Query, ValueTemplate: r.ValueTemplate,
-					Unit: r.Unit, MissingValue: r.MissingValue,
+					Unit: r.Unit, MissingValue: r.MissingValue, Timer: r.ParsedTimer(),
 				})
 				mask[i] = r.Triggers()
 			}
@@ -53,10 +55,20 @@ func BuildSpecs(cfgs []config.WidgetConfig, mc *metrics.Client) ([]sharedwidgets
 			if slices.Contains(mask, false) {
 				spec.StatChangeMask = mask
 			}
+		case w.Template == string(pushward.WidgetTemplateTrend):
+			spec.Source = NewTrendSource(mc, w.Query, w.Interval)
+		case w.Template == string(pushward.WidgetTemplateCountdown):
+			spec.Source = staticSource{}
 		case w.Query != "":
 			spec.Source = &ScalarSource{Client: mc, Expr: w.Query}
 		case w.QueryAll != "":
 			spec.MultiSource = &MultiSource{Client: mc, Expr: w.QueryAll}
+		default:
+			// Second gate behind config.validWidgetTemplates. A template with no
+			// source builds cleanly, posts content the server 422s, and takes the
+			// whole process down through Manager.Start; refusing here keeps a
+			// hand-widened allowlist from turning into a startup crash.
+			return nil, fmt.Errorf("widget %q: template %q has no source in this bridge", w.Slug, w.Template)
 		}
 		specs = append(specs, spec)
 	}
