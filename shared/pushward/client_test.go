@@ -363,6 +363,102 @@ func TestCreateActivity_Success(t *testing.T) {
 	}
 }
 
+func TestCreateActivity_WithDismissalTTL(t *testing.T) {
+	// The raw JSON, not the decoded struct: zero-vs-absent is the whole point of
+	// the pointer, and a decode collapses it.
+	var raw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	if err := c.CreateActivity(context.Background(), "relay-selftest", "Self test", 1, 300, 120, WithDismissalTTL(0)); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	got, ok := raw["dismissal_ttl"]
+	if !ok {
+		t.Fatal("dismissal_ttl absent from the body; 0 must travel, not be omitted")
+	}
+	if got != float64(0) {
+		t.Errorf("expected dismissal_ttl 0, got %v", got)
+	}
+}
+
+func TestCreateActivity_OmitsDismissalTTLWhenUnset(t *testing.T) {
+	var raw map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	if err := c.CreateActivity(context.Background(), "gh-repo", "GitHub CI", 3, 900, 1800); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if _, ok := raw["dismissal_ttl"]; ok {
+		t.Error("dismissal_ttl must be absent when no option is passed, or every bridge silently overrides the server default")
+	}
+}
+
+func TestWithDismissalTTL_Clamps(t *testing.T) {
+	for _, tc := range []struct {
+		in   int
+		want int
+	}{
+		{-1, 0},
+		{0, 0},
+		{120, 120},
+		{99999, DismissalTTLMax},
+	} {
+		var req CreateActivityRequest
+		WithDismissalTTL(tc.in)(&req)
+		if req.DismissalTTL == nil {
+			t.Fatalf("WithDismissalTTL(%d) left the field nil", tc.in)
+		}
+		if *req.DismissalTTL != tc.want {
+			t.Errorf("WithDismissalTTL(%d) = %d, want %d", tc.in, *req.DismissalTTL, tc.want)
+		}
+	}
+}
+
+func TestDismissalTTLOptions_NilYieldsNoOptions(t *testing.T) {
+	if opts := DismissalTTLOptions(nil); len(opts) != 0 {
+		t.Errorf("expected no options for a nil duration, got %d", len(opts))
+	}
+	d := 2 * time.Minute
+	opts := DismissalTTLOptions(&d)
+	if len(opts) != 1 {
+		t.Fatalf("expected 1 option, got %d", len(opts))
+	}
+	var req CreateActivityRequest
+	opts[0](&req)
+	if req.DismissalTTL == nil || *req.DismissalTTL != 120 {
+		t.Errorf("expected dismissal_ttl 120, got %v", req.DismissalTTL)
+	}
+}
+
+func TestPatchRequest_TTLFieldsOmittedWhenNil(t *testing.T) {
+	body, err := json.Marshal(PatchRequest{State: "ended", DismissalTTL: IntPtr(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["dismissal_ttl"] != float64(0) {
+		t.Errorf("expected dismissal_ttl 0 on the wire, got %v", raw["dismissal_ttl"])
+	}
+	for _, absent := range []string{"ended_ttl", "stale_ttl"} {
+		if _, ok := raw[absent]; ok {
+			t.Errorf("%s must be absent when nil", absent)
+		}
+	}
+}
+
 func TestCreateActivity_LimitReached(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/problem+json")

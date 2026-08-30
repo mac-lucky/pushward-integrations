@@ -482,6 +482,11 @@ func TestCleanup_SendsEndedUpdate(t *testing.T) {
 	if req.State != pushward.StateEnded {
 		t.Errorf("expected ENDED state, got %s", req.State)
 	}
+	// A card left over from a crashed run should not sit on the Lock Screen for
+	// another cleanup_delay after every restart.
+	if req.DismissalTTL == nil || *req.DismissalTTL != 0 {
+		t.Errorf("expected dismissal_ttl 0, got %v", req.DismissalTTL)
+	}
 }
 
 // --- Context cancellation test ---

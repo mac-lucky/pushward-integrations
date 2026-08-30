@@ -25,8 +25,16 @@ func testConfig() *config.UnmanicConfig {
 			StaleTimeout:   30 * time.Minute,
 			EndDelay:       10 * time.Millisecond,
 			EndDisplayTime: 10 * time.Millisecond,
+			DismissalDelay: testDismissalDelay(),
 		},
 	}
+}
+
+// testDismissalDelay mirrors the shipped default so the handler tests prove the
+// configured value actually reaches the create body.
+func testDismissalDelay() *time.Duration {
+	d := 2 * time.Minute
+	return &d
 }
 
 func newHandler(t *testing.T, cfg *config.UnmanicConfig) (http.Handler, *[]testutil.APICall, *sync.Mutex) {
@@ -79,6 +87,11 @@ func TestSuccess(t *testing.T) {
 	}
 	var createReq pushward.CreateActivityRequest
 	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
+	// A completion confirmation should not sit on the Lock Screen for the full
+	// cleanup_delay; the configured dismissal_delay has to reach the create body.
+	if createReq.DismissalTTL == nil || *createReq.DismissalTTL != 120 {
+		t.Errorf("expected dismissal_ttl 120, got %v", createReq.DismissalTTL)
+	}
 	if !strings.HasPrefix(createReq.Slug, "unmanic-") {
 		t.Errorf("expected slug with unmanic- prefix, got %s", createReq.Slug)
 	}

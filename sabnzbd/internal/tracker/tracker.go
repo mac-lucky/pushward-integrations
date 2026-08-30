@@ -98,6 +98,10 @@ func (t *Tracker) Cleanup(ctx context.Context) {
 	req := pushward.UpdateRequest{
 		State:   pushward.StateEnded,
 		Content: pushward.Content{Template: t.cfg.SABnzbd.Template, Progress: 0, State: "Dismissed"},
+		// The card is provably stale - it survived a crash and says so - and
+		// without this it lingers on the Lock Screen for another cleanup_delay
+		// after every restart.
+		DismissalTTL: pushward.IntPtr(0),
 	}
 	if err := t.pw.UpdateActivity(ctx, slug, req); err != nil {
 		slog.Info("no stale activity to clean up")
@@ -306,7 +310,15 @@ func (t *Tracker) sendSeed(ctx context.Context, progress float64, state, icon, a
 // send issues a merge-patch tick. It returns the PatchActivity error so callers
 // can avoid recording dedup state for an update the server never received
 // (e.g. retries exhausted or the circuit breaker is open).
-func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string, value *float64) error {
+// sendPatchOption tweaks the PatchRequest send builds, for the top-level fields
+// that are not part of the content frame.
+type sendPatchOption func(*pushward.PatchRequest)
+
+// dismissImmediately clears the card off the Lock Screen as the end frame lands
+// rather than letting it linger for cleanup_delay.
+func dismissImmediately(r *pushward.PatchRequest) { r.DismissalTTL = pushward.IntPtr(0) }
+
+func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string, value *float64, opts ...sendPatchOption) error {
 	template := t.cfg.SABnzbd.Template
 	contentPatch := &pushward.ContentPatch{
 		Progress:      pushward.Float64Ptr(progress),
@@ -331,10 +343,14 @@ func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accen
 	}
 	contentPatch.LiveProgress, contentPatch.EndDate = liveProgress(template, remainingSeconds)
 
-	if err := t.pw.PatchActivity(ctx, slug, pushward.PatchRequest{
+	req := pushward.PatchRequest{
 		State:   activityState,
 		Content: contentPatch,
-	}); err != nil {
+	}
+	for _, opt := range opts {
+		opt(&req)
+	}
+	if err := t.pw.PatchActivity(ctx, slug, req); err != nil {
 		slog.Error("failed to send update", "error", err)
 		return err
 	}
@@ -379,7 +395,8 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		// real completion summary.
 		if pp, _ := t.getPPStatus(ctx); pp == "" {
 			slog.Warn("SABnzbd never started downloading, giving up")
-			_ = t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", pushward.ColorGreen, nil, "", pushward.StateEnded, nil)
+			// Nothing happened, so there is nothing to come back and read.
+			_ = t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", pushward.ColorGreen, nil, "", pushward.StateEnded, nil, dismissImmediately)
 			return
 		}
 		slog.Info("queue idle but post-processing active, tracking post-processing")

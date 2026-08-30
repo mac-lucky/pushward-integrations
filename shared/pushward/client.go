@@ -494,19 +494,69 @@ func (c *Client) recordResult(ctx context.Context, operation string, attempts in
 	}
 }
 
+// CreateOption tunes a single CreateActivity call. It is the growth path for
+// POST /activities body fields; the positional parameters are frozen.
+type CreateOption func(*CreateActivityRequest)
+
+// WithDismissalTTL sets dismissal_ttl: seconds after ENDED before the Live
+// Activity leaves the Lock Screen, with 0 removing it immediately. Values are
+// clamped to 0..DismissalTTLMax rather than rejected, because an option func
+// cannot return an error and a clamped window beats a 422 that loses the whole
+// create - the same trade ClampStepShape makes.
+//
+// Set this at create, not only on the end frame: the server applies
+// dismissal_ttl to auto-ends too (stale_ttl expiry, countdown expiry), and
+// those never receive a PATCH from a bridge.
+func WithDismissalTTL(seconds int) CreateOption {
+	v := min(max(seconds, 0), DismissalTTLMax)
+	return func(r *CreateActivityRequest) { r.DismissalTTL = &v }
+}
+
+// DismissalTTLOptions adapts an optional configured duration to the option
+// slice, so a call site can splat it unconditionally:
+//
+//	pw.CreateActivity(ctx, slug, name, prio, endedTTL, staleTTL,
+//	    pushward.DismissalTTLOptions(cfg.DismissalDelay)...)
+//
+// A nil duration yields no options, leaving the server default in force.
+func DismissalTTLOptions(d *time.Duration) []CreateOption {
+	if d == nil {
+		return nil
+	}
+	return []CreateOption{WithDismissalTTL(int(d.Seconds()))}
+}
+
+// DismissalTTLPtr is the same adaptation for the *int dismissal_ttl fields on
+// UpdateRequest and PatchRequest. Nil in, nil out.
+func DismissalTTLPtr(d *time.Duration) *int {
+	if d == nil {
+		return nil
+	}
+	return IntPtr(min(max(int(d.Seconds()), 0), DismissalTTLMax))
+}
+
 // CreateActivity creates (or refreshes) an activity via POST /activities.
 // The server upserts and always returns 201 with an X-Resource-Action header
 // distinguishing created vs. updated, so duplicate slugs are no longer a 409.
 // A 409 now signals only activity.limit_exceeded - surfaced as a typed error.
-func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority, endedTTL, staleTTL int) error {
+// Optional body fields ride in as CreateOption rather than more positional
+// parameters: the signature is frozen by pushward-grafana-plugin, which pins
+// this module and calls CreateActivity from two places, so widening it is a
+// cross-repo compile break on a v0 module with no major-version escape hatch.
+// Same shape as PatchOption below.
+func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority, endedTTL, staleTTL int, opts ...CreateOption) error {
+	req := CreateActivityRequest{
+		Slug:     slug,
+		Name:     name,
+		Priority: priority,
+		EndedTTL: endedTTL,
+		StaleTTL: staleTTL,
+	}
+	for _, opt := range opts {
+		opt(&req)
+	}
 	return c.doWithRetry(ctx, "create", http.MethodPost, fmt.Sprintf("%s/activities", c.baseURL), "",
-		CreateActivityRequest{
-			Slug:     slug,
-			Name:     name,
-			Priority: priority,
-			EndedTTL: endedTTL,
-			StaleTTL: staleTTL,
-		},
+		req,
 		func(body []byte) (bool, error) {
 			p := parseProblem(body)
 			// bytes.Contains is a rollout-safety net for servers that have

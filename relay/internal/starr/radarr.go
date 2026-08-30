@@ -216,7 +216,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 	if !alreadyTracked {
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := cl.CreateActivity(ctx, slug, title, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
+		if err := cl.CreateActivity(ctx, slug, title, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL, h.config.CreateOptions()...); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
 			return err
@@ -324,7 +324,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 
 		endedTTL := int(h.config.CleanupDelay.Seconds())
 		staleTTL := int(h.config.StaleTimeout.Seconds())
-		if err := cl.CreateActivity(ctx, slug, title, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
+		if err := cl.CreateActivity(ctx, slug, title, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL, h.config.CreateOptions()...); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
 			return err

@@ -34,7 +34,15 @@ const (
 // produce a shape that validates.
 const (
 	MaxStepLabelLen = 32 // runes per step_labels entry
-	MinStepRows     = 1  // jobs per step_rows entry
+
+	// MaxSeverityLabelRunes caps content.severity_label, which the server reads
+	// on the alert template only. Raised from 32 in server v1.11.0.
+	MaxSeverityLabelRunes = 40
+
+	// DismissalTTLMax mirrors the server's dismissal_ttl ceiling: iOS will not
+	// hold an ended Live Activity on the Lock Screen longer than 4h.
+	DismissalTTLMax = 14400
+	MinStepRows     = 1 // jobs per step_rows entry
 	MaxStepRows     = 10
 )
 
@@ -484,6 +492,14 @@ type PatchRequest struct {
 	Content  *ContentPatch `json:"content,omitempty"`
 	Sound    ActivitySound `json:"sound,omitempty"`
 	Priority *int          `json:"priority,omitempty"`
+
+	// The three TTLs are top-level merge-patch fields on the server (omitted
+	// keeps, null clears, a number sets). With omitempty a nil pointer means
+	// "keep"; the null-clear form is unreachable from this client, the same
+	// limitation UpdateRequest and ContentPatch carry. No caller wants it.
+	EndedTTL     *int `json:"ended_ttl,omitempty"`
+	StaleTTL     *int `json:"stale_ttl,omitempty"`
+	DismissalTTL *int `json:"dismissal_ttl,omitempty"`
 }
 
 // WidgetTemplate names a renderer on the iOS widget extension.

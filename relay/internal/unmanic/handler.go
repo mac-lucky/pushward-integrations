@@ -126,7 +126,7 @@ func (h *Handler) handleResult(ctx context.Context, userKey string, log *slog.Lo
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
-	if err := cl.CreateActivity(ctx, slug, filename, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, filename, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL, h.config.CreateOptions()...); err != nil {
 		log.Error("failed to create unmanic activity", "slug", slug, "error", err)
 		return err
 	}

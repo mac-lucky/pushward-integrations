@@ -188,7 +188,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 
 	cl := h.clients.Get(userKey)
 	if err := cl.CreateActivity(ctx, slug, name, ov.PriorityOr(h.config.Priority),
-		int(h.config.CleanupDelay.Seconds()), int(h.config.StaleTimeout.Seconds())); err != nil {
+		int(h.config.CleanupDelay.Seconds()), int(h.config.StaleTimeout.Seconds()), h.config.CreateOptions()...); err != nil {
 		log.Error("failed to create overseerr activity", "slug", slug, "error", err)
 		return nil, humautil.UpstreamError(err)
 	}

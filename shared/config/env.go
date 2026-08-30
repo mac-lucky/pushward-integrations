@@ -55,6 +55,23 @@ func EnvDuration(name string, dst *time.Duration) error {
 	return nil
 }
 
+// EnvDurationPtr applies a duration environment override to an optional field.
+// Unlike EnvDuration it can distinguish "unset" (nil, so the server default
+// applies) from an explicit zero, which for dismissal_ttl means "remove the
+// card immediately".
+func EnvDurationPtr(name string, dst **time.Duration) error {
+	v := os.Getenv(name)
+	if v == "" {
+		return nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return fmt.Errorf("parsing %s: %w", name, err)
+	}
+	*dst = &d
+	return nil
+}
+
 // EnvInt applies an integer environment override to dst, leaving it untouched
 // when the variable is unset or empty.
 //

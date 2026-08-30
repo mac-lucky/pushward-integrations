@@ -123,7 +123,7 @@ func (h *Handler) handleDocument(ctx context.Context, userKey string, log *slog.
 	endedTTL := int(h.config.CleanupDelay.Seconds())
 	staleTTL := int(h.config.StaleTimeout.Seconds())
 
-	if err := cl.CreateActivity(ctx, slug, name, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, name, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL, h.config.CreateOptions()...); err != nil {
 		log.Error("failed to create paperless activity", "slug", slug, "error", err)
 		return err
 	}
@@ -179,7 +179,7 @@ func (h *Handler) handleConsumptionStarted(ctx context.Context, userKey string, 
 		name = "Document"
 	}
 
-	if err := cl.CreateActivity(ctx, slug, name, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
+	if err := cl.CreateActivity(ctx, slug, name, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL, h.config.CreateOptions()...); err != nil {
 		log.Error("failed to create paperless activity", "slug", slug, "error", err)
 		return err
 	}

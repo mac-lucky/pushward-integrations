@@ -227,7 +227,10 @@ func sendTest(ctx context.Context, cl *pushward.Client, log *slog.Logger, provid
 
 	slug := "relay-test-" + provider
 
-	if err := cl.CreateActivity(ctx, slug, pt.name, 1, 300, 120); err != nil {
+	// dismissal_ttl 0: a diagnostic card should leave the Lock Screen the moment
+	// it ends. Set at create rather than on the end frame so it also covers the
+	// 120s stale_ttl auto-end, which no PATCH from here ever reaches.
+	if err := cl.CreateActivity(ctx, slug, pt.name, 1, 300, 120, pushward.WithDismissalTTL(0)); err != nil {
 		return fmt.Errorf("create activity: %w", err)
 	}
 

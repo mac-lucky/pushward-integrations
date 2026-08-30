@@ -38,6 +38,10 @@ func TestSendTest(t *testing.T) {
 		if create.StaleTTL != 120 {
 			t.Errorf("expected stale_ttl 120, got %d", create.StaleTTL)
 		}
+		// A diagnostic card clears the Lock Screen the moment it ends.
+		if create.DismissalTTL == nil || *create.DismissalTTL != 0 {
+			t.Errorf("expected dismissal_ttl 0, got %v", create.DismissalTTL)
+		}
 
 		var update pushward.UpdateRequest
 		testutil.UnmarshalBody(t, recorded[1].Body, &update)

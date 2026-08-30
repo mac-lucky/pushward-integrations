@@ -7,6 +7,7 @@ import (
 
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/poster"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 // Config holds the relay gateway configuration.
@@ -90,6 +91,35 @@ type BaseProviderConfig struct {
 	StaleTimeout   time.Duration `yaml:"stale_timeout"`
 	EndDelay       time.Duration `yaml:"end_delay"`
 	EndDisplayTime time.Duration `yaml:"end_display_time"`
+
+	// DismissalDelay maps to the server's dismissal_ttl: how long an ENDED card
+	// stays on the Lock Screen, which CleanupDelay (deletion) otherwise decides.
+	// Nil leaves the server default. A pointer because 0 means "remove
+	// immediately", which is a real setting rather than an unset one.
+	DismissalDelay *time.Duration `yaml:"dismissal_delay"`
+}
+
+// CreateOptions turns the configured dismissal delay into CreateActivity
+// options, so a handler can splat it without a nil check.
+func (b BaseProviderConfig) CreateOptions() []pushward.CreateOption {
+	return pushward.DismissalTTLOptions(b.DismissalDelay)
+}
+
+// completionDismissalDelay returns the default dismissal_ttl for the providers whose
+// terminal event is a completion confirmation rather than something to come
+// back to: paperless, unmanic, overseerr and the two Starr apps. Each of them
+// also fires a notification on the same path, which is the durable record, and
+// they are the highest-churn family in the relay - a Sonarr season pack fires
+// once per episode. Alert and build/backup providers deliberately leave it
+// unset: a resolved outage or a finished build is exactly the card you go back
+// to the Lock Screen for. Override per provider with dismissal_delay.
+//
+// A function, not a shared var: yaml.v3 decodes into a non-nil pointer in place,
+// so one shared address would let a dismissal_delay on any single provider
+// rewrite the default for all four.
+func completionDismissalDelay() *time.Duration {
+	d := 2 * time.Minute
+	return &d
 }
 
 // GrafanaConfig holds Grafana-specific settings.
@@ -247,6 +277,7 @@ func Load(path string) (*Config, error) {
 					StaleTimeout:   30 * time.Minute,
 					EndDelay:       5 * time.Second,
 					EndDisplayTime: 4 * time.Second,
+					DismissalDelay: completionDismissalDelay(),
 				},
 			},
 			Jellyfin: JellyfinConfig{
@@ -269,6 +300,7 @@ func Load(path string) (*Config, error) {
 					StaleTimeout:   30 * time.Minute,
 					EndDelay:       5 * time.Second,
 					EndDisplayTime: 4 * time.Second,
+					DismissalDelay: completionDismissalDelay(),
 				},
 			},
 			Changedetection: ChangedetectionConfig{
@@ -287,6 +319,7 @@ func Load(path string) (*Config, error) {
 					StaleTimeout:   30 * time.Minute,
 					EndDelay:       5 * time.Second,
 					EndDisplayTime: 4 * time.Second,
+					DismissalDelay: completionDismissalDelay(),
 				},
 			},
 			Bazarr: BazarrConfig{
@@ -317,6 +350,7 @@ func Load(path string) (*Config, error) {
 					StaleTimeout:   30 * time.Minute,
 					EndDelay:       5 * time.Second,
 					EndDisplayTime: 4 * time.Second,
+					DismissalDelay: completionDismissalDelay(),
 				},
 			},
 			UptimeKuma: UptimeKumaConfig{

@@ -27,8 +27,16 @@ func testConfig() *config.StarrConfig {
 			StaleTimeout:   30 * time.Minute,
 			EndDelay:       10 * time.Millisecond,
 			EndDisplayTime: 10 * time.Millisecond,
+			DismissalDelay: testDismissalDelay(),
 		},
 	}
+}
+
+// testDismissalDelay mirrors the shipped default so the handler tests prove the
+// configured value actually reaches the create body.
+func testDismissalDelay() *time.Duration {
+	d := 2 * time.Minute
+	return &d
 }
 
 func newTestAPI(t *testing.T, cfg *config.StarrConfig) (http.Handler, *Handler, *[]testutil.APICall, *sync.Mutex) {
@@ -135,6 +143,11 @@ func TestRadarrGrab(t *testing.T) {
 	}
 	if createReq.Priority != 1 {
 		t.Errorf("expected priority 1, got %d", createReq.Priority)
+	}
+	// A completion confirmation should not sit on the Lock Screen for the full
+	// cleanup_delay; the configured dismissal_delay has to reach the create body.
+	if createReq.DismissalTTL == nil || *createReq.DismissalTTL != 120 {
+		t.Errorf("expected dismissal_ttl 120, got %v", createReq.DismissalTTL)
 	}
 
 	// Verify ONGOING update

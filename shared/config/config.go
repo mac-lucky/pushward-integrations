@@ -7,6 +7,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 // PushWardConfig holds the common PushWard API settings shared by all integrations.
@@ -18,6 +20,12 @@ type PushWardConfig struct {
 	StaleTimeout   time.Duration `yaml:"stale_timeout"`
 	EndDelay       time.Duration `yaml:"end_delay"`
 	EndDisplayTime time.Duration `yaml:"end_display_time"`
+
+	// DismissalDelay maps to the server's dismissal_ttl: how long an ENDED
+	// activity stays on the Lock Screen, decoupled from CleanupDelay, which
+	// governs deletion. Nil leaves the server default (removal follows
+	// ended_ttl, capped at 4h). A pointer because 0 means "remove immediately".
+	DismissalDelay *time.Duration `yaml:"dismissal_delay"`
 }
 
 // DefaultPushWardConfig is the shipped default for a bridge that closes its
@@ -84,7 +92,10 @@ func (c *PushWardConfig) ApplyEnvOverrides() error {
 	if err := EnvDuration("PUSHWARD_END_DELAY", &c.EndDelay); err != nil {
 		return err
 	}
-	return EnvDuration("PUSHWARD_END_DISPLAY_TIME", &c.EndDisplayTime)
+	if err := EnvDuration("PUSHWARD_END_DISPLAY_TIME", &c.EndDisplayTime); err != nil {
+		return err
+	}
+	return EnvDurationPtr("PUSHWARD_DISMISSAL_DELAY", &c.DismissalDelay)
 }
 
 // Validate checks that required fields are set and priority is in range.
@@ -108,7 +119,18 @@ func (c *PushWardConfig) Validate() error {
 	if c.StaleTimeout < 0 || c.StaleTimeout > 720*time.Hour {
 		return fmt.Errorf("pushward.stale_timeout must be 0-720h (got %v)", c.StaleTimeout)
 	}
+	// dismissal_ttl has a tighter ceiling than the other two: 4h is the iOS
+	// limit, not a server policy, so there is nothing to raise it to.
+	if c.DismissalDelay != nil && (*c.DismissalDelay < 0 || *c.DismissalDelay > 4*time.Hour) {
+		return fmt.Errorf("pushward.dismissal_delay must be 0-4h (got %v)", *c.DismissalDelay)
+	}
 	return nil
+}
+
+// CreateOptions turns the configured dismissal delay into CreateActivity
+// options, so a call site can splat it without a nil check.
+func (c PushWardConfig) CreateOptions() []pushward.CreateOption {
+	return pushward.DismissalTTLOptions(c.DismissalDelay)
 }
 
 // ApplyEnvOverrides applies PUSHWARD_SERVER_* environment variable overrides.

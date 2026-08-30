@@ -492,3 +492,59 @@ func TestApplyEnvOverrides_Poster(t *testing.T) {
 		}
 	})
 }
+
+// The dismissal_ttl defaults are a policy decision, not an accident, and without
+// a test the Tier C half erodes silently: a completion confirmation clears the
+// Lock Screen after two minutes, while an alert or a build result - the cards
+// you actually come back to read - keep the server default.
+func TestDefaultDismissalDelay(t *testing.T) {
+	clearRelayEnv(t)
+	t.Setenv("PUSHWARD_DATABASE_DSN", "postgres://relay@localhost/relay")
+	cfg, err := Load("")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	p := cfg.Providers
+
+	completions := map[string]*time.Duration{
+		"starr":     p.Starr.DismissalDelay,
+		"paperless": p.Paperless.DismissalDelay,
+		"unmanic":   p.Unmanic.DismissalDelay,
+		"overseerr": p.Overseerr.DismissalDelay,
+	}
+	for name, got := range completions {
+		if got == nil {
+			t.Errorf("%s: expected a dismissal_delay default, got nil", name)
+			continue
+		}
+		if *got != 2*time.Minute {
+			t.Errorf("%s: expected 2m dismissal_delay, got %v", name, *got)
+		}
+	}
+
+	// Each provider must own its pointer: yaml.v3 decodes into a non-nil pointer
+	// in place, so a shared address would let one provider's dismissal_delay
+	// rewrite every other provider's default.
+	if p.Starr.DismissalDelay == p.Paperless.DismissalDelay {
+		t.Error("providers share one *time.Duration; a YAML override on either would move both")
+	}
+
+	glanceable := map[string]*time.Duration{
+		"grafana":         p.Grafana.DismissalDelay,
+		"argocd":          p.ArgoCD.DismissalDelay,
+		"uptimekuma":      p.UptimeKuma.DismissalDelay,
+		"gatus":           p.Gatus.DismissalDelay,
+		"proxmox":         p.Proxmox.DismissalDelay,
+		"truenas":         p.TrueNAS.DismissalDelay,
+		"komodo":          p.Komodo.DismissalDelay,
+		"changedetection": p.Changedetection.DismissalDelay,
+		"backrest":        p.Backrest.DismissalDelay,
+		"gitea":           p.Gitea.DismissalDelay,
+		"jellyfin":        p.Jellyfin.DismissalDelay,
+	}
+	for name, got := range glanceable {
+		if got != nil {
+			t.Errorf("%s: expected no dismissal_delay (the card is worth coming back to), got %v", name, *got)
+		}
+	}
+}
