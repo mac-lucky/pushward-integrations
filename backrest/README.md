@@ -76,6 +76,7 @@ version.
 | `PUSHWARD_API_KEY` | `pushward.api_key` | Integration key (`hlk_`) | required |
 | `PUSHWARD_PRIORITY` | `pushward.priority` | Activity priority, 0-10 | `1` |
 | `PUSHWARD_CLEANUP_DELAY` | `pushward.cleanup_delay` | The activity's `ended_ttl`: how long a finished card lingers, and how long it stays on the Lock Screen | `10m` |
+| `PUSHWARD_DISMISSAL_DELAY` | `pushward.dismissal_delay` | Server `dismissal_ttl`: how long the ended card stays on the Lock Screen, independent of `cleanup_delay`, which governs deletion. `0` removes it the moment it ends; unset leaves the server default (follows `ended_ttl`, capped at 4h). | unset |
 | `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Silence after which the server ends the activity itself. The keep-alive is half of it | `30m` |
 | `PUSHWARD_LOG_LEVEL` | _(env only)_ | `debug`, `info`, `warn` or `error`. Read before the config file, so it works even when config loading is what failed | `info` |
 | `PUSHWARD_POLL_INTERVAL` | `polling.interval` | Poll interval while something is running | `5s` |

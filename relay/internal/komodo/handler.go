@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
-	"strings"
-	"unicode"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -31,24 +29,34 @@ type Handler struct {
 	ender   *lifecycle.Ender
 }
 
-// RegisterRoutes registers the Komodo webhook endpoint and returns the Handler.
-
-// severityLabel replaces the stock Info/Warning/Critical badge with the Komodo
-// alert type, humanized: ContainerUnhealthy reads as "Container Unhealthy". The
-// condition is the useful thing to show and today it only reaches the card
-// through summarize. Empty type leaves the stock badge. Firing and resolve
-// frames carry the same label so the badge does not change mid-incident.
-func severityLabel(kd *komodoData) string {
-	var b strings.Builder
-	for i, r := range strings.TrimSpace(kd.Type) {
-		if i > 0 && unicode.IsUpper(r) {
-			b.WriteByte(' ')
-		}
-		b.WriteRune(r)
-	}
-	return text.TruncateHard(b.String(), pushward.MaxSeverityLabelRunes)
+// severityLabels humanizes the alert conditions severityLabel can be asked
+// about. Its keys mirror resolvableTypes (types.go) exactly - the only
+// conditions that reach a Live Activity - which TestSeverityLabelsCoverResolvableTypes
+// enforces. A table rather than a rune walk over the CamelCase name: the walk
+// renders ServerCpu as "Server Cpu" and has no way to be told otherwise.
+var severityLabels = map[string]string{
+	"ServerUnreachable":     "Server Unreachable",
+	"ServerCpu":             "Server CPU",
+	"ServerMem":             "Server Memory",
+	"ServerDisk":            "Server Disk",
+	"ServerVersionMismatch": "Server Version Mismatch",
+	"SwarmUnhealthy":        "Swarm Unhealthy",
 }
 
+// severityLabel replaces the stock Info/Warning/Critical badge with the Komodo
+// alert condition in words: ServerUnreachable reads as "Server Unreachable".
+// The condition is the useful thing to show and today it only reaches the card
+// through summarize. Firing and resolve frames carry the same label so the
+// badge does not change mid-incident.
+//
+// An unrecognised type yields no label. That shows the stock badge on a fresh
+// card only: severity_label is omitempty and the server merge-patches, so a
+// slug reused inside the cleanup window keeps the label it last received.
+func severityLabel(kd *komodoData) string {
+	return pushward.SeverityLabel(severityLabels[kd.Type])
+}
+
+// RegisterRoutes registers the Komodo webhook endpoint and returns the Handler.
 func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.KomodoConfig) *Handler {
 	h := &Handler{
 		store:   store,

@@ -40,6 +40,11 @@ type Config struct {
 	Smoothing       *bool
 	Scale           string
 	Decimals        *int
+
+	// CreateOptions carries the shared PushWard create-body knobs (currently
+	// dismissal_ttl) that have no positional slot on CreateActivity. Built by
+	// main.go from sharedconfig.PushWardConfig.CreateOptions; nil is fine.
+	CreateOptions []pushward.CreateOption
 }
 
 // Handler receives Grafana webhook alert notifications and creates
@@ -217,7 +222,7 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 
 	if isNew {
 		err := h.pwClient.CreateActivity(ctx, slug, alertname, h.cfg.Priority,
-			int(h.cfg.CleanupDelay.Seconds()), int(h.cfg.StaleTimeout.Seconds()))
+			int(h.cfg.CleanupDelay.Seconds()), int(h.cfg.StaleTimeout.Seconds()), h.cfg.CreateOptions...)
 		if err != nil {
 			h.mu.Lock()
 			delete(h.active, mapKey)

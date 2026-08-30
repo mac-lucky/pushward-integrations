@@ -535,7 +535,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		endedTTL := int(p.opts.PushWard.CleanupDelay.Seconds())
 		staleTTL := int(p.opts.PushWard.StaleTimeout.Seconds())
 		title := text.TruncateHard(fmt.Sprintf("%s: %s", p.opts.TitlePrefix, repoShort), titleLimit)
-		if err := p.pw.CreateActivity(ctx, slug, title, p.opts.PushWard.Priority, endedTTL, staleTTL); err != nil {
+		if err := p.pw.CreateActivity(ctx, slug, title, p.opts.PushWard.Priority, endedTTL, staleTTL, p.opts.PushWard.CreateOptions()...); err != nil {
 			p.log.Error("failed to create activity", "slug", slug, "error", err)
 			continue
 		}

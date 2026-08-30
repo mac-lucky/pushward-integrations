@@ -108,6 +108,7 @@ All settings come from a YAML config file and/or environment variables. **Enviro
 | `PUSHWARD_API_KEY` | `pushward.api_key` | Integration key (`hlk_`) with `activity:manage` scope; sent as `Authorization: Bearer`. | Yes |
 | `PUSHWARD_PRIORITY` | `pushward.priority` | Live Activity priority; must be `0`-`10`. | No (default: `1`) |
 | `PUSHWARD_CLEANUP_DELAY` | `pushward.cleanup_delay` | Server-side `ended_ttl`: how long ended activities linger before cleanup (Go duration). | No (default: `15m`) |
+| `PUSHWARD_DISMISSAL_DELAY` | `pushward.dismissal_delay` | Server `dismissal_ttl`: how long the ended card stays on the Lock Screen, independent of `cleanup_delay`, which governs deletion. `0` removes it the moment it ends; unset leaves the server default (follows `ended_ttl`, capped at 4h). | No (unset) |
 | `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Server-side `stale_ttl`: auto-expiry for stuck/abandoned activities (Go duration). | No (default: `60m`) |
 | `PUSHWARD_END_DELAY` | `pushward.end_delay` | Delay before phase 1 (terminal `ONGOING` frame) of the two-phase end (Go duration). | No (default: `5s`) |
 | `PUSHWARD_END_DISPLAY_TIME` | `pushward.end_display_time` | How long the terminal frame shows before the `ENDED` frame is sent (Go duration). | No (default: `4s`) |

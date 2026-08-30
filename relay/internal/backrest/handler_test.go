@@ -673,9 +673,10 @@ func TestAnyError(t *testing.T) {
 	if update.Content.Severity != "critical" {
 		t.Errorf("expected severity 'critical', got %s", update.Content.Severity)
 	}
-	// The error text took the state line, so the condition moves to the badge.
-	if update.Content.SeverityLabel != stateAlertError {
-		t.Errorf("expected severity_label %q, got %q", stateAlertError, update.Content.SeverityLabel)
+	// No badge: the only label this branch could produce is the bare word
+	// "Error", which says less than the critical styling already does.
+	if update.Content.SeverityLabel != "" {
+		t.Errorf("expected no severity_label, got %q", update.Content.SeverityLabel)
 	}
 	if update.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red color, got %s", update.Content.AccentColor)
@@ -748,6 +749,11 @@ func TestSnapshotSkipped(t *testing.T) {
 	}
 	if update.Content.State != stateSnapshotSkipped {
 		t.Errorf("expected state %q, got %s", stateSnapshotSkipped, update.Content.State)
+	}
+	// Backrest emits no severity_label at all; the stock badge carries the
+	// severity and the state line already names the condition.
+	if update.Content.SeverityLabel != "" {
+		t.Errorf("expected no severity_label, got %q", update.Content.SeverityLabel)
 	}
 	if update.Content.Subtitle != "Backrest · daily-backup · local-repo" {
 		t.Errorf("expected subtitle 'Backrest · daily-backup · local-repo', got %q", update.Content.Subtitle)

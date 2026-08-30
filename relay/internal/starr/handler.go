@@ -8,7 +8,6 @@ import (
 	"slices"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -228,15 +227,6 @@ func (h *Handler) deleteTrackedSlug(ctx context.Context, userKey, mapKey string)
 	}
 }
 
-// titleCase capitalises the first rune of a string.
-func titleCase(s string) string {
-	if s == "" {
-		return s
-	}
-	r, size := utf8.DecodeRuneInString(s)
-	return strings.ToUpper(string(r)) + s[size:]
-}
-
 // handleHealth sends a push notification for a health issue.
 func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Logger, provider string, p *HealthPayload) error {
 	level := "Warning"
@@ -246,7 +236,7 @@ func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Lo
 	body := level + text.SepDot + text.Truncate(p.Message, 100)
 
 	req := pushward.SendNotificationRequest{
-		Title:      titleCase(provider) + " Health",
+		Title:      text.Capitalize(provider) + " Health",
 		Subtitle:   text.Truncate(p.Message, 80),
 		Body:       body,
 		ThreadID:   provider + "-health",
@@ -267,7 +257,7 @@ func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Lo
 // handleHealthRestored sends a push notification when a health issue resolves.
 func (h *Handler) handleHealthRestored(ctx context.Context, userKey string, log *slog.Logger, provider string, p *HealthRestoredPayload) error {
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title:      titleCase(provider) + " Health",
+		Title:      text.Capitalize(provider) + " Health",
 		Subtitle:   text.Truncate(p.Message, 80),
 		Body:       "Resolved" + text.SepDot + text.Truncate(p.Message, 100),
 		ThreadID:   provider + "-health",
@@ -298,7 +288,7 @@ func (h *Handler) handleManualInteractionNotify(ctx context.Context, userKey str
 		body = manualInteractionDefaultReason
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title:      titleCase(provider),
+		Title:      text.Capitalize(provider),
 		Subtitle:   text.Truncate(p.DownloadInfo.Title, 80),
 		Body:       body,
 		ThreadID:   provider,
@@ -343,7 +333,7 @@ func (h *Handler) handleApplicationUpdate(ctx context.Context, userKey string, l
 		"new_version":      p.NewVersion,
 	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
-		Title:      titleCase(provider),
+		Title:      text.Capitalize(provider),
 		Subtitle:   p.PreviousVersion + text.SepArrow + p.NewVersion,
 		Body:       "Updated" + text.SepDot + p.PreviousVersion + text.SepArrow + p.NewVersion,
 		ThreadID:   provider,
@@ -367,6 +357,6 @@ func deleteReasonText(reason string) string {
 	case "noLinkedEpisodes":
 		return "No linked episodes"
 	default:
-		return titleCase(reason)
+		return text.Capitalize(reason)
 	}
 }

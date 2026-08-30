@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -28,18 +27,20 @@ type Handler struct {
 	ender   *lifecycle.Ender
 }
 
-// RegisterRoutes registers the Gatus webhook endpoint and returns the Handler.
-
 // severityLabel replaces the stock Info/Warning/Critical badge with the Gatus
 // endpoint group - prod, homelab - which is routing information the card does
-// not otherwise carry; the endpoint name is already the activity name. Empty
-// when the payload carries no group, which leaves the stock badge. The firing
-// and resolve frames use the same label so the badge is stable across the
-// transition.
+// not otherwise carry; the endpoint name is already the activity name. The
+// firing and resolve frames use the same label so the badge is stable across
+// the transition.
+//
+// Empty when the payload carries no group. That shows the stock badge on a
+// fresh card only: severity_label is omitempty and the server merge-patches, so
+// a slug reused inside the cleanup window keeps the label it last received.
 func severityLabel(p *gatusPayload) string {
-	return text.TruncateHard(strings.TrimSpace(p.EndpointGroup), pushward.MaxSeverityLabelRunes)
+	return pushward.SeverityLabel(p.EndpointGroup)
 }
 
+// RegisterRoutes registers the Gatus webhook endpoint and returns the Handler.
 func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.GatusConfig) *Handler {
 	h := &Handler{
 		store:   store,

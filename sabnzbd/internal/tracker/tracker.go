@@ -307,9 +307,6 @@ func (t *Tracker) sendSeed(ctx context.Context, progress float64, state, icon, a
 	return nil
 }
 
-// send issues a merge-patch tick. It returns the PatchActivity error so callers
-// can avoid recording dedup state for an update the server never received
-// (e.g. retries exhausted or the circuit breaker is open).
 // sendPatchOption tweaks the PatchRequest send builds, for the top-level fields
 // that are not part of the content frame.
 type sendPatchOption func(*pushward.PatchRequest)
@@ -318,6 +315,9 @@ type sendPatchOption func(*pushward.PatchRequest)
 // rather than letting it linger for cleanup_delay.
 func dismissImmediately(r *pushward.PatchRequest) { r.DismissalTTL = pushward.IntPtr(0) }
 
+// send issues a merge-patch tick. It returns the PatchActivity error so callers
+// can avoid recording dedup state for an update the server never received
+// (e.g. retries exhausted or the circuit breaker is open).
 func (t *Tracker) send(ctx context.Context, progress float64, state, icon, accentColor string, remainingSeconds *int, subtitle string, activityState string, value *float64, opts ...sendPatchOption) error {
 	template := t.cfg.SABnzbd.Template
 	contentPatch := &pushward.ContentPatch{
@@ -374,7 +374,7 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 
 	endedTTL := int(t.cfg.PushWard.CleanupDelay.Seconds())
 	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
-	if err := t.pw.CreateActivity(ctx, slug, "SABnzbd", t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
+	if err := t.pw.CreateActivity(ctx, slug, "SABnzbd", t.cfg.PushWard.Priority, endedTTL, staleTTL, t.cfg.PushWard.CreateOptions()...); err != nil {
 		slog.Error("failed to create activity", "error", err)
 		return
 	}

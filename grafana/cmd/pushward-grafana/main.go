@@ -66,6 +66,7 @@ func main() {
 		Priority:        cfg.PushWard.Priority,
 		CleanupDelay:    cfg.PushWard.CleanupDelay,
 		StaleTimeout:    cfg.PushWard.StaleTimeout,
+		CreateOptions:   cfg.PushWard.CreateOptions(),
 		SeverityLabel:   cfg.Timeline.SeverityLabel,
 		DefaultSeverity: cfg.Timeline.DefaultSeverity,
 		Smoothing:       cfg.Timeline.Smoothing,

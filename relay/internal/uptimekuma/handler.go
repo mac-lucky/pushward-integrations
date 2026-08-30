@@ -31,17 +31,19 @@ type Handler struct {
 	ender   *lifecycle.Ender
 }
 
-// RegisterRoutes registers the Uptime Kuma webhook endpoint and returns the Handler.
-
 // severityLabel replaces the stock Info/Warning/Critical badge with the monitor
 // type - HTTP, PING, PORT, DNS, DOCKER - which is the one thing about the check
-// the card does not otherwise say. Empty when Uptime Kuma sent no type, which
-// leaves the stock badge. The same label rides the DOWN, PENDING and resolve
-// frames so the badge does not change under the user mid-incident.
+// the card does not otherwise say. The same label rides the DOWN, PENDING and
+// resolve frames so the badge does not change under the user mid-incident.
+//
+// Empty when Uptime Kuma sent no type. That shows the stock badge on a fresh
+// card only: severity_label is omitempty and the server merge-patches, so a
+// slug reused inside the cleanup window keeps the label it last received.
 func severityLabel(p *uptimekumaPayload) string {
-	return text.TruncateHard(strings.ToUpper(strings.TrimSpace(p.Monitor.Type)), pushward.MaxSeverityLabelRunes)
+	return pushward.SeverityLabel(strings.ToUpper(p.Monitor.Type))
 }
 
+// RegisterRoutes registers the Uptime Kuma webhook endpoint and returns the Handler.
 func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.UptimeKumaConfig) *Handler {
 	h := &Handler{
 		store:   store,

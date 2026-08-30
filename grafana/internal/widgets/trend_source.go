@@ -9,6 +9,12 @@ import (
 	sharedwidgets "github.com/mac-lucky/pushward-integrations/shared/widgets"
 )
 
+// TODO: TrendSource here and pushward-grafana-plugin's are the same buffer
+// written twice, and so are the two validateContent passes over the same widget
+// config. Neither can be hoisted into shared/widgets yet: the plugin pins a
+// released pseudo-version of shared and would not pick either up until it moves
+// off the pin.
+
 // Trend sparkline bounds, mirrored from pushward-server: fewer than 2 or more
 // than 48 points is rejected.
 const (
@@ -99,6 +105,8 @@ func (s *TrendSource) push(v float64, now time.Time) {
 // staticSource publishes a widget that never polls. Value always reports
 // ErrNoData, which the manager reads as "nothing to update" after the initial
 // create - the countdown template renders entirely from its own dates.
-type staticSource struct{}
-
-func (staticSource) Value(context.Context) (float64, error) { return 0, sharedwidgets.ErrNoData }
+func staticSource() sharedwidgets.ValueSource {
+	return sharedwidgets.ValueSourceFunc(func(context.Context) (float64, error) {
+		return 0, sharedwidgets.ErrNoData
+	})
+}

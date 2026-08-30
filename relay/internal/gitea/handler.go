@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -504,7 +503,7 @@ func conclusionState(conclusion string) (string, string) {
 	case "":
 		return "Complete", pushward.ColorGreen
 	default:
-		return titleCase(conclusion), pushward.ColorOrange
+		return text.Capitalize(conclusion), pushward.ColorOrange
 	}
 }
 
@@ -562,13 +561,4 @@ func upsertJob(jobs []jobRecord, jr jobRecord) []jobRecord {
 // creation-ordered sequence across updates.
 func sortJobs(jobs []jobRecord) {
 	sort.Slice(jobs, func(i, j int) bool { return jobs[i].ID < jobs[j].ID })
-}
-
-// titleCase capitalises the first rune of s.
-func titleCase(s string) string {
-	if s == "" {
-		return s
-	}
-	r, size := utf8.DecodeRuneInString(s)
-	return strings.ToUpper(string(r)) + s[size:]
 }

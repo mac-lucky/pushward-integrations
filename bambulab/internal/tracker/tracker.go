@@ -183,7 +183,7 @@ func (t *Tracker) startTracking(ctx context.Context, state *bambulab.MergedState
 	endedTTL := int(t.cfg.PushWard.CleanupDelay.Seconds())
 	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
 
-	if err := t.pw.CreateActivity(ctx, t.slug, printName(state), t.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
+	if err := t.pw.CreateActivity(ctx, t.slug, printName(state), t.cfg.PushWard.Priority, endedTTL, staleTTL, t.cfg.PushWard.CreateOptions()...); err != nil {
 		slog.Error("failed to create activity", "error", err)
 		return
 	}

@@ -121,7 +121,8 @@ func (c *PushWardConfig) Validate() error {
 	}
 	// dismissal_ttl has a tighter ceiling than the other two: 4h is the iOS
 	// limit, not a server policy, so there is nothing to raise it to.
-	if c.DismissalDelay != nil && (*c.DismissalDelay < 0 || *c.DismissalDelay > 4*time.Hour) {
+	maxDismissal := time.Duration(pushward.DismissalTTLMax) * time.Second
+	if c.DismissalDelay != nil && (*c.DismissalDelay < 0 || *c.DismissalDelay > maxDismissal) {
 		return fmt.Errorf("pushward.dismissal_delay must be 0-4h (got %v)", *c.DismissalDelay)
 	}
 	return nil

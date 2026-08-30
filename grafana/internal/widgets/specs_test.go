@@ -8,6 +8,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/config"
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	sharedwidgets "github.com/mac-lucky/pushward-integrations/shared/widgets"
 )
 
 func TestBuildSpecs_StatListChangeMask(t *testing.T) {
@@ -58,7 +59,7 @@ func TestBuildSpecsAttachesTrendAndCountdownSources(t *testing.T) {
 	if _, ok := specs[0].Source.(*TrendSource); !ok {
 		t.Errorf("expected a TrendSource for the trend template, got %T", specs[0].Source)
 	}
-	if _, ok := specs[1].Source.(staticSource); !ok {
+	if _, ok := specs[1].Source.(sharedwidgets.ValueSourceFunc); !ok {
 		t.Errorf("expected a staticSource for the countdown template, got %T", specs[1].Source)
 	}
 	if specs[0].StaleAfter == nil || *specs[0].StaleAfter != 600 {

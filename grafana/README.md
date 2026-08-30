@@ -110,6 +110,7 @@ Settings come from a YAML config file **or** environment variables. **Env vars o
 | `PUSHWARD_LOG_LEVEL` | _(env only)_ | `debug`, `info`, `warn` or `error` (default `info`). Read before the config file, so it works even when config loading is what failed | No |
 | `PUSHWARD_PRIORITY` | `pushward.priority` | Activity priority, validated to `0`-`10` (default `5`) | No |
 | `PUSHWARD_CLEANUP_DELAY` | `pushward.cleanup_delay` | Sent to the server as `ended_ttl`: grace period after resolve before the activity row is deleted and the iOS Lock Screen entry is dismissed (default `15m`; Apple caps Lock Screen dismissal at 4h) | No |
+| `PUSHWARD_DISMISSAL_DELAY` | `pushward.dismissal_delay` | Server `dismissal_ttl`: how long the ended card stays on the Lock Screen, independent of `cleanup_delay`, which governs deletion. `0` removes it the moment it ends; unset leaves the server default (follows `ended_ttl`, capped at 4h). | No |
 | `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Time before the in-memory sweeper drops an unresolved alert; also passed to the server (default `24h`; sweeper ticks every `stale_timeout/2`) | No |
 | `PUSHWARD_HISTORY_WINDOW` | `timeline.history_window` | How far back to backfill series history on initial firing (default `30m`) | No |
 | `PUSHWARD_POLL_INTERVAL` | `timeline.poll_interval` | How often the per-alert poller refreshes data points (default `30s`) | No |
@@ -157,7 +158,7 @@ Widgets are **independent of alerts**. Each entry in the `widgets:` list (or `PU
 | `progress` | `query` | Scalar; requires `content.min_value` + `content.max_value`. |
 | `gauge` | `query` | Scalar; requires `content.min_value` + `content.max_value`. |
 | `stat_list` | per-row `query` | 1-6 `stat_rows`, each with its own `query` + `value_template`. |
-| `trend` | `query` | Scalar plus a sparkline built from this bridge's own rolling buffer of the last 48 polls, so it needs no range query and appears after the second poll. No `query_all`: there is one buffer per widget. |
+| `trend` | `query` | Scalar plus a sparkline built from this bridge's own rolling buffer of the last 48 polls, so it needs no range query and appears after the second poll. No `query_all`: there is one buffer per widget. Under the default `update_mode: on_change` the sparkline only advances when the scalar changes, because the heartbeat re-sends the stored content unchanged; a continuously scrolling sparkline needs `update_mode: always`. |
 | `countdown` | none | Renders from `content.end_date` on device; published once, so `query`, `query_all` and `stat_rows` are all rejected. |
 
 `battery`, `schedule` and `flow` are server widget templates this bridge does not offer: each needs several independent readings in one push, and the poller runs one query per widget.
@@ -168,7 +169,9 @@ Server-mirrored validation runs at config load: `interval` defaults to `60s` and
 
 `stale_after` (60-604800 seconds) is how long iOS waits before dimming a widget as out of date. Setting it also arms a heartbeat that re-sends the stored content every `max(30s, stale_after/2)`; the server records an unchanged re-send as a touch rather than a push, so a flat metric costs no notifications and the widget still looks alive. It must be at least three times the poll interval, because the heartbeat rides the poll ticker.
 
-Any widget can carry tap targets: `content.tap_action` retargets the whole widget, while `content.url_action` and `content.secondary_url_action` draw buttons, which iOS renders on the Home Screen families only.
+`content.subtitle_timer` renders the subtitle as a live timer on any template, and `stat_rows[].timer` does the same for one stat_list row's trailing text. Both take `date` (RFC 3339, required) and `style` (`timer`, the default, or `relative`); the static `subtitle` / `value_template` stays as the fallback for clients that do not render a timer.
+
+Any widget can carry tap targets: `content.tap_action` retargets the whole widget, while `content.url_action` and `content.secondary_url_action` draw buttons, which iOS renders on the Home Screen families only. Tap-action URLs are validated at config load against the same rules the server applies - a scheme is required, `javascript:`/`data:`/`file:`/`vbscript:` are rejected, http(s) needs a host, and `method`/`headers`/`body` are only valid on an http(s) URL - so a typo fails at startup rather than on the first push.
 
 ```yaml
 widgets:

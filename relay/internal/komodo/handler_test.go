@@ -144,6 +144,9 @@ func TestServerUnreachableActive(t *testing.T) {
 	if upd.Content.FiredAt == nil || *upd.Content.FiredAt != 1730000000 {
 		t.Errorf("expected fired_at 1730000000 (ms/1000), got %v", upd.Content.FiredAt)
 	}
+	if upd.Content.SeverityLabel != "Server Unreachable" {
+		t.Errorf("expected severity_label 'Server Unreachable', got %q", upd.Content.SeverityLabel)
+	}
 
 	var notif pushward.SendNotificationRequest
 	testutil.UnmarshalBody(t, recorded[2].Body, &notif)
@@ -181,6 +184,10 @@ func TestServerUnreachableActiveThenResolved(t *testing.T) {
 	}
 	if end.Content.AccentColor != pushward.ColorGreen {
 		t.Errorf("expected green, got %s", end.Content.AccentColor)
+	}
+	// The badge is stable across the transition: same condition, same label.
+	if end.Content.SeverityLabel != "Server Unreachable" {
+		t.Errorf("expected severity_label 'Server Unreachable' on the end frame, got %q", end.Content.SeverityLabel)
 	}
 }
 
@@ -372,17 +379,36 @@ func TestKomodoTestSelfTest(t *testing.T) {
 
 func TestSeverityLabel(t *testing.T) {
 	for _, tc := range []struct{ in, want string }{
-		{"ContainerUnhealthy", "Container Unhealthy"},
-		{"ServerCpu", "Server Cpu"},
-		{"  ServerMem ", "Server Mem"},
+		{"ServerUnreachable", "Server Unreachable"},
+		// The rune-walking humanizer this replaced rendered "Server Cpu".
+		{"ServerCpu", "Server CPU"},
+		{"SwarmUnhealthy", "Swarm Unhealthy"},
+		// Never reaches a Live Activity, so it has no label of its own.
+		{"ContainerUnhealthy", ""},
 		{"", ""},
 	} {
 		if got := severityLabel(&komodoData{Type: tc.in}); got != tc.want {
 			t.Errorf("severityLabel(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
-	long := strings.Repeat("A", 60)
-	if got := severityLabel(&komodoData{Type: long}); len([]rune(got)) > pushward.MaxSeverityLabelRunes {
-		t.Errorf("label ran past the %d-rune cap: %d", pushward.MaxSeverityLabelRunes, len([]rune(got)))
+	for _, label := range severityLabels {
+		if len([]rune(label)) > pushward.MaxSeverityLabelRunes {
+			t.Errorf("label %q runs past the %d-rune cap", label, pushward.MaxSeverityLabelRunes)
+		}
+	}
+}
+
+// severityLabels is only ever asked about a resolvable condition, so a new
+// entry in either map without the other would ship a card with no badge.
+func TestSeverityLabelsCoverResolvableTypes(t *testing.T) {
+	for typ := range resolvableTypes {
+		if severityLabels[typ] == "" {
+			t.Errorf("resolvable type %q has no severity label", typ)
+		}
+	}
+	for typ := range severityLabels {
+		if !resolvableTypes[typ] {
+			t.Errorf("severity label for %q, which is not a resolvable type", typ)
+		}
 	}
 }

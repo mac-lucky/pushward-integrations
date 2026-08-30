@@ -509,7 +509,10 @@ type CreateOption func(*CreateActivityRequest)
 // those never receive a PATCH from a bridge.
 func WithDismissalTTL(seconds int) CreateOption {
 	v := min(max(seconds, 0), DismissalTTLMax)
-	return func(r *CreateActivityRequest) { r.DismissalTTL = &v }
+	// A fresh pointer per application: one option value is applied to every
+	// request a long-lived caller sends, and a shared address would let any
+	// later mutation reach back into requests already built.
+	return func(r *CreateActivityRequest) { r.DismissalTTL = IntPtr(v) }
 }
 
 // DismissalTTLOptions adapts an optional configured duration to the option
@@ -526,15 +529,6 @@ func DismissalTTLOptions(d *time.Duration) []CreateOption {
 	return []CreateOption{WithDismissalTTL(int(d.Seconds()))}
 }
 
-// DismissalTTLPtr is the same adaptation for the *int dismissal_ttl fields on
-// UpdateRequest and PatchRequest. Nil in, nil out.
-func DismissalTTLPtr(d *time.Duration) *int {
-	if d == nil {
-		return nil
-	}
-	return IntPtr(min(max(int(d.Seconds()), 0), DismissalTTLMax))
-}
-
 // CreateActivity creates (or refreshes) an activity via POST /activities.
 // The server upserts and always returns 201 with an X-Resource-Action header
 // distinguishing created vs. updated, so duplicate slugs are no longer a 409.
@@ -543,7 +537,6 @@ func DismissalTTLPtr(d *time.Duration) *int {
 // parameters: the signature is frozen by pushward-grafana-plugin, which pins
 // this module and calls CreateActivity from two places, so widening it is a
 // cross-repo compile break on a v0 module with no major-version escape hatch.
-// Same shape as PatchOption below.
 func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority, endedTTL, staleTTL int, opts ...CreateOption) error {
 	req := CreateActivityRequest{
 		Slug:     slug,

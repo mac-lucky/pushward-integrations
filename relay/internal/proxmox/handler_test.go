@@ -257,6 +257,10 @@ func TestFencingAlert(t *testing.T) {
 	if update.Content.Subtitle != "Proxmox · pve2" {
 		t.Errorf("expected subtitle 'Proxmox · pve2', got %q", update.Content.Subtitle)
 	}
+	// The badge names the event class; the state line is the raw title.
+	if update.Content.SeverityLabel != "Fencing" {
+		t.Errorf("expected severity_label 'Fencing', got %q", update.Content.SeverityLabel)
+	}
 
 	// Phase 2: ENDED
 	var phase2 pushward.UpdateRequest
@@ -306,6 +310,9 @@ func TestUpdatesNotification(t *testing.T) {
 	}
 	if update.Content.State != "5 updates available" {
 		t.Errorf("expected state '5 updates available', got %s", update.Content.State)
+	}
+	if update.Content.SeverityLabel != "Updates" {
+		t.Errorf("expected severity_label 'Updates', got %q", update.Content.SeverityLabel)
 	}
 
 	// Phase 2: ENDED

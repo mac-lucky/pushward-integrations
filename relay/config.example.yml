@@ -44,16 +44,6 @@ providers:
     priority: 5
     cleanup_delay: 15m                     # -> ended_ttl (deletion)
     stale_timeout: 24h                    # -> stale_ttl
-    # dismissal_delay: 2m                 # -> dismissal_ttl: how long an ended
-    #                                     #    card stays on the Lock Screen,
-    #                                     #    0 removes it at once. Unset keeps
-    #                                     #    the server default (follows
-    #                                     #    ended_ttl, capped at 4h).
-    #                                     #    Defaults to 2m on the completion
-    #                                     #    providers: starr, paperless,
-    #                                     #    unmanic, overseerr. Alert and
-    #                                     #    build providers leave it unset -
-    #                                     #    those are cards you come back to.
 
   argocd:
     enabled: true
@@ -70,7 +60,13 @@ providers:
     # mode: smart                             # activity (default) | notify | smart
     priority: 1
     cleanup_delay: 15m
-    # dismissal_delay: 15m                    # opt out of the 2m default
+    # dismissal_delay: 2m                     # -> dismissal_ttl: how long an ended card
+    #                                         #    stays on the Lock Screen, which
+    #                                         #    cleanup_delay (deletion) otherwise
+    #                                         #    decides. 0 removes it at once, null
+    #                                         #    drops this default for the server's.
+    #                                         #    Read by starr, paperless, unmanic and
+    #                                         #    overseerr only; the rest ignore it.
     stale_timeout: 30m
     end_delay: 5s
     end_display_time: 4s

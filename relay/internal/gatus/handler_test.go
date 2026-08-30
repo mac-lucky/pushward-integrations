@@ -256,6 +256,9 @@ func TestTriggeredWithGroup(t *testing.T) {
 	if update.Content.Subtitle != "Gatus · production/My API" {
 		t.Errorf("expected subtitle 'Gatus · production/My API', got %q", update.Content.Subtitle)
 	}
+	if update.Content.SeverityLabel != "production" {
+		t.Errorf("expected the endpoint group in the badge, got %q", update.Content.SeverityLabel)
+	}
 
 	// Verify notification includes endpoint_group
 	var notif pushward.SendNotificationRequest
@@ -414,6 +417,43 @@ func TestOverrideChannelsNotificationResolveClearsDedup(t *testing.T) {
 	}
 	if n := testutil.CountPath(recorded, "/notifications"); n != 3 {
 		t.Fatalf("expected 3 notifications (triggered, resolved, triggered again), got %d", n)
+	}
+}
+
+// The badge has to be stable across the transition, so the same label rides the
+// firing frame and both end frames rather than dropping on resolve.
+func TestSeverityLabelRidesFiringAndResolve(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+
+	body := func(status string) string {
+		return `{
+			"endpoint_name": "My API",
+			"endpoint_group": "production",
+			"endpoint_url": "https://api.example.com/health",
+			"alert_description": "Health check failed",
+			"status": "` + status + `",
+			"result_errors": ""
+		}`
+	}
+	if w := send(t, h, body("TRIGGERED")); w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for TRIGGERED, got %d", w.Code)
+	}
+	if w := send(t, h, body("RESOLVED")); w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for RESOLVED, got %d", w.Code)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	recorded := testutil.GetCalls(calls, mu)
+	// create + firing ONGOING + 2 notifications + phase1 ONGOING + phase2 ENDED
+	if len(recorded) != 6 {
+		t.Fatalf("expected 6 calls, got %d", len(recorded))
+	}
+	for _, idx := range []int{1, 4, 5} {
+		var upd pushward.UpdateRequest
+		testutil.UnmarshalBody(t, recorded[idx].Body, &upd)
+		if upd.Content.SeverityLabel != "production" {
+			t.Errorf("call %d: expected severity_label 'production', got %q", idx, upd.Content.SeverityLabel)
+		}
 	}
 }
 

@@ -1,6 +1,7 @@
 package pushward
 
 import (
+	"strings"
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -34,17 +35,25 @@ const (
 // produce a shape that validates.
 const (
 	MaxStepLabelLen = 32 // runes per step_labels entry
-
-	// MaxSeverityLabelRunes caps content.severity_label, which the server reads
-	// on the alert template only. Raised from 32 in server v1.11.0.
-	MaxSeverityLabelRunes = 40
-
-	// DismissalTTLMax mirrors the server's dismissal_ttl ceiling: iOS will not
-	// hold an ended Live Activity on the Lock Screen longer than 4h.
-	DismissalTTLMax = 14400
-	MinStepRows     = 1 // jobs per step_rows entry
+	MinStepRows     = 1  // jobs per step_rows entry
 	MaxStepRows     = 10
 )
+
+// MaxSeverityLabelRunes caps content.severity_label, which the server reads on
+// the alert template only. Raised from 32 in server v1.11.0.
+const MaxSeverityLabelRunes = 40
+
+// DismissalTTLMax mirrors the server's dismissal_ttl ceiling: iOS will not hold
+// an ended Live Activity on the Lock Screen longer than 4h.
+const DismissalTTLMax = 14400
+
+// SeverityLabel trims and clamps a badge string to the wire bound, the way
+// ClampStepShape does for the steps trio: one place applies the limit so a new
+// emitter cannot ship a label the server rejects. Every severity_label an
+// integration sends goes through here.
+func SeverityLabel(s string) string {
+	return text.TruncateHard(strings.TrimSpace(s), MaxSeverityLabelRunes)
+}
 
 // ClampStepShape returns rows and labels clamped to the wire bounds above. It is
 // the one place those bounds are applied, so a new emitter cannot ship a shape
@@ -137,6 +146,9 @@ func Int64Ptr(v int64) *int64 { return &v }
 
 // Float64Ptr returns a pointer to the given float64 value.
 func Float64Ptr(v float64) *float64 { return &v }
+
+// DurationPtr returns a pointer to the given duration.
+func DurationPtr(v time.Duration) *time.Duration { return &v }
 
 // StringPtr returns a pointer to the given string value.
 func StringPtr(v string) *string { return &v }

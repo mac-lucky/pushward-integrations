@@ -66,10 +66,9 @@ const (
 	maxMediaExtraControls   = 3
 	maxMediaClockSkew       = 300 * time.Second
 
-	// severity_label is read on the alert template only; the cap went 32 -> 40
-	// in server v1.11.0.
-	maxSeverityLabelRunes = 40
-	maxDismissalTTL       = 14400
+	// maxTTLSeconds is the server's shared ceiling for ended_ttl and stale_ttl
+	// (30 days). dismissal_ttl has its own, much lower one.
+	maxTTLSeconds = 2592000
 )
 
 type createRequest struct {
@@ -545,23 +544,29 @@ func validateCreateRequest(req *createRequest) error {
 	if req.Priority != nil && (*req.Priority < 0 || *req.Priority > 10) {
 		return fmt.Errorf("priority must be 0-10")
 	}
-	if req.EndedTTL != nil && (*req.EndedTTL < 1 || *req.EndedTTL > 2592000) {
-		return fmt.Errorf("ended_ttl must be 1-2592000")
-	}
-	if req.StaleTTL != nil && (*req.StaleTTL < 1 || *req.StaleTTL > 2592000) {
-		return fmt.Errorf("stale_ttl must be 1-2592000")
+	if err := validateTTLs(req.EndedTTL, req.StaleTTL); err != nil {
+		return err
 	}
 	// dismissal_ttl allows 0 where the other two do not: it is the "remove the
 	// card immediately" value, and the whole reason the field is a pointer.
-	if err := validateDismissalTTL(req.DismissalTTL); err != nil {
-		return err
+	return validateDismissalTTL(req.DismissalTTL)
+}
+
+// validateTTLs range-checks the ended/stale pair, which the create and update
+// paths bound identically.
+func validateTTLs(endedTTL, staleTTL *int) error {
+	if endedTTL != nil && (*endedTTL < 1 || *endedTTL > maxTTLSeconds) {
+		return fmt.Errorf("ended_ttl must be 1-%d", maxTTLSeconds)
+	}
+	if staleTTL != nil && (*staleTTL < 1 || *staleTTL > maxTTLSeconds) {
+		return fmt.Errorf("stale_ttl must be 1-%d", maxTTLSeconds)
 	}
 	return nil
 }
 
 func validateDismissalTTL(v *int) error {
-	if v != nil && (*v < 0 || *v > maxDismissalTTL) {
-		return fmt.Errorf("dismissal_ttl must be 0-%d", maxDismissalTTL)
+	if v != nil && (*v < 0 || *v > pushward.DismissalTTLMax) {
+		return fmt.Errorf("dismissal_ttl must be 0-%d", pushward.DismissalTTLMax)
 	}
 	return nil
 }
@@ -576,11 +581,8 @@ func validateUpdateRequest(req *updateRequest) error {
 	if req.Priority != nil && (*req.Priority < 0 || *req.Priority > 10) {
 		return fmt.Errorf("priority must be 0-10")
 	}
-	if req.EndedTTL != nil && (*req.EndedTTL < 1 || *req.EndedTTL > 2592000) {
-		return fmt.Errorf("ended_ttl must be 1-2592000")
-	}
-	if req.StaleTTL != nil && (*req.StaleTTL < 1 || *req.StaleTTL > 2592000) {
-		return fmt.Errorf("stale_ttl must be 1-2592000")
+	if err := validateTTLs(req.EndedTTL, req.StaleTTL); err != nil {
+		return err
 	}
 	if err := validateDismissalTTL(req.DismissalTTL); err != nil {
 		return err
@@ -683,8 +685,8 @@ func validateAlert(c *apiContent) error {
 	if !validSeverities[c.Severity] {
 		return fmt.Errorf("severity is required and must be critical, warning, or info")
 	}
-	if utf8.RuneCountInString(c.SeverityLabel) > maxSeverityLabelRunes {
-		return fmt.Errorf("severity_label must be at most %d runes", maxSeverityLabelRunes)
+	if utf8.RuneCountInString(c.SeverityLabel) > pushward.MaxSeverityLabelRunes {
+		return fmt.Errorf("severity_label must be at most %d runes", pushward.MaxSeverityLabelRunes)
 	}
 	if c.FiredAt != nil && *c.FiredAt <= 0 {
 		return fmt.Errorf("fired_at must be > 0")

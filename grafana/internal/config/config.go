@@ -125,12 +125,6 @@ func (t *TapActionConfig) toTapAction() *pushward.TapAction {
 	}
 }
 
-// validTrends bounds content.trend, the directional arrow on value/gauge/trend
-// widgets. Deriving it from the TrendSource buffer is the behaviour operators
-// will eventually want, but auto-deriving silently would override an explicit
-// setting; a trend: auto mode is the follow-on.
-var validTrends = map[string]bool{"up": true, "down": true, "flat": true}
-
 // Triggers reports whether a change in this row's value should drive a widget
 // PATCH. Trigger is nil-defaulted to true; only an explicit false makes the
 // row display-only (excluded from stat_list change detection).
@@ -295,6 +289,16 @@ var validTimerStyles = map[string]bool{
 	"": true, pushward.TimerStyleTimer: true, pushward.TimerStyleRelative: true,
 }
 
+// validTrends bounds content.trend, the directional arrow on value/gauge/trend
+// widgets. It allows the empty string the way the server's own validWidgetTrends
+// does, so the call site needs no unset guard. Deriving the arrow from the
+// TrendSource buffer is the behaviour operators will eventually want, but
+// auto-deriving silently would override an explicit setting; a trend: auto mode
+// is the follow-on.
+var validTrends = map[string]bool{
+	"": true, pushward.TrendUp: true, pushward.TrendDown: true, pushward.TrendFlat: true,
+}
+
 // Server caps (mirror pushward-server/internal/model/widget.go). Validating
 // here keeps misconfigurations on the integration side instead of bouncing
 // off a 422 at runtime.
@@ -359,8 +363,11 @@ func validateWidgets(widgets []WidgetConfig) error {
 			// The sparkline comes from this bridge's own rolling buffer of one
 			// query's readings, and there is one buffer per widget, so a
 			// query_all fan-out has nowhere to keep per-series history.
-			if w.Query == "" || modes != 1 {
-				return fmt.Errorf("widgets[%d] %q: template trend requires `query`; `query_all` fan-out and `stat_rows` are not supported", i, w.Slug)
+			if w.Query == "" {
+				return fmt.Errorf("widgets[%d] %q: template trend requires `query`", i, w.Slug)
+			}
+			if modes != 1 {
+				return fmt.Errorf("widgets[%d] %q: template trend takes `query` only; `query_all` fan-out and `stat_rows` are not supported", i, w.Slug)
 			}
 		default:
 			if modes != 1 || len(w.StatRows) > 0 {
@@ -391,7 +398,7 @@ func validateWidgets(widgets []WidgetConfig) error {
 		if (w.Template == "progress" || w.Template == "gauge") && (w.Content.MinValue == nil || w.Content.MaxValue == nil) {
 			return fmt.Errorf("widgets[%d] %q: template %q requires content.min_value and content.max_value", i, w.Slug, w.Template)
 		}
-		if err := validateStaleAfter(i, w); err != nil {
+		if err := validateStaleAfter(i, w, w.Interval); err != nil {
 			return err
 		}
 		if err := w.validateContent(i); err != nil {
@@ -405,7 +412,11 @@ func validateWidgets(widgets []WidgetConfig) error {
 // that would make it misbehave rather than protect: a countdown, which is
 // published once and has nothing to refresh, and a window so short relative to
 // the poll interval that the widget reads stale between two healthy polls.
-func validateStaleAfter(idx int, w *WidgetConfig) error {
+//
+// interval is a parameter rather than read off w because the floor is a
+// multiple of it: taking w.Interval here would make the check silently pass
+// everything if it ever ran before the 60s default was applied.
+func validateStaleAfter(idx int, w *WidgetConfig, interval time.Duration) error {
 	if w.StaleAfter == nil {
 		return nil
 	}
@@ -416,9 +427,9 @@ func validateStaleAfter(idx int, w *WidgetConfig) error {
 	if s < staleAfterMin || s > staleAfterMax {
 		return fmt.Errorf("widgets[%d] %q: stale_after must be between %d and %d seconds, got %d", idx, w.Slug, staleAfterMin, staleAfterMax, s)
 	}
-	if floor := staleAfterIntervalRatio * int(w.Interval/time.Second); s < floor {
+	if floor := staleAfterIntervalRatio * int(interval/time.Second); s < floor {
 		return fmt.Errorf("widgets[%d] %q: stale_after %ds is below %d times the %v poll interval (%ds); the heartbeat rides the poll ticker, so the widget would dim before the next refresh landed",
-			idx, w.Slug, s, staleAfterIntervalRatio, w.Interval, floor)
+			idx, w.Slug, s, staleAfterIntervalRatio, interval, floor)
 	}
 	return nil
 }
@@ -446,8 +457,13 @@ func (w *WidgetConfig) validateContent(idx int) error {
 	if c.subtitleTimer, err = parseTimer("content.subtitle_timer", c.SubtitleTimer, maxDate); err != nil {
 		return fail(err)
 	}
-	if c.Trend != "" && !validTrends[c.Trend] {
+	if !validTrends[c.Trend] {
 		return fail(fmt.Errorf("content.trend must be one of up, down, flat (got %q)", c.Trend))
+	}
+	// The server rejects an empty or inverted range, and gauge/progress require
+	// both ends, so a min == max slips past the required-pair check above.
+	if c.MinValue != nil && c.MaxValue != nil && *c.MinValue >= *c.MaxValue {
+		return fail(fmt.Errorf("content.min_value (%g) must be below content.max_value (%g)", *c.MinValue, *c.MaxValue))
 	}
 	for i := range w.StatRows {
 		r := &w.StatRows[i]
@@ -455,14 +471,17 @@ func (w *WidgetConfig) validateContent(idx int) error {
 			return fail(err)
 		}
 	}
-	for field, a := range map[string]*TapActionConfig{
-		"content.tap_action":           c.TapAction,
-		"content.url_action":           c.URLAction,
-		"content.secondary_url_action": c.SecondaryURLAction,
-	} {
-		if a != nil && strings.TrimSpace(a.URL) == "" {
-			return fail(fmt.Errorf("%s.url is required", field))
-		}
+	// The full server-side rules, not just "url is non-empty": for value,
+	// status, countdown and stat_list the create is not deferred, so a widget
+	// the server rejects fails inside Manager.Start and main.go exits 1 - a
+	// typo'd dashboard URL would crash-loop the bridge and take the alert
+	// timelines with it.
+	if err := pushward.ValidateTapActionSlots(
+		c.TapAction.toTapAction(),
+		c.URLAction.toTapAction(),
+		c.SecondaryURLAction.toTapAction(),
+	); err != nil {
+		return fail(fmt.Errorf("content.%w", err))
 	}
 	return nil
 }

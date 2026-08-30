@@ -13,7 +13,7 @@ import (
 // BuildSpecs converts the grafana config into shared widget specs, attaching
 // the appropriate Prometheus source (scalar, multi-series, or stat_list) for
 // each widget. Returns an error if a stat_list source fails to compile (bad
-// value template); other modes can't fail at build time.
+// value template) or if a template reaches here with no source to drive it.
 func BuildSpecs(cfgs []config.WidgetConfig, mc *metrics.Client) ([]sharedwidgets.Spec, error) {
 	specs := make([]sharedwidgets.Spec, 0, len(cfgs))
 	for _, w := range cfgs {
@@ -58,7 +58,7 @@ func BuildSpecs(cfgs []config.WidgetConfig, mc *metrics.Client) ([]sharedwidgets
 		case w.Template == string(pushward.WidgetTemplateTrend):
 			spec.Source = NewTrendSource(mc, w.Query, w.Interval)
 		case w.Template == string(pushward.WidgetTemplateCountdown):
-			spec.Source = staticSource{}
+			spec.Source = staticSource()
 		case w.Query != "":
 			spec.Source = &ScalarSource{Client: mc, Expr: w.Query}
 		case w.QueryAll != "":

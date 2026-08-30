@@ -67,6 +67,28 @@ func TestClampStepShapeEmpty(t *testing.T) {
 	}
 }
 
+// TestPatchRequest_TTLFieldsOmittedWhenNil is the omitempty guard for the
+// patch-body TTLs: dismissal_ttl is a pointer so an explicit 0 travels, while
+// the other two must stay absent rather than resetting a server-side value.
+func TestPatchRequest_TTLFieldsOmittedWhenNil(t *testing.T) {
+	body, err := json.Marshal(PatchRequest{State: "ended", DismissalTTL: IntPtr(0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if raw["dismissal_ttl"] != float64(0) {
+		t.Errorf("expected dismissal_ttl 0 on the wire, got %v", raw["dismissal_ttl"])
+	}
+	for _, absent := range []string{"ended_ttl", "stale_ttl"} {
+		if _, ok := raw[absent]; ok {
+			t.Errorf("%s must be absent when nil", absent)
+		}
+	}
+}
+
 // TestMediaWireNames pins the snake_case keys of the media template on both
 // Content and ContentPatch, and that an empty patch leaks none of them: a nil
 // pointer without omitempty would marshal as null and delete the stored value

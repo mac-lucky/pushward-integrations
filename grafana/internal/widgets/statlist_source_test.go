@@ -6,8 +6,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/metrics"
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 const statValuePayload = `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"x"},"value":[1700000000,"42"]}]}}`
@@ -61,9 +63,11 @@ func TestStatListSource_RendersRowsAndMissing(t *testing.T) {
 	mc, close := newPromMux(map[string]string{"users": statValuePayload})
 	defer close()
 
+	// The timer rides both branches: a rendered row and the missing-value one.
+	timer := &pushward.TimerValue{Date: time.Now().Add(time.Hour), Style: pushward.TimerStyleRelative}
 	src, err := NewStatListSource(mc, []StatListRow{
-		{Label: "Users", Query: "users", ValueTemplate: `{{printf "%.0f" .Value}}`},
-		{Label: "Missing", Query: "does_not_exist", ValueTemplate: `{{.Value}}`, MissingValue: "?"},
+		{Label: "Users", Query: "users", ValueTemplate: `{{printf "%.0f" .Value}}`, Timer: timer},
+		{Label: "Missing", Query: "does_not_exist", ValueTemplate: `{{.Value}}`, MissingValue: "?", Timer: timer},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -80,6 +84,9 @@ func TestStatListSource_RendersRowsAndMissing(t *testing.T) {
 	}
 	if rows[1].Value != "?" {
 		t.Errorf("row 1 value = %q, want ? (missing)", rows[1].Value)
+	}
+	if rows[0].Timer != timer || rows[1].Timer != timer {
+		t.Errorf("expected the row timer on both rows, got %+v and %+v", rows[0].Timer, rows[1].Timer)
 	}
 }
 

@@ -815,3 +815,88 @@ func TestMockNotificationPushDefault(t *testing.T) {
 		})
 	}
 }
+
+func postActivity(t *testing.T, url, body string) int {
+	t.Helper()
+	resp, err := http.Post(url+"/activities", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// dismissal_ttl is bounded by a different validator on each path, and 0 is a
+// legal value where ended_ttl and stale_ttl start at 1 - so the create side
+// passing proves nothing about the update side.
+func TestValidateDismissalTTL(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		ttl  int
+		ok   bool
+	}{
+		{"zero removes the card immediately", 0, true},
+		{"the 4h ceiling", 14400, true},
+		{"negative", -1, false},
+		{"past the ceiling", 14401, false},
+	} {
+		t.Run(tt.name+" on create", func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			want := 400
+			if tt.ok {
+				want = 201
+			}
+			body := `{"slug":"dttl","name":"D TTL","dismissal_ttl":` + strconv.Itoa(tt.ttl) + `}`
+			if got := postActivity(t, srv.URL, body); got != want {
+				t.Errorf("got status %d, want %d", got, want)
+			}
+		})
+		t.Run(tt.name+" on patch", func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "dttl", "D TTL")
+			want := 400
+			if tt.ok {
+				want = 200
+			}
+			body := `{"state":"ended","dismissal_ttl":` + strconv.Itoa(tt.ttl) + `}`
+			if got := patchActivity(t, srv.URL, "dttl", body); got != want {
+				t.Errorf("got status %d, want %d", got, want)
+			}
+		})
+	}
+}
+
+// The server reads severity_label on the alert template only, so the cap is
+// enforced there and nowhere else.
+func TestValidateSeverityLabel(t *testing.T) {
+	long := strings.Repeat("x", 41)
+	for _, tt := range []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{
+			name:       "at the cap on alert",
+			body:       `{"state":"ongoing","content":{"template":"alert","severity":"warning","severity_label":"` + strings.Repeat("x", 40) + `"}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "past the cap on alert",
+			body:       `{"state":"ongoing","content":{"template":"alert","severity":"warning","severity_label":"` + long + `"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "past the cap on a non-alert template is ignored",
+			body:       `{"state":"ongoing","content":{"template":"generic","severity_label":"` + long + `"}}`,
+			wantStatus: 200,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "sev-label", "Severity Label")
+			if got := patchActivity(t, srv.URL, "sev-label", tt.body); got != tt.wantStatus {
+				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+}

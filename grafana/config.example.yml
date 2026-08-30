@@ -145,6 +145,15 @@ timeline:
 #         value_template: "{{printf \"%.0f\" .Value}}"
 #         missing_value: "?"
 #         trigger: false             # displays but never triggers a PATCH
+#       - label: "Next backup"
+#         query: "backup_next_run_timestamp"
+#         value_template: "{{printf \"%.0f\" .Value}}"
+#         # timer renders this row's trailing text as a live countdown on the
+#         # device; value_template stays the static fallback. Same shape as
+#         # content.subtitle_timer below.
+#         timer:
+#           date: "2026-12-24T18:00:00Z"   # RFC 3339, required
+#           style: "timer"                 # timer (default) | relative
 #
 #   # trend: a sparkline from this bridge's own rolling buffer of the last 48
 #   # polls, so it needs no range query and appears after the second poll.
@@ -159,6 +168,14 @@ timeline:
 #       icon: "waveform.path.ecg"
 #       unit: "s"
 #       trend: "flat"             # optional arrow: up|down|flat
+#       # subtitle_timer renders the subtitle as a live timer on any template;
+#       # subtitle stays the static fallback.
+#       subtitle_timer:
+#         date: "2026-12-24T18:00:00Z"
+#         style: "relative"
+#   # Under the default update_mode: on_change the sparkline only advances when
+#   # the scalar changes - the heartbeat re-sends the stored content unchanged.
+#   # A sparkline that scrolls on every poll needs update_mode: always.
 #
 #   # countdown: no query at all. The phone counts down from its own dates, so
 #   # the widget is published once and stale_after is rejected.

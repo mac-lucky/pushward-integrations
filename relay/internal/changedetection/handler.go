@@ -119,7 +119,7 @@ func (h *Handler) handleChange(ctx context.Context, payload *changedetectionPayl
 		Severity:    "info",
 		// The template forces severity info, so the stock badge reads "Info" on a
 		// content change. The label says what actually happened instead.
-		SeverityLabel: "Changed",
+		SeverityLabel: pushward.SeverityLabel("Changed"),
 		FiredAt:       firedAtPtr,
 		URL:           text.SanitizeURL(payload.DiffURL),
 		SecondaryURL:  text.SanitizeURL(payload.PreviewURL),

@@ -270,3 +270,52 @@ func TestEnvDuration(t *testing.T) {
 		})
 	}
 }
+
+// TestEnvDurationPtr covers the behaviour EnvDurationPtr exists for and
+// EnvDuration cannot express: telling an unset variable from an explicit zero.
+// dismissal_ttl reads 0 as "take the card off the Lock Screen the moment it
+// ends", so collapsing the two would turn a missing variable into a setting.
+func TestEnvDurationPtr(t *testing.T) {
+	tests := []struct {
+		name    string
+		value   string
+		want    *time.Duration
+		wantErr bool
+	}{
+		{name: "unset leaves nil", value: ""},
+		{name: "explicit zero is not unset", value: "0s", want: new(time.Duration)},
+		{name: "parsed", value: "90s", want: durationPtr(90 * time.Second)},
+		{name: "unparseable is an error", value: "90", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.value != "" {
+				t.Setenv("PUSHWARD_TEST_DISMISSAL", tt.value)
+			}
+			var got *time.Duration
+			err := EnvDurationPtr("PUSHWARD_TEST_DISMISSAL", &got)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected an error")
+				}
+				if !strings.Contains(err.Error(), "PUSHWARD_TEST_DISMISSAL") {
+					t.Errorf("error should name the variable, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			switch {
+			case tt.want == nil && got != nil:
+				t.Errorf("got %v, want nil", *got)
+			case tt.want != nil && got == nil:
+				t.Errorf("got nil, want %v", *tt.want)
+			case tt.want != nil && *got != *tt.want:
+				t.Errorf("got %v, want %v", *got, *tt.want)
+			}
+		})
+	}
+}
+
+func durationPtr(d time.Duration) *time.Duration { return &d }

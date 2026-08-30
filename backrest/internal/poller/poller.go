@@ -556,7 +556,7 @@ func (p *Poller) create(ctx context.Context, t *tracked, op *backrest.Operation,
 	endedTTL := int(p.cfg.PushWard.CleanupDelay.Seconds())
 	staleTTL := int(p.cfg.PushWard.StaleTimeout.Seconds())
 
-	if err := p.pw.CreateActivity(ctx, t.slug, activityName(op), p.cfg.PushWard.Priority, endedTTL, staleTTL); err != nil {
+	if err := p.pw.CreateActivity(ctx, t.slug, activityName(op), p.cfg.PushWard.Priority, endedTTL, staleTTL, p.cfg.PushWard.CreateOptions()...); err != nil {
 		slog.Error("failed to create activity", "slug", t.slug, "error", err)
 		return err
 	}

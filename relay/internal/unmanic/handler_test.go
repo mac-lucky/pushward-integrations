@@ -25,16 +25,11 @@ func testConfig() *config.UnmanicConfig {
 			StaleTimeout:   30 * time.Minute,
 			EndDelay:       10 * time.Millisecond,
 			EndDisplayTime: 10 * time.Millisecond,
-			DismissalDelay: testDismissalDelay(),
+			// Mirrors the shipped default so the tests prove the configured
+			// value actually reaches the create body.
+			DismissalDelay: pushward.DurationPtr(2 * time.Minute),
 		},
 	}
-}
-
-// testDismissalDelay mirrors the shipped default so the handler tests prove the
-// configured value actually reaches the create body.
-func testDismissalDelay() *time.Duration {
-	d := 2 * time.Minute
-	return &d
 }
 
 func newHandler(t *testing.T, cfg *config.UnmanicConfig) (http.Handler, *[]testutil.APICall, *sync.Mutex) {

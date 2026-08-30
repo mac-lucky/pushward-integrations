@@ -59,24 +59,6 @@ func TestValidateWidgets_RejectsEmpty(t *testing.T) {
 			input:   WidgetConfig{Slug: "x", Query: "up", Interval: time.Second},
 			wantErr: "too short",
 		},
-		// battery, schedule and flow stay rejected on purpose: each needs several
-		// independent readings in one push, which one-query-per-widget cannot
-		// express, and a spec with no source crashes the process at startup.
-		{
-			name:    "battery still rejected",
-			input:   WidgetConfig{Slug: "x", Query: "up", Template: "battery"},
-			wantErr: "unknown template",
-		},
-		{
-			name:    "schedule still rejected",
-			input:   WidgetConfig{Slug: "x", Query: "up", Template: "schedule"},
-			wantErr: "unknown template",
-		},
-		{
-			name:    "flow still rejected",
-			input:   WidgetConfig{Slug: "x", Query: "up", Template: "flow"},
-			wantErr: "unknown template",
-		},
 		{
 			name:    "trend with query_all",
 			input:   WidgetConfig{Slug: "x", Template: "trend", QueryAll: "up", SlugTemplate: "x-{{.id}}"},
@@ -86,6 +68,43 @@ func TestValidateWidgets_RejectsEmpty(t *testing.T) {
 			name:    "trend without query",
 			input:   WidgetConfig{Slug: "x", Template: "trend"},
 			wantErr: "template trend requires `query`",
+		},
+		{
+			// The second operand of the trend guard: query IS set, so the
+			// message has to stop claiming it is missing.
+			name:    "trend with both queries",
+			input:   WidgetConfig{Slug: "x", Template: "trend", Query: "up", QueryAll: "up", SlugTemplate: "x-{{.id}}"},
+			wantErr: "template trend takes `query` only",
+		},
+		{
+			name:    "gauge with an empty range",
+			input:   WidgetConfig{Slug: "x", Query: "up", Template: "gauge", Content: WidgetContentConfig{MinValue: pushward.Float64Ptr(5), MaxValue: pushward.Float64Ptr(5)}},
+			wantErr: "must be below content.max_value",
+		},
+		{
+			name:    "tap action without a scheme",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{TapAction: &TapActionConfig{URL: "example.com/dash"}}},
+			wantErr: "must be a valid URL with a scheme",
+		},
+		{
+			name:    "tap action with a blocked scheme",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{TapAction: &TapActionConfig{URL: "javascript:alert(1)"}}},
+			wantErr: "blocked scheme",
+		},
+		{
+			name:    "http tap action without a host",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{TapAction: &TapActionConfig{URL: "https:///dash"}}},
+			wantErr: "must include a host",
+		},
+		{
+			name:    "webhook shape on a custom scheme",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{URLAction: &TapActionConfig{URL: "pushward://widgets", Method: "POST"}}},
+			wantErr: "only valid for http(s) URLs",
+		},
+		{
+			name:    "unsupported method",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{URLAction: &TapActionConfig{URL: "https://example.com", Method: "TRACE"}}},
+			wantErr: "method must be one of",
 		},
 		{
 			name:    "countdown with a query",
@@ -157,6 +176,18 @@ func TestValidateWidgets_RejectsEmpty(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), c.wantErr) {
 				t.Fatalf("error %q does not contain %q", err, c.wantErr)
+			}
+		})
+	}
+
+	// battery, schedule and flow stay rejected on purpose: each needs several
+	// independent readings in one push, which one-query-per-widget cannot
+	// express, and a spec with no source crashes the process at startup.
+	for _, tmpl := range []string{"battery", "schedule", "flow"} {
+		t.Run(tmpl+" still rejected", func(t *testing.T) {
+			err := validateWidgets([]WidgetConfig{{Slug: "x", Query: "up", Template: tmpl}})
+			if err == nil || !strings.Contains(err.Error(), "unknown template") {
+				t.Fatalf("expected an unknown template error, got %v", err)
 			}
 		})
 	}
@@ -461,7 +492,10 @@ func TestParseWidgetsJSON_ContentExtras(t *testing.T) {
 		"subtitle_timer":{"date":"` + soonRFC3339() + `","style":"relative"},
 		"tap_action":{"url":"pushward://widgets"},
 		"url_action":{"url":"https://example.com","foreground":true,"title":"Open"},
-		"secondary_url_action":{"url":"https://example.com/2","foreground":true}}}]`
+		"secondary_url_action":{"url":"https://example.com/2","foreground":true}}},
+		{"slug":"s","template":"stat_list","stat_rows":[
+			{"label":"Next","query":"next","value_template":"{{.Value}}",
+			 "timer":{"date":"` + laterRFC3339() + `","style":"relative"}}]}]`
 	widgets, err := parseWidgetsJSON(raw)
 	if err != nil {
 		t.Fatalf("parseWidgetsJSON: %v", err)
@@ -478,6 +512,15 @@ func TestParseWidgetsJSON_ContentExtras(t *testing.T) {
 	}
 	if c.SecondaryURLAction == nil || c.SecondaryURLAction.URL != "https://example.com/2" {
 		t.Errorf("expected the secondary url action, got %+v", c.SecondaryURLAction)
+	}
+	// stat_rows[].timer rides a different parse path from content.subtitle_timer
+	// and reaches the wire through StatListRow rather than WidgetContent.
+	rowTimer := widgets[1].StatRows[0].ParsedTimer()
+	if rowTimer == nil {
+		t.Fatal("expected the stat row timer to be parsed")
+	}
+	if rowTimer.Style != pushward.TimerStyleRelative || rowTimer.Date.IsZero() {
+		t.Errorf("stat row timer = %+v, want the relative style and a parsed date", rowTimer)
 	}
 }
 

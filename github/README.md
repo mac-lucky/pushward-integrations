@@ -125,6 +125,7 @@ render:
 | `PUSHWARD_API_KEY` | `pushward.api_key` | PushWard integration key (`hlk_` prefix). | Yes | - |
 | `PUSHWARD_PRIORITY` | `pushward.priority` | Activity priority sent to the server (validated 0-10). | No | `1` |
 | `PUSHWARD_CLEANUP_DELAY` | `pushward.cleanup_delay` | Passed as `ended_ttl`: how long the server keeps an activity after it ends. | No | `15m` |
+| `PUSHWARD_DISMISSAL_DELAY` | `pushward.dismissal_delay` | Server `dismissal_ttl`: how long the ended card stays on the Lock Screen, independent of `cleanup_delay`, which governs deletion. `0` removes it the moment it ends; unset leaves the server default (follows `ended_ttl`, capped at 4h). | No | unset |
 | `PUSHWARD_STALE_TIMEOUT` | `pushward.stale_timeout` | Passed as `stale_ttl`; also drives the heartbeat interval (`/2`) and the stale-run eviction guard (`+30s`). | No | `30m` |
 | `PUSHWARD_END_DELAY` | `pushward.end_delay` | Wait after run completion before the final `ONGOING` frame (two-phase end, phase 1). | No | `5s` |
 | `PUSHWARD_END_DISPLAY_TIME` | `pushward.end_display_time` | How long the final frame shows before `ENDED` dismisses the activity (phase 2). | No | `4s` |

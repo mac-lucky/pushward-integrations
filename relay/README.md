@@ -150,6 +150,7 @@ Each provider block accepts these keys (defaults vary per provider - see [`confi
 | `stale_timeout` | State-store stale TTL. Must be `> 0` for any enabled provider - a non-positive TTL writes rows that are never cleaned up (config load fails). | varies (`24h` / `1h` / `30m`) |
 | `end_delay` | Delay before the final `ONGOING` (phase-1) update; `ENDED` then follows `end_display_time` later. Unused by grafana/changedetection. | `5s` |
 | `end_display_time` | How long the final completion content shows before `ENDED`. Unused by grafana/changedetection. | `4s` |
+| `dismissal_delay` | Maps to `dismissal_ttl`: how long an ended card stays on the Lock Screen, which `cleanup_delay` (deletion) otherwise decides. `0` removes it the moment it ends; `null` drops a shipped default and takes the server's. Rejected outside `0`-`4h`. | `2m` on starr/paperless/unmanic/overseerr. Read by those four only; the rest accept the key and ignore it |
 
 Provider-specific extras: `argocd.url`, `argocd.sync_grace_period`, `starr.mode`, `jellyfin.progress_debounce` (default `10s`), `jellyfin.pause_timeout` (default `5m`).
 

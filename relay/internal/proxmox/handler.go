@@ -355,7 +355,7 @@ func (h *Handler) handleFencing(ctx context.Context, userKey string, log *slog.L
 		AccentColor: pushward.ColorRed,
 		Severity:    "critical",
 		// The badge names the event class; the state line is the raw title.
-		SeverityLabel: "Fencing",
+		SeverityLabel: pushward.SeverityLabel("Fencing"),
 	}
 
 	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
@@ -400,7 +400,7 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey string, log *slog.L
 		Subtitle:      subtitle,
 		AccentColor:   pushward.ColorBlue,
 		Severity:      "info",
-		SeverityLabel: "Updates",
+		SeverityLabel: pushward.SeverityLabel("Updates"),
 	}
 
 	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
@@ -473,10 +473,7 @@ func (h *Handler) handleSystemMail(ctx context.Context, userKey string, log *slo
 	// Proxmox has four levels and PushWard has three, so the switch above folds
 	// notice into info. The badge carries the original word, which is the only
 	// place the distinction survives.
-	severityLabel := ""
-	if raw := strings.TrimSpace(p.Severity); raw != "" {
-		severityLabel = text.TruncateHard(strings.ToUpper(raw[:1])+strings.ToLower(raw[1:]), pushward.MaxSeverityLabelRunes)
-	}
+	severityLabel := pushward.SeverityLabel(text.Capitalize(strings.ToLower(strings.TrimSpace(p.Severity))))
 
 	content := pushward.Content{
 		Template:      "alert",

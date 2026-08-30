@@ -493,10 +493,11 @@ func TestApplyEnvOverrides_Poster(t *testing.T) {
 	})
 }
 
-// The dismissal_ttl defaults are a policy decision, not an accident, and without
-// a test the Tier C half erodes silently: a completion confirmation clears the
-// Lock Screen after two minutes, while an alert or a build result - the cards
-// you actually come back to read - keep the server default.
+// The dismissal_ttl defaults are a policy decision, not an accident: a completion
+// confirmation clears the Lock Screen after two minutes, while an alert or a
+// build result - the cards you actually come back to read - keep the server
+// default. The table below is driven off baseProviders so a new provider fails
+// here until someone records which half it belongs to.
 func TestDefaultDismissalDelay(t *testing.T) {
 	clearRelayEnv(t)
 	t.Setenv("PUSHWARD_DATABASE_DSN", "postgres://relay@localhost/relay")
@@ -504,47 +505,66 @@ func TestDefaultDismissalDelay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	p := cfg.Providers
 
-	completions := map[string]*time.Duration{
-		"starr":     p.Starr.DismissalDelay,
-		"paperless": p.Paperless.DismissalDelay,
-		"unmanic":   p.Unmanic.DismissalDelay,
-		"overseerr": p.Overseerr.DismissalDelay,
+	// 0 means "ship no default and leave the server's".
+	want := map[string]time.Duration{
+		"starr":     2 * time.Minute,
+		"paperless": 2 * time.Minute,
+		"unmanic":   2 * time.Minute,
+		"overseerr": 2 * time.Minute,
+
+		"grafana":         0,
+		"argocd":          0,
+		"jellyfin":        0,
+		"changedetection": 0,
+		"bazarr":          0,
+		"proxmox":         0,
+		"uptimekuma":      0,
+		"gatus":           0,
+		"backrest":        0,
+		"gitea":           0,
+		"komodo":          0,
+		"truenas":         0,
 	}
-	for name, got := range completions {
-		if got == nil {
-			t.Errorf("%s: expected a dismissal_delay default, got nil", name)
+
+	seen := make(map[string]bool, len(want))
+	for _, p := range cfg.baseProviders() {
+		seen[p.name] = true
+		exp, recorded := want[p.name]
+		if !recorded {
+			t.Errorf("%s: no dismissal_delay decision recorded - add it to want", p.name)
 			continue
 		}
-		if *got != 2*time.Minute {
-			t.Errorf("%s: expected 2m dismissal_delay, got %v", name, *got)
+		got := p.base.DismissalDelay
+		switch {
+		case exp == 0:
+			if got != nil {
+				t.Errorf("%s: expected no dismissal_delay (the card is worth coming back to), got %v", p.name, *got)
+			}
+		case got == nil:
+			t.Errorf("%s: expected a %v dismissal_delay default, got nil", p.name, exp)
+		case *got != exp:
+			t.Errorf("%s: expected %v dismissal_delay, got %v", p.name, exp, *got)
+		}
+	}
+	for name := range want {
+		if !seen[name] {
+			t.Errorf("%s: recorded in want but missing from baseProviders", name)
 		}
 	}
 
 	// Each provider must own its pointer: yaml.v3 decodes into a non-nil pointer
 	// in place, so a shared address would let one provider's dismissal_delay
 	// rewrite every other provider's default.
-	if p.Starr.DismissalDelay == p.Paperless.DismissalDelay {
-		t.Error("providers share one *time.Duration; a YAML override on either would move both")
-	}
-
-	glanceable := map[string]*time.Duration{
-		"grafana":         p.Grafana.DismissalDelay,
-		"argocd":          p.ArgoCD.DismissalDelay,
-		"uptimekuma":      p.UptimeKuma.DismissalDelay,
-		"gatus":           p.Gatus.DismissalDelay,
-		"proxmox":         p.Proxmox.DismissalDelay,
-		"truenas":         p.TrueNAS.DismissalDelay,
-		"komodo":          p.Komodo.DismissalDelay,
-		"changedetection": p.Changedetection.DismissalDelay,
-		"backrest":        p.Backrest.DismissalDelay,
-		"gitea":           p.Gitea.DismissalDelay,
-		"jellyfin":        p.Jellyfin.DismissalDelay,
-	}
-	for name, got := range glanceable {
-		if got != nil {
-			t.Errorf("%s: expected no dismissal_delay (the card is worth coming back to), got %v", name, *got)
+	owners := make(map[*time.Duration]string)
+	for _, p := range cfg.baseProviders() {
+		d := p.base.DismissalDelay
+		if d == nil {
+			continue
 		}
+		if other, dup := owners[d]; dup {
+			t.Errorf("%s and %s share one *time.Duration; a YAML override on either would move both", other, p.name)
+		}
+		owners[d] = p.name
 	}
 }

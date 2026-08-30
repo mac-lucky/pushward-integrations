@@ -118,8 +118,7 @@ func (b BaseProviderConfig) CreateOptions() []pushward.CreateOption {
 // so one shared address would let a dismissal_delay on any single provider
 // rewrite the default for all four.
 func completionDismissalDelay() *time.Duration {
-	d := 2 * time.Minute
-	return &d
+	return pushward.DurationPtr(2 * time.Minute)
 }
 
 // GrafanaConfig holds Grafana-specific settings.
@@ -571,6 +570,16 @@ func (cfg *Config) validateProviderTimeouts() error {
 	for _, p := range cfg.baseProviders() {
 		if p.base.Enabled && p.base.StaleTimeout <= 0 {
 			return fmt.Errorf("providers.%s.stale_timeout must be > 0, got %s (a non-positive TTL writes state rows that are never cleaned up)", p.name, p.base.StaleTimeout)
+		}
+		// dismissal_ttl is clamped, not rejected, on the way to the server, so
+		// an out-of-range value here fails silently in the worst direction: a
+		// negative delay clamps to 0, which dismisses the card the instant it
+		// ends - the opposite of what a longer window was asking for.
+		if p.base.Enabled && p.base.DismissalDelay != nil {
+			d := *p.base.DismissalDelay
+			if maxDismissal := time.Duration(pushward.DismissalTTLMax) * time.Second; d < 0 || d > maxDismissal {
+				return fmt.Errorf("providers.%s.dismissal_delay must be 0-%s, got %s", p.name, maxDismissal, d)
+			}
 		}
 	}
 	// ArgoCD feeds SyncGracePeriod*2 as a TTL, so a negative value would also

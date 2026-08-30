@@ -32,9 +32,8 @@ pushward:
   priority: 2
 
   # The activity's ended_ttl: how long a finished backup's card lingers before
-  # the server drops it, and - since this bridge does not set dismissal_ttl -
-  # how long it stays on the Lock Screen after it ends (the server caps that at
-  # 4h). Raise it if you want longer to notice a backup that finished while you
+  # the server drops it, and - unless you set dismissal_delay - how long it
+  # stays on the Lock Screen after it ends (the server caps that at 4h). Raise it if you want longer to notice a backup that finished while you
   # were away.  (PUSHWARD_CLEANUP_DELAY)
   cleanup_delay: 10m
 

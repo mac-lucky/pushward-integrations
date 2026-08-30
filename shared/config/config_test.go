@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 // --- LoadYAML ---
@@ -96,6 +98,7 @@ func TestApplyEnvOverrides_AllVars(t *testing.T) {
 	t.Setenv("PUSHWARD_STALE_TIMEOUT", "1h")
 	t.Setenv("PUSHWARD_END_DELAY", "3s")
 	t.Setenv("PUSHWARD_END_DISPLAY_TIME", "6s")
+	t.Setenv("PUSHWARD_DISMISSAL_DELAY", "90s")
 
 	cfg := PushWardConfig{
 		URL:      "http://original",
@@ -125,6 +128,9 @@ func TestApplyEnvOverrides_AllVars(t *testing.T) {
 	}
 	if cfg.EndDisplayTime != 6*time.Second {
 		t.Errorf("expected EndDisplayTime 6s, got %v", cfg.EndDisplayTime)
+	}
+	if cfg.DismissalDelay == nil || *cfg.DismissalDelay != 90*time.Second {
+		t.Errorf("expected DismissalDelay 90s, got %v", cfg.DismissalDelay)
 	}
 }
 
@@ -261,6 +267,10 @@ func TestValidate_TTLsOutOfRange(t *testing.T) {
 		"negative stale_timeout": {StaleTimeout: -1 * time.Second},
 		"cleanup_delay past 30d": {CleanupDelay: 721 * time.Hour},
 		"stale_timeout past 30d": {StaleTimeout: 721 * time.Hour},
+		// A negative dismissal_delay would clamp to 0 on the way out, which
+		// dismisses the card instantly - the opposite of a longer window.
+		"negative dismissal_delay": {DismissalDelay: pushward.DurationPtr(-5 * time.Minute)},
+		"dismissal_delay past 4h":  {DismissalDelay: pushward.DurationPtr(4*time.Hour + time.Second)},
 	}
 	for name, c := range cases {
 		cfg := c
@@ -278,6 +288,14 @@ func TestValidate_TTLBoundaries(t *testing.T) {
 		cfg := PushWardConfig{URL: "http://localhost", APIKey: "hlk_test", CleanupDelay: d, StaleTimeout: d}
 		if err := cfg.Validate(); err != nil {
 			t.Errorf("%v should be valid, got %v", d, err)
+		}
+	}
+	// dismissal_delay has its own, much lower ceiling, and 0 is a real setting
+	// ("remove the card immediately") rather than an unset one.
+	for _, d := range []time.Duration{0, time.Second, 4 * time.Hour} {
+		cfg := PushWardConfig{URL: "http://localhost", APIKey: "hlk_test", DismissalDelay: pushward.DurationPtr(d)}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("dismissal_delay %v should be valid, got %v", d, err)
 		}
 	}
 }
