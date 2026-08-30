@@ -104,6 +104,10 @@ func TestMonitorDown(t *testing.T) {
 	if update.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red color, got %s", update.Content.AccentColor)
 	}
+	// The badge names the check type, which nothing else on the card says.
+	if update.Content.SeverityLabel != "HTTP" {
+		t.Errorf("expected severity_label HTTP, got %q", update.Content.SeverityLabel)
+	}
 	if update.Content.Icon != "exclamationmark.triangle.fill" {
 		t.Errorf("expected icon exclamationmark.triangle.fill, got %s", update.Content.Icon)
 	}
@@ -193,6 +197,11 @@ func TestMonitorDownThenUp(t *testing.T) {
 	}
 	if phase1.Content.Severity != "info" {
 		t.Errorf("expected severity info, got %s", phase1.Content.Severity)
+	}
+	// The resolve frame is built in a different function than the firing frame,
+	// so the label has to be asserted on both or the badge changes mid-incident.
+	if phase1.Content.SeverityLabel != "HTTP" {
+		t.Errorf("expected severity_label HTTP on the resolve frame, got %q", phase1.Content.SeverityLabel)
 	}
 
 	// Phase 2: ENDED
@@ -417,5 +426,19 @@ func TestOverrideChannelsNotificationUpClearsDedup(t *testing.T) {
 	}
 	if n := testutil.CountPath(recorded, "/notifications"); n != 3 {
 		t.Fatalf("expected 3 notifications (down, resolved, down again), got %d", n)
+	}
+}
+
+func TestSeverityLabel(t *testing.T) {
+	if got := severityLabel(&uptimekumaPayload{Monitor: monitorInfo{Type: "  dns  "}}); got != "DNS" {
+		t.Errorf("expected DNS, got %q", got)
+	}
+	// No type in the payload leaves the stock Info/Warning/Critical badge.
+	if got := severityLabel(&uptimekumaPayload{}); got != "" {
+		t.Errorf("expected an empty label for a typeless monitor, got %q", got)
+	}
+	long := strings.Repeat("a", 60)
+	if got := severityLabel(&uptimekumaPayload{Monitor: monitorInfo{Type: long}}); len([]rune(got)) != pushward.MaxSeverityLabelRunes {
+		t.Errorf("expected the label truncated to %d runes, got %d", pushward.MaxSeverityLabelRunes, len([]rune(got)))
 	}
 }

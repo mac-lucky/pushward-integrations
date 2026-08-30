@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
+	"unicode"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -30,6 +32,23 @@ type Handler struct {
 }
 
 // RegisterRoutes registers the Komodo webhook endpoint and returns the Handler.
+
+// severityLabel replaces the stock Info/Warning/Critical badge with the Komodo
+// alert type, humanized: ContainerUnhealthy reads as "Container Unhealthy". The
+// condition is the useful thing to show and today it only reaches the card
+// through summarize. Empty type leaves the stock badge. Firing and resolve
+// frames carry the same label so the badge does not change mid-incident.
+func severityLabel(kd *komodoData) string {
+	var b strings.Builder
+	for i, r := range strings.TrimSpace(kd.Type) {
+		if i > 0 && unicode.IsUpper(r) {
+			b.WriteByte(' ')
+		}
+		b.WriteRune(r)
+	}
+	return text.TruncateHard(b.String(), pushward.MaxSeverityLabelRunes)
+}
+
 func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.KomodoConfig) *Handler {
 	h := &Handler{
 		store:   store,
@@ -129,14 +148,15 @@ func (h *Handler) handleResolvable(ctx context.Context, userKey string, log *slo
 		req := pushward.UpdateRequest{
 			State: pushward.StateOngoing,
 			Content: pushward.Content{
-				Template:    pushward.TemplateAlert,
-				Progress:    1.0,
-				State:       stateText,
-				Icon:        "exclamationmark.triangle.fill",
-				Subtitle:    subtitle(name),
-				AccentColor: color,
-				Severity:    severity,
-				FiredAt:     firedAt(p.TS),
+				Template:      pushward.TemplateAlert,
+				Progress:      1.0,
+				State:         stateText,
+				Icon:          "exclamationmark.triangle.fill",
+				Subtitle:      subtitle(name),
+				AccentColor:   color,
+				Severity:      severity,
+				SeverityLabel: severityLabel(&p.Data),
+				FiredAt:       firedAt(p.TS),
 			},
 		}
 		if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
@@ -183,13 +203,14 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 		// The carried err/summary is stale on a resolve event, so render a plain
 		// "Resolved" and never surface the original error.
 		content := pushward.Content{
-			Template:    pushward.TemplateAlert,
-			Progress:    1.0,
-			State:       "Resolved",
-			Icon:        "checkmark.circle.fill",
-			Subtitle:    subtitle(name),
-			AccentColor: pushward.ColorGreen,
-			Severity:    "info",
+			Template:      pushward.TemplateAlert,
+			Progress:      1.0,
+			State:         "Resolved",
+			Icon:          "checkmark.circle.fill",
+			Subtitle:      subtitle(name),
+			AccentColor:   pushward.ColorGreen,
+			Severity:      "info",
+			SeverityLabel: severityLabel(&p.Data),
 		}
 		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	} else {

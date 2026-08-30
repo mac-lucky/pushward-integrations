@@ -145,6 +145,12 @@ func TestCreateAlert(t *testing.T) {
 	if upd.Content.State != "Pool tank is DEGRADED" {
 		t.Errorf("expected message as state, got %q", upd.Content.State)
 	}
+	// Deliberately no severity_label: the OpsGenie-shaped payload carries no
+	// severity and its Alias is a bare UUID, so the only available label would be
+	// a static "TrueNAS Alert" - strictly worse than the badge it replaces.
+	if upd.Content.SeverityLabel != "" {
+		t.Errorf("expected no severity_label, got %q", upd.Content.SeverityLabel)
+	}
 	if upd.Content.AccentColor != pushward.ColorOrange || upd.Content.Severity != "warning" {
 		t.Errorf("expected orange/warning, got %s/%s", upd.Content.AccentColor, upd.Content.Severity)
 	}

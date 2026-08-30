@@ -673,6 +673,10 @@ func TestAnyError(t *testing.T) {
 	if update.Content.Severity != "critical" {
 		t.Errorf("expected severity 'critical', got %s", update.Content.Severity)
 	}
+	// The error text took the state line, so the condition moves to the badge.
+	if update.Content.SeverityLabel != stateAlertError {
+		t.Errorf("expected severity_label %q, got %q", stateAlertError, update.Content.SeverityLabel)
+	}
 	if update.Content.AccentColor != pushward.ColorRed {
 		t.Errorf("expected red color, got %s", update.Content.AccentColor)
 	}

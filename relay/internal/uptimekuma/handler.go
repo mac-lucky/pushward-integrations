@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -31,6 +32,16 @@ type Handler struct {
 }
 
 // RegisterRoutes registers the Uptime Kuma webhook endpoint and returns the Handler.
+
+// severityLabel replaces the stock Info/Warning/Critical badge with the monitor
+// type - HTTP, PING, PORT, DNS, DOCKER - which is the one thing about the check
+// the card does not otherwise say. Empty when Uptime Kuma sent no type, which
+// leaves the stock badge. The same label rides the DOWN, PENDING and resolve
+// frames so the badge does not change under the user mid-incident.
+func severityLabel(p *uptimekumaPayload) string {
+	return text.TruncateHard(strings.ToUpper(strings.TrimSpace(p.Monitor.Type)), pushward.MaxSeverityLabelRunes)
+}
+
 func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.UptimeKumaConfig) *Handler {
 	h := &Handler{
 		store:   store,
@@ -162,15 +173,16 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 		req := pushward.UpdateRequest{
 			State: pushward.StateOngoing,
 			Content: pushward.Content{
-				Template:    "alert",
-				Progress:    1.0,
-				State:       stateText,
-				Icon:        "exclamationmark.triangle.fill",
-				Subtitle:    subtitle,
-				AccentColor: pushward.ColorRed,
-				Severity:    "critical",
-				FiredAt:     firedAtPtr,
-				URL:         text.SanitizeURL(p.Monitor.URL),
+				Template:      "alert",
+				Progress:      1.0,
+				State:         stateText,
+				Icon:          "exclamationmark.triangle.fill",
+				Subtitle:      subtitle,
+				AccentColor:   pushward.ColorRed,
+				Severity:      "critical",
+				SeverityLabel: severityLabel(p),
+				FiredAt:       firedAtPtr,
+				URL:           text.SanitizeURL(p.Monitor.URL),
 			},
 		}
 		if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
@@ -223,14 +235,15 @@ func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger
 
 	if ov.AllowsActivity() {
 		content := pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       activityState,
-			Icon:        "checkmark.circle.fill",
-			Subtitle:    subtitle,
-			AccentColor: pushward.ColorGreen,
-			Severity:    "info",
-			URL:         text.SanitizeURL(p.Monitor.URL),
+			Template:      "alert",
+			Progress:      1.0,
+			State:         activityState,
+			Icon:          "checkmark.circle.fill",
+			Subtitle:      subtitle,
+			AccentColor:   pushward.ColorGreen,
+			Severity:      "info",
+			SeverityLabel: severityLabel(p),
+			URL:           text.SanitizeURL(p.Monitor.URL),
 		}
 		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	} else {
@@ -291,14 +304,15 @@ func (h *Handler) handlePending(ctx context.Context, userKey string, log *slog.L
 	req := pushward.UpdateRequest{
 		State: pushward.StateOngoing,
 		Content: pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       stateText,
-			Icon:        "hourglass",
-			Subtitle:    subtitle,
-			AccentColor: pushward.ColorOrange,
-			Severity:    "warning",
-			URL:         text.SanitizeURL(p.Monitor.URL),
+			Template:      "alert",
+			Progress:      1.0,
+			State:         stateText,
+			Icon:          "hourglass",
+			Subtitle:      subtitle,
+			AccentColor:   pushward.ColorOrange,
+			Severity:      "warning",
+			SeverityLabel: severityLabel(p),
+			URL:           text.SanitizeURL(p.Monitor.URL),
 		},
 	}
 	if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {

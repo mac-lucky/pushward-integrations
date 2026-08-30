@@ -418,6 +418,11 @@ func TestSystemMailAlert(t *testing.T) {
 	if update.Content.Severity != "critical" {
 		t.Errorf("expected severity 'critical' for error, got %s", update.Content.Severity)
 	}
+	// Proxmox has four levels and PushWard three, so the mapping folds notice
+	// into info; the badge keeps the word Proxmox actually sent.
+	if update.Content.SeverityLabel != "Error" {
+		t.Errorf("expected severity_label 'Error', got %q", update.Content.SeverityLabel)
+	}
 	if update.Content.State != "Certificate renewal failed" {
 		t.Errorf("expected state 'Certificate renewal failed', got %s", update.Content.State)
 	}

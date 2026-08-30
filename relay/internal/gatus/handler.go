@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -28,6 +29,17 @@ type Handler struct {
 }
 
 // RegisterRoutes registers the Gatus webhook endpoint and returns the Handler.
+
+// severityLabel replaces the stock Info/Warning/Critical badge with the Gatus
+// endpoint group - prod, homelab - which is routing information the card does
+// not otherwise carry; the endpoint name is already the activity name. Empty
+// when the payload carries no group, which leaves the stock badge. The firing
+// and resolve frames use the same label so the badge is stable across the
+// transition.
+func severityLabel(p *gatusPayload) string {
+	return text.TruncateHard(strings.TrimSpace(p.EndpointGroup), pushward.MaxSeverityLabelRunes)
+}
+
 func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.GatusConfig) *Handler {
 	h := &Handler{
 		store:   store,
@@ -169,15 +181,16 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 		req := pushward.UpdateRequest{
 			State: pushward.StateOngoing,
 			Content: pushward.Content{
-				Template:    "alert",
-				Progress:    1.0,
-				State:       stateText,
-				Icon:        "exclamationmark.triangle.fill",
-				Subtitle:    subtitle,
-				AccentColor: pushward.ColorRed,
-				Severity:    "critical",
-				FiredAt:     firedAt,
-				URL:         text.SanitizeURL(p.EndpointURL),
+				Template:      "alert",
+				Progress:      1.0,
+				State:         stateText,
+				Icon:          "exclamationmark.triangle.fill",
+				Subtitle:      subtitle,
+				AccentColor:   pushward.ColorRed,
+				Severity:      "critical",
+				SeverityLabel: severityLabel(p),
+				FiredAt:       firedAt,
+				URL:           text.SanitizeURL(p.EndpointURL),
 			},
 		}
 		if err := pwClient.UpdateActivity(ctx, slug, req); err != nil {
@@ -223,14 +236,15 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 
 	if ov.AllowsActivity() {
 		content := pushward.Content{
-			Template:    "alert",
-			Progress:    1.0,
-			State:       "Resolved",
-			Icon:        "checkmark.circle.fill",
-			Subtitle:    subtitle,
-			AccentColor: pushward.ColorGreen,
-			Severity:    "info",
-			URL:         text.SanitizeURL(p.EndpointURL),
+			Template:      "alert",
+			Progress:      1.0,
+			State:         "Resolved",
+			Icon:          "checkmark.circle.fill",
+			Subtitle:      subtitle,
+			AccentColor:   pushward.ColorGreen,
+			Severity:      "info",
+			SeverityLabel: severityLabel(p),
+			URL:           text.SanitizeURL(p.EndpointURL),
 		}
 		h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 	} else {

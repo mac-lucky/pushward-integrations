@@ -449,18 +449,24 @@ func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Log
 	mapKey := fmt.Sprintf("backrest:alert:%s:%s:%s", p.Plan, p.Repo, p.Event)
 
 	stateText := spec.state
+	// When Backrest sends an error the raw message takes the state line, which
+	// is where the condition would otherwise have been. Move the condition into
+	// the badge so the card still says which hook fired, not just what it said.
+	severityLabel := ""
 	if p.Error != "" {
 		stateText = text.TruncateHard(p.Error, 60)
+		severityLabel = text.TruncateHard(spec.state, pushward.MaxSeverityLabelRunes)
 	}
 
 	content := pushward.Content{
-		Template:    pushward.TemplateAlert,
-		Progress:    1.0,
-		State:       stateText,
-		Icon:        spec.icon,
-		Subtitle:    h.subtitle(p),
-		AccentColor: spec.color,
-		Severity:    spec.severity,
+		Template:      pushward.TemplateAlert,
+		Progress:      1.0,
+		State:         stateText,
+		Icon:          spec.icon,
+		Subtitle:      h.subtitle(p),
+		AccentColor:   spec.color,
+		Severity:      spec.severity,
+		SeverityLabel: severityLabel,
 	}
 
 	// No EndIfTracked here, unlike handleEnd: an alert creates its activity and

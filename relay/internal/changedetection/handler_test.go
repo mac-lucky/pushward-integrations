@@ -88,6 +88,11 @@ func TestPageChanged(t *testing.T) {
 	// Verify ONGOING update
 	var ongoing pushward.UpdateRequest
 	testutil.UnmarshalBody(t, recorded[1].Body, &ongoing)
+	// The template forces severity info, so without a label the badge reads
+	// "Info" on a content change.
+	if ongoing.Content.SeverityLabel != "Changed" {
+		t.Errorf("expected severity_label 'Changed', got %q", ongoing.Content.SeverityLabel)
+	}
 	if ongoing.State != pushward.StateOngoing {
 		t.Errorf("expected ONGOING, got %s", ongoing.State)
 	}

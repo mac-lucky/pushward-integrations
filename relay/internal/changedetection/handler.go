@@ -110,16 +110,19 @@ func (h *Handler) handleChange(ctx context.Context, payload *changedetectionPayl
 	}
 
 	content := pushward.Content{
-		Template:     "alert",
-		Progress:     1.0,
-		State:        stateText,
-		Icon:         "eye.fill",
-		Subtitle:     subtitle,
-		AccentColor:  pushward.ColorOrange,
-		Severity:     "info",
-		FiredAt:      firedAtPtr,
-		URL:          text.SanitizeURL(payload.DiffURL),
-		SecondaryURL: text.SanitizeURL(payload.PreviewURL),
+		Template:    "alert",
+		Progress:    1.0,
+		State:       stateText,
+		Icon:        "eye.fill",
+		Subtitle:    subtitle,
+		AccentColor: pushward.ColorOrange,
+		Severity:    "info",
+		// The template forces severity info, so the stock badge reads "Info" on a
+		// content change. The label says what actually happened instead.
+		SeverityLabel: "Changed",
+		FiredAt:       firedAtPtr,
+		URL:           text.SanitizeURL(payload.DiffURL),
+		SecondaryURL:  text.SanitizeURL(payload.PreviewURL),
 	}
 
 	ongoingReq := pushward.UpdateRequest{

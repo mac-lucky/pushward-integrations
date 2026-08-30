@@ -369,3 +369,20 @@ func TestKomodoTestSelfTest(t *testing.T) {
 		t.Errorf("expected relay-test-komodo slug, got %s", create.Slug)
 	}
 }
+
+func TestSeverityLabel(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"ContainerUnhealthy", "Container Unhealthy"},
+		{"ServerCpu", "Server Cpu"},
+		{"  ServerMem ", "Server Mem"},
+		{"", ""},
+	} {
+		if got := severityLabel(&komodoData{Type: tc.in}); got != tc.want {
+			t.Errorf("severityLabel(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	long := strings.Repeat("A", 60)
+	if got := severityLabel(&komodoData{Type: long}); len([]rune(got)) > pushward.MaxSeverityLabelRunes {
+		t.Errorf("label ran past the %d-rune cap: %d", pushward.MaxSeverityLabelRunes, len([]rune(got)))
+	}
+}

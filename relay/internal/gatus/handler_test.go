@@ -416,3 +416,18 @@ func TestOverrideChannelsNotificationResolveClearsDedup(t *testing.T) {
 		t.Fatalf("expected 3 notifications (triggered, resolved, triggered again), got %d", n)
 	}
 }
+
+func TestSeverityLabel(t *testing.T) {
+	// The endpoint group is routing information the card does not otherwise
+	// carry; the endpoint name is already the activity name.
+	if got := severityLabel(&gatusPayload{EndpointGroup: " prod "}); got != "prod" {
+		t.Errorf("expected prod, got %q", got)
+	}
+	// No group leaves the stock badge rather than an empty one.
+	if got := severityLabel(&gatusPayload{}); got != "" {
+		t.Errorf("expected an empty label for an ungrouped endpoint, got %q", got)
+	}
+	if got := severityLabel(&gatusPayload{EndpointGroup: strings.Repeat("g", 60)}); len([]rune(got)) != pushward.MaxSeverityLabelRunes {
+		t.Errorf("expected truncation to %d runes, got %d", pushward.MaxSeverityLabelRunes, len([]rune(got)))
+	}
+}

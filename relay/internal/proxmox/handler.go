@@ -354,6 +354,8 @@ func (h *Handler) handleFencing(ctx context.Context, userKey string, log *slog.L
 		Subtitle:    subtitle,
 		AccentColor: pushward.ColorRed,
 		Severity:    "critical",
+		// The badge names the event class; the state line is the raw title.
+		SeverityLabel: "Fencing",
 	}
 
 	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
@@ -391,13 +393,14 @@ func (h *Handler) handleUpdates(ctx context.Context, userKey string, log *slog.L
 	}
 
 	content := pushward.Content{
-		Template:    "alert",
-		Progress:    1.0,
-		State:       text.TruncateHard(p.Title, 100),
-		Icon:        "arrow.down.circle",
-		Subtitle:    subtitle,
-		AccentColor: pushward.ColorBlue,
-		Severity:    "info",
+		Template:      "alert",
+		Progress:      1.0,
+		State:         text.TruncateHard(p.Title, 100),
+		Icon:          "arrow.down.circle",
+		Subtitle:      subtitle,
+		AccentColor:   pushward.ColorBlue,
+		Severity:      "info",
+		SeverityLabel: "Updates",
 	}
 
 	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
@@ -467,15 +470,23 @@ func (h *Handler) handleSystemMail(ctx context.Context, userKey string, log *slo
 	if severity != pushward.SeverityInfo {
 		icon = "exclamationmark.triangle.fill"
 	}
+	// Proxmox has four levels and PushWard has three, so the switch above folds
+	// notice into info. The badge carries the original word, which is the only
+	// place the distinction survives.
+	severityLabel := ""
+	if raw := strings.TrimSpace(p.Severity); raw != "" {
+		severityLabel = text.TruncateHard(strings.ToUpper(raw[:1])+strings.ToLower(raw[1:]), pushward.MaxSeverityLabelRunes)
+	}
 
 	content := pushward.Content{
-		Template:    "alert",
-		Progress:    1.0,
-		State:       text.TruncateHard(title, 100),
-		Icon:        icon,
-		Subtitle:    subtitle,
-		AccentColor: pushward.SeverityColor(severity),
-		Severity:    severity,
+		Template:      "alert",
+		Progress:      1.0,
+		State:         text.TruncateHard(title, 100),
+		Icon:          icon,
+		Subtitle:      subtitle,
+		AccentColor:   pushward.SeverityColor(severity),
+		Severity:      severity,
+		SeverityLabel: severityLabel,
 	}
 
 	req := pushward.UpdateRequest{State: pushward.StateOngoing, Content: content}
