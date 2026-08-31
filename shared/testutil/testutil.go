@@ -56,6 +56,17 @@ var (
 		string(pushward.PlaybackStopped):   true,
 		string(pushward.PlaybackBuffering): true,
 	}
+	// approvalOptionID is the server's option-id charset: the slug charset at
+	// half the length.
+	approvalOptionID = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$`)
+	// validApprovalStyles includes "" because style is optional; with it
+	// omitted the first option renders primary and the rest secondary.
+	validApprovalStyles = map[string]bool{
+		"":                                      true,
+		string(pushward.ApprovalStylePrimary):   true,
+		string(pushward.ApprovalStyleSecondary): true,
+		string(pushward.ApprovalStyleDestructive): true,
+	}
 )
 
 // Media template bounds, mirroring the server's validation. The clock-skew
@@ -146,8 +157,7 @@ type apiContent struct {
 	Answer             map[string]any       `json:"answer,omitempty"`
 }
 
-// testApprovalOption mirrors pushward.ApprovalOption plus the foreground flag
-// the server decodes for symmetry and rejects on http(s) options.
+// testApprovalOption mirrors pushward.ApprovalOption.
 type testApprovalOption struct {
 	ID         string            `json:"id"`
 	Title      string            `json:"title"`
@@ -714,9 +724,12 @@ func validateContent(c *apiContent) error {
 }
 
 // validateApprovalFields is the off-template gate: approval fields on any
-// other template are a 422, same shape as validateMedia's gate.
+// other template are a 422, same shape as validateMedia's gate. Answer counts
+// here (the server's hasApprovalFields includes it) even though on the
+// approval template itself a client-sent answer is stripped, not rejected.
 func validateApprovalFields(c *apiContent) error {
-	hasApproval := len(c.Options) > 0 || c.Source != "" || len(c.Details) > 0 || c.OnExpire != ""
+	hasApproval := len(c.Options) > 0 || c.Source != "" || len(c.Details) > 0 ||
+		c.OnExpire != "" || c.Answer != nil
 	if hasApproval && c.Template != "" && c.Template != pushward.TemplateApproval {
 		return fmt.Errorf("options, source, details, on_expire and answer are only valid on the approval template, got %q", c.Template)
 	}
@@ -724,13 +737,11 @@ func validateApprovalFields(c *apiContent) error {
 }
 
 // validateApproval re-implements the server's approval template rules: 2-4
-// options with unique slug-charset ids and short titles, icons required at
-// three-plus options, http(s) options always silent (foreground rejected),
-// a url-less option left for the server's signed answer-URL fill, the two
-// generic button slots reserved, and on_expire tied to end_date and an
-// option id. The server also fills an empty method with POST on http(s)
-// options (not echoed here; the mock is stateless) and strips a client-sent
-// answer instead of rejecting it.
+// options with unique slug-charset ids, the two generic button slots
+// reserved, and on_expire tied to end_date and an option id. The per-option
+// rules live in validateApprovalOption. The server also fills an empty method
+// with POST on http(s) options (not echoed here; the mock is stateless) and
+// strips a client-sent answer instead of rejecting it.
 func validateApproval(c *apiContent) error {
 	if len(c.Options) < 2 || len(c.Options) > 4 {
 		return fmt.Errorf("options must have 2-4 entries for approval template, got %d", len(c.Options))
@@ -741,45 +752,17 @@ func validateApproval(c *apiContent) error {
 	// The server also rejects alarm / snooze_seconds on approval; the mock's
 	// apiContent does not model those countdown fields, so that rule is left
 	// to the real server.
-	seen := map[string]bool{}
+	seen := make(map[string]bool, len(c.Options))
 	for i := range c.Options {
-		o := &c.Options[i]
 		field := fmt.Sprintf("options[%d]", i)
-		if !approvalOptionIDValid(o.ID) {
-			return fmt.Errorf("%s.id is required and must be slug-shaped (at most 64 chars)", field)
+		o := &c.Options[i]
+		if err := validateApprovalOption(o, field, len(c.Options)); err != nil {
+			return err
 		}
 		if seen[o.ID] {
 			return fmt.Errorf("%s.id %q is already used", field, o.ID)
 		}
 		seen[o.ID] = true
-		if o.Title == "" || utf8.RuneCountInString(o.Title) > 24 {
-			return fmt.Errorf("%s.title is required and at most 24 runes", field)
-		}
-		switch o.Style {
-		case "", "primary", "secondary", "destructive":
-		default:
-			return fmt.Errorf("%s.style must be primary, secondary or destructive", field)
-		}
-		if utf8.RuneCountInString(o.Icon) > 64 {
-			return fmt.Errorf("%s.icon must be at most 64 runes", field)
-		}
-		if len(c.Options) >= 3 && o.Icon == "" {
-			return fmt.Errorf("%s.icon is required with three or more options", field)
-		}
-		if o.URL == "" {
-			// Server-recorded form: the server fills a signed answer URL.
-			if o.Foreground || o.Method != "" || len(o.Headers) > 0 || o.Body != "" {
-				return fmt.Errorf("%s: method, headers, body and foreground require a url", field)
-			}
-			continue
-		}
-		action := testTapAction{URL: o.URL, Foreground: o.Foreground, Method: o.Method, Headers: o.Headers, Body: o.Body}
-		if err := validateTapAction(&action, field); err != nil {
-			return err
-		}
-		if o.Foreground && isHTTPURL(o.URL) {
-			return fmt.Errorf("%s.foreground must not be true on an http(s) url: approval options are silent webhooks", field)
-		}
 	}
 	if utf8.RuneCountInString(c.Source) > 24 {
 		return fmt.Errorf("source must be at most 24 runes")
@@ -795,32 +778,57 @@ func validateApproval(c *apiContent) error {
 			return fmt.Errorf("details[%d].value is required and at most 64 runes", i)
 		}
 	}
-	if c.OnExpire != "" {
-		if c.EndDate == nil {
-			return fmt.Errorf("on_expire requires end_date")
-		}
-		if c.OnExpire != "none" && !seen[c.OnExpire] {
-			return fmt.Errorf("on_expire must be \"none\" or an option id, got %q", c.OnExpire)
-		}
+	if c.OnExpire == "" {
+		return nil
+	}
+	if c.EndDate == nil {
+		return fmt.Errorf("on_expire requires end_date")
+	}
+	if c.OnExpire != pushward.ApprovalAnswerNone && !seen[c.OnExpire] {
+		return fmt.Errorf("on_expire must be \"none\" or an option id, got %q", c.OnExpire)
 	}
 	return nil
 }
 
-// approvalOptionIDValid mirrors the server's ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$.
-func approvalOptionIDValid(id string) bool {
-	if id == "" || len(id) > 64 {
-		return false
+// validateApprovalOption checks one answer button: its identity (slug-shaped
+// id, short title, known style, and an icon once total reaches three, where
+// the buttons render as icon-first tiles), then its routing.
+//
+// Mode A is the producer's own endpoint, validated like any other action and,
+// on http(s), always silent. Mode B omits url entirely and leaves the slot
+// for the signed answer URL the server fills in: that fill overwrites method
+// with POST and passes headers and body through untouched, so none of the
+// three is rejected here. Foreground still is - the filled URL is http(s),
+// where the server refuses the foreground shape (an explicit false marshals
+// away and reads as absent).
+func validateApprovalOption(o *testApprovalOption, field string, total int) error {
+	if !approvalOptionID.MatchString(o.ID) {
+		return fmt.Errorf("%s.id is required and must be slug-shaped (at most 64 chars)", field)
 	}
-	for i, r := range id {
-		alnum := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
-		if i == 0 && !alnum {
-			return false
-		}
-		if !alnum && r != '_' && r != '-' {
-			return false
-		}
+	if o.Title == "" || utf8.RuneCountInString(o.Title) > 24 {
+		return fmt.Errorf("%s.title is required and at most 24 runes", field)
 	}
-	return true
+	if !validApprovalStyles[o.Style] {
+		return fmt.Errorf("%s.style must be primary, secondary or destructive", field)
+	}
+	if utf8.RuneCountInString(o.Icon) > 64 {
+		return fmt.Errorf("%s.icon must be at most 64 runes", field)
+	}
+	if o.Icon == "" && total >= 3 {
+		return fmt.Errorf("%s.icon is required with three or more options", field)
+	}
+	if o.URL == "" {
+		if o.Foreground {
+			return fmt.Errorf("%s.foreground must not be true without a url: the server fills an http(s) answer url and approval options are silent webhooks", field)
+		}
+		// The fill makes the option http(s), so the body cap still applies.
+		if utf8.RuneCountInString(o.Body) > 1024 {
+			return fmt.Errorf("%s.body must be at most 1024 characters", field)
+		}
+		return nil
+	}
+	action := testTapAction{URL: o.URL, Foreground: o.Foreground, Method: o.Method, Headers: o.Headers, Body: o.Body}
+	return validateSilentAction(&action, field, "approval options")
 }
 
 func validateAlert(c *apiContent) error {
@@ -1214,7 +1222,7 @@ func validateMediaControls(mc *testMediaControls) error {
 		{"volume_up", mc.VolumeUp},
 	}
 	for _, s := range slots {
-		if err := validateMediaControl(s.action, "controls."+s.name); err != nil {
+		if err := validateSilentAction(s.action, "controls."+s.name, "media controls"); err != nil {
 			return err
 		}
 	}
@@ -1223,7 +1231,7 @@ func validateMediaControls(mc *testMediaControls) error {
 	}
 	for i := range mc.Extra {
 		field := fmt.Sprintf("controls.extra[%d]", i)
-		if err := validateMediaControl(&mc.Extra[i], field); err != nil {
+		if err := validateSilentAction(&mc.Extra[i], field, "media controls"); err != nil {
 			return err
 		}
 		if mc.Extra[i].Icon == "" {
@@ -1233,12 +1241,16 @@ func validateMediaControls(mc *testMediaControls) error {
 	return nil
 }
 
-func validateMediaControl(a *testTapAction, field string) error {
+// validateSilentAction is the rule the action slots that only ever fire in
+// the background share: the tap-action shape, plus the refusal to open the
+// foreground from an http(s) URL. kind names the slot family in the error
+// ("media controls", "approval options").
+func validateSilentAction(a *testTapAction, field, kind string) error {
 	if err := validateTapAction(a, field); err != nil {
 		return err
 	}
 	if a != nil && a.Foreground && isHTTPURL(a.URL) {
-		return fmt.Errorf("%s.foreground must not be true on an http(s) url: media controls are silent webhooks", field)
+		return fmt.Errorf("%s.foreground must not be true on an http(s) url: %s are silent webhooks", field, kind)
 	}
 	return nil
 }

@@ -179,7 +179,7 @@ func TestApprovalWireNames(t *testing.T) {
 	options := []ApprovalOption{
 		{
 			ID: "send", Title: "Send", Style: ApprovalStylePrimary, Icon: "paperplane.fill",
-			URL: "https://ha.example/approve", Method: "POST",
+			URL: "https://ha.example/approve", Foreground: true, Method: "POST",
 			Headers: map[string]string{"Authorization": "Bearer k"}, Body: `{"go":true}`,
 		},
 		{ID: "deny", Title: "Deny"},
@@ -214,28 +214,37 @@ func TestApprovalWireNames(t *testing.T) {
 		t.Error("Content must expose the server-recorded answer")
 	}
 
-	// An option's own keys, incl. that the mode-B form (no URL) omits the
-	// routing fields entirely.
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(mustJSON(t, full), &raw); err != nil {
+	// An option's own keys, one row per form.
+	var wire struct {
+		Options []map[string]json.RawMessage `json:"options"`
+	}
+	if err := json.Unmarshal(mustJSON(t, full), &wire); err != nil {
 		t.Fatal(err)
 	}
-	var opts []map[string]json.RawMessage
-	if err := json.Unmarshal(raw["options"], &opts); err != nil {
-		t.Fatal(err)
+	wantOptionKeys := [][]string{
+		// Mode A carries every routing field; foreground marshals here even
+		// though the server 422s it on an http(s) url (it is live for custom
+		// schemes).
+		{"body", "foreground", "headers", "icon", "id", "method", "style", "title", "url"},
+		{"id", "title"}, // mode B: with no URL of its own, no routing field travels
 	}
-	if got := sortedKeys(setOf(opts[0])); !reflect.DeepEqual(got,
-		[]string{"body", "headers", "icon", "id", "method", "style", "title", "url"}) {
-		t.Errorf("options[0] keys = %v", got)
-	}
-	if got := sortedKeys(setOf(opts[1])); !reflect.DeepEqual(got, []string{"id", "title"}) {
-		t.Errorf("mode-B option must omit unset routing fields, got %v", got)
+	for i, want := range wantOptionKeys {
+		if got := sortedKeys(setOf(wire.Options[i])); !reflect.DeepEqual(got, want) {
+			t.Errorf("options[%d] keys = %v, want %v", i, got, want)
+		}
 	}
 
 	empty := jsonKeys(t, ContentPatch{})
-	for _, k := range append(wantApproval, "answer") {
+	for _, k := range wantApproval {
 		if empty[k] {
 			t.Errorf("empty ContentPatch leaks %q (missing omitempty)", k)
+		}
+	}
+	// jsonKeys on a zero struct can only see missing omitempty tags, so assert
+	// field absence structurally: ContentPatch must have no answer field at all.
+	for _, f := range reflect.VisibleFields(reflect.TypeOf(ContentPatch{})) {
+		if f.Name == "Answer" || strings.HasPrefix(f.Tag.Get("json"), "answer") {
+			t.Error("ContentPatch must not carry an answer field: the answer is server-owned")
 		}
 	}
 }

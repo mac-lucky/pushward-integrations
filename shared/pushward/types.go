@@ -245,6 +245,16 @@ const (
 	ApprovalStyleDestructive ApprovalStyle = "destructive"
 )
 
+// Approval answer values. ApprovalAnswerNone is both the OnExpire sentinel
+// for "expire without recording an option" and the Answer.Option the sweep
+// writes when no default was set; the By values name what resolved the round
+// (a user's tap or the deadline sweep).
+const (
+	ApprovalAnswerNone      = "none"
+	ApprovalAnswerByUser    = "user"
+	ApprovalAnswerByExpired = "expired"
+)
+
 // ApprovalOption is one answer button of the approval template (2-4 per
 // activity). It carries the TapAction routing fields plus the button identity:
 // a stable ID (unique within the options, slug charset, at most 64 chars), a
@@ -252,7 +262,8 @@ const (
 // becomes required once the activity has three or more options - those render
 // as icon-first tiles). An http(s) URL is always a silent webhook: the server
 // rejects a foreground shape and fills an empty Method with POST, like a
-// media control.
+// media control. Foreground is live only with a custom-scheme URL, which
+// opens the target app.
 //
 // Omit URL entirely for the server-recorded form: the server fills the option
 // with a signed answer URL of its own, and the first tap is written to
@@ -261,14 +272,15 @@ const (
 // Screen). Mixing both forms in one activity is allowed; a tap on an option
 // with your own URL is never recorded in Answer.
 type ApprovalOption struct {
-	ID      string            `json:"id"`
-	Title   string            `json:"title"`
-	Style   ApprovalStyle     `json:"style,omitempty"`
-	Icon    string            `json:"icon,omitempty"`
-	URL     string            `json:"url,omitempty"`
-	Method  string            `json:"method,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Body    string            `json:"body,omitempty"`
+	ID         string            `json:"id"`
+	Title      string            `json:"title"`
+	Style      ApprovalStyle     `json:"style,omitempty"`
+	Icon       string            `json:"icon,omitempty"`
+	URL        string            `json:"url,omitempty"`
+	Foreground bool              `json:"foreground,omitempty"`
+	Method     string            `json:"method,omitempty"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Body       string            `json:"body,omitempty"`
 }
 
 // ApprovalDetail is one label/value context row shown between the question
@@ -282,11 +294,14 @@ type ApprovalDetail struct {
 // ApprovalAnswer is the server-recorded resolution of an approval activity.
 // Read-only: it appears in responses once a server-recorded option was tapped
 // (By "user") or the deadline sweep applied OnExpire (By "expired"; Option is
-// then "none" when no default was set). Never send it - the server strips it
-// from writes, and re-sending Options starts a new round and clears it.
+// then "none" when no default was set; At is unix seconds). Never send it -
+// the server strips it from writes, and re-sending Options starts a new round
+// and clears it.
 // Unlike the other server-owned fields this one IS decoded here on purpose:
 // polling an activity until Answer is set is how a producer with no webhook
-// endpoint of its own reads the outcome.
+// endpoint of its own reads the outcome. That read path is staged for now:
+// this client ships no GET call yet, so the polling rides a future reader or
+// direct API calls.
 type ApprovalAnswer struct {
 	Option string `json:"option"`
 	At     int64  `json:"at"`
@@ -574,7 +589,8 @@ type ContentPatch struct {
 	// Approval template. Options and Details replace wholesale (RFC 7396
 	// array semantics); re-sending Options starts a new round and clears the
 	// server-recorded answer. The answer itself is server-owned and has no
-	// patch field - read it back from the response Content.
+	// patch field - read it back from the response Content. With omitempty an
+	// empty Details slice cannot express clearing, matching Tiles and Lines.
 	Options  []ApprovalOption `json:"options,omitempty"`
 	Source   *string          `json:"source,omitempty"`
 	Details  []ApprovalDetail `json:"details,omitempty"`
