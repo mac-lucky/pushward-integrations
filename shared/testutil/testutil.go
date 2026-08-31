@@ -28,7 +28,7 @@ type APICall struct {
 var (
 	slugPattern    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 	hexColor       = regexp.MustCompile(`^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$`)
-	validTemplates = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true, "timeline": true, "board": true, "log": true, "media": true}
+	validTemplates = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true, "timeline": true, "board": true, "log": true, "media": true, "approval": true}
 	// validTrends / validLogLevels include "" because trend and level are
 	// optional - an omitted value is valid; only a non-empty unknown value fails.
 	validTrends     = map[string]bool{"": true, pushward.TrendUp: true, pushward.TrendDown: true, pushward.TrendFlat: true}
@@ -90,55 +90,80 @@ type updateRequest struct {
 }
 
 type apiContent struct {
-	Template           string             `json:"template"`
-	Progress           float64            `json:"progress"`
-	State              string             `json:"state,omitempty"`
-	Icon               string             `json:"icon,omitempty"`
-	Subtitle           string             `json:"subtitle,omitempty"`
-	AccentColor        string             `json:"accent_color,omitempty"`
-	BackgroundColor    string             `json:"background_color,omitempty"`
-	TextColor          string             `json:"text_color,omitempty"`
-	CurrentStep        *int               `json:"current_step,omitempty"`
-	TotalSteps         *int               `json:"total_steps,omitempty"`
-	StepRows           []int              `json:"step_rows,omitempty"`
-	StepLabels         []string           `json:"step_labels,omitempty"`
-	StepColors         []string           `json:"step_colors,omitempty"`
-	StepWeights        []float64          `json:"step_weights,omitempty"`
-	URL                string             `json:"url,omitempty"`
-	SecondaryURL       string             `json:"secondary_url,omitempty"`
-	Severity           string             `json:"severity,omitempty"`
-	FiredAt            *int64             `json:"fired_at,omitempty"`
-	SeverityLabel      string             `json:"severity_label,omitempty"`
-	RemainingTime      *int               `json:"remaining_time,omitempty"`
-	CompletionMessage  string             `json:"completion_message,omitempty"`
-	EndDate            *int64             `json:"end_date,omitempty"`
-	StartDate          *int64             `json:"start_date,omitempty"`
-	WarningThreshold   *int               `json:"warning_threshold,omitempty"`
-	Value              any                `json:"value,omitempty"`
-	MinValue           *float64           `json:"min_value,omitempty"`
-	MaxValue           *float64           `json:"max_value,omitempty"`
-	Unit               string             `json:"unit,omitempty"`
-	Scale              string             `json:"scale,omitempty"`
-	Decimals           *int               `json:"decimals,omitempty"`
-	Smoothing          *bool              `json:"smoothing,omitempty"`
-	Thresholds         []testThreshold    `json:"thresholds,omitempty"`
-	Duration           *string            `json:"duration,omitempty"`
-	Tiles              []testBoardTile    `json:"tiles,omitempty"`
-	Lines              []testLogLine      `json:"lines,omitempty"`
-	TapAction          *testTapAction     `json:"tap_action,omitempty"`
-	URLAction          *testTapAction     `json:"url_action,omitempty"`
-	SecondaryURLAction *testTapAction     `json:"secondary_url_action,omitempty"`
-	ImageURL           string             `json:"image_url,omitempty"`
-	ImageShape         string             `json:"image_shape,omitempty"`
-	ImageThumbhash     string             `json:"image_thumbhash,omitempty"`
-	MediaTitle         string             `json:"media_title,omitempty"`
-	PlaybackState      string             `json:"playback_state,omitempty"`
-	PositionSeconds    *float64           `json:"position_seconds,omitempty"`
-	DurationSeconds    *float64           `json:"duration_seconds,omitempty"`
-	PositionAt         *int64             `json:"position_at,omitempty"`
-	Volume             *float64           `json:"volume,omitempty"`
-	Favorite           *bool              `json:"favorite,omitempty"`
-	Controls           *testMediaControls `json:"controls,omitempty"`
+	Template           string               `json:"template"`
+	Progress           float64              `json:"progress"`
+	State              string               `json:"state,omitempty"`
+	Icon               string               `json:"icon,omitempty"`
+	Subtitle           string               `json:"subtitle,omitempty"`
+	AccentColor        string               `json:"accent_color,omitempty"`
+	BackgroundColor    string               `json:"background_color,omitempty"`
+	TextColor          string               `json:"text_color,omitempty"`
+	CurrentStep        *int                 `json:"current_step,omitempty"`
+	TotalSteps         *int                 `json:"total_steps,omitempty"`
+	StepRows           []int                `json:"step_rows,omitempty"`
+	StepLabels         []string             `json:"step_labels,omitempty"`
+	StepColors         []string             `json:"step_colors,omitempty"`
+	StepWeights        []float64            `json:"step_weights,omitempty"`
+	URL                string               `json:"url,omitempty"`
+	SecondaryURL       string               `json:"secondary_url,omitempty"`
+	Severity           string               `json:"severity,omitempty"`
+	FiredAt            *int64               `json:"fired_at,omitempty"`
+	SeverityLabel      string               `json:"severity_label,omitempty"`
+	RemainingTime      *int                 `json:"remaining_time,omitempty"`
+	CompletionMessage  string               `json:"completion_message,omitempty"`
+	EndDate            *int64               `json:"end_date,omitempty"`
+	StartDate          *int64               `json:"start_date,omitempty"`
+	WarningThreshold   *int                 `json:"warning_threshold,omitempty"`
+	Value              any                  `json:"value,omitempty"`
+	MinValue           *float64             `json:"min_value,omitempty"`
+	MaxValue           *float64             `json:"max_value,omitempty"`
+	Unit               string               `json:"unit,omitempty"`
+	Scale              string               `json:"scale,omitempty"`
+	Decimals           *int                 `json:"decimals,omitempty"`
+	Smoothing          *bool                `json:"smoothing,omitempty"`
+	Thresholds         []testThreshold      `json:"thresholds,omitempty"`
+	Duration           *string              `json:"duration,omitempty"`
+	Tiles              []testBoardTile      `json:"tiles,omitempty"`
+	Lines              []testLogLine        `json:"lines,omitempty"`
+	TapAction          *testTapAction       `json:"tap_action,omitempty"`
+	URLAction          *testTapAction       `json:"url_action,omitempty"`
+	SecondaryURLAction *testTapAction       `json:"secondary_url_action,omitempty"`
+	ImageURL           string               `json:"image_url,omitempty"`
+	ImageShape         string               `json:"image_shape,omitempty"`
+	ImageThumbhash     string               `json:"image_thumbhash,omitempty"`
+	MediaTitle         string               `json:"media_title,omitempty"`
+	PlaybackState      string               `json:"playback_state,omitempty"`
+	PositionSeconds    *float64             `json:"position_seconds,omitempty"`
+	DurationSeconds    *float64             `json:"duration_seconds,omitempty"`
+	PositionAt         *int64               `json:"position_at,omitempty"`
+	Volume             *float64             `json:"volume,omitempty"`
+	Favorite           *bool                `json:"favorite,omitempty"`
+	Controls           *testMediaControls   `json:"controls,omitempty"`
+	Options            []testApprovalOption `json:"options,omitempty"`
+	Source             string               `json:"source,omitempty"`
+	Details            []testApprovalDetail `json:"details,omitempty"`
+	OnExpire           string               `json:"on_expire,omitempty"`
+	Answer             map[string]any       `json:"answer,omitempty"`
+}
+
+// testApprovalOption mirrors pushward.ApprovalOption plus the foreground flag
+// the server decodes for symmetry and rejects on http(s) options.
+type testApprovalOption struct {
+	ID         string            `json:"id"`
+	Title      string            `json:"title"`
+	Style      string            `json:"style,omitempty"`
+	Icon       string            `json:"icon,omitempty"`
+	URL        string            `json:"url,omitempty"`
+	Foreground bool              `json:"foreground,omitempty"`
+	Method     string            `json:"method,omitempty"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Body       string            `json:"body,omitempty"`
+}
+
+// testApprovalDetail mirrors pushward.ApprovalDetail.
+type testApprovalDetail struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
 }
 
 type testThreshold struct {
@@ -594,7 +619,7 @@ func validateContent(c *apiContent) error {
 	// Under merge-patch, template may be absent on ticks; only per-template
 	// required-field validation is gated on it.
 	if c.Template != "" && !validTemplates[c.Template] {
-		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, gauge, timeline, board, log, media")
+		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, gauge, timeline, board, log, media, approval")
 	}
 	if c.Progress < 0 || c.Progress > 1 {
 		return fmt.Errorf("progress must be 0.0-1.0")
@@ -646,6 +671,9 @@ func validateContent(c *apiContent) error {
 	if err := validateMedia(c); err != nil {
 		return err
 	}
+	if err := validateApprovalFields(c); err != nil {
+		return err
+	}
 
 	switch c.Template {
 	case "alert":
@@ -676,9 +704,123 @@ func validateContent(c *apiContent) error {
 		if err := validateLog(c); err != nil {
 			return err
 		}
+	case "approval":
+		if err := validateApproval(c); err != nil {
+			return err
+		}
 	}
 
 	return nil
+}
+
+// validateApprovalFields is the off-template gate: approval fields on any
+// other template are a 422, same shape as validateMedia's gate.
+func validateApprovalFields(c *apiContent) error {
+	hasApproval := len(c.Options) > 0 || c.Source != "" || len(c.Details) > 0 || c.OnExpire != ""
+	if hasApproval && c.Template != "" && c.Template != pushward.TemplateApproval {
+		return fmt.Errorf("options, source, details, on_expire and answer are only valid on the approval template, got %q", c.Template)
+	}
+	return nil
+}
+
+// validateApproval re-implements the server's approval template rules: 2-4
+// options with unique slug-charset ids and short titles, icons required at
+// three-plus options, http(s) options always silent (foreground rejected),
+// a url-less option left for the server's signed answer-URL fill, the two
+// generic button slots reserved, and on_expire tied to end_date and an
+// option id. The server also fills an empty method with POST on http(s)
+// options (not echoed here; the mock is stateless) and strips a client-sent
+// answer instead of rejecting it.
+func validateApproval(c *apiContent) error {
+	if len(c.Options) < 2 || len(c.Options) > 4 {
+		return fmt.Errorf("options must have 2-4 entries for approval template, got %d", len(c.Options))
+	}
+	if c.URLAction != nil || c.SecondaryURLAction != nil {
+		return fmt.Errorf("url_action and secondary_url_action are not valid on the approval template")
+	}
+	// The server also rejects alarm / snooze_seconds on approval; the mock's
+	// apiContent does not model those countdown fields, so that rule is left
+	// to the real server.
+	seen := map[string]bool{}
+	for i := range c.Options {
+		o := &c.Options[i]
+		field := fmt.Sprintf("options[%d]", i)
+		if !approvalOptionIDValid(o.ID) {
+			return fmt.Errorf("%s.id is required and must be slug-shaped (at most 64 chars)", field)
+		}
+		if seen[o.ID] {
+			return fmt.Errorf("%s.id %q is already used", field, o.ID)
+		}
+		seen[o.ID] = true
+		if o.Title == "" || utf8.RuneCountInString(o.Title) > 24 {
+			return fmt.Errorf("%s.title is required and at most 24 runes", field)
+		}
+		switch o.Style {
+		case "", "primary", "secondary", "destructive":
+		default:
+			return fmt.Errorf("%s.style must be primary, secondary or destructive", field)
+		}
+		if utf8.RuneCountInString(o.Icon) > 64 {
+			return fmt.Errorf("%s.icon must be at most 64 runes", field)
+		}
+		if len(c.Options) >= 3 && o.Icon == "" {
+			return fmt.Errorf("%s.icon is required with three or more options", field)
+		}
+		if o.URL == "" {
+			// Server-recorded form: the server fills a signed answer URL.
+			if o.Foreground || o.Method != "" || len(o.Headers) > 0 || o.Body != "" {
+				return fmt.Errorf("%s: method, headers, body and foreground require a url", field)
+			}
+			continue
+		}
+		action := testTapAction{URL: o.URL, Foreground: o.Foreground, Method: o.Method, Headers: o.Headers, Body: o.Body}
+		if err := validateTapAction(&action, field); err != nil {
+			return err
+		}
+		if o.Foreground && isHTTPURL(o.URL) {
+			return fmt.Errorf("%s.foreground must not be true on an http(s) url: approval options are silent webhooks", field)
+		}
+	}
+	if utf8.RuneCountInString(c.Source) > 24 {
+		return fmt.Errorf("source must be at most 24 runes")
+	}
+	if len(c.Details) > 2 {
+		return fmt.Errorf("details must have at most 2 entries")
+	}
+	for i, d := range c.Details {
+		if d.Label == "" || utf8.RuneCountInString(d.Label) > 24 {
+			return fmt.Errorf("details[%d].label is required and at most 24 runes", i)
+		}
+		if d.Value == "" || utf8.RuneCountInString(d.Value) > 64 {
+			return fmt.Errorf("details[%d].value is required and at most 64 runes", i)
+		}
+	}
+	if c.OnExpire != "" {
+		if c.EndDate == nil {
+			return fmt.Errorf("on_expire requires end_date")
+		}
+		if c.OnExpire != "none" && !seen[c.OnExpire] {
+			return fmt.Errorf("on_expire must be \"none\" or an option id, got %q", c.OnExpire)
+		}
+	}
+	return nil
+}
+
+// approvalOptionIDValid mirrors the server's ^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$.
+func approvalOptionIDValid(id string) bool {
+	if id == "" || len(id) > 64 {
+		return false
+	}
+	for i, r := range id {
+		alnum := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+		if i == 0 && !alnum {
+			return false
+		}
+		if !alnum && r != '_' && r != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 func validateAlert(c *apiContent) error {

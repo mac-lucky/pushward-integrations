@@ -170,6 +170,76 @@ func TestMediaWireNames(t *testing.T) {
 	}
 }
 
+// TestApprovalWireNames pins the snake_case keys of the approval template on
+// both Content and ContentPatch, and that an empty patch leaks none of them
+// (the TestMediaWireNames rule: a nil pointer without omitempty marshals as
+// null and deletes the stored value under merge-patch). Answer is Content-only
+// on purpose - it is server-owned, decoded for polling, never patchable.
+func TestApprovalWireNames(t *testing.T) {
+	options := []ApprovalOption{
+		{
+			ID: "send", Title: "Send", Style: ApprovalStylePrimary, Icon: "paperplane.fill",
+			URL: "https://ha.example/approve", Method: "POST",
+			Headers: map[string]string{"Authorization": "Bearer k"}, Body: `{"go":true}`,
+		},
+		{ID: "deny", Title: "Deny"},
+	}
+	details := []ApprovalDetail{{Label: "To", Value: "ops@example.com"}}
+	wantApproval := []string{"details", "on_expire", "options", "source"}
+
+	full := Content{
+		Template: TemplateApproval,
+		State:    "Ship it?",
+		Options:  options,
+		Source:   "Agent",
+		Details:  details,
+		OnExpire: "deny",
+		Answer:   &ApprovalAnswer{Option: "send", At: 1755500000, By: "user"},
+	}
+	patch := ContentPatch{
+		Options:  options,
+		Source:   StringPtr("Agent"),
+		Details:  details,
+		OnExpire: StringPtr("deny"),
+	}
+	for name, v := range map[string]any{"Content": full, "ContentPatch": patch} {
+		got := jsonKeys(t, v)
+		for _, k := range wantApproval {
+			if !got[k] {
+				t.Errorf("%s: approval key %q missing from %v", name, k, sortedKeys(got))
+			}
+		}
+	}
+	if !jsonKeys(t, full)["answer"] {
+		t.Error("Content must expose the server-recorded answer")
+	}
+
+	// An option's own keys, incl. that the mode-B form (no URL) omits the
+	// routing fields entirely.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(mustJSON(t, full), &raw); err != nil {
+		t.Fatal(err)
+	}
+	var opts []map[string]json.RawMessage
+	if err := json.Unmarshal(raw["options"], &opts); err != nil {
+		t.Fatal(err)
+	}
+	if got := sortedKeys(setOf(opts[0])); !reflect.DeepEqual(got,
+		[]string{"body", "headers", "icon", "id", "method", "style", "title", "url"}) {
+		t.Errorf("options[0] keys = %v", got)
+	}
+	if got := sortedKeys(setOf(opts[1])); !reflect.DeepEqual(got, []string{"id", "title"}) {
+		t.Errorf("mode-B option must omit unset routing fields, got %v", got)
+	}
+
+	empty := jsonKeys(t, ContentPatch{})
+	for _, k := range append(wantApproval, "answer") {
+		if empty[k] {
+			t.Errorf("empty ContentPatch leaks %q (missing omitempty)", k)
+		}
+	}
+}
+
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)

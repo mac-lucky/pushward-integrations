@@ -24,6 +24,7 @@ const (
 	TemplateBoard     = "board"
 	TemplateLog       = "log"
 	TemplateMedia     = "media"
+	TemplateApproval  = "approval"
 )
 
 // Steps-template wire bounds, mirroring the server's per-entry validation.
@@ -233,6 +234,65 @@ type MediaControls struct {
 	Extra      []TapAction `json:"extra,omitempty"`
 }
 
+// ApprovalStyle is the rendering weight of one approval option button.
+// Omitted, the first option renders primary and the rest secondary.
+type ApprovalStyle string
+
+// Approval option styles.
+const (
+	ApprovalStylePrimary     ApprovalStyle = "primary"
+	ApprovalStyleSecondary   ApprovalStyle = "secondary"
+	ApprovalStyleDestructive ApprovalStyle = "destructive"
+)
+
+// ApprovalOption is one answer button of the approval template (2-4 per
+// activity). It carries the TapAction routing fields plus the button identity:
+// a stable ID (unique within the options, slug charset, at most 64 chars), a
+// required Title (at most 24 runes) and an optional Style and Icon (Icon
+// becomes required once the activity has three or more options - those render
+// as icon-first tiles). An http(s) URL is always a silent webhook: the server
+// rejects a foreground shape and fills an empty Method with POST, like a
+// media control.
+//
+// Omit URL entirely for the server-recorded form: the server fills the option
+// with a signed answer URL of its own, and the first tap is written to
+// Content.Answer, pushed to every device, and ends the activity a few seconds
+// later (DismissalTTL controls how long the answered card lingers on the Lock
+// Screen). Mixing both forms in one activity is allowed; a tap on an option
+// with your own URL is never recorded in Answer.
+type ApprovalOption struct {
+	ID      string            `json:"id"`
+	Title   string            `json:"title"`
+	Style   ApprovalStyle     `json:"style,omitempty"`
+	Icon    string            `json:"icon,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Method  string            `json:"method,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
+	Body    string            `json:"body,omitempty"`
+}
+
+// ApprovalDetail is one label/value context row shown between the question
+// and the buttons (recipient, amount, environment). At most 2 rows; Label at
+// most 24 runes, Value at most 64.
+type ApprovalDetail struct {
+	Label string `json:"label"`
+	Value string `json:"value"`
+}
+
+// ApprovalAnswer is the server-recorded resolution of an approval activity.
+// Read-only: it appears in responses once a server-recorded option was tapped
+// (By "user") or the deadline sweep applied OnExpire (By "expired"; Option is
+// then "none" when no default was set). Never send it - the server strips it
+// from writes, and re-sending Options starts a new round and clears it.
+// Unlike the other server-owned fields this one IS decoded here on purpose:
+// polling an activity until Answer is set is how a producer with no webhook
+// endpoint of its own reads the outcome.
+type ApprovalAnswer struct {
+	Option string `json:"option"`
+	At     int64  `json:"at"`
+	By     string `json:"by"`
+}
+
 // Content is the superset of all content fields used across integrations.
 // Unused fields use omitempty and won't appear in JSON.
 type Content struct {
@@ -354,6 +414,22 @@ type Content struct {
 	Volume          *float64       `json:"volume,omitempty"`
 	Favorite        *bool          `json:"favorite,omitempty"`
 	Controls        *MediaControls `json:"controls,omitempty"`
+
+	// Approval template: a question card (the question rides State) with 2-4
+	// answer buttons. Options and Details replace wholesale on each update
+	// (RFC 7396 array semantics), and re-sending Options starts a new round -
+	// the server clears the stored Answer. Source (at most 24 runes) is the
+	// producer badge in the card header. OnExpire names the option id the
+	// server records when EndDate passes unanswered ("none" to just expire)
+	// and requires EndDate. url_action / secondary_url_action are rejected on
+	// this template (the server reserves those slots to keep older app builds
+	// answerable), and so are alarm / snooze_seconds. Every field but Options
+	// is optional; Answer is read-only, see its type.
+	Options  []ApprovalOption `json:"options,omitempty"`
+	Source   string           `json:"source,omitempty"`
+	Details  []ApprovalDetail `json:"details,omitempty"`
+	OnExpire string           `json:"on_expire,omitempty"`
+	Answer   *ApprovalAnswer  `json:"answer,omitempty"`
 }
 
 // CreateActivityRequest is the body for POST /activities.
@@ -494,6 +570,15 @@ type ContentPatch struct {
 	Volume          *float64       `json:"volume,omitempty"`
 	Favorite        *bool          `json:"favorite,omitempty"`
 	Controls        *MediaControls `json:"controls,omitempty"`
+
+	// Approval template. Options and Details replace wholesale (RFC 7396
+	// array semantics); re-sending Options starts a new round and clears the
+	// server-recorded answer. The answer itself is server-owned and has no
+	// patch field - read it back from the response Content.
+	Options  []ApprovalOption `json:"options,omitempty"`
+	Source   *string          `json:"source,omitempty"`
+	Details  []ApprovalDetail `json:"details,omitempty"`
+	OnExpire *string          `json:"on_expire,omitempty"`
 }
 
 // PatchRequest is the typed body for PATCH /activities/{slug}. State is a
