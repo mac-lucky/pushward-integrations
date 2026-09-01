@@ -295,8 +295,10 @@ type ApprovalDetail struct {
 // Read-only: it appears in responses once a server-recorded option was tapped
 // (By "user") or the deadline sweep applied OnExpire (By "expired"; Option is
 // then "none" when no default was set; At is unix seconds). Never send it -
-// the server strips it from writes, and re-sending Options starts a new round
-// and clears it.
+// the server strips it from writes. A re-sent Options set EQUAL to the live
+// one (compared by id/title/style/icon/url/method) KEEPS the recorded answer;
+// only a changed set - e.g. fresh option ids - opens a new round and clears
+// it.
 // Unlike the other server-owned fields this one IS decoded here on purpose:
 // polling an activity until Answer is set is how a producer with no webhook
 // endpoint of its own reads the outcome. Client.GetActivity is that read path.
@@ -430,8 +432,10 @@ type Content struct {
 
 	// Approval template: a question card (the question rides State) with 2-4
 	// answer buttons. Options and Details replace wholesale on each update
-	// (RFC 7396 array semantics), and re-sending Options starts a new round -
-	// the server clears the stored Answer. Source (at most 24 runes) is the
+	// (RFC 7396 array semantics). Re-sending an Options set equal to the
+	// live one (id/title/style/icon/url/method compared; Details and EndDate
+	// do not count) keeps the recorded Answer - only a changed set starts a
+	// new round and clears it, so re-arm by changing the option ids. Source (at most 24 runes) is the
 	// producer badge in the card header. OnExpire names the option id the
 	// server records when EndDate passes unanswered ("none" to just expire)
 	// and requires EndDate. url_action / secondary_url_action are rejected on
@@ -585,8 +589,9 @@ type ContentPatch struct {
 	Controls        *MediaControls `json:"controls,omitempty"`
 
 	// Approval template. Options and Details replace wholesale (RFC 7396
-	// array semantics); re-sending Options starts a new round and clears the
-	// server-recorded answer. The answer itself is server-owned and has no
+	// array semantics); an Options set equal to the live one keeps the
+	// server-recorded answer, and only a changed set (e.g. fresh option ids)
+	// starts a new round and clears it. The answer itself is server-owned and has no
 	// patch field - read it back from the response Content. With omitempty an
 	// empty Details slice cannot express clearing, matching Tiles and Lines.
 	Options  []ApprovalOption `json:"options,omitempty"`
