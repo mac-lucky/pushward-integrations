@@ -299,9 +299,7 @@ type ApprovalDetail struct {
 // and clears it.
 // Unlike the other server-owned fields this one IS decoded here on purpose:
 // polling an activity until Answer is set is how a producer with no webhook
-// endpoint of its own reads the outcome. That read path is staged for now:
-// this client ships no GET call yet, so the polling rides a future reader or
-// direct API calls.
+// endpoint of its own reads the outcome. Client.GetActivity is that read path.
 type ApprovalAnswer struct {
 	Option string `json:"option"`
 	At     int64  `json:"at"`
@@ -952,4 +950,62 @@ func (r *SendNotificationRequest) FillSourceDisplayName() {
 	if r.SourceDisplayName == "" && r.Source != "" {
 		r.SourceDisplayName = DisplayNameFor(r.Source)
 	}
+}
+
+// Activity is a Live Activity as returned by GET /activities/{slug}. It is a
+// read shape: every field the server owns is decoded, none are ever sent.
+// Writes go through CreateActivityRequest, UpdateRequest and PatchRequest,
+// which carry only the fields a producer is allowed to set.
+//
+// Content is the same superset used on the write path, so a read of an
+// approval activity lands its server-recorded Content.Answer here.
+type Activity struct {
+	Kind      string  `json:"kind"`
+	ID        string  `json:"id"`
+	Slug      string  `json:"slug"`
+	Name      string  `json:"name"`
+	State     string  `json:"state"`
+	Priority  int     `json:"priority"`
+	Content   Content `json:"content"`
+	ChannelID string  `json:"channel_id,omitempty"`
+
+	EndedTTL     int  `json:"ended_ttl,omitempty"`
+	StaleTTL     int  `json:"stale_ttl,omitempty"`
+	DismissalTTL *int `json:"dismissal_ttl,omitempty"`
+
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
+	EndedAt   string `json:"ended_at,omitempty"`
+	DeleteAt  string `json:"delete_at,omitempty"`
+}
+
+// Activity states as returned in Activity.State. Preempted is server-set only:
+// it marks an activity evicted to make room for a higher-priority one.
+const (
+	ActivityStateOngoing   = "ongoing"
+	ActivityStateEnded     = "ended"
+	ActivityStatePreempted = "preempted"
+)
+
+// Answer returns the server-recorded approval resolution, or nil when the
+// round is still open (or the activity is not an approval). It is the value a
+// producer polls for after posting an approval whose options carry no URL of
+// their own.
+func (a *Activity) Answer() *ApprovalAnswer {
+	if a == nil {
+		return nil
+	}
+	return a.Content.Answer
+}
+
+// Widget is a widget as returned by GET /widgets/{slug}. Read shape, like
+// Activity: writes go through CreateWidgetRequest and UpdateWidgetRequest.
+type Widget struct {
+	Slug         string        `json:"slug"`
+	Name         string        `json:"name"`
+	Content      WidgetContent `json:"content"`
+	PushThrottle int           `json:"push_throttle,omitempty"`
+	StaleAfter   int           `json:"stale_after,omitempty"`
+	CreatedAt    string        `json:"created_at"`
+	UpdatedAt    string        `json:"updated_at"`
 }

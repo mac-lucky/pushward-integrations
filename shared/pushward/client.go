@@ -132,7 +132,18 @@ func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 // If contentType is empty, "application/json" is used. Widget PATCH requests
 // must pass "application/merge-patch+json" to satisfy RFC 7396 content
 // negotiation enforced by pushward-server.
+// doWithRetry runs a request whose success body is not needed. It is the
+// common case: every write in this client discards the 2xx body.
 func (c *Client) doWithRetry(ctx context.Context, operation, method, url, contentType string, body interface{}, handleConflict func([]byte) (bool, error)) error {
+	return c.doWithRetryInto(ctx, operation, method, url, contentType, body, handleConflict, nil)
+}
+
+// doWithRetryInto is doWithRetry plus an optional decode sink. When out is
+// non-nil the 2xx body is JSON-decoded into it; when nil the body is drained
+// and dropped, which is what every write path wants. Retry, backoff, throttle
+// and breaker behavior are identical either way - only the success branch
+// differs.
+func (c *Client) doWithRetryInto(ctx context.Context, operation, method, url, contentType string, body interface{}, handleConflict func([]byte) (bool, error), out any) error {
 	if c.breaker != nil && !c.breaker.Allow() {
 		err := ErrCircuitOpen
 		if c.onResult != nil {
@@ -237,10 +248,30 @@ func (c *Client) doWithRetry(ctx context.Context, operation, method, url, conten
 			continue
 		}
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-			_, _ = io.Copy(io.Discard, resp.Body)
+			var decodeErr error
+			if out != nil {
+				// Bounded like the error path below. A success body here is a
+				// single activity or widget, never a stream.
+				respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+				switch {
+				case err != nil:
+					decodeErr = fmt.Errorf("reading response body: %w", err)
+				default:
+					if err := json.Unmarshal(respBody, out); err != nil {
+						decodeErr = fmt.Errorf("decoding response body: %w", err)
+					}
+				}
+			} else {
+				_, _ = io.Copy(io.Discard, resp.Body)
+			}
 			_ = resp.Body.Close()
-			c.recordResult(ctx, operation, attempts, start, nil, breakerHealthy)
-			return nil
+			// breakerHealthy even when the body did not decode: the backend
+			// answered 2xx, so it is up. A malformed body is a contract drift
+			// or a bug on this side, and no retry can fix either - so the
+			// error is returned without being retried and without faulting
+			// the (relay-wide shared) breaker.
+			c.recordResult(ctx, operation, attempts, start, decodeErr, breakerHealthy)
+			return decodeErr
 		}
 
 		// Read body for error diagnostics. Problem bodies routinely exceed
@@ -650,4 +681,33 @@ func (c *Client) UpdateWidget(ctx context.Context, slug string, req UpdateWidget
 func (c *Client) DeleteWidget(ctx context.Context, slug string) error {
 	return c.doWithRetry(ctx, "widget.delete", http.MethodDelete,
 		c.widgetURL(slug), "", nil, nil)
+}
+
+// GetActivity reads a single activity via GET /activities/{slug}.
+//
+// It exists for the approval template: an option posted without a URL of its
+// own gets a server-minted answer URL, and the tap is recorded on
+// Content.Answer rather than delivered to the producer. Polling this call
+// until Answer is non-nil is how a bridge with no inbound endpoint learns the
+// outcome. A missing slug returns a typed *HTTPError with Code
+// ErrCodeActivityNotFound, so a caller can tell "no such round" from "round
+// still open" without string matching.
+func (c *Client) GetActivity(ctx context.Context, slug string) (*Activity, error) {
+	var a Activity
+	if err := c.doWithRetryInto(ctx, "get", http.MethodGet, c.activityURL(slug), "", nil, nil, &a); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// GetWidget reads a single widget via GET /widgets/{slug}. Useful as a
+// producer's own state store: a bridge that must survive a restart can write
+// what it knows into a widget and rehydrate from it on boot, which also puts
+// that state on the user's Home Screen instead of hiding it in a volume.
+func (c *Client) GetWidget(ctx context.Context, slug string) (*Widget, error) {
+	var w Widget
+	if err := c.doWithRetryInto(ctx, "widget.get", http.MethodGet, c.widgetURL(slug), "", nil, nil, &w); err != nil {
+		return nil, err
+	}
+	return &w, nil
 }

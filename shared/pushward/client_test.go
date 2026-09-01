@@ -1703,3 +1703,132 @@ func TestPatchActivity_ImageTrioRoundTrip(t *testing.T) {
 		t.Errorf("image_shape = %v, want circle", content["image_shape"])
 	}
 }
+
+func TestGetActivity_DecodesApprovalAnswer(t *testing.T) {
+	var gotPath, gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod = r.URL.Path, r.Method
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"kind":"owned","id":"abc","slug":"slack-workday",
+			"name":"Start the workday clock?","state":"ongoing","priority":3,
+			"content":{"template":"approval","state":"Start?","source":"Workday",
+				"options":[{"id":"start","title":"Start"},{"id":"notyet","title":"Not yet"}],
+				"on_expire":"start",
+				"answer":{"option":"notyet","at":1788252979,"by":"user"}},
+			"created_at":"2026-09-01T08:56:02Z","updated_at":"2026-09-01T08:56:19Z"}`))
+	}))
+	defer srv.Close()
+
+	a, err := NewClient(srv.URL, "test-key").GetActivity(context.Background(), "slack-workday")
+	if err != nil {
+		t.Fatalf("GetActivity: %v", err)
+	}
+	if gotMethod != http.MethodGet {
+		t.Errorf("method = %q, want GET", gotMethod)
+	}
+	if gotPath != "/activities/slack-workday" {
+		t.Errorf("path = %q, want /activities/slack-workday", gotPath)
+	}
+	if a.State != ActivityStateOngoing || a.Content.Template != TemplateApproval {
+		t.Errorf("state/template = %q/%q", a.State, a.Content.Template)
+	}
+	ans := a.Answer()
+	if ans == nil {
+		t.Fatal("Answer() = nil, want the recorded answer")
+	}
+	if ans.Option != "notyet" || ans.By != ApprovalAnswerByUser || ans.At != 1788252979 {
+		t.Errorf("answer = %+v", ans)
+	}
+}
+
+// An open round carries no answer key at all, which must read as nil rather
+// than a zero-valued ApprovalAnswer - the poll loop's whole stop condition is
+// "Answer() != nil".
+func TestGetActivity_OpenRoundHasNilAnswer(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"kind":"owned","id":"abc","slug":"s","name":"n","state":"ongoing",
+			"priority":0,"content":{"template":"approval"},
+			"created_at":"2026-09-01T08:56:02Z","updated_at":"2026-09-01T08:56:02Z"}`))
+	}))
+	defer srv.Close()
+
+	a, err := NewClient(srv.URL, "test-key").GetActivity(context.Background(), "s")
+	if err != nil {
+		t.Fatalf("GetActivity: %v", err)
+	}
+	if a.Answer() != nil {
+		t.Errorf("Answer() = %+v, want nil", a.Answer())
+	}
+}
+
+func TestGetActivity_NotFound(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"status":404,"code":"activity.not_found","detail":"no such activity"}`))
+	}))
+	defer srv.Close()
+
+	a, err := NewClient(srv.URL, "test-key").GetActivity(context.Background(), "missing")
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if a != nil {
+		t.Errorf("activity = %+v, want nil on error", a)
+	}
+	var he *HTTPError
+	if !errors.As(err, &he) || he.Code != ErrCodeActivityNotFound {
+		t.Errorf("err = %v, want *HTTPError with code %q", err, ErrCodeActivityNotFound)
+	}
+}
+
+// A 2xx whose body is not the documented shape is the caller's problem, not
+// the backend's: it must surface as an error without being retried.
+func TestGetActivity_MalformedBodyFailsWithoutRetry(t *testing.T) {
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls++
+		_, _ = w.Write([]byte(`{"slug":`))
+	}))
+	defer srv.Close()
+
+	if _, err := NewClient(srv.URL, "test-key").GetActivity(context.Background(), "s"); err == nil {
+		t.Fatal("expected a decode error")
+	}
+	if calls != 1 {
+		t.Errorf("calls = %d, want 1 (a malformed 2xx must not retry)", calls)
+	}
+}
+
+func TestGetWidget(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		_, _ = w.Write([]byte(`{"slug":"slack-workday","name":"Workday",
+			"content":{"template":"countdown","label":"working",
+				"start_date":"2026-09-01T09:12:00Z","end_date":"2026-09-01T17:12:00Z"},
+			"created_at":"2026-09-01T08:00:00Z","updated_at":"2026-09-01T09:12:00Z"}`))
+	}))
+	defer srv.Close()
+
+	got, err := NewClient(srv.URL, "test-key").GetWidget(context.Background(), "slack-workday")
+	if err != nil {
+		t.Fatalf("GetWidget: %v", err)
+	}
+	if gotPath != "/widgets/slack-workday" {
+		t.Errorf("path = %q, want /widgets/slack-workday", gotPath)
+	}
+	if got.Slug != "slack-workday" || got.Name != "Workday" {
+		t.Errorf("widget = %+v", got)
+	}
+	// The countdown pair is the point of reading a widget back: it is how a
+	// producer rehydrates a start/end it would otherwise lose on restart.
+	if got.Content.StartDate == nil || got.Content.EndDate == nil {
+		t.Fatalf("start/end = %v/%v, want both decoded", got.Content.StartDate, got.Content.EndDate)
+	}
+	if d := got.Content.EndDate.Sub(*got.Content.StartDate); d != 8*time.Hour {
+		t.Errorf("end - start = %s, want 8h", d)
+	}
+	if got.Content.Label != "working" {
+		t.Errorf("label = %q, want %q", got.Content.Label, "working")
+	}
+}
