@@ -2,8 +2,11 @@ package poller
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"math"
+	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,6 +92,12 @@ type tracked struct {
 	slug     string
 	subtitle string
 	seeded   bool
+	// preempted is set once the server has evicted the activity to make room
+	// for a higher-priority one. Content patches are refused from then on, so
+	// progress is held back until the operation ends; the two-phase close
+	// carries an explicit state, which is what the server accepts to bring the
+	// activity back for its outcome.
+	preempted bool
 
 	// Push throttle. lastPhase is the coarse step, not the rendered state line:
 	// that line carries a byte count and a transfer rate which move on nearly
@@ -402,6 +411,11 @@ func (p *Poller) track(op *backrest.Operation) *tracked {
 // push seeds or patches the activity, recording the frame only once it has
 // landed so a failed send is simply re-evaluated on the next tick.
 func (p *Poller) push(ctx context.Context, t *tracked, op *backrest.Operation, content pushward.Content, phase string, now time.Time) error {
+	if t.preempted {
+		// Nothing to send: a content patch would be refused until a frame
+		// carries an explicit state, and scheduleEnd is where that happens.
+		return nil
+	}
 	var err error
 	if !t.seeded {
 		err = p.create(ctx, t, op, content)
@@ -409,6 +423,13 @@ func (p *Poller) push(ctx context.Context, t *tracked, op *backrest.Operation, c
 		err = p.patch(ctx, t, content)
 	}
 	if err != nil {
+		if isPreempted(err) {
+			t.preempted = true
+			t.failingSince = time.Time{}
+			slog.Info("activity preempted by the server, holding progress until the operation ends",
+				"slug", t.slug, "op", t.opID)
+			return nil
+		}
 		if t.failingSince.IsZero() {
 			t.failingSince = now
 		}
@@ -573,10 +594,24 @@ func (p *Poller) create(ctx context.Context, t *tracked, op *backrest.Operation,
 func (p *Poller) patch(ctx context.Context, t *tracked, content pushward.Content) error {
 	req := pushward.PatchRequest{Content: contentPatch(content)}
 	if err := p.pw.PatchActivity(ctx, t.slug, req); err != nil {
-		slog.Error("failed to patch activity", "slug", t.slug, "error", err)
+		if !isPreempted(err) {
+			slog.Error("failed to patch activity", "slug", t.slug, "error", err)
+		}
 		return err
 	}
 	return nil
+}
+
+// isPreempted reports whether the server refused a frame because it has
+// evicted the activity for a higher-priority one. The stored state is then
+// "preempted", which a state-less PATCH inherits and the server rejects as not
+// client-settable; retrying the same patch every tick can never succeed.
+func isPreempted(err error) bool {
+	var he *pushward.HTTPError
+	if !errors.As(err, &he) || he.StatusCode != http.StatusUnprocessableEntity {
+		return false
+	}
+	return strings.Contains(he.Detail, pushward.ActivityStatePreempted)
 }
 
 // contentPatch converts a full frame into merge-patch form.

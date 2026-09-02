@@ -2212,3 +2212,98 @@ func TestShouldPushTriggersIndependently(t *testing.T) {
 		t.Error("the heartbeat did not push")
 	}
 }
+
+// preemptingServer records every PushWard call and, from the n-th content-only
+// PATCH on, answers the way the server does once it has evicted the activity
+// for a higher-priority one: a 422 whose detail names the stored state. Frames
+// that carry an explicit state keep succeeding, which is what lets the
+// two-phase close through.
+func preemptingServer(t *testing.T, from int) (*httptest.Server, *[]testutil.APICall, *sync.Mutex) {
+	t.Helper()
+	var calls []testutil.APICall
+	var mu sync.Mutex
+	contentOnly := 0
+
+	record := func(r *http.Request) []byte {
+		body, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		calls = append(calls, testutil.APICall{Method: r.Method, Path: r.URL.Path, Body: body})
+		mu.Unlock()
+		return body
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /activities", func(w http.ResponseWriter, r *http.Request) {
+		record(r)
+		w.WriteHeader(http.StatusCreated)
+	})
+	mux.HandleFunc("PATCH /activities/", func(w http.ResponseWriter, r *http.Request) {
+		body := record(r)
+		var probe struct {
+			State string `json:"state"`
+		}
+		_ = json.Unmarshal(body, &probe)
+		refuse := false
+		if probe.State == "" {
+			mu.Lock()
+			contentOnly++
+			refuse = contentOnly >= from
+			mu.Unlock()
+		}
+		if !refuse {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = io.WriteString(w, `{"type":"about:blank","title":"Unprocessable Entity","status":422,"detail":"invalid activity state: \"preempted\", must be ongoing or ended"}`)
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, &calls, &mu
+}
+
+// Once the server has evicted the activity, every content-only frame is refused
+// the same way, so the poller holds progress instead of sending a doomed patch
+// on every tick. The close still goes through: both of its frames carry a state
+// the server accepts from a preempted activity.
+func TestPreemptedActivityHoldsProgressUntilTheEnd(t *testing.T) {
+	br := &fakeBackrest{windows: [][]backrest.Operation{
+		{runningBackup(1, 0, 1000)},   // priming window
+		{runningBackup(1, 100, 1000)}, // create + seed at 10%
+		{runningBackup(1, 500, 1000)}, // 50%: refused, the server has preempted it
+		{runningBackup(1, 700, 1000)}, // 70%: must not be sent
+		{finishedBackup(t, 1, time.Second)},
+	}}
+	srv, calls, mu := preemptingServer(t, 1)
+	h := wire(t, testConfig(), br, srv, calls, mu)
+
+	h.poll(t)
+	h.poll(t)
+	h.advance(10 * time.Second)
+	h.poll(t)
+	if got := h.pushCount(); got != 2 {
+		t.Fatalf("pushes up to the refusal = %d, want 2 (seed + the refused frame)", got)
+	}
+	mark := len(h.recorded())
+
+	h.advance(10 * time.Second)
+	h.poll(t)
+	if got := len(h.recorded()); got != mark {
+		t.Fatalf("calls after preemption = %d, want %d: a preempted activity must not be patched", got, mark)
+	}
+
+	h.advance(10 * time.Second)
+	h.poll(t)
+	recorded := waitForEnded(t, h, mark)
+	for _, c := range recorded[mark:] {
+		if c.Method == "PATCH" && activityState(t, c) == "" {
+			t.Errorf("content-only PATCH sent after preemption: %s", c.Body)
+		}
+	}
+	final := content(t, recorded[len(recorded)-1])
+	if !strings.HasPrefix(final.State, stateComplete) {
+		t.Errorf("state = %q, want the completion line", final.State)
+	}
+}
