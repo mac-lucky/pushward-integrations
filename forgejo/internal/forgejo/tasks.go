@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -38,7 +39,9 @@ const (
 //
 // GOTCHA: `limit` on its own is IGNORED here - the endpoint answers with every
 // row it has. Both parameters must be sent, which is why this always sets page.
-func (c *Client) listTasks(ctx context.Context, repo string, page int, statuses ...string) ([]wireTask, error) {
+// The endpoint also takes a status filter; nothing here wants one, since the
+// finished rows are as useful as the running ones (see stampLiveTimings).
+func (c *Client) listTasks(ctx context.Context, repo string, page int) ([]wireTask, error) {
 	owner, name, err := splitRepo(repo)
 	if err != nil {
 		return nil, err
@@ -46,9 +49,6 @@ func (c *Client) listTasks(ctx context.Context, repo string, page int, statuses 
 	q := url.Values{}
 	q.Set("page", strconv.Itoa(page))
 	q.Set("limit", strconv.Itoa(taskPageSize))
-	for _, s := range statuses {
-		q.Add("status", s)
-	}
 	endpoint := fmt.Sprintf("%s/repos/%s/%s/actions/tasks?%s",
 		c.apiBase, url.PathEscape(owner), url.PathEscape(name), q.Encode())
 
@@ -63,27 +63,34 @@ func (c *Client) listTasks(ctx context.Context, repo string, page int, statuses 
 	return resp.Tasks, nil
 }
 
-// stampLiveTimings fills StartedAt on the running jobs from the repo's running
-// tasks.
+// stampLiveTimings fills the timings of a run in progress from the newest page
+// of the repo's tasks.
 //
 // The jobs endpoint carries no timestamps at all, so this join is the only
 // source of a step's start - the anchor the live-progress window is measured
-// from. Filtering on status=running keeps the response to the handful of rows
-// that matter rather than the repo's whole task history.
+// from. The page is taken unfiltered on purpose: a group's start is its FIRST
+// shard's start, which may already have finished by the time a poll lands, and
+// the completions stamped on the run's last tick are what the next run of the
+// workflow is seeded from (see cipoll's shapeCache). Page 1 is the repo's fifty
+// newest rows, which is every row of a run in flight unless another run in the
+// same repo has since produced more than that.
+//
+// The lookup runs while something is running and once everything has finished;
+// a run parked between job waves has nothing on the page worth a request.
 //
 // A failure here is not a poll failure: the jobs come back unstamped, the ladder
 // reads that as "unknown" and renders the static bar.
 func (c *Client) stampLiveTimings(ctx context.Context, repo string, jobs []Job) []Job {
-	if !c.opts.LiveTimings || !anyRunning(jobs) {
+	if !c.opts.LiveTimings || (!anyRunning(jobs) && !allTerminal(jobs)) {
 		return jobs
 	}
-	tasks, err := c.listTasks(ctx, repo, 1, StatusRunning)
+	tasks, err := c.listTasks(ctx, repo, 1)
 	if err != nil {
 		slog.Warn("live task timings unavailable, falling back to the static bar",
 			"repo", repo, "error", err)
 		return jobs
 	}
-	joinTasks(jobs, tasks, 0)
+	joinTasks(jobs, tasks, 0, time.Time{})
 	return jobs
 }
 
@@ -92,11 +99,12 @@ func (c *Client) stampLiveTimings(ctx context.Context, repo string, jobs []Job) 
 //
 // indexInRepo is the run's UI number, which is what a task's run_number carries;
 // it is used only to log a mismatch. The join itself is by task id, which is
-// unique repo-wide and therefore authoritative on its own.
+// unique repo-wide and therefore authoritative on its own. stoppedAt is when the
+// run itself stopped, the bound on what a row's updated_at may claim.
 //
 // Partial results are deliberate: an unmatched job stays unmeasured, and
 // ci.GroupWeights floors that group into a thin pill rather than dropping it.
-func (c *Client) stampHistoricTimings(ctx context.Context, repo string, jobs []Job, indexInRepo int64) []Job {
+func (c *Client) stampHistoricTimings(ctx context.Context, repo string, jobs []Job, indexInRepo int64, stoppedAt time.Time) []Job {
 	if !c.opts.HistoryTimings {
 		return jobs
 	}
@@ -110,7 +118,7 @@ func (c *Client) stampHistoricTimings(ctx context.Context, repo string, jobs []J
 		return jobs
 	}
 
-	matched := 0
+	matched, rewritten := 0, 0
 	for page := 1; page <= maxTaskPages && matched < want; page++ {
 		tasks, err := c.listTasks(ctx, repo, page)
 		if err != nil {
@@ -121,7 +129,8 @@ func (c *Client) stampHistoricTimings(ctx context.Context, repo string, jobs []J
 		if len(tasks) == 0 {
 			break
 		}
-		matched += joinTasks(jobs, tasks, indexInRepo)
+		m, r := joinTasks(jobs, tasks, indexInRepo, stoppedAt)
+		matched, rewritten = matched+m, rewritten+r
 		if len(tasks) < taskPageSize {
 			break
 		}
@@ -134,6 +143,12 @@ func (c *Client) stampHistoricTimings(ctx context.Context, repo string, jobs []J
 		slog.Warn("some jobs had no matching task row, they stay unmeasured",
 			"repo", repo, "run", indexInRepo, "want", want,
 			"jobs", unmatchedNames(jobs))
+	}
+	if rewritten > 0 {
+		// Same reasoning: the rows were found, but what they say about completion
+		// is a later edit, and the groups behind them fall back to the mean.
+		slog.Warn("task rows were rewritten after the run, their durations are unknown",
+			"repo", repo, "run", indexInRepo, "rewritten", rewritten, "of", matched)
 	}
 	return jobs
 }
@@ -158,22 +173,32 @@ func unmatchedNames(jobs []Job) []string {
 	return out
 }
 
+// stoppedSlack is how far past the run's own stop a task row's updated_at may
+// sit and still be read as the task's completion. Forgejo writes the run's stop
+// after the last task's, so a genuine completion is never later; a row edited
+// after the fact is, by days.
+const stoppedSlack = 60 * time.Second
+
 // joinTasks copies timings onto the jobs whose task_id matches a task id, and
-// reports how many it stamped.
+// reports how many it stamped and how many of those had a completion it refused.
 //
-// A terminal task's span is run_started_at..updated_at. A running task has only
-// a start, so CompletedAt is left zero and the group stays unmeasured for
-// weighting while still being anchorable.
-func joinTasks(jobs []Job, tasks []wireTask, indexInRepo int64) int {
+// A task's span is run_started_at..updated_at, but updated_at is a modification
+// time, not a stop time: Forgejo rewrites finished rows days after the run (see
+// the README's API notes). So with the run's own stop known, a completion later
+// than stoppedAt plus stoppedSlack is not believed: the job keeps its start,
+// which still says when its group began, and loses its completion, so the group
+// falls back to the mean like any other unmeasured one. A running task, or a
+// zero stoppedAt (a run in flight, a stop that failed to decode), is taken as
+// given.
+func joinTasks(jobs []Job, tasks []wireTask, indexInRepo int64, stoppedAt time.Time) (matched, rewritten int) {
 	if len(jobs) == 0 || len(tasks) == 0 {
-		return 0
+		return 0, 0
 	}
 	byID := make(map[int64]wireTask, len(tasks))
 	for _, t := range tasks {
 		byID[t.ID] = t
 	}
 
-	matched := 0
 	for i := range jobs {
 		t, ok := byID[jobs[i].TaskID]
 		if !ok {
@@ -187,20 +212,25 @@ func joinTasks(jobs []Job, tasks []wireTask, indexInRepo int64) int {
 		}
 		matched++
 		jobs[i].StartedAt = t.RunStartedAt.Time()
-		if isTerminal(t.Status) {
-			jobs[i].CompletedAt = t.UpdatedAt.Time()
+		if !isTerminal(t.Status) {
+			continue
 		}
+		end := t.UpdatedAt.Time()
+		if !stoppedAt.IsZero() && end.After(stoppedAt.Add(stoppedSlack)) {
+			rewritten++
+			continue
+		}
+		jobs[i].CompletedAt = end
 	}
-	return matched
+	return matched, rewritten
 }
 
 func anyRunning(jobs []Job) bool {
-	for _, j := range jobs {
-		if j.RawStatus == StatusRunning {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(jobs, func(j Job) bool { return j.RawStatus == StatusRunning })
+}
+
+func allTerminal(jobs []Job) bool {
+	return !slices.ContainsFunc(jobs, func(j Job) bool { return !isTerminal(j.RawStatus) })
 }
 
 // Duration is a job's measured wall-clock span, or 0 when the join left it

@@ -121,6 +121,10 @@ type Poller struct {
 	// wasPaced is whether the last claim found detection paced, so the change is
 	// logged once rather than on every tick.
 	wasPaced bool
+
+	// seeds holds the last run seen finish per repo and workflow. See shapeCache
+	// for its lock rule.
+	seeds *shapeCache
 }
 
 func New(forge Forge, pw *pushward.Client, opts Options) *Poller {
@@ -141,6 +145,7 @@ func New(forge Forge, pw *pushward.Client, opts Options) *Poller {
 		log:     logger,
 		tracked: make(map[string]*trackedRun),
 		repos:   opts.Repos,
+		seeds:   newShapeCache(maxSeeds),
 	}
 }
 
@@ -585,10 +590,10 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 		// grown). Choosing one coherent shape - not an element-wise merge - keeps
 		// step_labels consistent with current_step's index into them.
 		var weightsByName map[string]float64
-		if base, ok := p.baselineShape(ctx, repo, run); ok {
+		if base, weights, ok := p.baselineShape(ctx, repo, run); ok {
 			// Pill durations are keyed by group name, so they attach correctly
 			// whether we adopt the prior shape wholesale or keep the live one.
-			weightsByName = base.WeightsByName
+			weightsByName = weights
 			if base.TotalSteps > shape.TotalSteps {
 				shape = base
 			}
@@ -702,20 +707,13 @@ func (p *Poller) shape(jobs []ci.Job) ci.StepInfo {
 // liveAnchor returns the unix window iOS animates the current step's pill
 // across. The shared ladder decides whether there is anything worth animating;
 // this only applies the config gate and supplies the ceiling that bounds a
-// corrupt prior-run duration.
-func (p *Poller) liveAnchor(info ci.StepInfo, byName map[string]float64, now time.Time) (start, end int64, ok bool) {
+// corrupt prior-run duration. why names the gate that declined, blank when the
+// feature is off.
+func (p *Poller) liveAnchor(info ci.StepInfo, byName map[string]float64, now time.Time) (start, end int64, ok bool, why ci.AnchorDecline) {
 	if !p.opts.Render.LiveProgress {
-		return 0, 0, false
+		return 0, 0, false, ""
 	}
-	start, end, ok, why := ci.LiveAnchor(info, byName, now, maxRunLifetime)
-	if !ok {
-		// Debug, not Info: for a short group this is the expected outcome on most
-		// ticks. It is here because a card that never animates is otherwise
-		// indistinguishable from a bug, and the four causes look identical on the
-		// wire.
-		p.log.Debug("live progress not anchored", "step", info.CurrentStepName, "reason", string(why))
-	}
-	return start, end, ok
+	return ci.LiveAnchor(info, byName, now, maxRunLifetime)
 }
 
 // liveProgressOff is the explicit false that stops an animation carried forward
@@ -757,51 +755,78 @@ func (p *Poller) payloadWeights(total int, labels []string, byName map[string]fl
 	return ci.UniformWeights(total)
 }
 
-// baselineShape returns the step shape of a prior run of the same workflow on
-// the same branch, used to seed a stable total-steps denominator. A finished run
-// has revealed its entire job DAG, so its group count is ground truth. Returns
-// ok=false (so the caller keeps the current-run scan) when there is no usable
-// prior run or any lookup fails.
+// baselineShape returns the step shape of a prior run of the same workflow and
+// the durations to seed from it. A finished run has revealed its entire job DAG,
+// so its group count is ground truth. Returns ok=false (so the caller keeps the
+// current-run scan) when there is no usable prior run or any lookup fails.
 //
-// A blank branch is rejected: without it the lookup would seed from whatever
-// branch ran most recently, whose job shape may differ. A blank WorkflowKey
-// likewise can't target a workflow, so both short-circuit to the live scan
-// before the forge is asked anything.
+// Three rungs: the last run this process saw finish (see shapeCache), when it
+// has what the config needs; then the forge, on this run's ref and then on any
+// ref of the workflow (see Forge.BaselineJobs). A blank WorkflowKey can't target
+// a workflow and short-circuits to the live scan.
 //
 // The seed is an upper-or-lower estimate, not a guarantee. If this run takes a
 // shorter path than the seed (if-gated jobs skipped), the total over-counts and
 // the final frame shows the phantom steps as done (self-heals to N/N via
 // scheduleEnd). If it grows past the seed, the pollActive clamp raises the total.
-func (p *Poller) baselineShape(ctx context.Context, repo string, run Run) (ci.StepInfo, bool) {
-	if run.WorkflowKey == "" || run.HeadBranch == "" {
-		return ci.StepInfo{}, false
+func (p *Poller) baselineShape(ctx context.Context, repo string, run Run) (ci.StepInfo, map[string]float64, bool) {
+	if run.WorkflowKey == "" {
+		return ci.StepInfo{}, nil, false
 	}
 	wantTimings := p.opts.Render.WantTimings()
-	base, err := p.forge.BaselineJobs(ctx, repo, run, wantTimings)
-	if err != nil {
-		// Logged here rather than in each adapter: the decision this informs - keep
-		// the live scan - is the loop's, and both forges would otherwise carry the
-		// same two warnings.
-		p.log.Warn("prior-run step seed unavailable, using the live scan",
-			"repo", repo, "workflow", run.WorkflowKey, "branch", run.HeadBranch, "error", err)
-		return ci.StepInfo{}, false
+	if entry, ok := p.seeds.get(repo, run.WorkflowKey); ok && (!wantTimings || entry.weights != nil) {
+		var weights map[string]float64
+		if wantTimings {
+			weights = entry.weights
+		}
+		p.log.Info("seeded steps from prior run",
+			"repo", repo, "prev_run_id", entry.runID, "source", "cache",
+			"steps", entry.shape.TotalSteps, "step_rows", entry.shape.StepRows, "step_weights", weights)
+		return entry.shape, weights, true
 	}
-	jobs := base.Jobs
-	if len(jobs) == 0 {
-		return ci.StepInfo{}, false
+
+	refs := []string{run.HeadBranch, ""}
+	if run.HeadBranch == "" {
+		refs = refs[1:]
 	}
-	info := p.shape(jobs)
+	var base Baseline
+	var ref string
+	for _, ref = range refs {
+		var err error
+		if base, err = p.forge.BaselineJobs(ctx, repo, run, ref, wantTimings); err != nil {
+			// Logged here rather than in each adapter: the decision this informs - keep
+			// the live scan - is the loop's, and both forges would otherwise carry the
+			// same two warnings.
+			p.log.Warn("prior-run step seed unavailable, using the live scan",
+				"repo", repo, "workflow", run.WorkflowKey, "branch", run.HeadBranch, "ref", ref, "error", err)
+			return ci.StepInfo{}, nil, false
+		}
+		if len(base.Jobs) > 0 {
+			break
+		}
+	}
+	if len(base.Jobs) == 0 {
+		return ci.StepInfo{}, nil, false
+	}
+	shape := p.shape(base.Jobs)
+	source := "same ref"
+	if ref == "" {
+		source = "any ref"
+	}
 	// Measure how long each group ran in this finished run, keyed by group name
 	// so the numbers attach to the right label even if the live run reveals its
 	// groups in a different order. They size the pills and anchor the live
 	// window, so collect them when either consumer is switched on.
+	var weights map[string]float64
+	weightsSource := ci.WeightsNone
 	if wantTimings {
-		info.WeightsByName = ci.GroupWeights(jobs)
+		weights, weightsSource = ci.BaselineWeights(base.Jobs, shape.StepLabels, base.Duration)
 	}
 	p.log.Info("seeded steps from prior run",
-		"repo", repo, "prev_run_id", base.RunID, "steps", info.TotalSteps,
-		"step_rows", info.StepRows, "step_weights", info.WeightsByName)
-	return info, true
+		"repo", repo, "prev_run_id", base.RunID, "source", source, "branch", run.HeadBranch,
+		"weights_source", string(weightsSource), "steps", shape.TotalSteps,
+		"step_rows", shape.StepRows, "step_weights", weights)
+	return shape, weights, true
 }
 
 func (p *Poller) pollActive(ctx context.Context) error {
@@ -859,6 +884,9 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		}
 
 		info := p.shape(jobs)
+		// The scan as the forge reported it, kept apart from the clamp below: a
+		// finished run is filed under this shape, not under the carried maximum.
+		observed := info
 		var weightsByName map[string]float64
 
 		p.mu.Lock()
@@ -926,6 +954,15 @@ func (p *Poller) pollActive(ctx context.Context) error {
 					"repo", repo, "run_id", tRunID, "status", run.RawStatus)
 				continue
 			}
+			// File the run as the seed for its workflow's next one: the observed
+			// shape, and durations measured from the live timestamps as this last
+			// tick saw them. Outside p.mu, and before the end is scheduled; the next
+			// cycle's detection pass runs after this one, so the successor finds it.
+			var measured map[string]float64
+			if p.opts.Render.WantTimings() {
+				measured = ci.GroupWeights(jobs)
+			}
+			p.seeds.put(repo, run.WorkflowKey, observed, measured, tRunID, run.Conclusion == ci.ConclusionSuccess)
 			// The run's own outcome is authoritative; the ladder's AnyFailed only
 			// covers a run that reports nothing usable of its own.
 			state, color := p.forge.Outcome(*run, info.AnyFailed)
@@ -966,13 +1003,20 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		heartbeat := p.opts.PushWard.StaleTimeout / 2
 		// Resolved before taking the lock: it reads only the scan, the immutable
 		// published weights and the config.
-		liveStart, liveEnd, wantLive := p.liveAnchor(info, weightsByName, time.Now())
+		liveStart, liveEnd, wantLive, why := p.liveAnchor(info, weightsByName, time.Now())
 
 		p.mu.Lock()
 		tt, ok := p.tracked[repo]
 		if !ok {
 			p.mu.Unlock()
 			continue
+		}
+		// Say once per step why it will not animate; a step that was anchored and
+		// has since outrun its estimate did animate, and is not reported.
+		logDecline := !wantLive && why != "" && info.CurrentStepName != tt.liveStepName &&
+			(tt.declineStep != info.CurrentStepName || tt.declineWhy != why)
+		if logDecline {
+			tt.declineStep, tt.declineWhy = info.CurrentStepName, why
 		}
 		shapeChanged := tt.shapeSent < tt.maxTotalSteps
 		scalarChanged := tt.lastPatchAt.IsZero() ||
@@ -993,6 +1037,10 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		// broadcast to every device to change nothing.
 		clearLive := tt.liveSent && !wantLive && info.CurrentStepName != tt.liveStepName
 		p.mu.Unlock()
+		if logDecline {
+			p.log.Info("live progress not anchored",
+				"repo", repo, "step", info.CurrentStepName, "reason", string(why))
+		}
 		if !shapeChanged && !scalarChanged && !heartbeatDue && !anchorChanged && !clearLive {
 			continue
 		}

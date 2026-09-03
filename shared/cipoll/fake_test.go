@@ -1,8 +1,10 @@
 package cipoll
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"sync"
@@ -36,7 +38,7 @@ type fakeForge struct {
 	liveJobs   func(repo string, runID int64) ([]ci.Job, error)
 	getRun     func(repo string, runID int64) (*Run, error)
 	// baseline left nil means "no usable prior run", the common case.
-	baseline func(repo string, run Run, wantTimings bool) (Baseline, error)
+	baseline func(repo string, run Run, ref string, wantTimings bool) (Baseline, error)
 	// outcome left nil collapses to Success/Failed, the simpler of the two
 	// mappings the real adapters implement.
 	outcome func(run Run, anyFailed bool) (string, string)
@@ -102,7 +104,7 @@ func (f *fakeForge) LiveJobs(_ context.Context, repo string, runID int64) ([]ci.
 	return hook(repo, runID)
 }
 
-func (f *fakeForge) BaselineJobs(_ context.Context, repo string, run Run, wantTimings bool) (Baseline, error) {
+func (f *fakeForge) BaselineJobs(_ context.Context, repo string, run Run, ref string, wantTimings bool) (Baseline, error) {
 	f.mu.Lock()
 	f.baselineCalls++
 	f.lastWantTimings = wantTimings
@@ -111,7 +113,7 @@ func (f *fakeForge) BaselineJobs(_ context.Context, repo string, run Run, wantTi
 	if hook == nil {
 		return Baseline{}, nil
 	}
-	return hook(repo, run, wantTimings)
+	return hook(repo, run, ref, wantTimings)
 }
 
 func (f *fakeForge) Outcome(run Run, anyFailed bool) (state, color string) {
@@ -209,13 +211,16 @@ func activeRun(id int64, name, branch string) Run {
 	}
 }
 
-// terminalRun is what GetRun returns once the run itself has stopped.
+// terminalRun is what GetRun returns once the run itself has stopped. It
+// carries the workflow key, as both real forges' re-reads do, which is what
+// files the finished run as the workflow's next seed.
 func terminalRun(id int64, conclusion string) *Run {
 	return &Run{
-		ID:         id,
-		Status:     ci.StatusCompleted,
-		RawStatus:  ci.StatusCompleted,
-		Conclusion: conclusion,
+		ID:          id,
+		WorkflowKey: "99",
+		Status:      ci.StatusCompleted,
+		RawStatus:   ci.StatusCompleted,
+		Conclusion:  conclusion,
 	}
 }
 
@@ -236,6 +241,19 @@ func priorRunJobs() []ci.Job {
 // asserting against numbers nothing serves.
 func priorDurations() map[string]float64 {
 	return ci.GroupWeights(priorRunJobs())
+}
+
+// threeStepShape is the shape priorRunJobs reveals, derived for the same reason.
+func threeStepShape() ci.StepInfo {
+	return copyShape(ci.ComputeSteps(priorRunJobs()))
+}
+
+// captureLog points opts at a buffer that collects everything the poller logs
+// at Info and above.
+func captureLog(opts *Options) *bytes.Buffer {
+	var buf bytes.Buffer
+	opts.Logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	return &buf
 }
 
 // --- poller wiring ---

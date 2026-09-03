@@ -181,7 +181,7 @@ func TestBaselineJobs_PrefersTheSuccessfulRun(t *testing.T) {
 
 	base, err := testForge(t, mux).BaselineJobs(
 		context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "99", HeadBranch: "main"}, true)
+		cipoll.Run{WorkflowKey: "99", HeadBranch: "main"}, "main", true)
 	if err != nil {
 		t.Fatalf("expected a usable seed: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestBaselineJobs_FallsBackToAnyCompletedRun(t *testing.T) {
 
 	base, err := testForge(t, mux).BaselineJobs(
 		context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "99", HeadBranch: "feature"}, true)
+		cipoll.Run{WorkflowKey: "99", HeadBranch: "feature"}, "feature", true)
 	if err != nil {
 		t.Fatalf("expected the completed run to seed the shape: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestBaselineJobs_AbortsOnTheFirstLookupError(t *testing.T) {
 
 	if _, err := testForge(t, mux).BaselineJobs(
 		context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "99", HeadBranch: "main"}, true); err == nil {
+		cipoll.Run{WorkflowKey: "99", HeadBranch: "main"}, "main", true); err == nil {
 		t.Error("expected the seed to abort with an error")
 	}
 }
@@ -260,7 +260,7 @@ func TestBaselineJobs_NoPriorRun(t *testing.T) {
 
 	base, err := testForge(t, mux).BaselineJobs(
 		context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "99", HeadBranch: "main"}, true)
+		cipoll.Run{WorkflowKey: "99", HeadBranch: "main"}, "main", true)
 	// No prior run is not an error - the caller just keeps its live scan.
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -282,7 +282,7 @@ func TestBaselineJobs_RejectsAMalformedWorkflowKey(t *testing.T) {
 
 	for _, key := range []string{"", "not-a-number"} {
 		if _, err := f.BaselineJobs(context.Background(), testRepo,
-			cipoll.Run{WorkflowKey: key, HeadBranch: "main"}, true); err == nil {
+			cipoll.Run{WorkflowKey: key, HeadBranch: "main"}, "main", true); err == nil {
 			t.Errorf("expected an error for WorkflowKey %q", key)
 		}
 	}
@@ -581,7 +581,7 @@ func TestBaselineJobs_JobsLookupFails(t *testing.T) {
 	})
 
 	_, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "99", HeadBranch: "main"}, true)
+		cipoll.Run{WorkflowKey: "99", HeadBranch: "main"}, "main", true)
 	if err == nil {
 		t.Fatal("expected the jobs lookup failure to surface")
 	}
@@ -611,5 +611,41 @@ func TestNewMakesDiscoveryFatal(t *testing.T) {
 	cancel()
 	if err := p.Run(ctx); err == nil {
 		t.Error("expected Run to fail when discovery fails, even with repos configured")
+	}
+}
+
+// TestBaselineJobs_BlankRefSendsNoBranchFilter is the loop's any-ref rung: no
+// branch parameter at all, and the run found there seeds with its wall clock.
+func TestBaselineJobs_BlankRefSendsNoBranchFilter(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, r *http.Request) {
+		if _, filtered := r.URL.Query()["branch"]; filtered {
+			t.Errorf("sent branch=%q, want no branch filter", r.URL.Query().Get("branch"))
+		}
+		_ = json.NewEncoder(w).Encode(runsResponse(ghclient.WorkflowRun{
+			ID: 39, WorkflowID: 99, HeadBranch: "main",
+			CreatedAt:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+			RunStartedAt: time.Date(2026, 1, 1, 0, 1, 0, 0, time.UTC),
+			UpdatedAt:    time.Date(2026, 1, 1, 0, 6, 0, 0, time.UTC),
+		}))
+	})
+	mux.HandleFunc("/repos/owner/repo/actions/runs/39/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(jobsResponse(
+			ghclient.Job{ID: 1, Name: "Build", Status: ci.StatusCompleted, Conclusion: ci.ConclusionSuccess},
+		))
+	})
+
+	base, err := testForge(t, mux).BaselineJobs(
+		context.Background(), testRepo,
+		cipoll.Run{WorkflowKey: "99", HeadBranch: "v1.2.3"}, "", true)
+	if err != nil {
+		t.Fatalf("expected the any-branch run to seed: %v", err)
+	}
+	if base.RunID != 39 {
+		t.Errorf("RunID = %d, want 39", base.RunID)
+	}
+	// From the first pickup, not from creation: the queue wait is not the run.
+	if base.Duration != 5*time.Minute {
+		t.Errorf("Duration = %v, want the run's 5m", base.Duration)
 	}
 }

@@ -108,6 +108,130 @@ func TestGroupWeights_ClockSkew(t *testing.T) {
 	}
 }
 
+// TestGroupWeights_SerializedShardsUseTheSpan pins the span over MAX: shards
+// that queue behind each other on a busy runner hold the run up for their sum,
+// and that is the window the countdown has to cover. MAX would give 100 here
+// and end the ETA after the first shard.
+func TestGroupWeights_SerializedShardsUseTheSpan(t *testing.T) {
+	jobs := []Job{
+		{
+			Name: "tofu (a)", Status: StatusCompleted, Conclusion: ConclusionSuccess,
+			StartedAt: at(0), CompletedAt: at(100 * time.Second),
+		},
+		{
+			Name: "tofu (b)", Status: StatusCompleted, Conclusion: ConclusionSuccess,
+			StartedAt: at(100 * time.Second), CompletedAt: at(200 * time.Second),
+		},
+	}
+	if got := GroupWeights(jobs)["tofu"]; got != 200 {
+		t.Errorf("tofu = %v, want the 200s span", got)
+	}
+}
+
+// TestGroupWeights_StaggeredShards covers the in-between case: parallel shards
+// whose pickups were staggered by runner capacity. The span is first start to
+// last end, not the slowest shard on its own.
+func TestGroupWeights_StaggeredShards(t *testing.T) {
+	jobs := []Job{
+		{
+			Name: "test (a)", Status: StatusCompleted, Conclusion: ConclusionSuccess,
+			StartedAt: at(0), CompletedAt: at(300 * time.Second),
+		},
+		{
+			Name: "test (b)", Status: StatusCompleted, Conclusion: ConclusionSuccess,
+			StartedAt: at(60 * time.Second), CompletedAt: at(330 * time.Second),
+		},
+	}
+	if got := GroupWeights(jobs)["test"]; got != 330 {
+		t.Errorf("test = %v, want the 330s span", got)
+	}
+}
+
+// TestGroupWeights_StartOnlyShardTightensTheSpan pins the one-sided rule: a
+// shard with a start but no completion still says when the group began. Requiring
+// both stamps on one job would discard that and measure from the later shard.
+func TestGroupWeights_StartOnlyShardTightensTheSpan(t *testing.T) {
+	jobs := []Job{
+		{Name: "build (a)", Status: StatusInProgress, StartedAt: at(0)},
+		{
+			Name: "build (b)", Status: StatusCompleted, Conclusion: ConclusionSuccess,
+			StartedAt: at(40 * time.Second), CompletedAt: at(100 * time.Second),
+		},
+	}
+	if got := GroupWeights(jobs)["build"]; got != 100 {
+		t.Errorf("build = %v, want 100s from the earlier shard's start", got)
+	}
+}
+
+func TestEvenWeights(t *testing.T) {
+	labels := []string{"lint", "test", "deploy"}
+	got := EvenWeights(labels, 300*time.Second)
+	want := map[string]float64{"lint": 100, "test": 100, "deploy": 100}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("EvenWeights = %v, want %v", got, want)
+	}
+	// Nothing to spread, or a share that does not clear the floor: nil, so the
+	// "nil means unmeasured" convention the anchor relies on still holds.
+	if got := EvenWeights(nil, 300*time.Second); got != nil {
+		t.Errorf("EvenWeights(no labels) = %v, want nil", got)
+	}
+	if got := EvenWeights(labels, 0); got != nil {
+		t.Errorf("EvenWeights(zero total) = %v, want nil", got)
+	}
+	if got := EvenWeights(labels, 3*time.Second); got != nil {
+		t.Errorf("EvenWeights(sub-floor share) = %v, want nil", got)
+	}
+}
+
+func TestBaselineWeights(t *testing.T) {
+	measured := []Job{
+		{Name: "Lint", Status: StatusCompleted, Conclusion: ConclusionSuccess, StartedAt: at(0), CompletedAt: at(5 * time.Second)},
+		{Name: "Build", Status: StatusCompleted, Conclusion: ConclusionSuccess, StartedAt: at(5 * time.Second), CompletedAt: at(305 * time.Second)},
+		{Name: "Test", Status: StatusCompleted, Conclusion: ConclusionSuccess, StartedAt: at(305 * time.Second), CompletedAt: at(345 * time.Second)},
+	}
+	untimed := []Job{
+		{Name: "Lint", Status: StatusCompleted, Conclusion: ConclusionSuccess},
+		{Name: "Build", Status: StatusCompleted, Conclusion: ConclusionSuccess},
+		{Name: "Test", Status: StatusCompleted, Conclusion: ConclusionSuccess},
+	}
+	labels := []string{"Lint", "Build", "Test"}
+
+	tests := []struct {
+		name   string
+		jobs   []Job
+		run    time.Duration
+		want   map[string]float64
+		source WeightsSource
+	}{
+		{
+			name: "measured", jobs: measured, run: 345 * time.Second,
+			want: map[string]float64{"Lint": 5, "Build": 300, "Test": 40}, source: WeightsMeasured,
+		},
+		{
+			// No group ran longer than its run: a shard re-run hours later, or a
+			// task row touched after the fact, cannot stretch a span past it.
+			name: "clamped to the run", jobs: measured, run: 200 * time.Second,
+			want: map[string]float64{"Lint": 5, "Build": 200, "Test": 40}, source: WeightsMeasured,
+		},
+		{
+			// Every row rewritten after the run: nothing measurable, but the run's
+			// own length is known, so each step counts down toward the average.
+			name: "split when unmeasured", jobs: untimed, run: 300 * time.Second,
+			want: map[string]float64{"Lint": 100, "Build": 100, "Test": 100}, source: WeightsSplit,
+		},
+		{name: "nothing at all", jobs: untimed, run: 0, want: nil, source: WeightsNone},
+		{name: "a zero run clamps nothing", jobs: measured, run: 0, want: map[string]float64{"Lint": 5, "Build": 300, "Test": 40}, source: WeightsMeasured},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, source := BaselineWeights(tc.jobs, labels, tc.run)
+			if !reflect.DeepEqual(got, tc.want) || source != tc.source {
+				t.Errorf("BaselineWeights = %v (%s), want %v (%s)", got, source, tc.want, tc.source)
+			}
+		})
+	}
+}
+
 func TestMeanWeight(t *testing.T) {
 	tests := []struct {
 		name   string

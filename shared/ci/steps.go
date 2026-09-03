@@ -58,16 +58,10 @@ type StepInfo struct {
 	StepLabels      []string
 	StepColors      []string
 
-	// WeightsByName maps a step group's label to its pill weight (seconds of
-	// wall-clock in a prior run). Keyed by name, not index, so it survives the
-	// live scan revealing groups in a different order; projected to a per-step
-	// slice at send time. ComputeSteps never sets this - a caller fills it from
-	// GroupWeights over a prior run's jobs.
-	WeightsByName map[string]float64
-
-	// CurrentStepStartedAt is when the running group began, and is the point
-	// LiveAnchor measures its window from. Zero when nothing is running or the
-	// forge has not stamped a start.
+	// CurrentStepStartedAt is when the current group began - its earliest
+	// stamped start across every shard, finished ones included - and is the
+	// point LiveAnchor measures its window from; GroupWeights spans from the
+	// same start. Zero when the forge has stamped none of the group's jobs.
 	CurrentStepStartedAt time.Time
 
 	AllCompleted bool
@@ -100,9 +94,10 @@ func ComputeSteps(jobs []Job) StepInfo {
 		completed int
 		active    bool
 		failed    bool
-		// startedAt is the earliest start among the group's running jobs. A
-		// fan-out group's shards run in parallel against one step deadline, so
-		// the first shard to start is when the step started.
+		// startedAt is the earliest start among the group's jobs, running or
+		// already finished: a fan-out group's shards run against one step
+		// deadline, so the step started when its first shard did, even one that
+		// has come and gone by the time a poll lands.
 		startedAt time.Time
 	}
 	var steps []step
@@ -120,6 +115,7 @@ func ComputeSteps(jobs []Job) StepInfo {
 			steps = append(steps, step{name: base})
 		}
 		steps[si].count++
+		steps[si].startedAt = earliest(steps[si].startedAt, job.StartedAt)
 
 		switch job.Status {
 		case StatusCompleted:
@@ -132,10 +128,6 @@ func ComputeSteps(jobs []Job) StepInfo {
 		case StatusInProgress:
 			steps[si].active = true
 			allCompleted = false
-			if ts := job.StartedAt; !ts.IsZero() &&
-				(steps[si].startedAt.IsZero() || ts.Before(steps[si].startedAt)) {
-				steps[si].startedAt = ts
-			}
 		default: // queued
 			allCompleted = false
 		}

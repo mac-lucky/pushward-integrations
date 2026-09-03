@@ -14,7 +14,10 @@ type WorkflowRun struct {
 	Conclusion string    `json:"conclusion"`
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
-	HeadBranch string    `json:"head_branch"`
+	// RunStartedAt is when the first job was picked up, as opposed to CreatedAt,
+	// which precedes the queue wait.
+	RunStartedAt time.Time `json:"run_started_at"`
+	HeadBranch   string    `json:"head_branch"`
 	// WorkflowID identifies the workflow definition this run belongs to. It is
 	// stable across runs of the same workflow, letting us look up a prior run's
 	// full step shape to seed a stable total-steps denominator.

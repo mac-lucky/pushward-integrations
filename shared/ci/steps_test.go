@@ -373,6 +373,29 @@ func TestComputeSteps_CurrentStepStartedAt(t *testing.T) {
 		t.Errorf("CurrentStepStartedAt = %v, want the earliest shard start %v", info.CurrentStepStartedAt, first)
 	}
 
+	// A shard that already finished still marks when the group began: shards that
+	// queue behind each other on a busy runner would otherwise restart the window
+	// on every hand-over, and the span GroupWeights measured is from this start.
+	info = ComputeSteps([]Job{
+		{Name: "Build (ubuntu)", Status: StatusCompleted, Conclusion: ConclusionSuccess, StartedAt: first, CompletedAt: second},
+		{Name: "Build (macos)", Status: StatusInProgress, StartedAt: second},
+	})
+	if !info.CurrentStepStartedAt.Equal(first) {
+		t.Errorf("CurrentStepStartedAt = %v, want the finished shard's start %v", info.CurrentStepStartedAt, first)
+	}
+
+	// Between two serialized shards nothing is running, so the group reads as
+	// Queued - and carries the finished shard's start, which is what the next
+	// shard re-anchors from. LiveAnchor refuses the placeholder by name before
+	// it reads that start (see anchor_test).
+	info = ComputeSteps([]Job{
+		{Name: "Build (ubuntu)", Status: StatusCompleted, Conclusion: ConclusionSuccess, StartedAt: first, CompletedAt: second},
+		{Name: "Build (macos)", Status: StatusQueued},
+	})
+	if info.CurrentStepName != QueuedStepName || !info.CurrentStepStartedAt.Equal(first) {
+		t.Errorf("step = %q started %v, want %q carrying %v", info.CurrentStepName, info.CurrentStepStartedAt, QueuedStepName, first)
+	}
+
 	// An unstamped start must not fabricate an anchor. Every forge produces this:
 	// GitHub before it stamps the job, Forgejo whenever the task join misses, the
 	// relay always.

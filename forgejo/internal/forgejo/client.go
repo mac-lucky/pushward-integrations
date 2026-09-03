@@ -295,12 +295,18 @@ func splitRepo(repo string) (owner, name string, err error) {
 	return parts[0], parts[1], nil
 }
 
-// fullRef converts a run's bare prettyref into the fully-qualified ref the runs
+// FullRef converts a run's bare prettyref into the fully-qualified ref the runs
 // `ref` filter requires. Filtering on the bare name matches nothing at all -
-// silently, with an HTTP 200 and an empty list.
-func fullRef(branch string) string {
+// silently, with an HTTP 200 and an empty list. A pull request's prettyref is
+// "#17", standing for refs/pull/17/head. A tag push's is the bare tag name and
+// maps to a refs/heads/ ref that matches nothing, which the poller's any-ref
+// rung then covers.
+func FullRef(branch string) string {
 	if branch == "" || strings.HasPrefix(branch, "refs/") {
 		return branch
+	}
+	if n, ok := strings.CutPrefix(branch, "#"); ok && n != "" && strings.Trim(n, "0123456789") == "" {
+		return "refs/pull/" + n + "/head"
 	}
 	return "refs/heads/" + branch
 }
@@ -392,14 +398,15 @@ func (c *Client) GetRun(ctx context.Context, repo string, runID int64) (*Run, er
 }
 
 // GetLatestFinishedRun returns the most recent terminal run of the same workflow
-// on the same branch, used to seed a stable step total.
+// on ref - a fully-qualified ref, see FullRef - or on any ref when ref is blank.
+// It seeds a stable step total.
 //
 // Forgejo has no "completed" umbrella status the way GitHub does, so this runs
 // two passes: a fully-successful run first (it executed the whole job DAG), then
 // the remaining terminal statuses in one repeatable-parameter query. Returns nil
 // with no error when there is nothing to seed from.
-func (c *Client) GetLatestFinishedRun(ctx context.Context, repo, workflowID, branch string) (*Run, error) {
-	if workflowID == "" || branch == "" {
+func (c *Client) GetLatestFinishedRun(ctx context.Context, repo, workflowID, ref string) (*Run, error) {
+	if workflowID == "" {
 		return nil, nil
 	}
 	owner, name, err := splitRepo(repo)
@@ -412,7 +419,9 @@ func (c *Client) GetLatestFinishedRun(ctx context.Context, repo, workflowID, bra
 		q.Set("page", "1")
 		q.Set("limit", "1")
 		q.Set("workflow_id", workflowID)
-		q.Set("ref", fullRef(branch))
+		if ref != "" {
+			q.Set("ref", ref)
+		}
 		for _, s := range statuses {
 			q.Add("status", s)
 		}
@@ -482,13 +491,13 @@ func (c *Client) GetLiveJobs(ctx context.Context, repo string, runID int64) ([]J
 }
 
 // GetFinishedJobs lists a finished run's jobs and stamps them with the durations
-// that size the step pills.
-func (c *Client) GetFinishedJobs(ctx context.Context, repo string, runID, indexInRepo int64) ([]Job, error) {
-	jobs, err := c.GetJobs(ctx, repo, runID)
+// that size the step pills, bounded by the run's own stop - see joinTasks.
+func (c *Client) GetFinishedJobs(ctx context.Context, repo string, run Run) ([]Job, error) {
+	jobs, err := c.GetJobs(ctx, repo, run.ID)
 	if err != nil {
 		return nil, err
 	}
-	return c.stampHistoricTimings(ctx, repo, jobs, indexInRepo), nil
+	return c.stampHistoricTimings(ctx, repo, jobs, run.IndexInRepo, run.StoppedAt), nil
 }
 
 // authenticatedLogin returns the token owner's login, cached after the first

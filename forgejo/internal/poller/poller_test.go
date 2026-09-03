@@ -369,15 +369,19 @@ func TestListRepos(t *testing.T) {
 // tasks rows that are the only source of per-job timing.
 func baselineMux(t *testing.T, onTasks func()) *http.ServeMux {
 	t.Helper()
+	return seedMux(t, mainRuns(t), priorTasks(onTasks,
+		taskJSON(201, "lint", "success", "2026-07-30T10:00:00Z", "2026-07-30T10:00:05Z"),
+		taskJSON(202, "build", "success", "2026-07-30T10:00:05Z", "2026-07-30T10:05:05Z"),
+		taskJSON(203, "deploy", "success", "2026-07-30T10:05:05Z", "2026-07-30T10:05:45Z"),
+	))
+}
+
+// seedMux serves the prior-run lookup and the tasks page as scripted, and run
+// 7's three jobs as always.
+func seedMux(t *testing.T, runs, tasks http.HandlerFunc) *http.ServeMux {
+	t.Helper()
 	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/repos/acme/app/actions/runs", func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		if len(q["status"]) == 1 && q["status"][0] == fjclient.StatusSuccess {
-			_, _ = w.Write([]byte(runsJSON(runJSON(7, 20, "success", "ci.yml", "main"))))
-			return
-		}
-		_, _ = w.Write([]byte(`{"total_count":0,"workflow_runs":[]}`))
-	})
+	mux.HandleFunc("/api/v1/repos/acme/app/actions/runs", runs)
 	mux.HandleFunc("/api/v1/repos/acme/app/actions/runs/7/jobs", func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(jobsJSON(
 			jobJSON(1, 201, "lint", "success"),
@@ -385,17 +389,24 @@ func baselineMux(t *testing.T, onTasks func()) *http.ServeMux {
 			jobJSON(3, 203, "deploy", "success"),
 		)))
 	})
-	mux.HandleFunc("/api/v1/repos/acme/app/actions/tasks", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/api/v1/repos/acme/app/actions/tasks", tasks)
+	return mux
+}
+
+// mainRuns finds run 7 on main's success pass and nothing anywhere else.
+func mainRuns(t *testing.T) http.HandlerFunc {
+	t.Helper()
+	return runsHandler(t, map[string]string{"refs/heads/main": runJSON(7, 20, "success", "ci.yml", "main")}, new([]string))
+}
+
+// priorTasks serves one page of task rows, counting the requests.
+func priorTasks(onTasks func(), rows ...string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
 		if onTasks != nil {
 			onTasks()
 		}
-		_, _ = w.Write([]byte(tasksJSON(
-			taskJSON(201, "lint", "success", "2026-07-30T10:00:00Z", "2026-07-30T10:00:05Z"),
-			taskJSON(202, "build", "success", "2026-07-30T10:00:05Z", "2026-07-30T10:05:05Z"),
-			taskJSON(203, "deploy", "success", "2026-07-30T10:05:05Z", "2026-07-30T10:05:45Z"),
-		)))
-	})
-	return mux
+		_, _ = w.Write([]byte(tasksJSON(rows...)))
+	}
 }
 
 // With timings wanted, the tasks join runs and the jobs come back stamped.
@@ -404,12 +415,15 @@ func TestBaselineJobs_JoinsTimingsWhenWanted(t *testing.T) {
 	f := testForge(t, baselineMux(t, func() { joined++ }))
 
 	base, err := f.BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, true)
+		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, "main", true)
 	if err != nil {
 		t.Fatalf("expected a usable seed: %v", err)
 	}
 	if base.RunID != 7 {
 		t.Errorf("RunID = %d, want 7", base.RunID)
+	}
+	if base.Duration != 5*time.Minute {
+		t.Errorf("Duration = %v, want the run's own 5m", base.Duration)
 	}
 	jobs := base.Jobs
 	if joined == 0 {
@@ -435,7 +449,7 @@ func TestBaselineJobs_SkipsTheJoinWhenTimingsAreNotWanted(t *testing.T) {
 	f := testForge(t, baselineMux(t, func() { joined++ }))
 
 	base, err := f.BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, false)
+		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, "main", false)
 	if err != nil {
 		t.Fatalf("expected a usable seed: %v", err)
 	}
@@ -460,7 +474,7 @@ func TestBaselineJobs_NoPriorRun(t *testing.T) {
 	})
 
 	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, true)
+		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, "main", true)
 	// No prior run is not an error - the caller just keeps its live scan.
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -477,7 +491,7 @@ func TestBaselineJobs_LookupErrorIsNotASeed(t *testing.T) {
 	})
 
 	if _, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, true); err == nil {
+		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, "main", true); err == nil {
 		t.Error("expected an error when the lookup failed")
 	}
 }
@@ -546,16 +560,18 @@ func TestNewEndToEnd(t *testing.T) {
 		)))
 	})
 	mux.HandleFunc("/api/v1/repos/acme/app/actions/tasks", func(w http.ResponseWriter, r *http.Request) {
-		// The live join asks for the running tasks only; the historic one pages the
-		// whole list with no status filter.
-		if slices.Contains(r.URL.Query()["status"], fjclient.StatusRunning) {
-			_, _ = w.Write([]byte(tasksJSON(taskJSON(102, "tofu (tailscale)", "running", buildStart, buildStart))))
-			return
+		// Both joins page the repo-wide list unfiltered, newest first: the live
+		// run's rows sit ahead of the prior run's on one page.
+		if got := r.URL.Query()["status"]; len(got) != 0 {
+			t.Errorf("tasks status filter = %v, want none", got)
 		}
 		_, _ = w.Write([]byte(tasksJSON(
-			taskJSON(201, "checks", "success", "2026-07-30T10:00:00Z", "2026-07-30T10:00:05Z"),
-			taskJSON(202, "detect", "success", "2026-07-30T10:00:05Z", "2026-07-30T10:00:15Z"),
+			taskJSON(102, "tofu (tailscale)", "running", buildStart, buildStart),
+			taskJSON(101, "detect", "success", "2026-07-30T10:10:05Z", "2026-07-30T10:10:15Z"),
+			taskJSON(100, "checks", "success", "2026-07-30T10:10:00Z", "2026-07-30T10:10:05Z"),
 			taskJSON(203, "tofu (tailscale)", "success", "2026-07-30T10:00:15Z", "2026-07-30T10:05:15Z"),
+			taskJSON(202, "detect", "success", "2026-07-30T10:00:05Z", "2026-07-30T10:00:15Z"),
+			taskJSON(201, "checks", "success", "2026-07-30T10:00:00Z", "2026-07-30T10:00:05Z"),
 		)))
 	})
 
@@ -658,7 +674,7 @@ func TestBaselineJobs_JobsLookupFails(t *testing.T) {
 	})
 
 	_, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, false)
+		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, "main", false)
 	if err == nil {
 		t.Fatal("expected the jobs lookup failure to surface")
 	}
@@ -689,5 +705,86 @@ func TestLiveJobs_MissedTaskJoinLeavesTimesZero(t *testing.T) {
 	if !jobs[0].StartedAt.IsZero() || !jobs[0].CompletedAt.IsZero() {
 		t.Errorf("a missed join must leave the times zero, got (%v, %v)",
 			jobs[0].StartedAt, jobs[0].CompletedAt)
+	}
+}
+
+// runsHandler serves the prior-run lookups by ref: refs maps a ref filter (""
+// for none) to the run JSON it finds on the success pass, and records every
+// request's ref in order.
+func runsHandler(t *testing.T, refs map[string]string, seen *[]string) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		*seen = append(*seen, q.Get("ref"))
+		if run, ok := refs[q.Get("ref")]; ok && slices.Contains(q["status"], fjclient.StatusSuccess) {
+			_, _ = w.Write([]byte(runsJSON(run)))
+			return
+		}
+		_, _ = w.Write([]byte(`{"total_count":0,"workflow_runs":[]}`))
+	}
+}
+
+// TestBaselineJobs_BlankRefSendsNoFilter is the loop's any-ref rung: no ref
+// parameter at all, and the run found there seeds.
+func TestBaselineJobs_BlankRefSendsNoFilter(t *testing.T) {
+	var seen []string
+	mux := seedMux(t, runsHandler(t,
+		map[string]string{"": runJSON(7, 20, "success", "ci.yml", "main")}, &seen), priorTasks(nil))
+
+	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
+		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "v1.2.3"}, "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.RunID != 7 || len(base.Jobs) != 3 {
+		t.Fatalf("baseline = %+v, want run 7 with its 3 jobs", base)
+	}
+	if want := []string{""}; !reflect.DeepEqual(seen, want) {
+		t.Errorf("ref filters sent = %q, want %q", seen, want)
+	}
+}
+
+// TestBaselineJobs_QualifiesTheRef: the loop hands over the prettyref as the
+// forge reported it, and the adapter qualifies it - a PR's "#17" is looked up
+// as its head ref, where the PR's earlier runs live.
+func TestBaselineJobs_QualifiesTheRef(t *testing.T) {
+	var seen []string
+	mux := seedMux(t, runsHandler(t,
+		map[string]string{"refs/pull/17/head": runJSON(7, 20, "success", "ci.yml", "#17")}, &seen), priorTasks(nil))
+
+	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
+		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "#17"}, "#17", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if base.RunID != 7 {
+		t.Errorf("baseline = %+v, want run 7 found under refs/pull/17/head", base)
+	}
+	if len(seen) != 1 || seen[0] != "refs/pull/17/head" {
+		t.Errorf("ref filters sent = %q, want one hit on the pull ref", seen)
+	}
+}
+
+// TestBaselineJobs_PassesTheRunStopToTheJoin: a task row updated two days
+// after the run stopped is the rewritten-row case, and it must reach the join
+// as unknown rather than as a two-day group.
+func TestBaselineJobs_PassesTheRunStopToTheJoin(t *testing.T) {
+	mux := seedMux(t, mainRuns(t), priorTasks(nil,
+		taskJSON(201, "lint", "success", "2026-07-30T10:00:00Z", "2026-07-30T10:00:05Z"),
+		taskJSON(202, "build", "success", "2026-07-30T10:00:05Z", "2026-08-01T00:00:00Z"),
+		taskJSON(203, "deploy", "success", "2026-07-30T10:05:05Z", "2026-07-30T10:05:45Z"),
+	))
+
+	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
+		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, "main", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ci.GroupWeights(base.Jobs)
+	if got["build"] != ci.StepWeightFloor {
+		t.Errorf("build = %v, want the floor for a completion after the run's stop", got["build"])
+	}
+	if got["lint"] != 5 || got["deploy"] != 40 {
+		t.Errorf("weights = %v, want the intact rows measured", got)
 	}
 }

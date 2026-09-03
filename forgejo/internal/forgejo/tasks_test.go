@@ -47,8 +47,14 @@ func TestListTasksSendsPageAndLimitTogether(t *testing.T) {
 func TestStampLiveTimingsJoinsByTaskID(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/repos/acme/app/actions/tasks", func(w http.ResponseWriter, r *http.Request) {
-		if got := r.URL.Query().Get("status"); got != StatusRunning {
-			t.Errorf("status filter = %q, want %q", got, StatusRunning)
+		q := r.URL.Query()
+		// Unfiltered on purpose: the finished shards of the run are what give a
+		// group its first start, and what the run is measured by when it ends.
+		if got := q["status"]; len(got) != 0 {
+			t.Errorf("status filter = %v, want none", got)
+		}
+		if q.Get("page") != "1" || q.Get("limit") == "" {
+			t.Errorf("query = %v, want page=1 with a limit", q)
 		}
 		_, _ = w.Write(fixture(t, "tasks_page.json"))
 	})
@@ -63,9 +69,13 @@ func TestStampLiveTimingsJoinsByTaskID(t *testing.T) {
 	if !jobs[1].CompletedAt.IsZero() {
 		t.Error("a running task has no completion to copy")
 	}
-	// task 84 is terminal in the fixture, so it gets both.
+	// task 84 is terminal in the fixture, so it gets both: a finished shard's
+	// start is the group's start, and its completion is the run's measurement.
 	if jobs[0].StartedAt.IsZero() || jobs[0].CompletedAt.IsZero() {
 		t.Error("the terminal job should have been stamped too")
+	}
+	if got := jobs[0].Duration(); got != 4*time.Second {
+		t.Errorf("checks duration = %v, want 4s from the live page", got)
 	}
 }
 
@@ -108,82 +118,109 @@ func TestStampLiveTimingsErrorIsNotFatal(t *testing.T) {
 	}
 }
 
-func TestStampLiveTimingsSkippedWhenNothingRunning(t *testing.T) {
+// TestStampLiveTimingsSkippedBetweenWaves: with nothing running and the next
+// wave still waiting for a runner there is nothing on the page worth a request.
+// Not started at all is the same case.
+func TestStampLiveTimingsSkippedBetweenWaves(t *testing.T) {
 	var calls atomic.Int32
 	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		_, _ = w.Write(fixture(t, "tasks_page.json"))
 	}))
-	jobs := []Job{{ID: 1, TaskID: 84, Name: "checks", Status: ci.StatusCompleted, RawStatus: StatusSuccess}}
-	c.stampLiveTimings(context.Background(), "acme/app", jobs)
+	for _, jobs := range [][]Job{
+		{
+			{ID: 1, TaskID: 84, Name: "checks", Status: ci.StatusCompleted, Conclusion: ci.ConclusionSuccess, RawStatus: StatusSuccess},
+			{ID: 2, TaskID: 0, Name: "detect", Status: ci.StatusQueued, RawStatus: StatusWaiting},
+		},
+		{
+			{ID: 1, TaskID: 0, Name: "checks", Status: ci.StatusQueued, RawStatus: StatusWaiting},
+		},
+	} {
+		c.stampLiveTimings(context.Background(), "acme/app", jobs)
+	}
 	if n := calls.Load(); n != 0 {
-		t.Errorf("made %d requests with nothing running, want 0", n)
+		t.Errorf("made %d requests with nothing running and nothing finished to measure, want 0", n)
 	}
 }
 
-func TestStampLiveTimingsDisabledByOptions(t *testing.T) {
-	var calls atomic.Int32
-	srv := newStubServer(t, &calls, fixture(t, "tasks_page.json"))
-	c := NewClient(srv, "t", Options{Timeout: time.Second}) // LiveTimings false
-	c.stampLiveTimings(context.Background(), "acme/app", runningJobs())
-	if n := calls.Load(); n != 0 {
-		t.Errorf("made %d requests with live timings off, want 0", n)
-	}
-}
-
-func TestStampHistoricTimingsComputesDurations(t *testing.T) {
+// TestStampLiveTimingsMeasuresAFinishedRun is the final tick of a run: nothing
+// is running any more, and the completed rows are exactly what the next run of
+// this workflow will be seeded from.
+func TestStampLiveTimingsMeasuresAFinishedRun(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/repos/acme/app/actions/tasks", serveFixture(t, "tasks_page.json"))
 	c := testClient(t, mux)
 
-	jobs := []Job{
+	jobs := c.stampLiveTimings(context.Background(), "acme/app", []Job{
 		{ID: 1, TaskID: 84, Name: "checks", Status: ci.StatusCompleted, Conclusion: ci.ConclusionSuccess, RawStatus: StatusSuccess},
 		{ID: 2, TaskID: 85, Name: "detect", Status: ci.StatusCompleted, Conclusion: ci.ConclusionSuccess, RawStatus: StatusSuccess},
-	}
-	jobs = c.stampHistoricTimings(context.Background(), "acme/app", jobs, 33)
-
-	// checks: 21:27:22 -> 21:27:26 = 4s. detect: 21:27:22 -> 21:27:25 = 3s.
-	if got := jobs[0].Duration(); got != 4*time.Second {
-		t.Errorf("checks duration = %v, want 4s", got)
-	}
-	if got := jobs[1].Duration(); got != 3*time.Second {
-		t.Errorf("detect duration = %v, want 3s", got)
-	}
-
+	})
 	weights := ci.GroupWeights(toCIJobsForTest(jobs))
 	if weights["checks"] != 4 || weights["detect"] != 3 {
-		t.Errorf("weights = %v, want checks=4 detect=3", weights)
+		t.Errorf("weights = %v, want checks=4 detect=3 measured live", weights)
 	}
 }
 
-// TestStampHistoricTimingsEpochIsUnmeasurable is the minValidTime payoff, end to
-// end: an unstarted task would otherwise contribute a 55-year duration and
-// swamp every other pill.
-func TestStampHistoricTimingsEpochIsUnmeasurable(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/api/v1/repos/acme/app/actions/tasks", serveFixture(t, "tasks_page.json"))
-	c := testClient(t, mux)
+// taskRow builds a task row with real timestamps, the way the API sends them.
+func taskRow(id int64, name, status string, started, updated time.Time) wireTask {
+	t := wireTask{ID: id, Name: name, Status: status}
+	t.RunStartedAt.set(started)
+	t.UpdatedAt.set(updated)
+	return t
+}
 
+// TestJoinTasksBoundsCompletionByTheRunStop is the production case: Forgejo
+// touched the finished rows a day after the run, so updated_at read as a
+// forty-hour job. With the run's own stop known, a completion past it is
+// refused - the start stays, since it still says when the group began - while
+// one inside the slack is the genuine article, and no stop bounds nothing.
+func TestJoinTasksBoundsCompletionByTheRunStop(t *testing.T) {
+	started := time.Date(2026, 9, 1, 4, 7, 0, 0, time.UTC)
+	stopped := time.Date(2026, 9, 1, 4, 12, 36, 0, time.UTC)
+	tests := []struct {
+		name          string
+		updated       time.Time
+		stopped       time.Time
+		wantRewritten int
+		wantDuration  time.Duration
+	}{
+		{name: "rewritten two days later", updated: stopped.Add(42 * time.Hour), stopped: stopped, wantRewritten: 1},
+		{name: "inside the slack", updated: stopped.Add(4 * time.Second), stopped: stopped, wantDuration: 5*time.Minute + 40*time.Second},
+		{name: "before the stop", updated: stopped.Add(-10 * time.Second), stopped: stopped, wantDuration: 5*time.Minute + 26*time.Second},
+		{name: "no stop to bound against", updated: stopped.Add(42 * time.Hour), wantDuration: 42*time.Hour + 5*time.Minute + 36*time.Second},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			jobs := []Job{{ID: 1, TaskID: 1, Name: "test", RawStatus: StatusSuccess}}
+			tasks := []wireTask{taskRow(1, "test", StatusSuccess, started, tc.updated)}
+
+			matched, rewritten := joinTasks(jobs, tasks, 62, tc.stopped)
+			if matched != 1 || rewritten != tc.wantRewritten {
+				t.Fatalf("matched=%d rewritten=%d, want 1 and %d", matched, rewritten, tc.wantRewritten)
+			}
+			if !jobs[0].StartedAt.Equal(started) {
+				t.Errorf("StartedAt = %v, want the row's start kept", jobs[0].StartedAt)
+			}
+			if got := jobs[0].Duration(); got != tc.wantDuration {
+				t.Errorf("duration = %v, want %v", got, tc.wantDuration)
+			}
+		})
+	}
+
+	// Mixed rows, as one runner lane's rows were rewritten and another's were
+	// not: only the intact group is measured, the other floors and takes the mean.
 	jobs := []Job{
-		// task 87 carries an epoch run_started_at in the fixture.
-		{ID: 1, TaskID: 87, Name: "tofu (grafana)", Status: ci.StatusCompleted, Conclusion: ci.ConclusionSuccess, RawStatus: StatusSuccess},
-		{ID: 2, TaskID: 84, Name: "checks", Status: ci.StatusCompleted, Conclusion: ci.ConclusionSuccess, RawStatus: StatusSuccess},
+		{ID: 1, TaskID: 1, Name: "analysis", RawStatus: StatusSuccess},
+		{ID: 2, TaskID: 2, Name: "test", RawStatus: StatusSuccess},
 	}
-	jobs = c.stampHistoricTimings(context.Background(), "acme/app", jobs, 33)
-
-	if !jobs[0].StartedAt.IsZero() {
-		t.Errorf("epoch start decoded as %v, want zero", jobs[0].StartedAt)
+	tasks := []wireTask{
+		taskRow(1, "analysis", StatusSuccess, started.Add(-time.Minute), stopped.Add(42*time.Hour)),
+		taskRow(2, "test", StatusSuccess, started, stopped.Add(-10*time.Second)),
 	}
-	if d := jobs[0].Duration(); d != 0 {
-		t.Errorf("duration = %v, want 0 for an unmeasurable task", d)
-	}
-
+	joinTasks(jobs, tasks, 62, stopped)
 	weights := ci.GroupWeights(toCIJobsForTest(jobs))
-	if w := weights["tofu"]; w != ci.StepWeightFloor {
-		t.Errorf("tofu weight = %v, want the floor %v", w, ci.StepWeightFloor)
-	}
-	if weights["checks"] != 4 {
-		t.Errorf("the measurable group lost its duration: %v", weights)
+	if weights["analysis"] != ci.StepWeightFloor || weights["test"] != 326 {
+		t.Errorf("weights = %v, want analysis at the floor and test=326", weights)
 	}
 }
 
@@ -197,7 +234,7 @@ func TestStampHistoricTimingsStopsWhenAllMatched(t *testing.T) {
 	c := testClient(t, mux)
 
 	jobs := []Job{{ID: 1, TaskID: 84, Name: "checks", Status: ci.StatusCompleted, RawStatus: StatusSuccess}}
-	c.stampHistoricTimings(context.Background(), "acme/app", jobs, 33)
+	c.stampHistoricTimings(context.Background(), "acme/app", jobs, 33, time.Time{})
 	if n := calls.Load(); n != 1 {
 		t.Errorf("made %d requests, want 1 once every task was matched", n)
 	}
@@ -216,7 +253,7 @@ func TestStampHistoricTimingsPageCap(t *testing.T) {
 	c := testClient(t, mux)
 
 	jobs := []Job{{ID: 1, TaskID: 84, Name: "checks", Status: ci.StatusCompleted, RawStatus: StatusSuccess}}
-	jobs = c.stampHistoricTimings(context.Background(), "acme/app", jobs, 33)
+	jobs = c.stampHistoricTimings(context.Background(), "acme/app", jobs, 33, time.Time{})
 
 	if n := int(calls.Load()); n != maxTaskPages {
 		t.Errorf("made %d page requests, want the cap of %d", n, maxTaskPages)
@@ -247,7 +284,7 @@ func TestStampHistoricTimingsReachesBuriedRows(t *testing.T) {
 	c := testClient(t, mux)
 
 	jobs := []Job{{ID: 1, TaskID: 84, Name: "checks", Status: ci.StatusCompleted, RawStatus: StatusSuccess}}
-	jobs = c.stampHistoricTimings(context.Background(), "acme/app", jobs, 33)
+	jobs = c.stampHistoricTimings(context.Background(), "acme/app", jobs, 33, time.Time{})
 
 	if got := jobs[0].Duration(); got != 4*time.Second {
 		t.Fatalf("checks duration = %v, want 4s from the page-4 row", got)
@@ -262,7 +299,7 @@ func TestStampHistoricTimingsDisabledByOptions(t *testing.T) {
 	var calls atomic.Int32
 	srv := newStubServer(t, &calls, fixture(t, "tasks_page.json"))
 	c := NewClient(srv, "t", Options{Timeout: time.Second}) // HistoryTimings false
-	c.stampHistoricTimings(context.Background(), "acme/app", runningJobs(), 33)
+	c.stampHistoricTimings(context.Background(), "acme/app", runningJobs(), 33, time.Time{})
 	if n := calls.Load(); n != 0 {
 		t.Errorf("made %d requests with history timings off, want 0", n)
 	}
@@ -278,7 +315,7 @@ func TestJoinTasksRunNumberMismatchStillJoins(t *testing.T) {
 	_ = tasks[0].RunStartedAt.UnmarshalJSON([]byte(`"2026-07-30T10:00:00Z"`))
 	_ = tasks[0].UpdatedAt.UnmarshalJSON([]byte(`"2026-07-30T10:00:05Z"`))
 
-	if matched := joinTasks(jobs, tasks, 33); matched != 1 {
+	if matched, _ := joinTasks(jobs, tasks, 33, time.Time{}); matched != 1 {
 		t.Fatalf("matched %d, want 1", matched)
 	}
 	if jobs[0].Duration() != 5*time.Second {
@@ -287,14 +324,14 @@ func TestJoinTasksRunNumberMismatchStillJoins(t *testing.T) {
 }
 
 func TestJoinTasksHandlesEmptyInputs(t *testing.T) {
-	if n := joinTasks(nil, []wireTask{{ID: 1}}, 0); n != 0 {
+	if n, _ := joinTasks(nil, []wireTask{{ID: 1}}, 0, time.Time{}); n != 0 {
 		t.Errorf("joinTasks(nil jobs) = %d", n)
 	}
-	if n := joinTasks([]Job{{TaskID: 1}}, nil, 0); n != 0 {
+	if n, _ := joinTasks([]Job{{TaskID: 1}}, nil, 0, time.Time{}); n != 0 {
 		t.Errorf("joinTasks(nil tasks) = %d", n)
 	}
 	// A job with no task id can never join.
-	if n := joinTasks([]Job{{TaskID: 0}}, []wireTask{{ID: 0}}, 0); n != 1 {
+	if n, _ := joinTasks([]Job{{TaskID: 0}}, []wireTask{{ID: 0}}, 0, time.Time{}); n != 1 {
 		t.Logf("task id 0 joined; harmless, but the caller does not count it as wanted")
 	}
 }

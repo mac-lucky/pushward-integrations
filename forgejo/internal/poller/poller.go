@@ -97,13 +97,14 @@ func (f *forge) LiveJobs(ctx context.Context, repo string, runID int64) ([]ci.Jo
 	return toCIJobs(jobs), nil
 }
 
-// BaselineJobs looks up a prior finished run of the same workflow and branch.
+// BaselineJobs looks up the workflow's latest finished run on ref (any ref when
+// blank), qualifying the prettyref the loop hands it - see fjclient.FullRef.
 //
 // wantTimings decides how the jobs are fetched: Forgejo's job objects carry no
 // timestamps, so the durations cost an extra paginated tasks call that is pure
 // waste when neither the pill sizing nor the ETA is switched on.
-func (f *forge) BaselineJobs(ctx context.Context, repo string, run cipoll.Run, wantTimings bool) (cipoll.Baseline, error) {
-	prev, err := f.fj.GetLatestFinishedRun(ctx, repo, run.WorkflowKey, run.HeadBranch)
+func (f *forge) BaselineJobs(ctx context.Context, repo string, run cipoll.Run, ref string, wantTimings bool) (cipoll.Baseline, error) {
+	prev, err := f.fj.GetLatestFinishedRun(ctx, repo, run.WorkflowKey, fjclient.FullRef(ref))
 	if err != nil {
 		return cipoll.Baseline{}, fmt.Errorf("prior-run lookup: %w", err)
 	}
@@ -113,14 +114,14 @@ func (f *forge) BaselineJobs(ctx context.Context, repo string, run cipoll.Run, w
 
 	var jobs []fjclient.Job
 	if wantTimings {
-		jobs, err = f.fj.GetFinishedJobs(ctx, repo, prev.ID, prev.IndexInRepo)
+		jobs, err = f.fj.GetFinishedJobs(ctx, repo, *prev)
 	} else {
 		jobs, err = f.fj.GetJobs(ctx, repo, prev.ID)
 	}
 	if err != nil {
 		return cipoll.Baseline{}, fmt.Errorf("jobs for prior run %d: %w", prev.ID, err)
 	}
-	return cipoll.Baseline{Jobs: toCIJobs(jobs), RunID: prev.ID}, nil
+	return cipoll.Baseline{Jobs: toCIJobs(jobs), RunID: prev.ID, Duration: prev.Duration}, nil
 }
 
 // Outcome maps a terminal run to its final card state and accent color.

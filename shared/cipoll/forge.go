@@ -71,13 +71,17 @@ const (
 	OutcomeComplete  = "Complete"
 )
 
-// Baseline is a prior finished run of the same workflow and branch, used to seed
-// a stable total-steps denominator. The zero value means there is no usable prior
-// run, which is not an error.
+// Baseline is a prior finished run of the same workflow, used to seed a stable
+// total-steps denominator and the per-group durations. The zero value means
+// there is no usable prior run, which is not an error.
 type Baseline struct {
 	Jobs []ci.Job
 	// RunID identifies the run the jobs came from. Logs only.
 	RunID int64
+	// Duration is how long the prior run itself took, from the run object rather
+	// than from its jobs, and zero when the forge does not say. See
+	// ci.BaselineWeights for what it bounds and, failing everything else, seeds.
+	Duration time.Duration
 }
 
 // Forge is one CI forge, as much of it as the poller needs.
@@ -114,15 +118,19 @@ type Forge interface {
 	// LiveJobs returns the run's current jobs, already converted for the ladder.
 	LiveJobs(ctx context.Context, repo string, runID int64) ([]ci.Job, error)
 
-	// BaselineJobs returns a prior finished run to seed a stable total-steps
-	// denominator from frame one. The forge owns which prior run to pick and how
-	// hard to look; a zero Baseline means there is no usable one, which is not an
-	// error and leaves the caller on its live scan.
+	// BaselineJobs returns the workflow's most recent finished run on ref, or on
+	// any ref when ref is blank, to seed a stable total-steps denominator from
+	// frame one. The loop drives the widening - the run's own ref first, then any
+	// ref, since a tag build or a fresh branch has no earlier run of its own -
+	// and the forge owns which finished run on that ref counts (a successful one
+	// that ran the whole DAG, failing that any terminal one). ref is the run's
+	// HeadBranch as the forge reported it; the adapter qualifies it. A zero
+	// Baseline means there is no usable run on that ref, which is not an error.
 	//
 	// wantTimings says whether the caller will read per-group durations off the
 	// result; a forge whose job objects carry no timestamps can then skip the
 	// extra lookup that fills them in.
-	BaselineJobs(ctx context.Context, repo string, run Run, wantTimings bool) (Baseline, error)
+	BaselineJobs(ctx context.Context, repo string, run Run, ref string, wantTimings bool) (Baseline, error)
 
 	// Outcome maps a terminal run to the card's final state text and accent
 	// color. Forges differ here deliberately - one collapses everything to

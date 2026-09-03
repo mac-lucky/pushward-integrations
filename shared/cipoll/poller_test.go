@@ -228,12 +228,12 @@ func TestPollActive_NilRunFromGetRunDefersInsteadOfPanicking(t *testing.T) {
 // reach it rather than being logged and dropped adapter-side.
 func TestBaselineShape_ErrorKeepsTheLiveScan(t *testing.T) {
 	f := newFakeForge(t)
-	f.baseline = func(string, Run, bool) (Baseline, error) {
+	f.baseline = func(string, Run, string, bool) (Baseline, error) {
 		return Baseline{}, errors.New("403 from the forge")
 	}
 	p := New(f, nil, testOptions())
 
-	if _, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main")); ok {
+	if _, _, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main")); ok {
 		t.Error("expected ok=false so the caller keeps its live scan")
 	}
 }
@@ -340,13 +340,17 @@ func TestLiveAnchorConfigGate(t *testing.T) {
 
 	opts := testOptions()
 	opts.Render.LiveProgress = false
-	if _, _, ok := New(newFakeForge(t), nil, opts).liveAnchor(info, weights, now); ok {
-		t.Error("expected no anchor when live progress is disabled")
+	if _, _, ok, why := New(newFakeForge(t), nil, opts).liveAnchor(info, weights, now); ok || why != "" {
+		t.Errorf("anchored=%v why=%q, want no anchor and no reason when live progress is disabled", ok, why)
 	}
 
 	opts.Render.LiveProgress = true
-	if _, _, ok := New(newFakeForge(t), nil, opts).liveAnchor(info, weights, now); !ok {
+	if _, _, ok, _ := New(newFakeForge(t), nil, opts).liveAnchor(info, weights, now); !ok {
 		t.Error("expected an anchor when live progress is enabled")
+	}
+	// The reason comes through from the ladder, so the once-per-step log can name it.
+	if _, _, ok, why := New(newFakeForge(t), nil, opts).liveAnchor(info, nil, now); ok || why != ci.DeclineUnmeasured {
+		t.Errorf("anchored=%v why=%q, want %q", ok, why, ci.DeclineUnmeasured)
 	}
 }
 
@@ -687,7 +691,7 @@ func TestPollIdle_SeedsStepsFromPriorRun(t *testing.T) {
 		return []ci.Job{job("Lint", ci.StatusInProgress, "")}, nil
 	}
 	// The prior run revealed its full 6-step DAG.
-	f.baseline = func(string, Run, bool) (Baseline, error) {
+	f.baseline = func(string, Run, string, bool) (Baseline, error) {
 		var jobs []ci.Job
 		for _, name := range []string{"Lint", "Build", "Test", "Scan", "Publish", "Notify"} {
 			jobs = append(jobs, job(name, ci.StatusCompleted, ci.ConclusionSuccess))
@@ -761,7 +765,7 @@ func TestPollIdle_KeepsCurrentScanWhenPriorRunSmaller(t *testing.T) {
 		}, nil
 	}
 	// ...while the prior run only had 2, so the seed must not shrink the total.
-	f.baseline = func(string, Run, bool) (Baseline, error) {
+	f.baseline = func(string, Run, string, bool) (Baseline, error) {
 		return Baseline{
 			Jobs: []ci.Job{
 				job("Lint", ci.StatusCompleted, ci.ConclusionSuccess),
@@ -810,30 +814,82 @@ func TestPollIdle_LiveScanErrorFallsBackToOneStep(t *testing.T) {
 	}
 }
 
-// Both guards must skip the lookup entirely rather than asking the forge for a
-// prior run it cannot identify.
+// A blank WorkflowKey skips the lookup entirely: there is no workflow to ask
+// for. A blank branch is not that: it skips only the same-ref rung.
 func TestBaselineShape_ShortCircuits(t *testing.T) {
 	f := newFakeForge(t)
+	var refs []string
+	f.baseline = func(_ string, _ Run, ref string, _ bool) (Baseline, error) {
+		refs = append(refs, ref)
+		return Baseline{}, nil
+	}
 	p := New(f, nil, testOptions())
 
-	if _, ok := p.baselineShape(context.Background(), testRepo, Run{HeadBranch: "main"}); ok {
+	if _, _, ok := p.baselineShape(context.Background(), testRepo, Run{HeadBranch: "main"}); ok {
 		t.Error("expected ok=false when WorkflowKey is blank")
 	}
-	if _, ok := p.baselineShape(context.Background(), testRepo, Run{WorkflowKey: "99"}); ok {
-		t.Error("expected ok=false when the branch is blank")
+	if len(refs) != 0 {
+		t.Errorf("asked the forge %v with no workflow key, want no lookup", refs)
 	}
-	if _, calls, _ := f.counts(); calls != 0 {
-		t.Errorf("expected the forge not to be asked, got %d BaselineJobs calls", calls)
+	if _, _, ok := p.baselineShape(context.Background(), testRepo, Run{WorkflowKey: "99"}); ok {
+		t.Error("expected ok=false when no run was found")
+	}
+	if want := []string{""}; !reflect.DeepEqual(refs, want) {
+		t.Errorf("refs asked = %q, want only the any-ref rung for a blank branch", refs)
+	}
+}
+
+// TestBaselineShape_WidensToAnyRef pins the ladder: this run's ref first, both
+// forge passes behind it, then any ref; a hit stops the walk.
+func TestBaselineShape_WidensToAnyRef(t *testing.T) {
+	f := newFakeForge(t)
+	var refs []string
+	f.baseline = func(_ string, _ Run, ref string, _ bool) (Baseline, error) {
+		refs = append(refs, ref)
+		if ref == "" {
+			return Baseline{Jobs: priorRunJobs(), RunID: 41}, nil
+		}
+		return Baseline{}, nil
+	}
+	opts := testOptions()
+	buf := captureLog(&opts)
+	p := New(f, nil, opts)
+
+	shape, _, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "v1.2.3"))
+	if !ok || shape.TotalSteps != 3 {
+		t.Fatalf("ok=%v shape=%+v, want the any-ref seed", ok, shape)
+	}
+	if want := []string{"v1.2.3", ""}; !reflect.DeepEqual(refs, want) {
+		t.Errorf("refs asked = %q, want %q", refs, want)
+	}
+	if !strings.Contains(buf.String(), `source="any ref"`) {
+		t.Errorf("log = %q, want the widened source named", buf.String())
+	}
+
+	// A hit on the run's own ref never widens.
+	refs = nil
+	f.baseline = func(_ string, _ Run, ref string, _ bool) (Baseline, error) {
+		refs = append(refs, ref)
+		return Baseline{Jobs: priorRunJobs(), RunID: 41}, nil
+	}
+	if _, _, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main")); !ok {
+		t.Fatal("expected the same-ref seed")
+	}
+	if want := []string{"main"}; !reflect.DeepEqual(refs, want) {
+		t.Errorf("refs asked = %q, want %q", refs, want)
+	}
+	if !strings.Contains(buf.String(), `source="same ref"`) {
+		t.Errorf("log = %q, want the same-ref source named", buf.String())
 	}
 }
 
 // A prior run the forge finds but reports no jobs for is not a usable seed.
 func TestBaselineShape_EmptyJobsIsNotASeed(t *testing.T) {
 	f := newFakeForge(t)
-	f.baseline = func(string, Run, bool) (Baseline, error) { return Baseline{RunID: 41}, nil }
+	f.baseline = func(string, Run, string, bool) (Baseline, error) { return Baseline{RunID: 41}, nil }
 	p := New(f, nil, testOptions())
 
-	if _, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main")); ok {
+	if _, _, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main")); ok {
 		t.Error("expected ok=false when the prior run reported no jobs")
 	}
 }
@@ -856,14 +912,14 @@ func TestBaselineShape_PassesWantTimings(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeForge(t)
-			f.baseline = func(string, Run, bool) (Baseline, error) {
+			f.baseline = func(string, Run, string, bool) (Baseline, error) {
 				return Baseline{Jobs: priorRunJobs(), RunID: 41}, nil
 			}
 			opts := testOptionsRender(tc.colors, tc.weights)
 			opts.Render.LiveProgress = tc.live
 			p := New(f, nil, opts)
 
-			info, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main"))
+			_, weights, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main"))
 			if !ok {
 				t.Fatal("expected a usable seed")
 			}
@@ -871,8 +927,8 @@ func TestBaselineShape_PassesWantTimings(t *testing.T) {
 				t.Errorf("wantTimings = %v, want %v", got, tc.want)
 			}
 			// The durations are only measured when something reads them.
-			if gotWeights := info.WeightsByName != nil; gotWeights != tc.want {
-				t.Errorf("WeightsByName present = %v, want %v", gotWeights, tc.want)
+			if gotWeights := weights != nil; gotWeights != tc.want {
+				t.Errorf("weights present = %v, want %v", gotWeights, tc.want)
 			}
 		})
 	}
@@ -888,7 +944,9 @@ func seedOnce(t *testing.T, opts Options) (pushward.Content, json.RawMessage) {
 	f.liveJobs = func(string, int64) ([]ci.Job, error) {
 		return []ci.Job{job("Lint", ci.StatusInProgress, "")}, nil
 	}
-	f.baseline = func(string, Run, bool) (Baseline, error) { return Baseline{Jobs: priorRunJobs(), RunID: 41}, nil }
+	f.baseline = func(string, Run, string, bool) (Baseline, error) {
+		return Baseline{Jobs: priorRunJobs(), RunID: 41}, nil
+	}
 	p, calls, mu := newTestPoller(t, opts, f)
 
 	if err := p.pollIdle(context.Background()); err != nil {
@@ -1059,7 +1117,7 @@ func TestPollIdle_UnreachableForgeStillSendsWeights(t *testing.T) {
 	}
 	// A prior run measured one group, so weightsByName is populated while the
 	// live scan produced no labels to project it onto.
-	f.baseline = func(string, Run, bool) (Baseline, error) {
+	f.baseline = func(string, Run, string, bool) (Baseline, error) {
 		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 		return Baseline{Jobs: []ci.Job{doneJob("Lint", base, base.Add(12*time.Second))}, RunID: 41}, nil
 	}
@@ -2689,5 +2747,200 @@ func TestRun_PollsPeriodicallyAndHoldsTheDiscoveryCooldown(t *testing.T) {
 	// Discovery is on a 5-minute cooldown, so all those ticks share one enumeration.
 	if repoCalls, _, _ := f.counts(); repoCalls != 1 {
 		t.Errorf("enumerated the owner %d times, want 1: the cooldown must hold across ticks", repoCalls)
+	}
+}
+
+// TestBaselineShape_UsesTheCacheFirst pins the seed order: the last run this
+// process saw finish beats a forge lookup, and it is keyed by workflow alone,
+// so a run on another ref - a tag build, a pull request - still finds it.
+func TestBaselineShape_UsesTheCacheFirst(t *testing.T) {
+	f := newFakeForge(t)
+	f.baseline = func(string, Run, string, bool) (Baseline, error) {
+		t.Error("the forge must not be asked while the cache has a usable seed")
+		return Baseline{}, nil
+	}
+	p := New(f, nil, testOptionsRender(false, true))
+	p.seeds.put(testRepo, "99", threeStepShape(), priorDurations(), 41, true)
+
+	info, weights, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "v1.2.3"))
+	if !ok {
+		t.Fatal("expected the cached seed")
+	}
+	if info.TotalSteps != 3 || !reflect.DeepEqual(info.StepLabels, []string{"Lint", "Build", "Test"}) {
+		t.Errorf("shape = %+v, want the cached three steps", info)
+	}
+	if !reflect.DeepEqual(weights, priorDurations()) {
+		t.Errorf("weights = %v, want the cached durations", weights)
+	}
+	if _, calls, _ := f.counts(); calls != 0 {
+		t.Errorf("baselineCalls = %d, want 0", calls)
+	}
+}
+
+// A cached run measured as nothing is no seed while something downstream reads
+// durations: the forge may still have a measurable run, so it is asked.
+func TestBaselineShape_CacheWithoutWeightsFallsThrough(t *testing.T) {
+	f := newFakeForge(t)
+	f.baseline = func(string, Run, string, bool) (Baseline, error) {
+		return Baseline{Jobs: priorRunJobs(), RunID: 40}, nil
+	}
+	p := New(f, nil, testOptions())
+	p.seeds.put(testRepo, "99", threeStepShape(), nil, 41, true)
+
+	_, weights, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main"))
+	if !ok || weights == nil {
+		t.Fatalf("expected the forge's measured seed, got ok=%v weights=%v", ok, weights)
+	}
+	if _, calls, _ := f.counts(); calls != 1 {
+		t.Errorf("baselineCalls = %d, want 1", calls)
+	}
+
+	// With nothing reading durations the shape alone is a complete seed.
+	off := New(newFakeForge(t), nil, testOptions())
+	off.opts.Render.LiveProgress = false
+	off.seeds.put(testRepo, "99", threeStepShape(), nil, 41, true)
+	if _, _, ok := off.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main")); !ok {
+		t.Error("expected the cached shape to seed when no durations are wanted")
+	}
+}
+
+func TestPollActive_CompletionCachesTheObservedShape(t *testing.T) {
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) { return priorRunJobs(), nil }
+	f.getRun = func(_ string, runID int64) (*Run, error) {
+		return terminalRun(runID, ci.ConclusionSuccess), nil
+	}
+	tracked := liveTrackedRun(nil)
+	// The card carried a phantom fourth step from its own seed; the run itself
+	// revealed three, and three is what gets filed.
+	tracked.maxTotalSteps = 4
+	tracked.maxStepRows = []int{1, 2, 1, 1}
+	tracked.maxStepLabels = []string{"Lint", "Build", "Test", "Deploy"}
+	p, patches := trackedPoller(t, testOptions(), f, tracked)
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	patches(2) // let the two-phase end drain
+
+	entry, ok := p.seeds.get(testRepo, "99")
+	if !ok {
+		t.Fatal("the finished run should have been filed as the next seed")
+	}
+	if entry.runID != 42 || !entry.success {
+		t.Errorf("entry = %+v, want run 42 filed as a success", entry)
+	}
+	if entry.shape.TotalSteps != 3 || !reflect.DeepEqual(entry.shape.StepLabels, []string{"Lint", "Build", "Test"}) {
+		t.Errorf("shape = %+v, want the observed three steps, not the clamped four", entry.shape)
+	}
+	if !reflect.DeepEqual(entry.weights, priorDurations()) {
+		t.Errorf("weights = %v, want %v measured from the live jobs", entry.weights, priorDurations())
+	}
+}
+
+func TestPollActive_CompletionSkipsCacheWithoutWorkflowKey(t *testing.T) {
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) { return priorRunJobs(), nil }
+	f.getRun = func(_ string, runID int64) (*Run, error) {
+		run := terminalRun(runID, ci.ConclusionSuccess)
+		run.WorkflowKey = ""
+		return run, nil
+	}
+	p, patches := trackedPoller(t, testOptions(), f, liveTrackedRun(nil))
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	patches(2)
+	if _, ok := p.seeds.get(testRepo, ""); ok {
+		t.Error("filed an entry for a run with no workflow key")
+	}
+}
+
+// TestBaselineShape_SplitsRunDurationWhenUnmeasured is the Forgejo case where
+// every task row of the prior run was rewritten after the fact: no job can be
+// measured, but the run's own length is known, so each step counts down toward
+// the run's average instead of not at all.
+func TestBaselineShape_SplitsRunDurationWhenUnmeasured(t *testing.T) {
+	untimed := []ci.Job{
+		job("Lint", ci.StatusCompleted, ci.ConclusionSuccess),
+		job("Build", ci.StatusCompleted, ci.ConclusionSuccess),
+		job("Test", ci.StatusCompleted, ci.ConclusionSuccess),
+	}
+	f := newFakeForge(t)
+	f.baseline = func(string, Run, string, bool) (Baseline, error) {
+		return Baseline{Jobs: untimed, RunID: 41, Duration: 300 * time.Second}, nil
+	}
+	opts := testOptions()
+	buf := captureLog(&opts)
+	_, weights, ok := New(f, nil, opts).baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main"))
+	if !ok {
+		t.Fatal("expected a usable seed")
+	}
+	if want := map[string]float64{"Lint": 100, "Build": 100, "Test": 100}; !reflect.DeepEqual(weights, want) {
+		t.Errorf("weights = %v, want the run split evenly %v", weights, want)
+	}
+	if !strings.Contains(buf.String(), `weights_source="run-duration split"`) {
+		t.Errorf("log = %q, want the split named", buf.String())
+	}
+}
+
+// The cache names itself as the seed source.
+func TestBaselineShape_LogsTheCacheAsSource(t *testing.T) {
+	opts := testOptions()
+	buf := captureLog(&opts)
+	p := New(newFakeForge(t), nil, opts)
+	p.seeds.put(testRepo, "99", threeStepShape(), priorDurations(), 41, true)
+	if _, _, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main")); !ok {
+		t.Fatal("expected the cached seed")
+	}
+	if !strings.Contains(buf.String(), "source=cache") {
+		t.Errorf("log = %q, want source=cache", buf.String())
+	}
+}
+
+// TestPollActive_LogsUnanchoredOncePerStep pins the deployed-level signal: a
+// step that cannot animate is named once, with its reason, not on every tick.
+func TestPollActive_LogsUnanchoredOncePerStep(t *testing.T) {
+	opts := testOptions()
+	buf := captureLog(&opts)
+
+	buildStart := time.Now().Add(-30 * time.Second)
+	f := newFakeForge(t)
+	var mu sync.Mutex
+	current := []ci.Job{job("Lint", ci.StatusCompleted, ci.ConclusionSuccess), runningJob("Build", buildStart)}
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		return current, nil
+	}
+	// No durations at all: every step declines as unmeasured.
+	p, patches := trackedPoller(t, opts, f, liveTrackedRun(nil))
+
+	for range 2 {
+		if err := p.pollActive(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	patches(1)
+	if n := strings.Count(buf.String(), "live progress not anchored"); n != 1 {
+		t.Fatalf("logged the decline %d times over two ticks of one step, want 1: %q", n, buf.String())
+	}
+	if !strings.Contains(buf.String(), "step=Build") || !strings.Contains(buf.String(), string(ci.DeclineUnmeasured)) {
+		t.Errorf("log = %q, want the step and the reason named", buf.String())
+	}
+
+	mu.Lock()
+	current = []ci.Job{
+		job("Lint", ci.StatusCompleted, ci.ConclusionSuccess),
+		job("Build", ci.StatusCompleted, ci.ConclusionSuccess),
+		runningJob("Test", time.Now().Add(-5*time.Second)),
+	}
+	mu.Unlock()
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	patches(2)
+	if n := strings.Count(buf.String(), "live progress not anchored"); n != 2 {
+		t.Errorf("logged the decline %d times after a step change, want 2: %q", n, buf.String())
 	}
 }

@@ -33,8 +33,10 @@ func main() {
 	fj := fjclient.NewClient(cfg.Forgejo.URL, cfg.Forgejo.Token, fjclient.Options{
 		Timeout: cfg.Forgejo.Timeout,
 		// The timing join costs an extra tasks lookup per poll, so only ask for it
-		// when something actually renders the result.
-		LiveTimings:    cfg.Render.LiveProgress,
+		// when something renders the result. Both switches read the same answer:
+		// the live join is also what measures a finished run for the next one's
+		// pills, so pill sizing alone still wants it.
+		LiveTimings:    cfg.Render.WantTimings(),
 		HistoryTimings: cfg.Render.WantTimings(),
 	})
 	pw := pushward.NewClient(cfg.PushWard.URL, cfg.PushWard.APIKey)

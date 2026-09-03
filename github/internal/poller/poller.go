@@ -96,19 +96,20 @@ func (f *forge) LiveJobs(ctx context.Context, repo string, runID int64) ([]ci.Jo
 	return toCIJobs(jobs), nil
 }
 
-// BaselineJobs looks up a prior finished run of the same workflow and branch.
+// BaselineJobs looks up the workflow's latest finished run on ref, a branch
+// name, or on any branch when ref is blank.
 //
 // wantTimings is ignored: GitHub stamps started_at/completed_at on every job it
 // returns, so the durations come free with the jobs call and there is no cheaper
 // variant to fall back to.
-func (f *forge) BaselineJobs(ctx context.Context, repo string, run cipoll.Run, _ bool) (cipoll.Baseline, error) {
+func (f *forge) BaselineJobs(ctx context.Context, repo string, run cipoll.Run, ref string, _ bool) (cipoll.Baseline, error) {
 	workflowID, err := strconv.ParseInt(run.WorkflowKey, 10, 64)
 	if err != nil {
 		// Unreachable via the poller, which short-circuits a blank key, but a
 		// malformed id must not be turned into a lookup for workflow 0.
 		return cipoll.Baseline{}, fmt.Errorf("workflow key %q: %w", run.WorkflowKey, err)
 	}
-	prev, err := f.lastFinishedRun(ctx, repo, workflowID, run.HeadBranch)
+	prev, err := f.lastFinishedRun(ctx, repo, workflowID, ref)
 	if err != nil {
 		return cipoll.Baseline{}, err
 	}
@@ -119,7 +120,13 @@ func (f *forge) BaselineJobs(ctx context.Context, repo string, run cipoll.Run, _
 	if err != nil {
 		return cipoll.Baseline{}, fmt.Errorf("jobs for prior run %d: %w", prev.ID, err)
 	}
-	return cipoll.Baseline{Jobs: toCIJobs(jobs), RunID: prev.ID}, nil
+	// The run's wall clock from its first pickup; an older API that omits
+	// run_started_at counts from creation, over-counting only the queue wait.
+	started := prev.RunStartedAt
+	if started.IsZero() {
+		started = prev.CreatedAt
+	}
+	return cipoll.Baseline{Jobs: toCIJobs(jobs), RunID: prev.ID, Duration: prev.UpdatedAt.Sub(started)}, nil
 }
 
 // lastFinishedRun returns the most relevant finished run to seed step shape from:

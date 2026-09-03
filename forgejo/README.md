@@ -23,13 +23,19 @@ Forgejo Actions --> pushward-forgejo --> pushward-server --> APNs --> PushWard i
 
 - **Stable denominator from the first frame.** A fresh run has only revealed its first wave of
   jobs, so the step count would otherwise climb (1/2 -> 3/4 -> 5/6). The bridge seeds the shape
-  from the last successful run of the same workflow and branch, which already ran the whole DAG.
+  from a finished run of the same workflow, which already ran the whole DAG: the last run this
+  bridge watched to completion, else the last successful run on the same ref, else the workflow's
+  last run on any ref. Pull request runs (`#17`) look under their own head ref first; tag builds
+  and fresh branches, which have no earlier run of their own, seed from the branch they came from.
 - **Duration-sized step pills** (`step_weights`, opt-in). Each group's pill is sized by how long
-  it ran last time.
+  it held the run up last time: first shard start to last shard end, so matrix shards that queue
+  behind each other on a busy runner size the pill by their sum.
 - **A live ETA on the running step** (`live_progress`, on by default). iOS fills the current
-  pill and counts it down between polls, anchored to when the step actually started. A step the
-  prior run did not measure counts down toward the run's average instead - the same estimate its
-  pill is already drawn at - so a partial tasks join costs accuracy rather than the whole ETA.
+  pill and counts it down between polls, anchored to when the step's first shard started - even
+  one that has already finished - and measured the same way the pill is. A step the prior run did
+  not measure counts down toward the run's average instead, the same estimate its pill is already
+  drawn at, so a partial tasks join costs accuracy rather than the whole ETA. When nothing in the
+  prior run could be measured but the run's own length is known, that length is split evenly.
 - **Color-coded steps** (`step_colors`, opt-in): tests one hue, build another, deploy another.
 - **Two-phase end.** The result lands as a final ongoing frame so it is visible on the Dynamic
   Island, then the activity is dismissed a few seconds later.
@@ -92,7 +98,7 @@ Environment variables always win over the YAML file.
 | `PUSHWARD_FORGEJO_STEP_COLORS` | `render.step_colors` | Tint step pills by job type | `false` |
 | `PUSHWARD_FORGEJO_STEP_WEIGHTS` | `render.step_weights` | Size step pills by prior-run duration | `false` |
 | `PUSHWARD_FORGEJO_LIVE_PROGRESS` | `render.live_progress` | Fill the running step and count its ETA down | `true` |
-| `PUSHWARD_LOG_LEVEL` | _(env only)_ | `debug`, `info`, `warn` or `error`. `debug` names which gate declined a live-progress window | `info` |
+| `PUSHWARD_LOG_LEVEL` | _(env only)_ | `debug`, `info`, `warn` or `error` | `info` |
 
 One of `forgejo.owner` or `forgejo.repos` is required. The shared `pushward.*` block (`url`,
 `api_key`, `priority`, `cleanup_delay`, `stale_timeout`, `end_delay`, `end_display_time`) is
@@ -146,12 +152,22 @@ GitHub's in ways that matter, and they are all covered by tests and by the fixtu
 - There is no `conclusion` field. One `status` enum carries everything, and the
   status/conclusion pair the steps ladder wants is synthesised at the client boundary.
 - Job objects carry no timestamps at all. Per-job timing comes from `/actions/tasks`, joined on
-  `task_id`. When that join misses, the step pills fall back to equal width and the ETA is simply
-  not shown - nothing breaks.
+  `task_id`. A job whose row the join misses stays unmeasured: its pill falls back to the run's
+  average, and if it is the running one the ETA is not shown until the next step - nothing breaks.
+- A task row's `updated_at` is a modification time, not a stop time. Forgejo rewrites finished
+  rows well after the run (nightly maintenance touched rows one and two days later on a
+  production instance), which read literally made a seven-minute run's steps weigh forty hours.
+  The bridge believes a completion only up to a minute past the run's own `stopped`; a later one
+  leaves the job unmeasured. A run whose rows were all rewritten is seeded from its `duration`
+  split evenly over the groups.
 - `/actions/tasks` takes only `page`, `limit` and `status` - there is no `run_id`, `workflow_id`
   or `ref` filter, so a run's own rows can only be found by walking the repo-wide list. That
   absence is why the join is page-bounded rather than a single targeted request; re-check it
-  before assuming the walk can be removed.
+  before assuming the walk can be removed. The live join reads the newest page unfiltered, so a
+  run in flight is measured from its own rows the moment it finishes.
+- A run's `prettyref` is the bare branch name for a push, `#17` for a pull request (its head ref
+  is `refs/pull/17/head`, which is what the `ref` filter needs) and the bare tag name for a tag
+  push. The runs `ref` filter matches the fully-qualified ref only.
 - `workflow_id` is a filename string, and there is no workflow display name anywhere in the API.
 - Runs held for approval (`blocked`) are not tracked: they may never execute.
 
@@ -161,8 +177,10 @@ GitHub's in ways that matter, and they are all covered by tests and by the fixtu
 |---|---|
 | No activity ever appears | Token cannot see the repo, or `owner`/`repos` names a repo that does not exist. Startup logs the instance version and the resolved repo list |
 | Steps show as `1/1` | The bridge could not read the run's jobs; check the token's repo access |
-| Pills are all the same width | `step_weights` is off, or no prior successful run of that workflow and branch exists yet |
-| No ETA countdown | Expected on the first run of a workflow - nothing has been measured yet, not even an average to estimate from. After that, expected on any step that finishes in under a few seconds. Run with `PUSHWARD_LOG_LEVEL=debug` and the `live progress not anchored` line names which |
+| Pills are all the same width | `step_weights` is off, or no finished run of that workflow exists yet on any ref. The `seeded steps from prior run` line says where the seed came from (`source`) and whether anything was measured (`weights_source`) |
+| No ETA countdown | Expected on the very first run of a workflow - nothing has been measured yet, not even an average to estimate from. After that, expected on any step that finishes in under a few seconds. The bridge logs `live progress not anchored` once per step with the reason |
+| ETA counts down from hours | The prior run's task rows were rewritten after the fact (see the API notes). Fixed in 0.3.0: a completion later than the run's own stop is no longer believed |
+| No ETA on pull request or tag runs | Fixed in 0.3.0: PR runs look under `refs/pull/N/head`, tag builds and fresh branches seed from the workflow's last run on any ref |
 | Two cards per build | The relay's `/forgejo` webhook is configured as well; see above |
 | Connection timeouts | The instance is not reachable from the container's network |
 

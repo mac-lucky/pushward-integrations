@@ -179,7 +179,7 @@ func TestGetLatestFinishedRunSendsFullRef(t *testing.T) {
 	})
 	c := testClient(t, mux)
 
-	run, err := c.GetLatestFinishedRun(context.Background(), "acme/app", "tofu.yml", "master")
+	run, err := c.GetLatestFinishedRun(context.Background(), "acme/app", "tofu.yml", FullRef("master"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,10 +201,16 @@ func TestFullRef(t *testing.T) {
 		"refs/tags/v1.0.0": "refs/tags/v1.0.0",
 		"feature/thing":    "refs/heads/feature/thing",
 		"":                 "",
+		// A pull request's prettyref stands for its head ref, which is what its
+		// earlier runs were recorded under. Anything else starting with # is a
+		// branch name and qualifies like one.
+		"#17":  "refs/pull/17/head",
+		"#":    "refs/heads/#",
+		"#abc": "refs/heads/#abc",
 	}
 	for in, want := range cases {
-		if got := fullRef(in); got != want {
-			t.Errorf("fullRef(%q) = %q, want %q", in, got, want)
+		if got := FullRef(in); got != want {
+			t.Errorf("FullRef(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -225,7 +231,7 @@ func TestGetLatestFinishedRunFallsBackToOtherTerminalStatuses(t *testing.T) {
 	})
 	c := testClient(t, mux)
 
-	run, err := c.GetLatestFinishedRun(context.Background(), "acme/app", "tofu.yml", "master")
+	run, err := c.GetLatestFinishedRun(context.Background(), "acme/app", "tofu.yml", FullRef("master"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,18 +246,51 @@ func TestGetLatestFinishedRunFallsBackToOtherTerminalStatuses(t *testing.T) {
 	}
 }
 
+// TestGetLatestFinishedRunBlankRefOmitsTheFilter pins the any-ref rung: the
+// same two status passes, with no ref sent at all.
+func TestGetLatestFinishedRunBlankRefOmitsTheFilter(t *testing.T) {
+	var passes int
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/repos/acme/app/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		passes++
+		q := r.URL.Query()
+		if _, has := q["ref"]; has {
+			t.Errorf("sent ref=%q, want no ref filter", q.Get("ref"))
+		}
+		if q.Get("workflow_id") != "tofu.yml" {
+			t.Errorf("workflow_id = %q, want tofu.yml", q.Get("workflow_id"))
+		}
+		if len(q["status"]) == 1 && q["status"][0] == StatusSuccess {
+			_, _ = w.Write([]byte(`{"total_count":0,"workflow_runs":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"total_count":1,"workflow_runs":[` + string(fixture(t, "run_failure.json")) + `]}`))
+	})
+	c := testClient(t, mux)
+
+	run, err := c.GetLatestFinishedRun(context.Background(), "acme/app", "tofu.yml", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run == nil {
+		t.Fatal("expected the terminal pass to find a run")
+	}
+	if passes != 2 {
+		t.Errorf("made %d passes, want 2", passes)
+	}
+}
+
+// A blank workflow cannot be looked up, ref or no ref.
 func TestGetLatestFinishedRunShortCircuits(t *testing.T) {
 	var calls atomic.Int32
 	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		_, _ = w.Write([]byte(`{"total_count":0,"workflow_runs":[]}`))
 	}))
-	for _, tc := range []struct{ workflow, branch string }{
-		{"", "master"}, {"tofu.yml", ""}, {"", ""},
-	} {
-		run, err := c.GetLatestFinishedRun(context.Background(), "acme/app", tc.workflow, tc.branch)
+	for _, ref := range []string{"refs/heads/master", ""} {
+		run, err := c.GetLatestFinishedRun(context.Background(), "acme/app", "", ref)
 		if err != nil || run != nil {
-			t.Errorf("workflow=%q branch=%q: got (%v, %v)", tc.workflow, tc.branch, run, err)
+			t.Errorf("ref=%q: got (%v, %v)", ref, run, err)
 		}
 	}
 	if n := calls.Load(); n != 0 {

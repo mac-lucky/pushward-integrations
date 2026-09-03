@@ -3,6 +3,7 @@ package cipoll
 import (
 	"time"
 
+	"github.com/mac-lucky/pushward-integrations/shared/ci"
 	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 )
 
@@ -67,4 +68,9 @@ type trackedRun struct {
 	// the next tick.
 	liveStepName string
 	liveSent     bool
+
+	// declineStep and declineWhy are the last "live progress not anchored" line
+	// written for this run, so a step that cannot animate is reported once.
+	declineStep string
+	declineWhy  ci.AnchorDecline
 }
