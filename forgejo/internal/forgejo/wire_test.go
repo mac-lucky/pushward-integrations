@@ -255,3 +255,35 @@ func toCIJobsForTest(jobs []Job) []ci.Job {
 	}
 	return out
 }
+
+// TestRunDurationPrefersTheStamps: the wire duration is upstream's own
+// derivation of start and stop, so the stamps lead and the wire value only
+// stands in for them. A run with no stop has no length at all, whatever the
+// join's fallback bound says, or a 12h/N split would replace the hours-long
+// countdown the bound exists to refuse.
+func TestRunDurationPrefersTheStamps(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want time.Duration
+	}{
+		{"stamps over the wire value", `{"started":"2026-09-01T04:07:00Z","stopped":"2026-09-01T04:12:00Z","duration":0}`, 5 * time.Minute},
+		{"epoch stop is no length", `{"started":"2026-09-01T04:07:00Z","stopped":"1970-01-01T00:00:00Z","duration":0}`, 0},
+		{"wire value when the stamps are missing", `{"duration":22000000000}`, 22 * time.Second},
+		{"nothing at all", `{}`, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var w wireRun
+			if err := json.Unmarshal([]byte(tc.body), &w); err != nil {
+				t.Fatal(err)
+			}
+			if got := runDuration(w); got != tc.want {
+				t.Errorf("runDuration = %v, want %v", got, tc.want)
+			}
+			if tc.name == "epoch stop is no length" && !toRun(w).StoppedAt.IsZero() {
+				t.Error("an epoch stop must read as zero")
+			}
+		})
+	}
+}

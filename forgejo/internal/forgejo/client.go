@@ -491,13 +491,14 @@ func (c *Client) GetLiveJobs(ctx context.Context, repo string, runID int64) ([]J
 }
 
 // GetFinishedJobs lists a finished run's jobs and stamps them with the durations
-// that size the step pills, bounded by the run's own stop - see joinTasks.
+// that size the step pills, bounded by the run's own stop or start - see
+// completionBound.
 func (c *Client) GetFinishedJobs(ctx context.Context, repo string, run Run) ([]Job, error) {
 	jobs, err := c.GetJobs(ctx, repo, run.ID)
 	if err != nil {
 		return nil, err
 	}
-	return c.stampHistoricTimings(ctx, repo, jobs, run.IndexInRepo, run.StoppedAt), nil
+	return c.stampHistoricTimings(ctx, repo, jobs, run.IndexInRepo, completionBound(run)), nil
 }
 
 // authenticatedLogin returns the token owner's login, cached after the first

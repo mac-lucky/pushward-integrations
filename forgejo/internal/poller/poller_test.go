@@ -65,6 +65,12 @@ func testForge(t *testing.T, handler http.Handler) *forge {
 // runJSON builds a run. Note id and indexInRepo differ, and html_url is built
 // from indexInRepo, exactly as the instance does it.
 func runJSON(id, indexInRepo int64, status, workflow, branch string) string {
+	return runJSONAt(id, indexInRepo, status, workflow, branch, "2026-07-30T10:05:00Z", 300000000000)
+}
+
+// runJSONAt is runJSON with the stop and wire duration under the test's
+// control: a cancelled run carries the epoch and a zero.
+func runJSONAt(id, indexInRepo int64, status, workflow, branch, stopped string, durationNS int64) string {
 	return fmt.Sprintf(`{
 		"id": %d, "index_in_repo": %d,
 		"title": "some commit subject",
@@ -72,11 +78,11 @@ func runJSON(id, indexInRepo int64, status, workflow, branch string) string {
 		"commit_sha": "deadbeef", "event": "push", "trigger_event": "push",
 		"status": %q,
 		"created": "2026-07-30T10:00:00Z", "started": "2026-07-30T10:00:00Z",
-		"stopped": "2026-07-30T10:05:00Z", "updated": "2026-07-30T10:05:00Z",
-		"duration": 300000000000,
+		"stopped": %q, "updated": "2026-07-30T10:05:00Z",
+		"duration": %d,
 		"html_url": "https://forgejo.example.com/acme/app/actions/runs/%d",
 		"repository": {"full_name": "acme/app", "html_url": "https://forgejo.example.com/acme/app"}
-	}`, id, indexInRepo, workflow, branch, status, indexInRepo)
+	}`, id, indexInRepo, workflow, branch, status, stopped, durationNS, indexInRepo)
 }
 
 func runsJSON(runs ...string) string {
@@ -786,5 +792,42 @@ func TestBaselineJobs_PassesTheRunStopToTheJoin(t *testing.T) {
 	}
 	if got["lint"] != 5 || got["deploy"] != 40 {
 		t.Errorf("weights = %v, want the intact rows measured", got)
+	}
+}
+
+// TestBaselineJobs_BoundsTheJoinFromTheStartWhenTheStopIsMissing: a cancelled
+// run is baseline-eligible and can carry the epoch as its stop, which used to
+// switch off both defences against a rewritten row at once - the stop bound
+// and the run-duration clamp read the same run. The join now bounds from the
+// start, and the run's length stays unknown rather than being invented from
+// that bound.
+func TestBaselineJobs_BoundsTheJoinFromTheStartWhenTheStopIsMissing(t *testing.T) {
+	cancelled := runJSONAt(7, 20, "cancelled", "ci.yml", "main", "1970-01-01T00:00:00Z", 0)
+	runs := func(w http.ResponseWriter, r *http.Request) {
+		if slices.Contains(r.URL.Query()["status"], "cancelled") {
+			_, _ = w.Write([]byte(runsJSON(cancelled)))
+			return
+		}
+		_, _ = w.Write([]byte(`{"total_count":0,"workflow_runs":[]}`))
+	}
+	mux := seedMux(t, runs, priorTasks(nil,
+		taskJSON(201, "lint", "success", "2026-07-30T10:00:00Z", "2026-07-30T10:00:05Z"),
+		taskJSON(202, "build", "success", "2026-07-30T10:00:05Z", "2026-08-01T00:00:00Z"),
+		taskJSON(203, "deploy", "success", "2026-07-30T10:05:05Z", "2026-07-30T10:05:45Z"),
+	))
+
+	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo, "ci.yml", "main", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := ci.GroupWeights(base.Jobs)
+	if _, ok := got["build"]; ok {
+		t.Errorf("build = %v, want it unmeasured: its row was rewritten two days after the start", got["build"])
+	}
+	if got["lint"] != 5 || got["deploy"] != 40 {
+		t.Errorf("weights = %v, want the intact rows measured", got)
+	}
+	if base.Duration != 0 {
+		t.Errorf("duration = %v, want 0 for a run with no stop of its own", base.Duration)
 	}
 }

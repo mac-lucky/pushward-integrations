@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -135,6 +136,10 @@ func TestStampLiveTimingsSkippedBetweenWaves(t *testing.T) {
 		{
 			{ID: 1, TaskID: 0, Name: "checks", Status: ci.StatusQueued, RawStatus: StatusWaiting},
 		},
+		// No jobs at all is the same non-case; "all terminal" is vacuously true
+		// of an empty list and used to cost a request per poll.
+		nil,
+		{},
 	} {
 		c.stampLiveTimings(context.Background(), "acme/app", jobs)
 	}
@@ -194,7 +199,7 @@ func TestJoinTasksBoundsCompletionByTheRunStop(t *testing.T) {
 			jobs := []Job{{ID: 1, TaskID: 1, Name: "test", RawStatus: StatusSuccess}}
 			tasks := []wireTask{taskRow(1, "test", StatusSuccess, started, tc.updated)}
 
-			matched, rewritten := joinTasks(jobs, tasks, 62, tc.stopped)
+			matched, rewritten := joinTasks(jobs, tasks, 62, completionBound(Run{StoppedAt: tc.stopped}))
 			if matched != 1 || rewritten != tc.wantRewritten {
 				t.Fatalf("matched=%d rewritten=%d, want 1 and %d", matched, rewritten, tc.wantRewritten)
 			}
@@ -218,10 +223,59 @@ func TestJoinTasksBoundsCompletionByTheRunStop(t *testing.T) {
 		taskRow(1, "analysis", StatusSuccess, started.Add(-time.Minute), stopped.Add(42*time.Hour)),
 		taskRow(2, "test", StatusSuccess, started, stopped.Add(-10*time.Second)),
 	}
-	joinTasks(jobs, tasks, 62, stopped)
+	joinTasks(jobs, tasks, 62, completionBound(Run{StoppedAt: stopped}))
 	weights := ci.GroupWeights(toCIJobsForTest(jobs))
 	if _, ok := weights["analysis"]; ok || weights["test"] != 326 {
 		t.Errorf("weights = %v, want analysis unmeasured and test=326", weights)
+	}
+}
+
+func TestCompletionBound(t *testing.T) {
+	started := time.Date(2026, 9, 1, 4, 7, 0, 0, time.UTC)
+	stopped := started.Add(5 * time.Minute)
+	created := started.Add(-time.Minute)
+	cases := []struct {
+		name string
+		run  Run
+		want time.Time
+	}{
+		{"stop known", Run{CreatedAt: created, StartedAt: started, StoppedAt: stopped}, stopped.Add(stoppedSlack)},
+		{"no stop, start known", Run{CreatedAt: created, StartedAt: started}, started.Add(maxRunSpan)},
+		{"only created", Run{CreatedAt: created}, created.Add(maxRunSpan)},
+		{"nothing known", Run{}, time.Time{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := completionBound(tc.run); !got.Equal(tc.want) {
+				t.Errorf("completionBound = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestJoinTasksBoundsAMissingStopFromTheStart is the shape that got past the
+// stop bound: a run cancelled before it got a stop, which Forgejo writes as the
+// epoch and flexTime reads as zero. With no stop there was no bound, so a row
+// rewritten days later measured as a days-long job - an 840x pill next to a
+// three-minute one - and, cancelled being baseline-eligible, seeded the next
+// run with it. The start bounds it instead.
+func TestJoinTasksBoundsAMissingStopFromTheStart(t *testing.T) {
+	started := time.Date(2026, 9, 1, 4, 7, 0, 0, time.UTC)
+	jobs := []Job{
+		{ID: 1, TaskID: 1, Name: "analysis", RawStatus: StatusSuccess},
+		{ID: 2, TaskID: 2, Name: "test", RawStatus: StatusSuccess},
+	}
+	tasks := []wireTask{
+		taskRow(1, "analysis", StatusSuccess, started, started.Add(42*time.Hour)),
+		taskRow(2, "test", StatusSuccess, started, started.Add(3*time.Minute)),
+	}
+	matched, rewritten := joinTasks(jobs, tasks, 62, completionBound(Run{StartedAt: started}))
+	if matched != 2 || rewritten != 1 {
+		t.Fatalf("matched=%d rewritten=%d, want 2 and 1", matched, rewritten)
+	}
+	weights := ci.GroupWeights(toCIJobsForTest(jobs))
+	if _, ok := weights["analysis"]; ok || weights["test"] != 180 {
+		t.Errorf("weights = %v, want analysis unmeasured and test=180", weights)
 	}
 }
 
@@ -337,15 +391,89 @@ func TestJoinTasksHandlesEmptyInputs(t *testing.T) {
 	}
 }
 
-// noisePage is a full page of task rows matching none of the ids under test: it
-// is what pushes a run's own rows onto a later page. Full-length on purpose, so
-// the walk does not stop early on a short page.
-func noisePage() string {
-	rows := make([]string, taskPageSize)
-	for i := range rows {
-		rows[i] = fmt.Sprintf(`{"id":%d,"name":"other","status":"success"}`, 10000+i)
+// TestStampHistoricTimingsJoinsAReservedRowOnce is the walk racing a live run
+// in the same repo: a row created between the page-1 and page-2 requests
+// shifts the newest-first list down by one, so page 2 re-serves page 1's last
+// row. Counted twice, that row satisfied the walk with a job still unmatched,
+// and left the warn silent because matched had reached want.
+func TestStampHistoricTimingsJoinsAReservedRowOnce(t *testing.T) {
+	const (
+		checks = `{"id":84,"name":"checks","status":"success","run_started_at":"2026-07-29T21:27:22+02:00","updated_at":"2026-07-29T21:27:26+02:00"}`
+		detect = `{"id":85,"name":"detect","status":"success","run_started_at":"2026-07-29T21:27:22+02:00","updated_at":"2026-07-29T21:27:25+02:00"}`
+	)
+	serve := func(t *testing.T, pages map[string]string) (*Client, *atomic.Int32) {
+		t.Helper()
+		var calls atomic.Int32
+		mux := http.NewServeMux()
+		mux.HandleFunc("/api/v1/repos/acme/app/actions/tasks", func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			body, ok := pages[r.URL.Query().Get("page")]
+			if !ok {
+				body = noisePage()
+			}
+			_, _ = w.Write([]byte(body))
+		})
+		return testClient(t, mux), &calls
 	}
+	jobs := func() []Job {
+		return []Job{
+			{ID: 1, TaskID: 84, Name: "checks", Status: ci.StatusCompleted, RawStatus: StatusSuccess},
+			{ID: 2, TaskID: 85, Name: "detect", Status: ci.StatusCompleted, RawStatus: StatusSuccess},
+		}
+	}
+
+	t.Run("the second job is still found", func(t *testing.T) {
+		c, calls := serve(t, map[string]string{
+			"1": tasksPage(append(noiseRows(taskPageSize-1, 10000), checks)...),
+			"2": tasksPage(append([]string{checks}, noiseRows(taskPageSize-1, 20000)...)...),
+			"3": tasksPage(detect),
+		})
+		got := c.stampHistoricTimings(context.Background(), "acme/app", jobs(), 33, time.Time{})
+		if got[0].Duration() != 4*time.Second || got[1].Duration() != 3*time.Second {
+			t.Errorf("durations = %v/%v, want checks 4s and detect 3s", got[0].Duration(), got[1].Duration())
+		}
+		if n := calls.Load(); n != 3 {
+			t.Errorf("made %d page requests, want 3: the re-served row must not satisfy the walk", n)
+		}
+	})
+
+	t.Run("a job that never turns up is reported", func(t *testing.T) {
+		c, calls := serve(t, map[string]string{
+			"1": tasksPage(append(noiseRows(taskPageSize-1, 10000), checks)...),
+			"2": tasksPage(append([]string{checks}, noiseRows(taskPageSize-1, 20000)...)...),
+		})
+		got := c.stampHistoricTimings(context.Background(), "acme/app", jobs(), 33, time.Time{})
+		if n := int(calls.Load()); n != maxTaskPages {
+			t.Errorf("made %d page requests, want the cap of %d", n, maxTaskPages)
+		}
+		// unmatchedNames is the warn's own input, so this proves the warn fires
+		// without capturing the log.
+		if want := []string{"detect"}; !slices.Equal(unmatchedNames(got), want) {
+			t.Errorf("unmatched = %v, want %v", unmatchedNames(got), want)
+		}
+	})
+}
+
+// noiseRows builds n task rows matching none of the ids under test, numbered
+// from a base so two pages of noise can carry distinct ids.
+func noiseRows(n, from int) []string {
+	rows := make([]string, n)
+	for i := range rows {
+		rows[i] = fmt.Sprintf(`{"id":%d,"name":"other","status":"success"}`, from+i)
+	}
+	return rows
+}
+
+// tasksPage wraps rows in the endpoint's envelope.
+func tasksPage(rows ...string) string {
 	return `{"total_count":9999,"workflow_runs":[` + strings.Join(rows, ",") + `]}`
+}
+
+// noisePage is a full page of noise: it is what pushes a run's own rows onto a
+// later page. Full-length on purpose, so the walk does not stop early on a
+// short page.
+func noisePage() string {
+	return tasksPage(noiseRows(taskPageSize, 10000)...)
 }
 
 // newStubServer returns a server URL that counts every request.

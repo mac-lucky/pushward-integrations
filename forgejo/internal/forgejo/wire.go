@@ -141,13 +141,30 @@ func toRun(w wireRun) Run {
 		StoppedAt:    w.Stopped.Time(),
 		HTMLURL:      w.HTMLURL,
 		NeedApproval: w.NeedApproval,
-		Duration:     time.Duration(w.Duration),
+		Duration:     runDuration(w),
 	}
 	if w.Repository != nil {
 		r.RepoFullName = w.Repository.FullName
 		r.RepoHTMLURL = w.Repository.HTMLURL
 	}
 	return r
+}
+
+// runDuration is the run's wall clock from its own start and stop. The wire
+// `duration` is upstream's derivation of the same two stamps (plus earlier
+// attempts' time on a re-run), so the stamps are the primary source and the
+// wire value only stands in when they are missing. Zero when neither says: a
+// run without a stop has no length to clamp or split by, and the join's
+// fallback bound (maxRunSpan) must not become one - a 12h/N even split would be
+// the hours-long countdown from the other direction.
+func runDuration(w wireRun) time.Duration {
+	if s, e := w.Started.Time(), w.Stopped.Time(); !s.IsZero() && !e.IsZero() && e.After(s) {
+		return e.Sub(s)
+	}
+	if w.Duration > 0 {
+		return time.Duration(w.Duration)
+	}
+	return 0
 }
 
 // toJob normalizes a wire job. Timestamps stay zero here: the jobs endpoint has
