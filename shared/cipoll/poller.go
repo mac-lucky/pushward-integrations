@@ -785,15 +785,17 @@ func (p *Poller) baselineShape(ctx context.Context, repo string, run Run) (ci.St
 		return entry.shape, weights, true
 	}
 
-	refs := []string{run.HeadBranch, ""}
-	if run.HeadBranch == "" {
-		refs = refs[1:]
+	// The run's own ref first, then any ref. A blank head branch is already the
+	// any-ref rung, so it is not worth a rung of its own.
+	refs := []string{""}
+	if run.HeadBranch != "" {
+		refs = []string{run.HeadBranch, ""}
 	}
 	var base Baseline
-	var ref string
-	for _, ref = range refs {
+	source := "any ref"
+	for _, ref := range refs {
 		var err error
-		if base, err = p.forge.BaselineJobs(ctx, repo, run, ref, wantTimings); err != nil {
+		if base, err = p.forge.BaselineJobs(ctx, repo, run.WorkflowKey, ref, wantTimings); err != nil {
 			// Logged here rather than in each adapter: the decision this informs - keep
 			// the live scan - is the loop's, and both forges would otherwise carry the
 			// same two warnings.
@@ -802,6 +804,9 @@ func (p *Poller) baselineShape(ctx context.Context, repo string, run Run) (ci.St
 			return ci.StepInfo{}, nil, false
 		}
 		if len(base.Jobs) > 0 {
+			if ref != "" {
+				source = "same ref"
+			}
 			break
 		}
 	}
@@ -809,10 +814,6 @@ func (p *Poller) baselineShape(ctx context.Context, repo string, run Run) (ci.St
 		return ci.StepInfo{}, nil, false
 	}
 	shape := p.shape(base.Jobs)
-	source := "same ref"
-	if ref == "" {
-		source = "any ref"
-	}
 	// Measure how long each group ran in this finished run, keyed by group name
 	// so the numbers attach to the right label even if the live run reveals its
 	// groups in a different order. They size the pills and anchor the live
@@ -962,7 +963,10 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			if p.opts.Render.WantTimings() {
 				measured = ci.GroupWeights(jobs)
 			}
-			p.seeds.put(repo, run.WorkflowKey, observed, measured, tRunID, run.Conclusion == ci.ConclusionSuccess)
+			p.seeds.put(repo, run.WorkflowKey, seedEntry{
+				shape: observed, weights: measured, runID: tRunID,
+				success: run.Conclusion == ci.ConclusionSuccess,
+			})
 			// The run's own outcome is authoritative; the ladder's AnyFailed only
 			// covers a run that reports nothing usable of its own.
 			state, color := p.forge.Outcome(*run, info.AnyFailed)
@@ -1013,10 +1017,11 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		}
 		// Say once per step why it will not animate; a step that was anchored and
 		// has since outrun its estimate did animate, and is not reported.
+		thisDecline := declined{step: info.CurrentStepName, why: why}
 		logDecline := !wantLive && why != "" && info.CurrentStepName != tt.liveStepName &&
-			(tt.declineStep != info.CurrentStepName || tt.declineWhy != why)
+			tt.declined != thisDecline
 		if logDecline {
-			tt.declineStep, tt.declineWhy = info.CurrentStepName, why
+			tt.declined = thisDecline
 		}
 		shapeChanged := tt.shapeSent < tt.maxTotalSteps
 		scalarChanged := tt.lastPatchAt.IsZero() ||

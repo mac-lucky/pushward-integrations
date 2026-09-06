@@ -11,7 +11,7 @@ import (
 // has watched to completion. Past the cap the oldest entry goes, and the next run
 // of that workflow seeds from the forge instead - which is where every entry
 // started, so nothing is lost but a lookup.
-const maxSeeds = 256
+const maxSeeds = 1024
 
 type seedKey struct{ repo, workflow string }
 
@@ -59,8 +59,8 @@ func newShapeCache(capacity int) *shapeCache {
 // when the labels match, a group the new run could not measure keeps the stored
 // measurement - the final tick's task page can come back short on a busy repo,
 // and one such tick should not throw away what the same shape already measured.
-func (c *shapeCache) put(repo, workflow string, shape ci.StepInfo, weights map[string]float64, runID int64, success bool) {
-	if workflow == "" || shape.TotalSteps <= 0 {
+func (c *shapeCache) put(repo, workflow string, e seedEntry) {
+	if workflow == "" || e.shape.TotalSteps <= 0 {
 		return
 	}
 	key := seedKey{repo: repo, workflow: workflow}
@@ -69,15 +69,16 @@ func (c *shapeCache) put(repo, workflow string, shape ci.StepInfo, weights map[s
 	defer c.mu.Unlock()
 
 	if prev, ok := c.entries[key]; ok {
-		if prev.success && !success {
+		if prev.success && !e.success {
 			return
 		}
-		if slices.Equal(prev.shape.StepLabels, shape.StepLabels) {
-			weights = mergeWeights(weights, prev.weights)
+		if slices.Equal(prev.shape.StepLabels, e.shape.StepLabels) {
+			e.weights = mergeWeights(e.weights, prev.weights)
 		}
 		c.order = slices.DeleteFunc(c.order, func(k seedKey) bool { return k == key })
 	}
-	c.entries[key] = seedEntry{shape: copyShape(shape), weights: weights, runID: runID, success: success}
+	e.shape = copyShape(e.shape)
+	c.entries[key] = e
 	c.order = append(c.order, key)
 	for len(c.order) > c.capacity {
 		delete(c.entries, c.order[0])

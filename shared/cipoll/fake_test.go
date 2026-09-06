@@ -38,7 +38,7 @@ type fakeForge struct {
 	liveJobs   func(repo string, runID int64) ([]ci.Job, error)
 	getRun     func(repo string, runID int64) (*Run, error)
 	// baseline left nil means "no usable prior run", the common case.
-	baseline func(repo string, run Run, ref string, wantTimings bool) (Baseline, error)
+	baseline func(repo, workflowKey, ref string, wantTimings bool) (Baseline, error)
 	// outcome left nil collapses to Success/Failed, the simpler of the two
 	// mappings the real adapters implement.
 	outcome func(run Run, anyFailed bool) (string, string)
@@ -104,7 +104,7 @@ func (f *fakeForge) LiveJobs(_ context.Context, repo string, runID int64) ([]ci.
 	return hook(repo, runID)
 }
 
-func (f *fakeForge) BaselineJobs(_ context.Context, repo string, run Run, ref string, wantTimings bool) (Baseline, error) {
+func (f *fakeForge) BaselineJobs(_ context.Context, repo, workflowKey, ref string, wantTimings bool) (Baseline, error) {
 	f.mu.Lock()
 	f.baselineCalls++
 	f.lastWantTimings = wantTimings
@@ -113,7 +113,7 @@ func (f *fakeForge) BaselineJobs(_ context.Context, repo string, run Run, ref st
 	if hook == nil {
 		return Baseline{}, nil
 	}
-	return hook(repo, run, ref, wantTimings)
+	return hook(repo, workflowKey, ref, wantTimings)
 }
 
 func (f *fakeForge) Outcome(run Run, anyFailed bool) (state, color string) {

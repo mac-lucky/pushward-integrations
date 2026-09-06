@@ -96,23 +96,22 @@ const (
 // fact, would otherwise stretch a span across the gap. A zero run duration
 // neither splits nor clamps.
 func BaselineWeights(jobs []Job, labels []string, run time.Duration) (map[string]float64, WeightsSource) {
-	source := WeightsMeasured
-	weights := GroupWeights(jobs)
-	if weights == nil {
-		source = WeightsSplit
-		weights = EvenWeights(labels, run)
-	}
-	if weights == nil {
-		return nil, WeightsNone
-	}
-	if limit := run.Seconds(); limit > StepWeightFloor {
-		for name, w := range weights {
-			if w > limit {
-				weights[name] = limit
+	if weights := GroupWeights(jobs); weights != nil {
+		// Only the measured path can exceed the run: an even split is run/N, which
+		// is at most the run itself.
+		if limit := run.Seconds(); limit > StepWeightFloor {
+			for name, w := range weights {
+				if w > limit {
+					weights[name] = limit
+				}
 			}
 		}
+		return weights, WeightsMeasured
 	}
-	return weights, source
+	if weights := EvenWeights(labels, run); weights != nil {
+		return weights, WeightsSplit
+	}
+	return nil, WeightsNone
 }
 
 // EvenWeights spreads a run's wall-clock evenly over its step groups. Returns

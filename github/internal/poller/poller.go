@@ -102,12 +102,12 @@ func (f *forge) LiveJobs(ctx context.Context, repo string, runID int64) ([]ci.Jo
 // wantTimings is ignored: GitHub stamps started_at/completed_at on every job it
 // returns, so the durations come free with the jobs call and there is no cheaper
 // variant to fall back to.
-func (f *forge) BaselineJobs(ctx context.Context, repo string, run cipoll.Run, ref string, _ bool) (cipoll.Baseline, error) {
-	workflowID, err := strconv.ParseInt(run.WorkflowKey, 10, 64)
+func (f *forge) BaselineJobs(ctx context.Context, repo, workflowKey, ref string, _ bool) (cipoll.Baseline, error) {
+	workflowID, err := strconv.ParseInt(workflowKey, 10, 64)
 	if err != nil {
 		// Unreachable via the poller, which short-circuits a blank key, but a
 		// malformed id must not be turned into a lookup for workflow 0.
-		return cipoll.Baseline{}, fmt.Errorf("workflow key %q: %w", run.WorkflowKey, err)
+		return cipoll.Baseline{}, fmt.Errorf("workflow key %q: %w", workflowKey, err)
 	}
 	prev, err := f.lastFinishedRun(ctx, repo, workflowID, ref)
 	if err != nil {

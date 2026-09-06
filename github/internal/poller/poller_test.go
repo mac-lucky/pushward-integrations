@@ -181,7 +181,7 @@ func TestBaselineJobs_PrefersTheSuccessfulRun(t *testing.T) {
 
 	base, err := testForge(t, mux).BaselineJobs(
 		context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "99", HeadBranch: "main"}, "main", true)
+		"99", "main", true)
 	if err != nil {
 		t.Fatalf("expected a usable seed: %v", err)
 	}
@@ -221,7 +221,7 @@ func TestBaselineJobs_FallsBackToAnyCompletedRun(t *testing.T) {
 
 	base, err := testForge(t, mux).BaselineJobs(
 		context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "99", HeadBranch: "feature"}, "feature", true)
+		"99", "feature", true)
 	if err != nil {
 		t.Fatalf("expected the completed run to seed the shape: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestBaselineJobs_AbortsOnTheFirstLookupError(t *testing.T) {
 
 	if _, err := testForge(t, mux).BaselineJobs(
 		context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "99", HeadBranch: "main"}, "main", true); err == nil {
+		"99", "main", true); err == nil {
 		t.Error("expected the seed to abort with an error")
 	}
 }
@@ -260,7 +260,7 @@ func TestBaselineJobs_NoPriorRun(t *testing.T) {
 
 	base, err := testForge(t, mux).BaselineJobs(
 		context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "99", HeadBranch: "main"}, "main", true)
+		"99", "main", true)
 	// No prior run is not an error - the caller just keeps its live scan.
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -282,7 +282,7 @@ func TestBaselineJobs_RejectsAMalformedWorkflowKey(t *testing.T) {
 
 	for _, key := range []string{"", "not-a-number"} {
 		if _, err := f.BaselineJobs(context.Background(), testRepo,
-			cipoll.Run{WorkflowKey: key, HeadBranch: "main"}, "main", true); err == nil {
+			key, "main", true); err == nil {
 			t.Errorf("expected an error for WorkflowKey %q", key)
 		}
 	}
@@ -581,7 +581,7 @@ func TestBaselineJobs_JobsLookupFails(t *testing.T) {
 	})
 
 	_, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "99", HeadBranch: "main"}, "main", true)
+		"99", "main", true)
 	if err == nil {
 		t.Fatal("expected the jobs lookup failure to surface")
 	}
@@ -637,7 +637,7 @@ func TestBaselineJobs_BlankRefSendsNoBranchFilter(t *testing.T) {
 
 	base, err := testForge(t, mux).BaselineJobs(
 		context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "99", HeadBranch: "v1.2.3"}, "", true)
+		"99", "", true)
 	if err != nil {
 		t.Fatalf("expected the any-branch run to seed: %v", err)
 	}

@@ -69,8 +69,15 @@ type trackedRun struct {
 	liveStepName string
 	liveSent     bool
 
-	// declineStep and declineWhy are the last "live progress not anchored" line
-	// written for this run, so a step that cannot animate is reported once.
-	declineStep string
-	declineWhy  ci.AnchorDecline
+	// declined is the last "live progress not anchored" line written for this
+	// run, so a step that cannot animate is reported once.
+	declined declined
+}
+
+// declined is one "live progress not anchored" line: the step it was written
+// for, and the gate that stopped it animating. Compared as a whole, so a step
+// that declines for a new reason is reported again.
+type declined struct {
+	step string
+	why  ci.AnchorDecline
 }

@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"reflect"
 	"strings"
@@ -228,7 +227,7 @@ func TestPollActive_NilRunFromGetRunDefersInsteadOfPanicking(t *testing.T) {
 // reach it rather than being logged and dropped adapter-side.
 func TestBaselineShape_ErrorKeepsTheLiveScan(t *testing.T) {
 	f := newFakeForge(t)
-	f.baseline = func(string, Run, string, bool) (Baseline, error) {
+	f.baseline = func(string, string, string, bool) (Baseline, error) {
 		return Baseline{}, errors.New("403 from the forge")
 	}
 	p := New(f, nil, testOptions())
@@ -242,9 +241,8 @@ func TestBaselineShape_ErrorKeepsTheLiveScan(t *testing.T) {
 // be able to change a bridge's logging, and two bridges in one process stay
 // separable.
 func TestOptionsLoggerIsUsed(t *testing.T) {
-	var buf bytes.Buffer
 	opts := testOptions()
-	opts.Logger = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	buf := captureLog(&opts)
 	opts.Owner = "owner"
 
 	f := newFakeForge(t)
@@ -691,7 +689,7 @@ func TestPollIdle_SeedsStepsFromPriorRun(t *testing.T) {
 		return []ci.Job{job("Lint", ci.StatusInProgress, "")}, nil
 	}
 	// The prior run revealed its full 6-step DAG.
-	f.baseline = func(string, Run, string, bool) (Baseline, error) {
+	f.baseline = func(string, string, string, bool) (Baseline, error) {
 		var jobs []ci.Job
 		for _, name := range []string{"Lint", "Build", "Test", "Scan", "Publish", "Notify"} {
 			jobs = append(jobs, job(name, ci.StatusCompleted, ci.ConclusionSuccess))
@@ -765,7 +763,7 @@ func TestPollIdle_KeepsCurrentScanWhenPriorRunSmaller(t *testing.T) {
 		}, nil
 	}
 	// ...while the prior run only had 2, so the seed must not shrink the total.
-	f.baseline = func(string, Run, string, bool) (Baseline, error) {
+	f.baseline = func(string, string, string, bool) (Baseline, error) {
 		return Baseline{
 			Jobs: []ci.Job{
 				job("Lint", ci.StatusCompleted, ci.ConclusionSuccess),
@@ -819,7 +817,7 @@ func TestPollIdle_LiveScanErrorFallsBackToOneStep(t *testing.T) {
 func TestBaselineShape_ShortCircuits(t *testing.T) {
 	f := newFakeForge(t)
 	var refs []string
-	f.baseline = func(_ string, _ Run, ref string, _ bool) (Baseline, error) {
+	f.baseline = func(_, _, ref string, _ bool) (Baseline, error) {
 		refs = append(refs, ref)
 		return Baseline{}, nil
 	}
@@ -844,7 +842,7 @@ func TestBaselineShape_ShortCircuits(t *testing.T) {
 func TestBaselineShape_WidensToAnyRef(t *testing.T) {
 	f := newFakeForge(t)
 	var refs []string
-	f.baseline = func(_ string, _ Run, ref string, _ bool) (Baseline, error) {
+	f.baseline = func(_, _, ref string, _ bool) (Baseline, error) {
 		refs = append(refs, ref)
 		if ref == "" {
 			return Baseline{Jobs: priorRunJobs(), RunID: 41}, nil
@@ -868,7 +866,7 @@ func TestBaselineShape_WidensToAnyRef(t *testing.T) {
 
 	// A hit on the run's own ref never widens.
 	refs = nil
-	f.baseline = func(_ string, _ Run, ref string, _ bool) (Baseline, error) {
+	f.baseline = func(_, _, ref string, _ bool) (Baseline, error) {
 		refs = append(refs, ref)
 		return Baseline{Jobs: priorRunJobs(), RunID: 41}, nil
 	}
@@ -886,7 +884,7 @@ func TestBaselineShape_WidensToAnyRef(t *testing.T) {
 // A prior run the forge finds but reports no jobs for is not a usable seed.
 func TestBaselineShape_EmptyJobsIsNotASeed(t *testing.T) {
 	f := newFakeForge(t)
-	f.baseline = func(string, Run, string, bool) (Baseline, error) { return Baseline{RunID: 41}, nil }
+	f.baseline = func(string, string, string, bool) (Baseline, error) { return Baseline{RunID: 41}, nil }
 	p := New(f, nil, testOptions())
 
 	if _, _, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main")); ok {
@@ -912,7 +910,7 @@ func TestBaselineShape_PassesWantTimings(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newFakeForge(t)
-			f.baseline = func(string, Run, string, bool) (Baseline, error) {
+			f.baseline = func(string, string, string, bool) (Baseline, error) {
 				return Baseline{Jobs: priorRunJobs(), RunID: 41}, nil
 			}
 			opts := testOptionsRender(tc.colors, tc.weights)
@@ -944,7 +942,7 @@ func seedOnce(t *testing.T, opts Options) (pushward.Content, json.RawMessage) {
 	f.liveJobs = func(string, int64) ([]ci.Job, error) {
 		return []ci.Job{job("Lint", ci.StatusInProgress, "")}, nil
 	}
-	f.baseline = func(string, Run, string, bool) (Baseline, error) {
+	f.baseline = func(string, string, string, bool) (Baseline, error) {
 		return Baseline{Jobs: priorRunJobs(), RunID: 41}, nil
 	}
 	p, calls, mu := newTestPoller(t, opts, f)
@@ -1117,7 +1115,7 @@ func TestPollIdle_UnreachableForgeStillSendsWeights(t *testing.T) {
 	}
 	// A prior run measured one group, so weightsByName is populated while the
 	// live scan produced no labels to project it onto.
-	f.baseline = func(string, Run, string, bool) (Baseline, error) {
+	f.baseline = func(string, string, string, bool) (Baseline, error) {
 		base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 		return Baseline{Jobs: []ci.Job{doneJob("Lint", base, base.Add(12*time.Second))}, RunID: 41}, nil
 	}
@@ -2755,12 +2753,12 @@ func TestRun_PollsPeriodicallyAndHoldsTheDiscoveryCooldown(t *testing.T) {
 // so a run on another ref - a tag build, a pull request - still finds it.
 func TestBaselineShape_UsesTheCacheFirst(t *testing.T) {
 	f := newFakeForge(t)
-	f.baseline = func(string, Run, string, bool) (Baseline, error) {
+	f.baseline = func(string, string, string, bool) (Baseline, error) {
 		t.Error("the forge must not be asked while the cache has a usable seed")
 		return Baseline{}, nil
 	}
 	p := New(f, nil, testOptionsRender(false, true))
-	p.seeds.put(testRepo, "99", threeStepShape(), priorDurations(), 41, true)
+	p.seeds.put(testRepo, "99", seedEntry{shape: threeStepShape(), weights: priorDurations(), runID: 41, success: true})
 
 	info, weights, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "v1.2.3"))
 	if !ok {
@@ -2781,11 +2779,11 @@ func TestBaselineShape_UsesTheCacheFirst(t *testing.T) {
 // durations: the forge may still have a measurable run, so it is asked.
 func TestBaselineShape_CacheWithoutWeightsFallsThrough(t *testing.T) {
 	f := newFakeForge(t)
-	f.baseline = func(string, Run, string, bool) (Baseline, error) {
+	f.baseline = func(string, string, string, bool) (Baseline, error) {
 		return Baseline{Jobs: priorRunJobs(), RunID: 40}, nil
 	}
 	p := New(f, nil, testOptions())
-	p.seeds.put(testRepo, "99", threeStepShape(), nil, 41, true)
+	p.seeds.put(testRepo, "99", seedEntry{shape: threeStepShape(), weights: nil, runID: 41, success: true})
 
 	_, weights, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main"))
 	if !ok || weights == nil {
@@ -2798,7 +2796,7 @@ func TestBaselineShape_CacheWithoutWeightsFallsThrough(t *testing.T) {
 	// With nothing reading durations the shape alone is a complete seed.
 	off := New(newFakeForge(t), nil, testOptions())
 	off.opts.Render.LiveProgress = false
-	off.seeds.put(testRepo, "99", threeStepShape(), nil, 41, true)
+	off.seeds.put(testRepo, "99", seedEntry{shape: threeStepShape(), weights: nil, runID: 41, success: true})
 	if _, _, ok := off.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main")); !ok {
 		t.Error("expected the cached shape to seed when no durations are wanted")
 	}
@@ -2867,7 +2865,7 @@ func TestBaselineShape_SplitsRunDurationWhenUnmeasured(t *testing.T) {
 		job("Test", ci.StatusCompleted, ci.ConclusionSuccess),
 	}
 	f := newFakeForge(t)
-	f.baseline = func(string, Run, string, bool) (Baseline, error) {
+	f.baseline = func(string, string, string, bool) (Baseline, error) {
 		return Baseline{Jobs: untimed, RunID: 41, Duration: 300 * time.Second}, nil
 	}
 	opts := testOptions()
@@ -2889,7 +2887,7 @@ func TestBaselineShape_LogsTheCacheAsSource(t *testing.T) {
 	opts := testOptions()
 	buf := captureLog(&opts)
 	p := New(newFakeForge(t), nil, opts)
-	p.seeds.put(testRepo, "99", threeStepShape(), priorDurations(), 41, true)
+	p.seeds.put(testRepo, "99", seedEntry{shape: threeStepShape(), weights: priorDurations(), runID: 41, success: true})
 	if _, _, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main")); !ok {
 		t.Fatal("expected the cached seed")
 	}

@@ -124,13 +124,13 @@ type Forge interface {
 	// ref, since a tag build or a fresh branch has no earlier run of its own -
 	// and the forge owns which finished run on that ref counts (a successful one
 	// that ran the whole DAG, failing that any terminal one). ref is the run's
-	// HeadBranch as the forge reported it; the adapter qualifies it. A zero
+	// head branch as the forge reported it; the adapter qualifies it. A zero
 	// Baseline means there is no usable run on that ref, which is not an error.
 	//
 	// wantTimings says whether the caller will read per-group durations off the
 	// result; a forge whose job objects carry no timestamps can then skip the
 	// extra lookup that fills them in.
-	BaselineJobs(ctx context.Context, repo string, run Run, ref string, wantTimings bool) (Baseline, error)
+	BaselineJobs(ctx context.Context, repo, workflowKey, ref string, wantTimings bool) (Baseline, error)
 
 	// Outcome maps a terminal run to the card's final state text and accent
 	// color. Forges differ here deliberately - one collapses everything to

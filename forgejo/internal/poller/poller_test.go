@@ -415,7 +415,7 @@ func TestBaselineJobs_JoinsTimingsWhenWanted(t *testing.T) {
 	f := testForge(t, baselineMux(t, func() { joined++ }))
 
 	base, err := f.BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, "main", true)
+		"ci.yml", "main", true)
 	if err != nil {
 		t.Fatalf("expected a usable seed: %v", err)
 	}
@@ -449,7 +449,7 @@ func TestBaselineJobs_SkipsTheJoinWhenTimingsAreNotWanted(t *testing.T) {
 	f := testForge(t, baselineMux(t, func() { joined++ }))
 
 	base, err := f.BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, "main", false)
+		"ci.yml", "main", false)
 	if err != nil {
 		t.Fatalf("expected a usable seed: %v", err)
 	}
@@ -474,7 +474,7 @@ func TestBaselineJobs_NoPriorRun(t *testing.T) {
 	})
 
 	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, "main", true)
+		"ci.yml", "main", true)
 	// No prior run is not an error - the caller just keeps its live scan.
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -491,7 +491,7 @@ func TestBaselineJobs_LookupErrorIsNotASeed(t *testing.T) {
 	})
 
 	if _, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, "main", true); err == nil {
+		"ci.yml", "main", true); err == nil {
 		t.Error("expected an error when the lookup failed")
 	}
 }
@@ -674,7 +674,7 @@ func TestBaselineJobs_JobsLookupFails(t *testing.T) {
 	})
 
 	_, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, "main", false)
+		"ci.yml", "main", false)
 	if err == nil {
 		t.Fatal("expected the jobs lookup failure to surface")
 	}
@@ -732,7 +732,7 @@ func TestBaselineJobs_BlankRefSendsNoFilter(t *testing.T) {
 		map[string]string{"": runJSON(7, 20, "success", "ci.yml", "main")}, &seen), priorTasks(nil))
 
 	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "v1.2.3"}, "", false)
+		"ci.yml", "", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -753,7 +753,7 @@ func TestBaselineJobs_QualifiesTheRef(t *testing.T) {
 		map[string]string{"refs/pull/17/head": runJSON(7, 20, "success", "ci.yml", "#17")}, &seen), priorTasks(nil))
 
 	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "#17"}, "#17", false)
+		"ci.yml", "#17", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -776,7 +776,7 @@ func TestBaselineJobs_PassesTheRunStopToTheJoin(t *testing.T) {
 	))
 
 	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		cipoll.Run{WorkflowKey: "ci.yml", HeadBranch: "main"}, "main", true)
+		"ci.yml", "main", true)
 	if err != nil {
 		t.Fatal(err)
 	}

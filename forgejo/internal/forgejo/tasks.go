@@ -234,7 +234,8 @@ func allTerminal(jobs []Job) bool {
 }
 
 // Duration is a job's measured wall-clock span, or 0 when the join left it
-// unmeasured. Exposed for logging; the ladder computes its own.
+// unmeasured. Kept for the join's own tests to assert against; the ladder
+// computes its own from the group span.
 func (j Job) Duration() time.Duration {
 	if j.StartedAt.IsZero() || j.CompletedAt.IsZero() {
 		return 0

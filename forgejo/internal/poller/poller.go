@@ -103,8 +103,8 @@ func (f *forge) LiveJobs(ctx context.Context, repo string, runID int64) ([]ci.Jo
 // wantTimings decides how the jobs are fetched: Forgejo's job objects carry no
 // timestamps, so the durations cost an extra paginated tasks call that is pure
 // waste when neither the pill sizing nor the ETA is switched on.
-func (f *forge) BaselineJobs(ctx context.Context, repo string, run cipoll.Run, ref string, wantTimings bool) (cipoll.Baseline, error) {
-	prev, err := f.fj.GetLatestFinishedRun(ctx, repo, run.WorkflowKey, fjclient.FullRef(ref))
+func (f *forge) BaselineJobs(ctx context.Context, repo, workflowKey, ref string, wantTimings bool) (cipoll.Baseline, error) {
+	prev, err := f.fj.GetLatestFinishedRun(ctx, repo, workflowKey, fjclient.FullRef(ref))
 	if err != nil {
 		return cipoll.Baseline{}, fmt.Errorf("prior-run lookup: %w", err)
 	}
