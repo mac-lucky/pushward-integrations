@@ -900,3 +900,117 @@ func TestValidateSeverityLabel(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateSteps_MergedTick drives the mock the way a forge poller does: a
+// seed frame that names the template, then ticks that do not. The server
+// merges each tick onto the stored content and validates the result, so the
+// per-template bounds must hold on the merged content, not on the tick alone.
+func TestValidateSteps_MergedTick(t *testing.T) {
+	seed := `{"state":"ongoing","content":{"template":"steps","progress":0.2,"current_step":1,"total_steps":3,"step_rows":[1,1,1],"step_labels":["a","b","c"],"step_weights":[1,1,1]}}`
+	tests := []struct {
+		name       string
+		tick       string
+		wantStatus int
+	}{
+		{
+			name:       "scalar tick",
+			tick:       `{"state":"ongoing","content":{"progress":0.6,"current_step":2,"state":"b"}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "current_step past the stored total",
+			tick:       `{"state":"ongoing","content":{"current_step":9}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "step_weights shorter than the stored total",
+			tick:       `{"state":"ongoing","content":{"step_weights":[1,2]}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "negative step_weight",
+			tick:       `{"state":"ongoing","content":{"step_weights":[-5,1,1]}}`,
+			wantStatus: 400,
+		},
+		{
+			// The wedge payloadWeights guards against: the total grows and the
+			// stored weights, carried over by the merge, no longer fit it.
+			name:       "grown total leaves the stored weights the wrong length",
+			tick:       `{"state":"ongoing","content":{"total_steps":4,"current_step":1,"step_rows":[1,1,1,1],"step_labels":["a","b","c","d"]}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "grown total with weights re-sent",
+			tick:       `{"state":"ongoing","content":{"total_steps":4,"current_step":1,"step_rows":[1,1,1,1],"step_labels":["a","b","c","d"],"step_weights":[1,1,1,1]}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "null removes the stored weights",
+			tick:       `{"state":"ongoing","content":{"total_steps":4,"current_step":1,"step_rows":[1,1,1,1],"step_labels":["a","b","c","d"],"step_weights":null}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "window anchored on a tick",
+			tick:       `{"state":"ongoing","content":{"current_step":2,"live_progress":true,"start_date":1700000000,"end_date":1700000300}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "live_progress without a window",
+			tick:       `{"state":"ongoing","content":{"current_step":2,"live_progress":true}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "live_progress switched off needs no window",
+			tick:       `{"state":"ongoing","content":{"current_step":2,"live_progress":false}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "window that ends before it starts",
+			tick:       `{"state":"ongoing","content":{"live_progress":true,"start_date":1700000300,"end_date":1700000000}}`,
+			wantStatus: 400,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "steps-app", "Steps App")
+			if got := patchActivity(t, srv.URL, "steps-app", seed); got != 200 {
+				t.Fatalf("seed: got status %d", got)
+			}
+			if got := patchActivity(t, srv.URL, "steps-app", tt.tick); got != tt.wantStatus {
+				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// TestValidateSteps_RejectedTickIsNotStored: a patch the mock refuses must not
+// change what the next one merges onto, or a single bad tick would poison
+// every later one.
+func TestValidateSteps_RejectedTickIsNotStored(t *testing.T) {
+	srv, _, _ := testutil.MockPushWardServer(t)
+	createActivity(t, srv.URL, "steps-app", "Steps App")
+	seed := `{"state":"ongoing","content":{"template":"steps","progress":0.2,"current_step":1,"total_steps":3}}`
+	if got := patchActivity(t, srv.URL, "steps-app", seed); got != 200 {
+		t.Fatalf("seed: got status %d", got)
+	}
+	bad := `{"state":"ongoing","content":{"total_steps":4,"step_weights":[1]}}`
+	if got := patchActivity(t, srv.URL, "steps-app", bad); got != 400 {
+		t.Fatalf("bad tick: got status %d, want 400", got)
+	}
+	// Against the stored total of 3 this is fine; against the rejected 4 with
+	// a one-entry weights array it would not be.
+	next := `{"state":"ongoing","content":{"current_step":3}}`
+	if got := patchActivity(t, srv.URL, "steps-app", next); got != 200 {
+		t.Errorf("tick after a rejected one: got status %d, want 200", got)
+	}
+}
+
+func TestValidateApprovalRejectsAlarm(t *testing.T) {
+	srv, _, _ := testutil.MockPushWardServer(t)
+	createActivity(t, srv.URL, "approve", "Approve")
+	body := `{"state":"ongoing","content":{"template":"approval","progress":0,"end_date":1800000000,"alarm":true,"options":[{"id":"yes","title":"Yes"},{"id":"no","title":"No"}]}}`
+	if got := patchActivity(t, srv.URL, "approve", body); got != 400 {
+		t.Errorf("got status %d, want 400", got)
+	}
+}

@@ -101,60 +101,66 @@ type updateRequest struct {
 }
 
 type apiContent struct {
-	Template           string               `json:"template"`
-	Progress           float64              `json:"progress"`
-	State              string               `json:"state,omitempty"`
-	Icon               string               `json:"icon,omitempty"`
-	Subtitle           string               `json:"subtitle,omitempty"`
-	AccentColor        string               `json:"accent_color,omitempty"`
-	BackgroundColor    string               `json:"background_color,omitempty"`
-	TextColor          string               `json:"text_color,omitempty"`
-	CurrentStep        *int                 `json:"current_step,omitempty"`
-	TotalSteps         *int                 `json:"total_steps,omitempty"`
-	StepRows           []int                `json:"step_rows,omitempty"`
-	StepLabels         []string             `json:"step_labels,omitempty"`
-	StepColors         []string             `json:"step_colors,omitempty"`
-	StepWeights        []float64            `json:"step_weights,omitempty"`
-	URL                string               `json:"url,omitempty"`
-	SecondaryURL       string               `json:"secondary_url,omitempty"`
-	Severity           string               `json:"severity,omitempty"`
-	FiredAt            *int64               `json:"fired_at,omitempty"`
-	SeverityLabel      string               `json:"severity_label,omitempty"`
-	RemainingTime      *int                 `json:"remaining_time,omitempty"`
-	CompletionMessage  string               `json:"completion_message,omitempty"`
-	EndDate            *int64               `json:"end_date,omitempty"`
-	StartDate          *int64               `json:"start_date,omitempty"`
-	WarningThreshold   *int                 `json:"warning_threshold,omitempty"`
-	Value              any                  `json:"value,omitempty"`
-	MinValue           *float64             `json:"min_value,omitempty"`
-	MaxValue           *float64             `json:"max_value,omitempty"`
-	Unit               string               `json:"unit,omitempty"`
-	Scale              string               `json:"scale,omitempty"`
-	Decimals           *int                 `json:"decimals,omitempty"`
-	Smoothing          *bool                `json:"smoothing,omitempty"`
-	Thresholds         []testThreshold      `json:"thresholds,omitempty"`
-	Duration           *string              `json:"duration,omitempty"`
-	Tiles              []testBoardTile      `json:"tiles,omitempty"`
-	Lines              []testLogLine        `json:"lines,omitempty"`
-	TapAction          *testTapAction       `json:"tap_action,omitempty"`
-	URLAction          *testTapAction       `json:"url_action,omitempty"`
-	SecondaryURLAction *testTapAction       `json:"secondary_url_action,omitempty"`
-	ImageURL           string               `json:"image_url,omitempty"`
-	ImageShape         string               `json:"image_shape,omitempty"`
-	ImageThumbhash     string               `json:"image_thumbhash,omitempty"`
-	MediaTitle         string               `json:"media_title,omitempty"`
-	PlaybackState      string               `json:"playback_state,omitempty"`
-	PositionSeconds    *float64             `json:"position_seconds,omitempty"`
-	DurationSeconds    *float64             `json:"duration_seconds,omitempty"`
-	PositionAt         *int64               `json:"position_at,omitempty"`
-	Volume             *float64             `json:"volume,omitempty"`
-	Favorite           *bool                `json:"favorite,omitempty"`
-	Controls           *testMediaControls   `json:"controls,omitempty"`
-	Options            []testApprovalOption `json:"options,omitempty"`
-	Source             string               `json:"source,omitempty"`
-	Details            []testApprovalDetail `json:"details,omitempty"`
-	OnExpire           string               `json:"on_expire,omitempty"`
-	Answer             map[string]any       `json:"answer,omitempty"`
+	Template           string                             `json:"template"`
+	Progress           float64                            `json:"progress"`
+	State              string                             `json:"state,omitempty"`
+	Icon               string                             `json:"icon,omitempty"`
+	Subtitle           string                             `json:"subtitle,omitempty"`
+	AccentColor        string                             `json:"accent_color,omitempty"`
+	BackgroundColor    string                             `json:"background_color,omitempty"`
+	TextColor          string                             `json:"text_color,omitempty"`
+	CurrentStep        *int                               `json:"current_step,omitempty"`
+	TotalSteps         *int                               `json:"total_steps,omitempty"`
+	StepRows           []int                              `json:"step_rows,omitempty"`
+	StepLabels         []string                           `json:"step_labels,omitempty"`
+	StepColors         []string                           `json:"step_colors,omitempty"`
+	StepWeights        []float64                          `json:"step_weights,omitempty"`
+	URL                string                             `json:"url,omitempty"`
+	SecondaryURL       string                             `json:"secondary_url,omitempty"`
+	Severity           string                             `json:"severity,omitempty"`
+	FiredAt            *int64                             `json:"fired_at,omitempty"`
+	SeverityLabel      string                             `json:"severity_label,omitempty"`
+	RemainingTime      *int                               `json:"remaining_time,omitempty"`
+	CompletionMessage  string                             `json:"completion_message,omitempty"`
+	EndDate            *int64                             `json:"end_date,omitempty"`
+	StartDate          *int64                             `json:"start_date,omitempty"`
+	LiveProgress       *bool                              `json:"live_progress,omitempty"`
+	Alarm              *bool                              `json:"alarm,omitempty"`
+	SnoozeSeconds      *int                               `json:"snooze_seconds,omitempty"`
+	WarningThreshold   *int                               `json:"warning_threshold,omitempty"`
+	Value              any                                `json:"value,omitempty"`
+	MinValue           *float64                           `json:"min_value,omitempty"`
+	MaxValue           *float64                           `json:"max_value,omitempty"`
+	Unit               string                             `json:"unit,omitempty"`
+	Scale              string                             `json:"scale,omitempty"`
+	Decimals           *int                               `json:"decimals,omitempty"`
+	Smoothing          *bool                              `json:"smoothing,omitempty"`
+	Thresholds         []testThreshold                    `json:"thresholds,omitempty"`
+	Units              map[string]string                  `json:"units,omitempty"`
+	History            map[string][]pushward.HistoryPoint `json:"history,omitempty"`
+	PrimarySeries      string                             `json:"primary_series,omitempty"`
+	Duration           *string                            `json:"duration,omitempty"`
+	Tiles              []testBoardTile                    `json:"tiles,omitempty"`
+	Lines              []testLogLine                      `json:"lines,omitempty"`
+	TapAction          *testTapAction                     `json:"tap_action,omitempty"`
+	URLAction          *testTapAction                     `json:"url_action,omitempty"`
+	SecondaryURLAction *testTapAction                     `json:"secondary_url_action,omitempty"`
+	ImageURL           string                             `json:"image_url,omitempty"`
+	ImageShape         string                             `json:"image_shape,omitempty"`
+	ImageThumbhash     string                             `json:"image_thumbhash,omitempty"`
+	MediaTitle         string                             `json:"media_title,omitempty"`
+	PlaybackState      string                             `json:"playback_state,omitempty"`
+	PositionSeconds    *float64                           `json:"position_seconds,omitempty"`
+	DurationSeconds    *float64                           `json:"duration_seconds,omitempty"`
+	PositionAt         *int64                             `json:"position_at,omitempty"`
+	Volume             *float64                           `json:"volume,omitempty"`
+	Favorite           *bool                              `json:"favorite,omitempty"`
+	Controls           *testMediaControls                 `json:"controls,omitempty"`
+	Options            []testApprovalOption               `json:"options,omitempty"`
+	Source             string                             `json:"source,omitempty"`
+	Details            []testApprovalDetail               `json:"details,omitempty"`
+	OnExpire           string                             `json:"on_expire,omitempty"`
+	Answer             map[string]any                     `json:"answer,omitempty"`
 }
 
 // testApprovalOption mirrors pushward.ApprovalOption.
@@ -292,7 +298,11 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 	}
 	var calls []APICall
 	var mu sync.Mutex
-	slugs := make(map[string]bool)
+	// activities is each slug's content as the server would hold it: every
+	// accepted PATCH merged onto the last (RFC 7396), so a tick that names no
+	// template is still validated against the template the activity has.
+	// Guarded by mu.
+	activities := make(map[string]map[string]any)
 
 	mux := http.NewServeMux()
 
@@ -319,10 +329,10 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 		// slug. X-Resource-Action distinguishes the two cases.
 		mu.Lock()
 		action := "created"
-		if slugs[req.Slug] {
+		if _, ok := activities[req.Slug]; ok {
 			action = "updated"
 		}
-		slugs[req.Slug] = true
+		activities[req.Slug] = map[string]any{}
 		mu.Unlock()
 		w.Header().Set("X-Resource-Action", action)
 		w.WriteHeader(http.StatusCreated)
@@ -343,18 +353,44 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 			return
 		}
 
-		if err := validateUpdateRequest(&req); err != nil {
+		if err := validateUpdateFields(&req); err != nil {
 			respondError(w, http.StatusBadRequest, err.Error())
 			return
 		}
 
+		// The content is validated as the server sees it: the patch merged onto
+		// what the activity already holds. Validating the patch on its own let a
+		// poller's ticks, which carry no template, past every per-template bound
+		// the server enforces, and an omitted array that no longer fit a grown
+		// total_steps passed here while the server rejected the whole payload.
+		var patch struct {
+			Content map[string]any `json:"content"`
+		}
+		if err := json.Unmarshal(body, &patch); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+
 		mu.Lock()
-		exists := slugs[slug]
-		mu.Unlock()
+		defer mu.Unlock()
+		stored, exists := activities[slug]
 		if !exists {
 			respondError(w, http.StatusNotFound, "activity not found")
 			return
 		}
+		merged := mergePatch(cloneJSON(stored), patch.Content)
+		var content apiContent
+		if err := reencode(merged, &content); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid content: "+err.Error())
+			return
+		}
+		if err := validateContent(&content); err != nil {
+			respondError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		// Stored only once it validates: a rejected patch leaves the activity
+		// as it was, so the next patch merges onto what the server would hold.
+		activities[slug] = merged
 
 		w.WriteHeader(http.StatusOK)
 	})
@@ -606,10 +642,11 @@ func validateDismissalTTL(v *int) error {
 	return nil
 }
 
-func validateUpdateRequest(req *updateRequest) error {
-	// state and content.template are optional under RFC 7396 merge-patch -
-	// an absent field means "preserve server-side value". Only validate when
-	// present (non-empty).
+// validateUpdateFields checks everything on a PATCH but its content, which is
+// validated after the merge (see the PATCH handler).
+func validateUpdateFields(req *updateRequest) error {
+	// state is optional under RFC 7396 merge-patch - an absent field means
+	// "preserve server-side value". Only validate when present (non-empty).
 	if req.State != "" && !validStates[req.State] {
 		return fmt.Errorf("state must be ongoing or ended")
 	}
@@ -619,10 +656,52 @@ func validateUpdateRequest(req *updateRequest) error {
 	if err := validateTTLs(req.EndedTTL, req.StaleTTL); err != nil {
 		return err
 	}
-	if err := validateDismissalTTL(req.DismissalTTL); err != nil {
+	return validateDismissalTTL(req.DismissalTTL)
+}
+
+// mergePatch applies src onto dst per RFC 7396: null removes a key, an object
+// merges into the object under the same key, anything else replaces it. dst is
+// mutated and returned; a nil dst starts empty.
+func mergePatch(dst, src map[string]any) map[string]any {
+	if dst == nil {
+		dst = make(map[string]any, len(src))
+	}
+	for k, v := range src {
+		switch v := v.(type) {
+		case nil:
+			delete(dst, k)
+		case map[string]any:
+			sub, _ := dst[k].(map[string]any)
+			dst[k] = mergePatch(sub, v)
+		default:
+			dst[k] = v
+		}
+	}
+	return dst
+}
+
+// cloneJSON deep-copies a decoded JSON object, so a merge can be thrown away
+// when its result does not validate.
+func cloneJSON(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		if sub, ok := v.(map[string]any); ok {
+			out[k] = cloneJSON(sub)
+			continue
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// reencode decodes a JSON object into a typed struct by way of its wire form,
+// which is what the validators are written against.
+func reencode(m map[string]any, into any) error {
+	raw, err := json.Marshal(m)
+	if err != nil {
 		return err
 	}
-	return validateContent(&req.Content)
+	return json.Unmarshal(raw, into)
 }
 
 func validateContent(c *apiContent) error {
@@ -684,6 +763,9 @@ func validateContent(c *apiContent) error {
 	if err := validateApprovalFields(c); err != nil {
 		return err
 	}
+	if err := validateWindow(c); err != nil {
+		return err
+	}
 
 	switch c.Template {
 	case "alert":
@@ -723,6 +805,32 @@ func validateContent(c *apiContent) error {
 	return nil
 }
 
+// validateWindow holds the rules that travel with the start_date..end_date
+// window onto every template that carries one: countdown counts it down, the
+// steps template animates its current pill across it and generic fills the
+// whole bar. They cannot sit with the countdown rules, since a poller's tick
+// re-anchors the window on a patch that names no template.
+func validateWindow(c *apiContent) error {
+	if c.EndDate != nil && *c.EndDate <= 0 {
+		return fmt.Errorf("end_date must be > 0")
+	}
+	if c.StartDate != nil {
+		if *c.StartDate <= 0 {
+			return fmt.Errorf("start_date must be > 0")
+		}
+		if c.EndDate != nil && *c.StartDate >= *c.EndDate {
+			return fmt.Errorf("start_date must be < end_date")
+		}
+	}
+	if c.LiveProgress != nil && *c.LiveProgress && c.EndDate == nil {
+		return fmt.Errorf("live_progress requires end_date")
+	}
+	if c.SnoozeSeconds != nil && (*c.SnoozeSeconds < 60 || *c.SnoozeSeconds > 3600) {
+		return fmt.Errorf("snooze_seconds must be 60-3600")
+	}
+	return nil
+}
+
 // validateApprovalFields is the off-template gate: approval fields on any
 // other template are a 422, same shape as validateMedia's gate. Answer counts
 // here (the server's hasApprovalFields includes it) even though on the
@@ -749,9 +857,9 @@ func validateApproval(c *apiContent) error {
 	if c.URLAction != nil || c.SecondaryURLAction != nil {
 		return fmt.Errorf("url_action and secondary_url_action are not valid on the approval template")
 	}
-	// The server also rejects alarm / snooze_seconds on approval; the mock's
-	// apiContent does not model those countdown fields, so that rule is left
-	// to the real server.
+	if c.Alarm != nil || c.SnoozeSeconds != nil {
+		return fmt.Errorf("alarm and snooze_seconds are not valid on the approval template")
+	}
 	seen := make(map[string]bool, len(c.Options))
 	for i := range c.Options {
 		field := fmt.Sprintf("options[%d]", i)
@@ -894,19 +1002,9 @@ func validateSteps(c *apiContent) error {
 }
 
 func validateCountdown(c *apiContent) error {
+	// The window's own bounds are validateWindow's, on every template.
 	if c.EndDate == nil {
 		return fmt.Errorf("end_date is required for countdown template")
-	}
-	if *c.EndDate <= 0 {
-		return fmt.Errorf("end_date must be > 0")
-	}
-	if c.StartDate != nil {
-		if *c.StartDate <= 0 {
-			return fmt.Errorf("start_date must be > 0")
-		}
-		if *c.StartDate >= *c.EndDate {
-			return fmt.Errorf("start_date must be < end_date")
-		}
 	}
 	if c.WarningThreshold != nil && *c.WarningThreshold < 0 {
 		return fmt.Errorf("warning_threshold must be >= 0")
@@ -978,6 +1076,14 @@ func validateTimeline(c *apiContent) error {
 	for k := range values {
 		if utf8.RuneCountInString(k) > 32 {
 			return fmt.Errorf("value key %q must be at most 32 characters", k)
+		}
+	}
+	horizon := time.Now().Add(maxMediaClockSkew).Unix()
+	for name, points := range c.History {
+		for i, p := range points {
+			if p.Timestamp <= 0 || p.Timestamp > horizon {
+				return fmt.Errorf("history[%q][%d].timestamp must be > 0 and not in the future", name, i)
+			}
 		}
 	}
 	return nil

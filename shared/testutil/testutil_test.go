@@ -281,3 +281,43 @@ func TestAPICallRecording(t *testing.T) {
 		t.Errorf("call[1]: got %s %s, want PATCH /activities/rec-app", recorded[1].Method, recorded[1].Path)
 	}
 }
+
+// TestUpdateActivity_MergesOntoTheStoredContent pins the server's merge-patch
+// semantics as the mock reproduces them: a later PATCH without a template is
+// validated against the template the first one established, and a re-created
+// slug starts over.
+func TestUpdateActivity_MergesOntoTheStoredContent(t *testing.T) {
+	srv, _, _ := testutil.MockPushWardServer(t)
+	createActivity(t, srv.URL, "merge-app", "Merge App")
+	patch := func(body string) int {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPatch, srv.URL+"/activities/merge-app", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+	if got := patch(`{"state":"ongoing","content":{"template":"gauge","progress":0.5,"value":50,"min_value":0,"max_value":100}}`); got != 200 {
+		t.Fatalf("seed: got %d", got)
+	}
+	// A gauge rule, reached without naming the template.
+	if got := patch(`{"state":"ongoing","content":{"value":150}}`); got != 400 {
+		t.Errorf("out-of-range value on a template-less tick: got %d, want 400", got)
+	}
+	if got := patch(`{"state":"ongoing","content":{"value":75}}`); got != 200 {
+		t.Errorf("in-range value: got %d, want 200", got)
+	}
+	// Re-creating the slug resets the content: the first patch after it must
+	// carry a whole gauge again, and a bare value has no template to be a
+	// gauge under.
+	createActivity(t, srv.URL, "merge-app", "Merge App")
+	if got := patch(`{"state":"ongoing","content":{"value":150}}`); got != 200 {
+		t.Errorf("value on a fresh slug with no template: got %d, want 200", got)
+	}
+}
