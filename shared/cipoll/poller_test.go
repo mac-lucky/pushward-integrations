@@ -3224,3 +3224,78 @@ func TestPollActive_LogsUnanchoredOncePerStep(t *testing.T) {
 		t.Errorf("logged the decline %d times after a step change, want 2: %q", n, buf.String())
 	}
 }
+
+// TestPollIdle_IgnoresTheRunItJustEnded covers a forge whose active list lags
+// its runs, or answers a conditional request from a cache: the run the loop
+// just closed comes back as active, and without the guard it would be carded,
+// seeded and ended a second time.
+func TestPollIdle_IgnoresTheRunItJustEnded(t *testing.T) {
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		return []ci.Job{job("Build", ci.StatusInProgress, "")}, nil
+	}
+	reported := int64(42)
+	f.activeRuns = func(string) ([]Run, error) { return []Run{activeRun(reported, "CI", "main")}, nil }
+	tracked := liveTrackedRun(nil)
+	tracked.liveSent = false
+	p, patches := trackedPoller(t, testOptions(), f, tracked)
+	p.repos = []string{testRepo}
+
+	p.scheduleEnd(context.Background(), testRepo, pushward.Content{Template: pushward.TemplateSteps, Progress: 1, State: "Success", CurrentStep: pushward.IntPtr(3), TotalSteps: pushward.IntPtr(3)})
+	if got := patches(2); len(got) != 2 {
+		t.Fatalf("expected both end frames, got %d", len(got))
+	}
+	p.mu.Lock()
+	_, still := p.tracked[testRepo]
+	remembered := p.lastEnded[testRepo]
+	p.mu.Unlock()
+	if still || remembered != 42 {
+		t.Fatalf("after the end: tracked=%v lastEnded=%d, want gone and 42", still, remembered)
+	}
+
+	// The same run re-reported: nothing is created.
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	_, revived := p.tracked[testRepo]
+	p.mu.Unlock()
+	if revived {
+		t.Fatal("a run the loop already ended must not be tracked again")
+	}
+	if got := patches(2); len(got) != 2 {
+		t.Errorf("expected no new frames for the re-reported run, got %d", len(got))
+	}
+
+	// A genuinely new run is.
+	reported = 43
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	tr, ok := p.tracked[testRepo]
+	p.mu.Unlock()
+	if !ok || tr.RunID != 43 {
+		t.Errorf("tracked = %+v ok=%v, want run 43 tracked", tr, ok)
+	}
+}
+
+func TestRefreshRepos_PrunesLastEnded(t *testing.T) {
+	f := newFakeForge(t)
+	f.repos = []string{"owner/kept"}
+	opts := testOptions()
+	opts.Owner = "owner"
+	p := New(f, nil, opts)
+	p.lastEnded["owner/kept"] = 1
+	p.lastEnded["owner/gone"] = 2
+
+	if err := p.refreshRepos(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := p.lastEnded["owner/gone"]; ok {
+		t.Error("a repo that left the watched set must not keep its last-ended run")
+	}
+	if p.lastEnded["owner/kept"] != 1 {
+		t.Error("a watched repo keeps its last-ended run")
+	}
+}

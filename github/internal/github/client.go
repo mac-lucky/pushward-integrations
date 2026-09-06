@@ -466,9 +466,15 @@ func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]Workflow
 	}
 
 	if resp.notModified {
-		// Nothing changed since the cached answer, and this cost no rate limit. Stored
-		// again only to restamp usedAt for the cache sweep.
-		c.storeRunsProbe(repo, cached.etag, cached.runs)
+		// Nothing changed since the cached answer, and this cost no rate limit.
+		// Restamp usedAt in place for the cache sweep; the one clone is the
+		// caller's copy.
+		c.mu.Lock()
+		if e, ok := c.runsCache[repo]; ok {
+			e.usedAt = time.Now()
+			c.runsCache[repo] = e
+		}
+		c.mu.Unlock()
 		return slices.Clone(cached.runs), nil
 	}
 

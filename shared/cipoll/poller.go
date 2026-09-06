@@ -126,6 +126,14 @@ type Poller struct {
 	// seeds holds the last run seen finish per repo and workflow. See shapeCache
 	// for its lock rule.
 	seeds *shapeCache
+
+	// lastEnded is the run the loop most recently closed, per repo, kept after
+	// its tracked entry is gone. A forge can report a finished run as active for
+	// a pass or two - a list that lags its runs, or a conditional request
+	// answered from a cache - and without this the loop would card, seed and
+	// end it a second time. Bounded by the watched set: refreshRepos drops the
+	// keys that leave it. Guarded by mu.
+	lastEnded map[string]int64
 }
 
 func New(forge Forge, pw *pushward.Client, opts Options) *Poller {
@@ -140,13 +148,14 @@ func New(forge Forge, pw *pushward.Client, opts Options) *Poller {
 		logger = slog.Default()
 	}
 	return &Poller{
-		forge:   forge,
-		pw:      pw,
-		opts:    opts,
-		log:     logger,
-		tracked: make(map[string]*trackedRun),
-		repos:   opts.Repos,
-		seeds:   newShapeCache(maxSeeds),
+		forge:     forge,
+		pw:        pw,
+		opts:      opts,
+		log:       logger,
+		tracked:   make(map[string]*trackedRun),
+		repos:     opts.Repos,
+		seeds:     newShapeCache(maxSeeds),
+		lastEnded: make(map[string]int64),
 	}
 }
 
@@ -290,6 +299,13 @@ func (p *Poller) refreshRepos(ctx context.Context) error {
 	changed := len(merged) != len(p.repos)
 	p.repos = merged
 	p.lastRefresh = time.Now()
+	if changed {
+		for repo := range p.lastEnded {
+			if !seen[repo] {
+				delete(p.lastEnded, repo)
+			}
+		}
+	}
 	p.mu.Unlock()
 	if changed {
 		p.log.Info("repo list updated", "count", len(merged))
@@ -510,6 +526,16 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			if r.CreatedAt.After(run.CreatedAt) {
 				run = r
 			}
+		}
+
+		// Equality only: an older run still going after a newer one ended is a
+		// legitimate card, and a run the loop closed is not.
+		p.mu.Lock()
+		ended := p.lastEnded[repo] == run.ID
+		p.mu.Unlock()
+		if ended {
+			p.log.Debug("ignoring a run the loop already ended", "repo", repo, "run_id", run.ID)
+			continue
 		}
 
 		// A pending end belongs to an already-completed run; only supersede it
@@ -1230,9 +1256,11 @@ func (p *Poller) scheduleEnd(ctx context.Context, repo string, content pushward.
 				p.log.Info("ended activity", "slug", slug, "state", content.State)
 			}
 
-			// Server handles cleanup via ended_ttl - just remove from local map
+			// Server handles cleanup via ended_ttl - just remove from local map,
+			// remembering which run this was so a lagging list cannot revive it.
 			p.mu.Lock()
 			if current, ok := p.tracked[repo]; ok && current.RunID == runID {
+				p.lastEnded[repo] = runID
 				delete(p.tracked, repo)
 			}
 			p.mu.Unlock()
