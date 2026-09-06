@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -656,7 +657,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 
 		p.mu.Lock()
 		if t, ok := p.tracked[repo]; ok {
-			t.shapeSent = initialTotalSteps
+			t.shapeSent = initialStepLabels
 		}
 		p.mu.Unlock()
 	}
@@ -691,6 +692,42 @@ func (p *Poller) subtitle(repoShort, runName string) string {
 // create/evict/re-create loop that never advances past the seed frame.
 func (p *Poller) staleAfter() time.Duration {
 	return max(p.opts.PushWard.StaleTimeout, p.opts.Polling.IdleInterval, p.opts.Polling.Interval) + staleEvictionGrace
+}
+
+// heartbeatEvery is how long a run may go unchanged before a patch is sent
+// anyway, to keep the activity off the server's stale-dismissal path. Half the
+// TTL, so one missed tick does not lose the card. A zero StaleTimeout takes the
+// server's default, which the bridge cannot read; the shipped default is the
+// best estimate of it, and is what would have been sent had the operator not
+// asked for the server's. Left at zero it would patch on every tick.
+func (p *Poller) heartbeatEvery() time.Duration {
+	ttl := p.opts.PushWard.StaleTimeout
+	if ttl <= 0 {
+		ttl = sharedconfig.DefaultPushWardConfig().StaleTimeout
+	}
+	return ttl / 2
+}
+
+// betweenWaves rewrites an all-visible-done scan for a run the forge says is
+// still going: the next wave has not been created yet. It reads as the queued
+// placeholder on the group the seed says comes next - what the ladder will
+// show once that wave's jobs exist - so the generic gate clears a window
+// anchored on the group that just finished, and the heartbeat runs through the
+// gap. The bar holds its last value: the forge has not said how much is left,
+// and a bar that jumped to full and fell back would be guessing twice.
+func betweenWaves(info, observed ci.StepInfo, lastProgress float64) ci.StepInfo {
+	info.AllCompleted = false
+	info.CurrentStepName = ci.QueuedStepName
+	info.CurrentStepStartedAt = time.Time{}
+	info.CurrentStep = info.TotalSteps
+	for i, label := range info.StepLabels {
+		if !slices.Contains(observed.StepLabels, label) {
+			info.CurrentStep = i + 1
+			break
+		}
+	}
+	info.Progress = lastProgress
+	return info
 }
 
 // shape computes the step shape and drops the opt-in pill fields the config
@@ -889,24 +926,37 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		// finished run is filed under this shape, not under the carried maximum.
 		observed := info
 		var weightsByName map[string]float64
+		var lastProgress float64
 
 		p.mu.Lock()
 		if tt, ok := p.tracked[repo]; ok {
 			tt.LastUpdate = time.Now()
 
-			// Clamp TotalSteps to never decrease: forges lazily create jobs behind
-			// needs/if conditions, so new steps appear over time. We keep the
-			// highest total to avoid confusing jumps.
-			if info.TotalSteps > tt.maxTotalSteps {
-				p.log.Info("new steps discovered",
-					"repo", repo, "jobs", len(jobs),
-					"prev_steps", tt.maxTotalSteps, "new_steps", info.TotalSteps,
-					"step_rows", info.StepRows)
+			switch {
+			case info.TotalSteps > tt.maxTotalSteps,
+				info.TotalSteps == tt.maxTotalSteps && !slices.Equal(info.StepLabels, tt.maxStepLabels):
+				// The live scan is ground truth for every group it names. More
+				// groups than before: forges lazily create jobs behind needs/if
+				// conditions, and the total only ever climbs so the counter never
+				// jumps backwards. The same count under other labels: the seed was
+				// for another path of the workflow (a pull request run seeding a
+				// tag build), and keeping it would leave current_step highlighting
+				// a pill for a group this run never had, under a state text that
+				// names the group it does have.
+				if info.TotalSteps > tt.maxTotalSteps {
+					p.log.Info("new steps discovered",
+						"repo", repo, "jobs", len(jobs),
+						"prev_steps", tt.maxTotalSteps, "new_steps", info.TotalSteps,
+						"step_rows", info.StepRows)
+				} else {
+					p.log.Info("seeded labels replaced by the live ones",
+						"repo", repo, "seeded", tt.maxStepLabels, "live", info.StepLabels)
+				}
 				tt.maxTotalSteps = info.TotalSteps
 				tt.maxStepRows = append([]int(nil), info.StepRows...)
 				tt.maxStepLabels = append([]string(nil), info.StepLabels...)
 				tt.maxStepColors = append([]string(nil), info.StepColors...)
-			} else if info.TotalSteps < tt.maxTotalSteps {
+			case info.TotalSteps < tt.maxTotalSteps:
 				// Fewer groups than the seeded maximum: a wave the forge has not
 				// revealed yet, or an if-gated job this run skipped. Keep the cached
 				// shape so the denominator holds, and carry current_step across by
@@ -919,6 +969,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				info.StepColors = tt.maxStepColors
 			}
 			weightsByName = tt.stepWeightByName
+			lastProgress = tt.lastProgress
 		}
 		p.mu.Unlock()
 
@@ -946,65 +997,72 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			// deferral is worth more than the panic it would otherwise cause here.
 			if err != nil || run == nil {
 				p.log.Warn("failed to confirm run completion, deferring end", "repo", repo, "run_id", tRunID, "error", err)
-				continue
-			}
-			if !run.Terminal() {
+			} else if !run.Terminal() {
 				// More jobs are still pending; keep the activity ongoing and let the
 				// next wave surface on a subsequent poll.
 				p.log.Debug("visible jobs complete but run still in progress, deferring end",
 					"repo", repo, "run_id", tRunID, "status", run.RawStatus)
+			}
+			if err != nil || run == nil || !run.Terminal() {
+				// Deferred either way. The group that just finished must not keep
+				// animating toward its estimate, and the card must not go quiet
+				// past the stale TTL while the forge sets up the next wave, so the
+				// tick carries on into the gate below as the placeholder rather
+				// than skipping it.
+				info = betweenWaves(info, observed, lastProgress)
+			} else {
+				// File the run as the seed for its workflow's next one: the observed
+				// shape, and durations measured from the live timestamps as this last
+				// tick saw them. Outside p.mu, and before the end is scheduled; the next
+				// cycle's detection pass runs after this one, so the successor finds it.
+				var measured map[string]float64
+				if p.opts.Render.WantTimings() {
+					measured = ci.GroupWeights(jobs)
+				}
+				p.seeds.put(repo, run.WorkflowKey, seedEntry{
+					shape: observed, weights: measured, runID: tRunID,
+					success: run.Conclusion == ci.ConclusionSuccess,
+				})
+				// The run's own outcome is authoritative; the ladder's AnyFailed only
+				// covers a run that reports nothing usable of its own.
+				state, color := p.forge.Outcome(*run, info.AnyFailed)
+				endRows, endLabels := pushward.ClampStepShape(info.StepRows, info.StepLabels)
+				p.log.Info("workflow completed",
+					"repo", repo, "run_id", tRunID, "slug", tSlug,
+					"status", run.RawStatus, "state", state)
+				p.scheduleEnd(ctx, repo, pushward.Content{
+					Template:    pushward.TemplateSteps,
+					Progress:    1.0,
+					State:       state,
+					Icon:        p.opts.Icon,
+					Subtitle:    p.subtitle(repoShort, tName),
+					AccentColor: color,
+					CurrentStep: pushward.IntPtr(info.TotalSteps),
+					TotalSteps:  pushward.IntPtr(info.TotalSteps),
+					StepRows:    endRows,
+					StepLabels:  endLabels,
+					StepColors:  info.StepColors,
+					StepWeights: stepWeights,
+					// Stop the animation on the result frames. Content updates are
+					// merge-patches, so the last step's window survives otherwise, and
+					// the server only strips the anchors from an END push: phase 1 is
+					// ONGOING and would spend end_display_time counting toward a deadline
+					// the run has already passed.
+					LiveProgress: p.liveProgressOff(),
+					URL:          tHTMLURL,
+					SecondaryURL: tRepoURL,
+				})
 				continue
 			}
-			// File the run as the seed for its workflow's next one: the observed
-			// shape, and durations measured from the live timestamps as this last
-			// tick saw them. Outside p.mu, and before the end is scheduled; the next
-			// cycle's detection pass runs after this one, so the successor finds it.
-			var measured map[string]float64
-			if p.opts.Render.WantTimings() {
-				measured = ci.GroupWeights(jobs)
-			}
-			p.seeds.put(repo, run.WorkflowKey, seedEntry{
-				shape: observed, weights: measured, runID: tRunID,
-				success: run.Conclusion == ci.ConclusionSuccess,
-			})
-			// The run's own outcome is authoritative; the ladder's AnyFailed only
-			// covers a run that reports nothing usable of its own.
-			state, color := p.forge.Outcome(*run, info.AnyFailed)
-			endRows, endLabels := pushward.ClampStepShape(info.StepRows, info.StepLabels)
-			p.log.Info("workflow completed",
-				"repo", repo, "run_id", tRunID, "slug", tSlug,
-				"status", run.RawStatus, "state", state)
-			p.scheduleEnd(ctx, repo, pushward.Content{
-				Template:    pushward.TemplateSteps,
-				Progress:    1.0,
-				State:       state,
-				Icon:        p.opts.Icon,
-				Subtitle:    p.subtitle(repoShort, tName),
-				AccentColor: color,
-				CurrentStep: pushward.IntPtr(info.TotalSteps),
-				TotalSteps:  pushward.IntPtr(info.TotalSteps),
-				StepRows:    endRows,
-				StepLabels:  endLabels,
-				StepColors:  info.StepColors,
-				StepWeights: stepWeights,
-				// Stop the animation on the result frames. Content updates are
-				// merge-patches, so the last step's window survives otherwise, and
-				// the server only strips the anchors from an END push: phase 1 is
-				// ONGOING and would spend end_display_time counting toward a deadline
-				// the run has already passed.
-				LiveProgress: p.liveProgressOff(),
-				URL:          tHTMLURL,
-				SecondaryURL: tRepoURL,
-			})
-			continue
 		}
 
 		// Skip redundant ticks: a run parked on one long step yields identical
 		// progress/state/steps across polls, and each PATCH pushes to every device.
-		// Send only when a scalar changed, the forge revealed new jobs (shape grew),
-		// or a heartbeat is due to keep the activity off the server's
-		// stale-dismissal path.
-		heartbeat := p.opts.PushWard.StaleTimeout / 2
+		// Send only when a scalar changed, the ladder changed (the forge revealed
+		// new jobs, or the seed's labels gave way to the live ones), or a
+		// heartbeat is due to keep the activity off the server's stale-dismissal
+		// path.
+		heartbeat := p.heartbeatEvery()
 		// Resolved before taking the lock: it reads only the scan, the immutable
 		// published weights and the config.
 		liveStart, liveEnd, wantLive, why := p.liveAnchor(info, weightsByName, time.Now())
@@ -1023,7 +1081,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		if logDecline {
 			tt.declined = thisDecline
 		}
-		shapeChanged := tt.shapeSent < tt.maxTotalSteps
+		shapeChanged := !slices.Equal(tt.shapeSent, tt.maxStepLabels)
 		scalarChanged := tt.lastPatchAt.IsZero() ||
 			info.Progress != tt.lastProgress ||
 			info.CurrentStepName != tt.lastState ||
@@ -1050,9 +1108,10 @@ func (p *Poller) pollActive(ctx context.Context) error {
 			continue
 		}
 
-		// step_rows/step_labels are re-sent only when the forge lazily revealed new
-		// jobs (totalSteps grew) - unchanged slices are preserved by the server
-		// under merge-patch and re-sending them wastes payload bytes.
+		// step_rows/step_labels are re-sent only when the tracked labels changed
+		// (the forge revealed a group, or the seed's labels gave way to the live
+		// ones) - unchanged slices are preserved by the server under merge-patch
+		// and re-sending them wastes payload bytes.
 		contentPatch := &pushward.ContentPatch{
 			Progress:    pushward.Float64Ptr(info.Progress),
 			State:       pushward.StringPtr(info.CurrentStepName),
@@ -1087,7 +1146,9 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		p.mu.Lock()
 		if tt, ok := p.tracked[repo]; ok {
 			if shapeChanged {
-				tt.shapeSent = tt.maxTotalSteps
+				// Shares the header with maxStepLabels, which is replaced wholesale
+				// and never written through, so a later relabel compares unequal.
+				tt.shapeSent = tt.maxStepLabels
 			}
 			tt.lastProgress = info.Progress
 			tt.lastState = info.CurrentStepName

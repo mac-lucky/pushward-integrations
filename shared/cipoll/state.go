@@ -43,10 +43,14 @@ type trackedRun struct {
 	// label even if the forge reveals the groups in a different order. Nil means
 	// no usable prior run - callers then send equal weights, see payloadWeights.
 	stepWeightByName map[string]float64
-	// shapeSent is the maxTotalSteps value at the time we last included
-	// step_rows/step_labels/step_weights in a merge-patch. When unchanged across
-	// polls we skip those slices to keep the tick payload minimal.
-	shapeSent int
+	// shapeSent is the step_labels the last landed patch carried the ladder
+	// (step_rows/step_labels/step_colors/step_weights) with, nil until one has.
+	// The ladder ships again when the tracked labels differ: longer because the
+	// forge revealed a group, or the same length because the seed named a group
+	// this run does not have. Unchanged across polls, the slices stay off the
+	// tick to keep its payload minimal. A bare-total seed has no labels and
+	// compares unequal to the first scan's, which is what pays its ladder.
+	shapeSent []string
 
 	// Change-detection state for pollActive: a PATCH (and the APNs push it
 	// triggers) is sent only when one of these scalars changes or a heartbeat

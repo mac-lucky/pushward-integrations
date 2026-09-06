@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/shared/ci"
+	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
@@ -416,7 +417,7 @@ func TestPollActive_ClampsShapeToTheServerBounds(t *testing.T) {
 	tracked.maxTotalSteps = 1
 	tracked.maxStepRows = []int{1}
 	tracked.maxStepLabels = []string{"seed"}
-	tracked.shapeSent = 1 // force the growth branch, which re-sends the ladder
+	tracked.shapeSent = []string{"seed"} // the growth branch re-sends the ladder
 	p, patches := trackedPoller(t, testOptionsRender(true, false), f, tracked)
 
 	if err := p.pollActive(context.Background()); err != nil {
@@ -1417,6 +1418,126 @@ func TestPollActive_SkipsRedundantTicks(t *testing.T) {
 	}
 }
 
+// A zero stale_timeout is legal (take the server's default) and used to make
+// the heartbeat due on every tick, which is the suppression above undone.
+func TestPollActive_ZeroStaleTimeoutDoesNotHeartbeatEveryTick(t *testing.T) {
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		return []ci.Job{
+			job("Lint", ci.StatusCompleted, ci.ConclusionSuccess),
+			job("Build", ci.StatusInProgress, ""),
+		}, nil
+	}
+	tracked := liveTrackedRun(nil)
+	tracked.liveSent = false
+	opts := testOptions()
+	opts.PushWard.StaleTimeout = 0
+	p, patches := trackedPoller(t, opts, f, tracked)
+
+	for i := 0; i < 3; i++ {
+		if err := p.pollActive(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := patches(1); len(got) != 1 {
+		t.Errorf("expected 1 PATCH across three identical ticks, got %d", len(got))
+	}
+}
+
+func TestHeartbeatEvery(t *testing.T) {
+	for _, tc := range []struct{ ttl, want time.Duration }{
+		{30 * time.Minute, 15 * time.Minute},
+		{10 * time.Second, 5 * time.Second},
+		// Zero takes the server default, which the bridge estimates by its own.
+		{0, sharedconfig.DefaultPushWardConfig().StaleTimeout / 2},
+	} {
+		opts := testOptions()
+		opts.PushWard.StaleTimeout = tc.ttl
+		p := New(newFakeForge(t), nil, opts)
+		if got := p.heartbeatEvery(); got != tc.want {
+			t.Errorf("heartbeatEvery(%v) = %v, want %v", tc.ttl, got, tc.want)
+		}
+	}
+}
+
+// TestPollActive_SameCountRelabelResendsTheLadder is the if-gated workflow: a
+// pull request run seeds [Lint, Test, Build], the tag run reveals [Lint, Test,
+// Publish]. Same count, so the growth branch never fired, and the card spent
+// the whole run with state "Publish" over a pill labelled "Build". The live
+// labels are ground truth and replace the seed's.
+func TestPollActive_SameCountRelabelResendsTheLadder(t *testing.T) {
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		return []ci.Job{
+			job("Lint", ci.StatusCompleted, ci.ConclusionSuccess),
+			job("Test", ci.StatusCompleted, ci.ConclusionSuccess),
+			job("Publish", ci.StatusInProgress, ""),
+		}, nil
+	}
+	tracked := liveTrackedRun(nil)
+	tracked.maxStepLabels = []string{"Lint", "Test", "Build"}
+	tracked.shapeSent = []string{"Lint", "Test", "Build"}
+	tracked.liveSent = false
+	p, patches := trackedPoller(t, testOptionsRender(true, true), f, tracked)
+
+	for i := 0; i < 2; i++ {
+		if err := p.pollActive(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := patches(1)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH (the relabel, then a suppressed tick), got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+	wantLabels := []string{"Lint", "Test", "Publish"}
+	if !reflect.DeepEqual(req.Content.StepLabels, wantLabels) {
+		t.Errorf("step_labels = %v, want the live %v", req.Content.StepLabels, wantLabels)
+	}
+	if req.Content.State != "Publish" || stepValue(req.Content.CurrentStep) != 3 {
+		t.Errorf("frame = %q step %d, want Publish on step 3", req.Content.State, stepValue(req.Content.CurrentStep))
+	}
+	if len(req.Content.StepWeights) != 3 {
+		t.Errorf("step_weights = %v, want one per step on the relabel", req.Content.StepWeights)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	tt := p.tracked[testRepo]
+	if !reflect.DeepEqual(tt.maxStepLabels, wantLabels) || !reflect.DeepEqual(tt.shapeSent, wantLabels) {
+		t.Errorf("tracked labels = %v sent %v, want both %v", tt.maxStepLabels, tt.shapeSent, wantLabels)
+	}
+}
+
+// A seed built with nothing but a total (the forge could not be reached) has
+// no labels; the first scan's labels compare unequal and pay the ladder.
+func TestPollActive_BareSeedGainsItsLabelsOnTheFirstTick(t *testing.T) {
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		return []ci.Job{job("Build", ci.StatusInProgress, "")}, nil
+	}
+	tracked := liveTrackedRun(nil)
+	tracked.maxTotalSteps = 1
+	tracked.maxStepRows = nil
+	tracked.maxStepLabels = nil
+	tracked.shapeSent = nil
+	tracked.liveSent = false
+	p, patches := trackedPoller(t, testOptionsRender(true, false), f, tracked)
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := patches(1)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+	if want := []string{"Build"}; !reflect.DeepEqual(req.Content.StepLabels, want) {
+		t.Errorf("step_labels = %v, want %v on the wire", req.Content.StepLabels, want)
+	}
+}
+
 func TestPollActive_EvictsStaleRun(t *testing.T) {
 	// Every hook is unset: eviction happens before any job fetch.
 	f := newFakeForge(t)
@@ -1575,24 +1696,37 @@ func TestPollActive_CompletionUsesTheForgeOutcome(t *testing.T) {
 
 // All visible jobs are complete, but the run itself is still going (the forge is
 // creating the next lazy job wave). pollActive must NOT end the activity early.
+// It does patch: the card reads as queued on the next seeded pill, with the
+// finished one drawn done, so nothing keeps animating a step that is over.
 func TestPollActive_DefersEndWhileRunStillGoing(t *testing.T) {
 	f := newFakeForge(t)
 	f.liveJobs = func(string, int64) ([]ci.Job, error) {
-		return []ci.Job{job("Build", ci.StatusCompleted, ci.ConclusionSuccess)}, nil
+		return []ci.Job{job("Lint", ci.StatusCompleted, ci.ConclusionSuccess)}, nil
 	}
 	f.getRun = func(_ string, runID int64) (*Run, error) {
 		return &Run{ID: runID, Status: ci.StatusInProgress, RawStatus: "running"}, nil
 	}
-	p, _, _ := newTestPoller(t, testOptions(), f)
-	p.tracked[testRepo] = &trackedRun{
-		RunID: 42, Slug: "fk-repo", Name: "CI",
-		maxTotalSteps: 1, maxStepRows: []int{1},
-	}
+	tracked := liveTrackedRun(nil)
+	tracked.liveSent = false
+	p, patches := trackedPoller(t, testOptions(), f, tracked)
 
 	if err := p.pollActive(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(50 * time.Millisecond)
+
+	got := patches(1)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+	if req.State != pushward.StateOngoing || req.Content.State != ci.QueuedStepName {
+		t.Errorf("frame = %s %q, want an ongoing %q", req.State, req.Content.State, ci.QueuedStepName)
+	}
+	if stepValue(req.Content.CurrentStep) != 2 {
+		t.Errorf("current_step = %d, want 2, the first seeded group the scan has not shown", stepValue(req.Content.CurrentStep))
+	}
+	assertNoLiveWindow(t, got[0].Body, "the between-waves frame")
 
 	p.mu.Lock()
 	tr, ok := p.tracked[testRepo]
@@ -1604,23 +1738,31 @@ func TestPollActive_DefersEndWhileRunStillGoing(t *testing.T) {
 }
 
 // A failed run re-read defers the end rather than guessing: ending on a
-// half-known outcome would dismiss a card for a run that is still alive.
+// half-known outcome would dismiss a card for a run that is still alive. The
+// tick is otherwise the between-waves one above.
 func TestPollActive_DefersEndWhenTheRunRereadFails(t *testing.T) {
 	f := newFakeForge(t)
 	f.liveJobs = func(string, int64) ([]ci.Job, error) {
-		return []ci.Job{job("Build", ci.StatusCompleted, ci.ConclusionSuccess)}, nil
+		return []ci.Job{job("Lint", ci.StatusCompleted, ci.ConclusionSuccess)}, nil
 	}
 	f.getRun = func(string, int64) (*Run, error) { return nil, errors.New("boom") }
-	p, calls, mu := newTestPoller(t, testOptions(), f)
-	p.tracked[testRepo] = &trackedRun{
-		RunID: 42, Slug: "fk-repo", Name: "CI",
-		maxTotalSteps: 1, maxStepRows: []int{1},
-	}
+	tracked := liveTrackedRun(nil)
+	tracked.liveSent = false
+	p, patches := trackedPoller(t, testOptions(), f, tracked)
 
 	if err := p.pollActive(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	time.Sleep(50 * time.Millisecond)
+
+	got := patches(1)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 PATCH, got %d", len(got))
+	}
+	var req pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &req)
+	if req.State != pushward.StateOngoing || req.Content.State != ci.QueuedStepName {
+		t.Errorf("frame = %s %q, want an ongoing %q", req.State, req.Content.State, ci.QueuedStepName)
+	}
 
 	p.mu.Lock()
 	tr, ok := p.tracked[testRepo]
@@ -1632,8 +1774,146 @@ func TestPollActive_DefersEndWhenTheRunRereadFails(t *testing.T) {
 	if hasPendingEnd {
 		t.Error("scheduled an end on a failed run re-read")
 	}
-	if got := testutil.GetCalls(calls, mu); len(got) != 0 {
-		t.Errorf("expected no frames, got %d", len(got))
+}
+
+// TestPollActive_BetweenWavesClearsTheLiveWindow is the gap a self-hosted
+// runner leaves between job waves: the last visible group finished, the run
+// has not, and the window anchored on that group used to survive the gap
+// untouched, animating toward an estimate for a step that was over. The
+// deferral now goes through the gate, which clears it and holds the bar.
+func TestPollActive_BetweenWavesClearsTheLiveWindow(t *testing.T) {
+	buildStart := time.Now().Add(-30 * time.Second).UTC().Truncate(time.Second)
+	tick := 0
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		tick++
+		switch {
+		case tick == 1:
+			return []ci.Job{
+				job("Lint", ci.StatusCompleted, ci.ConclusionSuccess),
+				runningJob("Build", buildStart),
+			}, nil
+		case tick <= 3:
+			return []ci.Job{
+				job("Lint", ci.StatusCompleted, ci.ConclusionSuccess),
+				job("Build", ci.StatusCompleted, ci.ConclusionSuccess),
+			}, nil
+		default:
+			return []ci.Job{
+				job("Lint", ci.StatusCompleted, ci.ConclusionSuccess),
+				job("Build", ci.StatusCompleted, ci.ConclusionSuccess),
+				runningJob("Test", time.Now().Add(-2*time.Second)),
+			}, nil
+		}
+	}
+	f.getRun = func(_ string, runID int64) (*Run, error) {
+		return &Run{ID: runID, Status: ci.StatusInProgress, RawStatus: "running"}, nil
+	}
+	tracked := liveTrackedRun(map[string]float64{"Lint": 5, "Build": 300, "Test": 300})
+	tracked.liveSent = false
+	p, patches := trackedPoller(t, testOptions(), f, tracked)
+
+	// Tick 1 anchors Build.
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := patches(1)
+	if len(got) != 1 {
+		t.Fatalf("tick 1: expected 1 PATCH, got %d", len(got))
+	}
+	var anchored pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[0].Body, &anchored)
+	if anchored.Content.LiveProgress == nil || !*anchored.Content.LiveProgress {
+		t.Fatalf("tick 1: expected the Build window anchored, got %s", got[0].Body)
+	}
+
+	// Tick 2: Build is done, the run is not. The window must go, the bar must
+	// hold, and the card reads as queued on the next seeded pill.
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got = patches(2)
+	if len(got) != 2 {
+		t.Fatalf("tick 2: expected a second PATCH, got %d", len(got))
+	}
+	var gap pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &gap)
+	if gap.Content.LiveProgress == nil || *gap.Content.LiveProgress {
+		t.Errorf("tick 2: expected live_progress=false, got %v", gap.Content.LiveProgress)
+	}
+	if gap.Content.StartDate != nil || gap.Content.EndDate != nil {
+		t.Errorf("tick 2: clearing must not restamp the window: %s", got[1].Body)
+	}
+	if gap.Content.State != ci.QueuedStepName || stepValue(gap.Content.CurrentStep) != 3 {
+		t.Errorf("tick 2: frame = %q step %d, want %q on step 3", gap.Content.State, stepValue(gap.Content.CurrentStep), ci.QueuedStepName)
+	}
+	if gap.Content.Progress != anchored.Content.Progress {
+		t.Errorf("tick 2: progress = %v, want tick 1's %v held through the gap", gap.Content.Progress, anchored.Content.Progress)
+	}
+	p.mu.Lock()
+	liveSent, endPending := p.tracked[testRepo].liveSent, p.tracked[testRepo].endTimers != nil
+	p.mu.Unlock()
+	if liveSent || endPending {
+		t.Errorf("tick 2: liveSent=%v endPending=%v, want the window forgotten and no end", liveSent, endPending)
+	}
+
+	// Tick 3 is identical and suppressed.
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := patches(2); len(got) != 2 {
+		t.Fatalf("tick 3: an unchanged gap must not patch, got %d", len(got))
+	}
+
+	// Tick 4: the next wave arrived and Test re-anchors.
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got = patches(3)
+	if len(got) != 3 {
+		t.Fatalf("tick 4: expected a third PATCH, got %d", len(got))
+	}
+	var next pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[2].Body, &next)
+	if next.Content.LiveProgress == nil || !*next.Content.LiveProgress || next.Content.State != "Test" {
+		t.Errorf("tick 4: expected Test anchored, got %s", got[2].Body)
+	}
+}
+
+// A long gap must still heartbeat, or the server's stale TTL dismisses a card
+// for a run that is merely waiting for a runner.
+func TestPollActive_BetweenWavesHeartbeats(t *testing.T) {
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		return []ci.Job{job("Lint", ci.StatusCompleted, ci.ConclusionSuccess)}, nil
+	}
+	f.getRun = func(_ string, runID int64) (*Run, error) {
+		return &Run{ID: runID, Status: ci.StatusInProgress, RawStatus: "running"}, nil
+	}
+	tracked := liveTrackedRun(nil)
+	tracked.liveSent = false
+	p, patches := trackedPoller(t, testOptions(), f, tracked)
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := patches(1); len(got) != 1 {
+		t.Fatalf("expected the first gap tick to patch, got %d", len(got))
+	}
+	p.mu.Lock()
+	p.tracked[testRepo].lastPatchAt = time.Now().Add(-(p.heartbeatEvery() + time.Minute))
+	p.mu.Unlock()
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := patches(2)
+	if len(got) != 2 {
+		t.Fatalf("the heartbeat must patch through the gap, got %d", len(got))
+	}
+	var beat pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &beat)
+	if beat.Content.State != ci.QueuedStepName {
+		t.Errorf("heartbeat state = %q, want %q", beat.Content.State, ci.QueuedStepName)
 	}
 }
 
@@ -2360,7 +2640,7 @@ func TestPollActive_ShapeGrowthResendsTheLadder(t *testing.T) {
 	tracked.maxTotalSteps = 2
 	tracked.maxStepRows = []int{1, 1}
 	tracked.maxStepLabels = []string{"Lint", "Build"}
-	tracked.shapeSent = 2 // the seed already landed
+	tracked.shapeSent = []string{"Lint", "Build"} // the seed already landed
 	tracked.liveSent = false
 	p, patches := trackedPoller(t, testOptionsRender(true, false), f, tracked)
 
@@ -2401,8 +2681,8 @@ func TestPollActive_ShapeGrowthResendsTheLadder(t *testing.T) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	tt := p.tracked[testRepo]
-	if tt.maxTotalSteps != 4 || tt.shapeSent != 4 {
-		t.Errorf("cached shape = %d/%d sent, want 4/4", tt.maxTotalSteps, tt.shapeSent)
+	if tt.maxTotalSteps != 4 || !reflect.DeepEqual(tt.shapeSent, wantLabels) {
+		t.Errorf("cached shape = %d/%v sent, want 4/%v", tt.maxTotalSteps, tt.shapeSent, wantLabels)
 	}
 }
 
@@ -2430,7 +2710,7 @@ func TestPollActive_ShapeGrowthResendsWeights(t *testing.T) {
 	tracked.maxTotalSteps = 2
 	tracked.maxStepRows = []int{1, 1}
 	tracked.maxStepLabels = []string{"Lint", "Build"}
-	tracked.shapeSent = 2
+	tracked.shapeSent = []string{"Lint", "Build"}
 	tracked.liveSent = false
 	p, patches := trackedPoller(t, testOptionsRender(true, true), f, tracked)
 
@@ -2477,7 +2757,8 @@ func TestPollIdle_FailedSeedLeavesTheLadderOwed(t *testing.T) {
 
 	p.mu.Lock()
 	tt, ok := p.tracked[testRepo]
-	shapeSent, maxTotal := 0, 0
+	var shapeSent []string
+	maxTotal := 0
 	if ok {
 		shapeSent, maxTotal = tt.shapeSent, tt.maxTotalSteps
 	}
@@ -2485,14 +2766,15 @@ func TestPollIdle_FailedSeedLeavesTheLadderOwed(t *testing.T) {
 	if !ok {
 		t.Fatal("a failed seed must still leave the run tracked")
 	}
-	if shapeSent != 0 {
-		t.Errorf("shapeSent = %d, want 0: a failed seed owes the ladder", shapeSent)
+	if shapeSent != nil {
+		t.Errorf("shapeSent = %v, want nil: a failed seed owes the ladder", shapeSent)
 	}
 	if maxTotal != 2 {
 		t.Errorf("maxTotalSteps = %d, want the scanned 2", maxTotal)
 	}
 
-	// The next tick pays the debt: shapeSent < maxTotalSteps makes shapeChanged true.
+	// The next tick pays the debt: the tracked labels differ from the nil that
+	// was sent, so shapeChanged is true.
 	if err := p.pollActive(context.Background()); err != nil {
 		t.Fatal(err)
 	}
