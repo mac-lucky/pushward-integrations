@@ -585,6 +585,8 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			Slug:       slug,
 			HTMLURL:    run.HTMLURL,
 			RepoURL:    run.RepoURL,
+			Ref:        run.HeadBranch,
+			createdAt:  run.CreatedAt,
 			LastUpdate: time.Now(),
 			trackedAt:  time.Now(),
 			// Assume an animation is running until proven otherwise. The slug is
@@ -823,9 +825,11 @@ func (p *Poller) payloadWeights(total int, labels []string, byName map[string]fl
 // so its group count is ground truth. Returns ok=false (so the caller keeps the
 // current-run scan) when there is no usable prior run or any lookup fails.
 //
-// Three rungs: the last run this process saw finish (see shapeCache), when it
-// has what the config needs; then the forge, on each of the run's candidate
-// refs with the any-ref rung last (see Forge.CandidateRefs). A blank
+// Three rungs: the last run this process saw finish (see shapeCache), on this
+// run's ref or any, when it has what the config needs; then the forge, on each
+// of the run's candidate refs with the any-ref rung last (see
+// Forge.CandidateRefs); and when the forge has nothing either, a cached shape
+// with no durations still beats the live scan's first wave. A blank
 // WorkflowKey can't target a workflow and short-circuits to the live scan.
 //
 // The seed is an upper-or-lower estimate, not a guarantee. If this run takes a
@@ -837,15 +841,21 @@ func (p *Poller) baselineShape(ctx context.Context, repo string, run Run) (ci.St
 		return ci.StepInfo{}, nil, false
 	}
 	wantTimings := p.opts.Render.WantTimings()
-	if entry, ok := p.seeds.get(repo, run.WorkflowKey); ok && (!wantTimings || entry.weights != nil) {
-		var weights map[string]float64
-		if wantTimings {
-			weights = entry.weights
-		}
+	entry, match := p.seeds.get(repo, run.WorkflowKey, run.HeadBranch)
+	cachedShape := func(weights map[string]float64, weightsSource ci.WeightsSource) (ci.StepInfo, map[string]float64, bool) {
 		p.log.Info("seeded steps from prior run",
-			"repo", repo, "prev_run_id", entry.runID, "source", "cache",
+			"repo", repo, "prev_run_id", entry.runID, "source", "cache", "match", string(match),
+			"branch", run.HeadBranch, "weights_source", string(weightsSource),
 			"steps", entry.shape.TotalSteps, "step_rows", entry.shape.StepRows, "step_weights", weights)
 		return entry.shape, weights, true
+	}
+	if match != seedMiss {
+		if !wantTimings {
+			return cachedShape(nil, ci.WeightsNone)
+		}
+		if weights, weightsSource := entry.seedWeights(); weights != nil {
+			return cachedShape(weights, weightsSource)
+		}
 	}
 
 	// The forge names the rungs: the run's own ref in whatever forms it may
@@ -860,7 +870,8 @@ func (p *Poller) baselineShape(ctx context.Context, repo string, run Run) (ci.St
 			// same two warnings.
 			p.log.Warn("prior-run step seed unavailable, using the live scan",
 				"repo", repo, "workflow", run.WorkflowKey, "branch", run.HeadBranch, "ref", ref, "error", err)
-			return ci.StepInfo{}, nil, false
+			base = Baseline{}
+			break
 		}
 		if len(base.Jobs) > 0 {
 			if ref != "" {
@@ -870,6 +881,11 @@ func (p *Poller) baselineShape(ctx context.Context, repo string, run Run) (ci.St
 		}
 	}
 	if len(base.Jobs) == 0 {
+		if match != seedMiss {
+			// The forge had nothing measurable either; a known shape with equal
+			// pills still beats the live scan's first wave.
+			return cachedShape(nil, ci.WeightsNone)
+		}
 		return ci.StepInfo{}, nil, false
 	}
 	shape := p.shape(base.Jobs)
@@ -931,6 +947,8 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		tName := t.Name
 		tHTMLURL := t.HTMLURL
 		tRepoURL := t.RepoURL
+		tRef := t.Ref
+		tCreatedAt := t.createdAt
 		p.mu.Unlock()
 
 		jobs, err := p.forge.LiveJobs(ctx, repo, tRunID)
@@ -1041,8 +1059,15 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				if p.opts.Render.WantTimings() {
 					measured = ci.GroupWeights(jobs)
 				}
-				p.seeds.put(repo, run.WorkflowKey, seedEntry{
-					shape: observed, weights: measured, runID: tRunID,
+				// The run's length from its creation: over-counts by the queue wait
+				// and up to one interval of detection lag, the trade the github
+				// adapter's creation fallback already makes.
+				var length time.Duration
+				if !tCreatedAt.IsZero() {
+					length = time.Since(tCreatedAt)
+				}
+				p.seeds.put(repo, run.WorkflowKey, tRef, seedEntry{
+					shape: observed, weights: measured, duration: length, runID: tRunID,
 					success: run.Conclusion == ci.ConclusionSuccess,
 				})
 				// The run's own outcome is authoritative; the ladder's AnyFailed only

@@ -19,7 +19,14 @@ type trackedRun struct {
 	HTMLURL string
 	// RepoURL is the card's secondary link, resolved once at track time by the
 	// forge adapter.
-	RepoURL    string
+	RepoURL string
+	// Ref is the head branch as the forge reported it, the key the seed cache
+	// files the run under when it finishes, and createdAt is the forge's own
+	// creation stamp, from which the run's length is measured then. Both are
+	// kept from detection so the completion tick does not depend on what the
+	// adapter's re-read fills in.
+	Ref        string
+	createdAt  time.Time
 	LastUpdate time.Time
 	trackedAt  time.Time // when this run was first tracked; bounds absolute lifetime
 	// endTimers is non-nil once a two-phase end is pending. The TimerGroup

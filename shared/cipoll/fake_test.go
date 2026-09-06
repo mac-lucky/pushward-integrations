@@ -323,6 +323,8 @@ func liveTrackedRun(weights map[string]float64) *trackedRun {
 		Name:             "CI",
 		HTMLURL:          "https://forge.example.com/owner/repo/actions/runs/42",
 		RepoURL:          "https://forge.example.com/owner/repo",
+		Ref:              "main",
+		createdAt:        time.Now().Add(-5 * time.Minute),
 		maxTotalSteps:    3,
 		maxStepRows:      []int{1, 1, 1},
 		maxStepLabels:    []string{"Lint", "Build", "Test"},

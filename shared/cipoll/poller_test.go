@@ -3061,8 +3061,8 @@ func TestRun_PollsPeriodicallyAndHoldsTheDiscoveryCooldown(t *testing.T) {
 }
 
 // TestBaselineShape_UsesTheCacheFirst pins the seed order: the last run this
-// process saw finish beats a forge lookup, and it is keyed by workflow alone,
-// so a run on another ref - a tag build, a pull request - still finds it.
+// process saw finish beats a forge lookup, and a run on a ref with no entry of
+// its own - a tag build, a pull request - still finds the workflow's newest.
 func TestBaselineShape_UsesTheCacheFirst(t *testing.T) {
 	f := newFakeForge(t)
 	f.baseline = func(string, string, string, bool) (Baseline, error) {
@@ -3070,7 +3070,7 @@ func TestBaselineShape_UsesTheCacheFirst(t *testing.T) {
 		return Baseline{}, nil
 	}
 	p := New(f, nil, testOptionsRender(false, true))
-	p.seeds.put(testRepo, "99", seedEntry{shape: threeStepShape(), weights: priorDurations(), runID: 41, success: true})
+	p.seeds.put(testRepo, "99", "main", seedEntry{shape: threeStepShape(), weights: priorDurations(), runID: 41, success: true})
 
 	info, weights, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "v1.2.3"))
 	if !ok {
@@ -3087,15 +3087,17 @@ func TestBaselineShape_UsesTheCacheFirst(t *testing.T) {
 	}
 }
 
-// A cached run measured as nothing is no seed while something downstream reads
-// durations: the forge may still have a measurable run, so it is asked.
+// A cached run measured as nothing, with no length of its own either, is no
+// seed while something downstream reads durations: the forge may still have a
+// measurable run, so it is asked - and when the forge has nothing, the cached
+// shape still seeds, with equal pills.
 func TestBaselineShape_CacheWithoutWeightsFallsThrough(t *testing.T) {
 	f := newFakeForge(t)
 	f.baseline = func(string, string, string, bool) (Baseline, error) {
 		return Baseline{Jobs: priorRunJobs(), RunID: 40}, nil
 	}
 	p := New(f, nil, testOptions())
-	p.seeds.put(testRepo, "99", seedEntry{shape: threeStepShape(), weights: nil, runID: 41, success: true})
+	p.seeds.put(testRepo, "99", "main", seedEntry{shape: threeStepShape(), weights: nil, runID: 41, success: true})
 
 	_, weights, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main"))
 	if !ok || weights == nil {
@@ -3108,9 +3110,69 @@ func TestBaselineShape_CacheWithoutWeightsFallsThrough(t *testing.T) {
 	// With nothing reading durations the shape alone is a complete seed.
 	off := New(newFakeForge(t), nil, testOptions())
 	off.opts.Render.LiveProgress = false
-	off.seeds.put(testRepo, "99", seedEntry{shape: threeStepShape(), weights: nil, runID: 41, success: true})
+	off.seeds.put(testRepo, "99", "main", seedEntry{shape: threeStepShape(), weights: nil, runID: 41, success: true})
 	if _, _, ok := off.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main")); !ok {
 		t.Error("expected the cached shape to seed when no durations are wanted")
+	}
+
+	// The forge has nothing either: the cached shape seeds with equal pills
+	// rather than leaving the card to the live scan's first wave.
+	empty := newFakeForge(t)
+	q := New(empty, nil, testOptions())
+	q.seeds.put(testRepo, "99", "main", seedEntry{shape: threeStepShape(), weights: nil, runID: 41, success: true})
+	shape, weights, ok := q.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main"))
+	if !ok || shape.TotalSteps != 3 || weights != nil {
+		t.Errorf("ok=%v shape=%+v weights=%v, want the cached shape with no durations", ok, shape, weights)
+	}
+}
+
+// A cached run the final tick could not measure still carries the run's own
+// length, and that seeds the split without a forge request.
+func TestBaselineShape_CacheSplitsTheRunLength(t *testing.T) {
+	f := newFakeForge(t)
+	f.baseline = func(string, string, string, bool) (Baseline, error) {
+		t.Error("the forge must not be asked while the cache has a length to split")
+		return Baseline{}, nil
+	}
+	opts := testOptions()
+	buf := captureLog(&opts)
+	p := New(f, nil, opts)
+	p.seeds.put(testRepo, "99", "main", seedEntry{shape: threeStepShape(), weights: nil, duration: 300 * time.Second, runID: 41, success: true})
+
+	_, weights, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main"))
+	if !ok || !reflect.DeepEqual(weights, map[string]float64{"Lint": 100, "Build": 100, "Test": 100}) {
+		t.Errorf("ok=%v weights=%v, want the run split evenly", ok, weights)
+	}
+	if !strings.Contains(buf.String(), `weights_source="run-duration split"`) {
+		t.Errorf("log = %q, want the split named", buf.String())
+	}
+}
+
+// TestBaselineShape_CachePrefersTheSameRef: two refs of one workflow finished
+// in this process, and each seeds its own kind of run; a ref with no run of
+// its own takes the newest.
+func TestBaselineShape_CachePrefersTheSameRef(t *testing.T) {
+	opts := testOptions()
+	buf := captureLog(&opts)
+	p := New(newFakeForge(t), nil, opts)
+	tag := threeStepShape()
+	tag.StepLabels = []string{"Lint", "Build", "Publish"}
+	p.seeds.put(testRepo, "99", "v1.2.3", seedEntry{shape: tag, weights: priorDurations(), runID: 40, success: true})
+	p.seeds.put(testRepo, "99", "main", seedEntry{shape: threeStepShape(), weights: priorDurations(), runID: 41, success: true})
+
+	shape, _, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "v1.2.3"))
+	if !ok || !reflect.DeepEqual(shape.StepLabels, tag.StepLabels) {
+		t.Errorf("ok=%v shape=%+v, want the tag's own Publish shape", ok, shape)
+	}
+	if !strings.Contains(buf.String(), `match="same ref"`) {
+		t.Errorf("log = %q, want the same-ref match named", buf.String())
+	}
+	shape, _, ok = p.baselineShape(context.Background(), testRepo, activeRun(43, "CI", "feature/new"))
+	if !ok || !reflect.DeepEqual(shape.StepLabels, []string{"Lint", "Build", "Test"}) {
+		t.Errorf("ok=%v shape=%+v, want the newest any-ref shape", ok, shape)
+	}
+	if !strings.Contains(buf.String(), `match="any ref"`) {
+		t.Errorf("log = %q, want the any-ref match named", buf.String())
 	}
 }
 
@@ -3133,9 +3195,12 @@ func TestPollActive_CompletionCachesTheObservedShape(t *testing.T) {
 	}
 	patches(2) // let the two-phase end drain
 
-	entry, ok := p.seeds.get(testRepo, "99")
-	if !ok {
-		t.Fatal("the finished run should have been filed as the next seed")
+	entry, match := p.seeds.get(testRepo, "99", "main")
+	if match != seedSameRef {
+		t.Fatalf("match = %q, want the finished run filed under its own ref", match)
+	}
+	if entry.duration <= 0 {
+		t.Errorf("duration = %v, want the run's length from its creation", entry.duration)
 	}
 	if entry.runID != 42 || !entry.success {
 		t.Errorf("entry = %+v, want run 42 filed as a success", entry)
@@ -3161,7 +3226,7 @@ func TestPollActive_CompletionSkipsCacheWithoutWorkflowKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	patches(2)
-	if _, ok := p.seeds.get(testRepo, ""); ok {
+	if _, match := p.seeds.get(testRepo, "", "main"); match != seedMiss {
 		t.Error("filed an entry for a run with no workflow key")
 	}
 }
@@ -3199,7 +3264,7 @@ func TestBaselineShape_LogsTheCacheAsSource(t *testing.T) {
 	opts := testOptions()
 	buf := captureLog(&opts)
 	p := New(newFakeForge(t), nil, opts)
-	p.seeds.put(testRepo, "99", seedEntry{shape: threeStepShape(), weights: priorDurations(), runID: 41, success: true})
+	p.seeds.put(testRepo, "99", "main", seedEntry{shape: threeStepShape(), weights: priorDurations(), runID: 41, success: true})
 	if _, _, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "main")); !ok {
 		t.Fatal("expected the cached seed")
 	}
