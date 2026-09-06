@@ -1832,3 +1832,53 @@ func TestGetWidget(t *testing.T) {
 		t.Errorf("label = %q, want %q", got.Content.Label, "working")
 	}
 }
+
+// --- Retry-After overflow ---
+
+// A count of seconds large enough to overflow int64 when multiplied used to
+// come out negative, and a negative delay skips the backoff, slips past the
+// retry budget and fires at once: five attempts in two milliseconds from a
+// header that asked for a three-century wait.
+func TestParseRetryAfter_HugeSecondsClamp(t *testing.T) {
+	for _, header := range []string{"10000000000", "99999999999999999999"} {
+		if d := parseRetryAfter(header); d != maxRetryAfter {
+			t.Errorf("parseRetryAfter(%q) = %v, want %v", header, d, maxRetryAfter)
+		}
+	}
+	if d := parseRetryAfter("-99999999999999999999"); d != 0 {
+		t.Errorf("negative overflow should be no hint, got %v", d)
+	}
+}
+
+func TestThrottleDelay_HugeMillisClamp(t *testing.T) {
+	if d := throttleDelay("", 1<<62); d != maxRetryAfter {
+		t.Errorf("throttleDelay(\"\", 1<<62) = %v, want %v", d, maxRetryAfter)
+	}
+}
+
+func TestDoWithRetry_HugeRetryAfterRespectsTheBudget(t *testing.T) {
+	var count atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		count.Add(1)
+		w.Header().Set("Retry-After", "10000000000")
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"code":"rate_limit.exceeded"}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "key", WithRetryBudget(250*time.Millisecond))
+	start := time.Now()
+	err := c.doWithRetry(context.Background(), "notify", http.MethodPost, srv.URL+"/notifications", "", nil, nil)
+	if err == nil {
+		t.Fatal("expected an error once the retry budget is exhausted")
+	}
+	// The clamped two-minute wait exceeds the budget, so the loop stops after
+	// the first attempt instead of firing the remaining four at once.
+	if got := count.Load(); got != 1 {
+		t.Errorf("expected 1 attempt, got %d", got)
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Errorf("the call should return without sleeping, took %s", elapsed)
+	}
+}

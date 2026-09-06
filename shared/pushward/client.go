@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -20,14 +22,39 @@ import (
 // honoring realistic backoff requests.
 const maxRetryAfter = 2 * time.Minute
 
+// boundedDelay converts a server-supplied count of unit into a Duration that
+// never exceeds maxRetryAfter. The bound is applied before the multiplication,
+// not after: a count large enough to overflow int64 would otherwise come out
+// negative, and a negative delay skips the backoff, slips past the retry
+// budget and fires the timer at once, which is the opposite of a throttle.
+// Zero and negative counts are "no hint".
+func boundedDelay(n int64, unit time.Duration) time.Duration {
+	if n <= 0 {
+		return 0
+	}
+	if n > int64(maxRetryAfter/unit) {
+		return maxRetryAfter
+	}
+	return time.Duration(n) * unit
+}
+
 // parseRetryAfter parses a Retry-After header value as either seconds or HTTP-date.
 // Returns 0 if the header is empty or unparseable.
 func parseRetryAfter(header string) time.Duration {
 	if header == "" {
 		return 0
 	}
-	if seconds, err := strconv.Atoi(header); err == nil && seconds > 0 {
-		return time.Duration(seconds) * time.Second
+	seconds, err := strconv.ParseInt(header, 10, 64)
+	if err == nil {
+		return boundedDelay(seconds, time.Second)
+	}
+	if errors.Is(err, strconv.ErrRange) {
+		// More digits than int64 holds is still a number, and a huge one; a
+		// negative one is as meaningless as any other negative count.
+		if strings.HasPrefix(header, "-") {
+			return 0
+		}
+		return maxRetryAfter
 	}
 	if t, err := http.ParseTime(header); err == nil {
 		if d := time.Until(t); d > 0 {
@@ -44,8 +71,8 @@ func parseRetryAfter(header string) time.Duration {
 // leaving the caller on its exponential backoff.
 func throttleDelay(retryAfterHeader string, problemRetryAfterMs int64) time.Duration {
 	d := parseRetryAfter(retryAfterHeader)
-	if d == 0 && problemRetryAfterMs > 0 {
-		d = time.Duration(problemRetryAfterMs) * time.Millisecond
+	if d == 0 {
+		d = boundedDelay(problemRetryAfterMs, time.Millisecond)
 	}
 	return min(d, maxRetryAfter)
 }
