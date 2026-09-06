@@ -824,9 +824,9 @@ func (p *Poller) payloadWeights(total int, labels []string, byName map[string]fl
 // current-run scan) when there is no usable prior run or any lookup fails.
 //
 // Three rungs: the last run this process saw finish (see shapeCache), when it
-// has what the config needs; then the forge, on this run's ref and then on any
-// ref of the workflow (see Forge.BaselineJobs). A blank WorkflowKey can't target
-// a workflow and short-circuits to the live scan.
+// has what the config needs; then the forge, on each of the run's candidate
+// refs with the any-ref rung last (see Forge.CandidateRefs). A blank
+// WorkflowKey can't target a workflow and short-circuits to the live scan.
 //
 // The seed is an upper-or-lower estimate, not a guarantee. If this run takes a
 // shorter path than the seed (if-gated jobs skipped), the total over-counts and
@@ -848,15 +848,11 @@ func (p *Poller) baselineShape(ctx context.Context, repo string, run Run) (ci.St
 		return entry.shape, weights, true
 	}
 
-	// The run's own ref first, then any ref. A blank head branch is already the
-	// any-ref rung, so it is not worth a rung of its own.
-	refs := []string{""}
-	if run.HeadBranch != "" {
-		refs = []string{run.HeadBranch, ""}
-	}
+	// The forge names the rungs: the run's own ref in whatever forms it may
+	// take, then any ref.
 	var base Baseline
 	source := "any ref"
-	for _, ref := range refs {
+	for _, ref := range p.forge.CandidateRefs(run) {
 		var err error
 		if base, err = p.forge.BaselineJobs(ctx, repo, run.WorkflowKey, ref, wantTimings); err != nil {
 			// Logged here rather than in each adapter: the decision this informs - keep

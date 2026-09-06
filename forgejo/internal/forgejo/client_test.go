@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -160,10 +161,10 @@ func TestGetJobsUnknownRunIsNotRetried(t *testing.T) {
 	}
 }
 
-// TestGetLatestFinishedRunSendsFullRef is the test that would have caught the
-// bare-ref bug: filtering on "master" returns an empty list with a 200, so the
-// seed would silently never find a prior run.
-func TestGetLatestFinishedRunSendsFullRef(t *testing.T) {
+// TestGetLatestFinishedRunSendsTheQualifiedRef is the test that would have
+// caught the bare-ref bug: filtering on "master" returns an empty list with a
+// 200, so the seed would silently never find a prior run.
+func TestGetLatestFinishedRunSendsTheQualifiedRef(t *testing.T) {
 	var refs []string
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/repos/acme/app/actions/runs", func(w http.ResponseWriter, r *http.Request) {
@@ -179,7 +180,7 @@ func TestGetLatestFinishedRunSendsFullRef(t *testing.T) {
 	})
 	c := testClient(t, mux)
 
-	run, err := c.GetLatestFinishedRun(context.Background(), "acme/app", "tofu.yml", FullRef("master"))
+	run, err := c.GetLatestFinishedRun(context.Background(), "acme/app", "tofu.yml", "refs/heads/master")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,24 +194,28 @@ func TestGetLatestFinishedRunSendsFullRef(t *testing.T) {
 	}
 }
 
-func TestFullRef(t *testing.T) {
-	cases := map[string]string{
-		"master":           "refs/heads/master",
-		"main":             "refs/heads/main",
-		"refs/heads/main":  "refs/heads/main",
-		"refs/tags/v1.0.0": "refs/tags/v1.0.0",
-		"feature/thing":    "refs/heads/feature/thing",
-		"":                 "",
+func TestCandidateRefs(t *testing.T) {
+	cases := map[string][]string{
+		"master":           {"refs/heads/master", "refs/tags/master", ""},
+		"main":             {"refs/heads/main", "refs/tags/main", ""},
+		"refs/heads/main":  {"refs/heads/main", ""},
+		"refs/tags/v1.0.0": {"refs/tags/v1.0.0", ""},
+		"feature/thing":    {"refs/heads/feature/thing", "refs/tags/feature/thing", ""},
+		"":                 {""},
+		// A tag push's prettyref is the bare tag name under the same push event
+		// as a branch push, so it is tried as a branch and then as a tag. 0.3.0
+		// tried it as a branch only and every tag run seeded from any ref.
+		"v0.6.0": {"refs/heads/v0.6.0", "refs/tags/v0.6.0", ""},
 		// A pull request's prettyref stands for its head ref, which is what its
 		// earlier runs were recorded under. Anything else starting with # is a
-		// branch name and qualifies like one.
-		"#17":  "refs/pull/17/head",
-		"#":    "refs/heads/#",
-		"#abc": "refs/heads/#abc",
+		// bare name and qualifies like one.
+		"#17":  {"refs/pull/17/head", ""},
+		"#":    {"refs/heads/#", "refs/tags/#", ""},
+		"#abc": {"refs/heads/#abc", "refs/tags/#abc", ""},
 	}
 	for in, want := range cases {
-		if got := FullRef(in); got != want {
-			t.Errorf("FullRef(%q) = %q, want %q", in, got, want)
+		if got := CandidateRefs(in); !reflect.DeepEqual(got, want) {
+			t.Errorf("CandidateRefs(%q) = %q, want %q", in, got, want)
 		}
 	}
 }
@@ -231,7 +236,7 @@ func TestGetLatestFinishedRunFallsBackToOtherTerminalStatuses(t *testing.T) {
 	})
 	c := testClient(t, mux)
 
-	run, err := c.GetLatestFinishedRun(context.Background(), "acme/app", "tofu.yml", FullRef("master"))
+	run, err := c.GetLatestFinishedRun(context.Background(), "acme/app", "tofu.yml", "refs/heads/master")
 	if err != nil {
 		t.Fatal(err)
 	}

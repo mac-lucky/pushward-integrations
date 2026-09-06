@@ -424,7 +424,7 @@ func TestBaselineJobs_JoinsTimingsWhenWanted(t *testing.T) {
 	f := testForge(t, baselineMux(t, func() { joined++ }))
 
 	base, err := f.BaselineJobs(context.Background(), testRepo,
-		"ci.yml", "main", true)
+		"ci.yml", "refs/heads/main", true)
 	if err != nil {
 		t.Fatalf("expected a usable seed: %v", err)
 	}
@@ -458,7 +458,7 @@ func TestBaselineJobs_SkipsTheJoinWhenTimingsAreNotWanted(t *testing.T) {
 	f := testForge(t, baselineMux(t, func() { joined++ }))
 
 	base, err := f.BaselineJobs(context.Background(), testRepo,
-		"ci.yml", "main", false)
+		"ci.yml", "refs/heads/main", false)
 	if err != nil {
 		t.Fatalf("expected a usable seed: %v", err)
 	}
@@ -483,7 +483,7 @@ func TestBaselineJobs_NoPriorRun(t *testing.T) {
 	})
 
 	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		"ci.yml", "main", true)
+		"ci.yml", "refs/heads/main", true)
 	// No prior run is not an error - the caller just keeps its live scan.
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -500,7 +500,7 @@ func TestBaselineJobs_LookupErrorIsNotASeed(t *testing.T) {
 	})
 
 	if _, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		"ci.yml", "main", true); err == nil {
+		"ci.yml", "refs/heads/main", true); err == nil {
 		t.Error("expected an error when the lookup failed")
 	}
 }
@@ -683,7 +683,7 @@ func TestBaselineJobs_JobsLookupFails(t *testing.T) {
 	})
 
 	_, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		"ci.yml", "main", false)
+		"ci.yml", "refs/heads/main", false)
 	if err == nil {
 		t.Fatal("expected the jobs lookup failure to surface")
 	}
@@ -753,16 +753,16 @@ func TestBaselineJobs_BlankRefSendsNoFilter(t *testing.T) {
 	}
 }
 
-// TestBaselineJobs_QualifiesTheRef: the loop hands over the prettyref as the
-// forge reported it, and the adapter qualifies it - a PR's "#17" is looked up
-// as its head ref, where the PR's earlier runs live.
-func TestBaselineJobs_QualifiesTheRef(t *testing.T) {
+// TestBaselineJobs_SendsTheRefAsGiven: the loop hands over one of the refs the
+// adapter itself named in CandidateRefs, already qualified, and the lookup
+// sends it untouched - one request, no widening of its own.
+func TestBaselineJobs_SendsTheRefAsGiven(t *testing.T) {
 	var seen []string
 	mux := seedMux(t, runsHandler(t,
 		map[string]string{"refs/pull/17/head": runJSON(7, 20, "success", "ci.yml", "#17")}, &seen), priorTasks(nil))
 
 	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		"ci.yml", "#17", false)
+		"ci.yml", "refs/pull/17/head", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -785,7 +785,7 @@ func TestBaselineJobs_PassesTheRunStopToTheJoin(t *testing.T) {
 	))
 
 	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo,
-		"ci.yml", "main", true)
+		"ci.yml", "refs/heads/main", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -819,7 +819,7 @@ func TestBaselineJobs_BoundsTheJoinFromTheStartWhenTheStopIsMissing(t *testing.T
 		taskJSON(203, "deploy", "success", "2026-07-30T10:05:05Z", "2026-07-30T10:05:45Z"),
 	))
 
-	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo, "ci.yml", "main", true)
+	base, err := testForge(t, mux).BaselineJobs(context.Background(), testRepo, "ci.yml", "refs/heads/main", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -832,5 +832,76 @@ func TestBaselineJobs_BoundsTheJoinFromTheStartWhenTheStopIsMissing(t *testing.T
 	}
 	if base.Duration != 0 {
 		t.Errorf("duration = %v, want 0 for a run with no stop of its own", base.Duration)
+	}
+}
+
+// TestCandidateRefs_QualifiesThePrettyRef: the adapter turns the run's bare
+// prettyref into the ladder the loop walks, a PR's "#17" into its head ref and
+// a bare name into the branch and then the tag of that name.
+func TestCandidateRefs_QualifiesThePrettyRef(t *testing.T) {
+	f := &forge{}
+	cases := map[string][]string{
+		"#17":    {"refs/pull/17/head", ""},
+		"v0.6.0": {"refs/heads/v0.6.0", "refs/tags/v0.6.0", ""},
+		"":       {""},
+	}
+	for in, want := range cases {
+		if got := f.CandidateRefs(cipoll.Run{HeadBranch: in}); !reflect.DeepEqual(got, want) {
+			t.Errorf("CandidateRefs(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestNewEndToEnd_TagRunSeedsFromTheTagRef is the production case from the
+// bridge's own logs: a v0.6.0 tag run seeded from "any ref" because its
+// prettyref was looked up as a branch that does not exist. The loop now walks
+// the adapter's candidates - branch, then tag - and the tag's own earlier run
+// seeds it.
+func TestNewEndToEnd_TagRunSeedsFromTheTagRef(t *testing.T) {
+	var seen []string
+	seeds := runsHandler(t, map[string]string{"refs/tags/v0.6.0": runJSON(7, 20, "success", "ci.yml", "v0.6.0")}, &seen)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/repos/acme/app/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		// Only the prior-run lookup carries workflow_id; the idle probe does not.
+		if r.URL.Query().Get("workflow_id") == "" {
+			_, _ = w.Write([]byte(runsJSON(runJSON(1, 33, "running", "ci.yml", "v0.6.0"))))
+			return
+		}
+		seeds(w, r)
+	})
+	mux.HandleFunc("/api/v1/repos/acme/app/actions/runs/1/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(jobsJSON(jobJSON(10, 100, "lint", "running"))))
+	})
+	mux.HandleFunc("/api/v1/repos/acme/app/actions/runs/7/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(jobsJSON(
+			jobJSON(1, 201, "lint", "success"),
+			jobJSON(2, 202, "build", "success"),
+			jobJSON(3, 203, "publish", "success"),
+		)))
+	})
+	mux.HandleFunc("/api/v1/repos/acme/app/actions/tasks", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(tasksJSON()))
+	})
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	p := New(testConfig(), mockForgejoClient(t, mux), pushward.NewClient(pwSrv.URL, "hlk_test"))
+	if err := p.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Branch first on both passes (success, then the rest), then the tag, which
+	// answers on its success pass.
+	want := []string{"refs/heads/v0.6.0", "refs/heads/v0.6.0", "refs/tags/v0.6.0"}
+	if !reflect.DeepEqual(seen, want) {
+		t.Errorf("ref filters sent = %q, want %q", seen, want)
+	}
+	got := testutil.GetCalls(calls, mu)
+	if len(got) < 2 {
+		t.Fatalf("expected at least a create and a seed, got %d calls", len(got))
+	}
+	var seed pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &seed)
+	if seed.Content.TotalSteps == nil || *seed.Content.TotalSteps != 3 {
+		t.Errorf("total_steps = %v, want the tag's earlier run's 3", seed.Content.TotalSteps)
 	}
 }

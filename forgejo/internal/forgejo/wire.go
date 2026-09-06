@@ -36,7 +36,7 @@ type wireRun struct {
 	// also what the runs `workflow_id` query filter takes.
 	WorkflowID string `json:"workflow_id"`
 	// PrettyRef is the BARE ref ("master"). The `ref` query filter needs the full
-	// ref; see fullRef.
+	// ref; see CandidateRefs.
 	PrettyRef string `json:"prettyref"`
 	CommitSHA string `json:"commit_sha"`
 	Event     string `json:"event"` // frequently the empty string

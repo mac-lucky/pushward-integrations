@@ -118,14 +118,25 @@ type Forge interface {
 	// LiveJobs returns the run's current jobs, already converted for the ladder.
 	LiveJobs(ctx context.Context, repo string, runID int64) ([]ci.Job, error)
 
+	// CandidateRefs lists the ref filters to try for run's seed, most specific
+	// first and ending with "" for any ref. The loop walks it in order, stops at
+	// the first ref with a usable run, and hands each entry to BaselineJobs
+	// as-is. Per-forge because only the forge knows what its display ref stands
+	// for: GitHub's branch filter takes the head branch as reported, while
+	// Forgejo's ref filter wants a fully-qualified ref and a bare prettyref may
+	// be a branch or a tag of the same name, which nothing on the wire
+	// separates.
+	CandidateRefs(run Run) []string
+
 	// BaselineJobs returns the workflow's most recent finished run on ref, or on
 	// any ref when ref is blank, to seed a stable total-steps denominator from
-	// frame one. The loop drives the widening - the run's own ref first, then any
-	// ref, since a tag build or a fresh branch has no earlier run of its own -
-	// and the forge owns which finished run on that ref counts (a successful one
-	// that ran the whole DAG, failing that any terminal one). ref is the run's
-	// head branch as the forge reported it; the adapter qualifies it. A zero
-	// Baseline means there is no usable run on that ref, which is not an error.
+	// frame one. The loop drives the widening over CandidateRefs - the run's own
+	// ref first, then any ref, since a tag build or a fresh branch has no earlier
+	// run of its own - and the forge owns which finished run on that ref counts
+	// (a successful one that ran the whole DAG, failing that any terminal one).
+	// ref is one entry of CandidateRefs, already in the form the forge's filter
+	// takes, or blank for any ref. A zero Baseline means there is no usable run
+	// on that ref, which is not an error.
 	//
 	// wantTimings says whether the caller will read per-group durations off the
 	// result; a forge whose job objects carry no timestamps can then skip the

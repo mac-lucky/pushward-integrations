@@ -649,3 +649,15 @@ func TestBaselineJobs_BlankRefSendsNoBranchFilter(t *testing.T) {
 		t.Errorf("Duration = %v, want the run's 5m", base.Duration)
 	}
 }
+
+// TestCandidateRefs: GitHub's branch filter takes the head branch as the run
+// reports it, tags included, so the ladder is the head branch and then any.
+func TestCandidateRefs(t *testing.T) {
+	f := &forge{}
+	if got, want := f.CandidateRefs(cipoll.Run{HeadBranch: "main"}), []string{"main", ""}; !reflect.DeepEqual(got, want) {
+		t.Errorf("CandidateRefs(main) = %q, want %q", got, want)
+	}
+	if got, want := f.CandidateRefs(cipoll.Run{}), []string{""}; !reflect.DeepEqual(got, want) {
+		t.Errorf("CandidateRefs(blank) = %q, want %q", got, want)
+	}
+}

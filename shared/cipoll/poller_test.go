@@ -882,6 +882,36 @@ func TestBaselineShape_WidensToAnyRef(t *testing.T) {
 	}
 }
 
+// TestBaselineShape_WalksTheForgesCandidateRefs: the ladder is the forge's,
+// not the loop's. Forgejo names a bare prettyref as a branch and then as a tag;
+// the loop tries each in order and stops at the first with a run, and a hit on
+// any non-blank rung is still the run's own ref.
+func TestBaselineShape_WalksTheForgesCandidateRefs(t *testing.T) {
+	f := newFakeForge(t)
+	f.candidateRefs = func(Run) []string { return []string{"refs/heads/v1", "refs/tags/v1", ""} }
+	var refs []string
+	f.baseline = func(_, _, ref string, _ bool) (Baseline, error) {
+		refs = append(refs, ref)
+		if ref == "refs/tags/v1" {
+			return Baseline{Jobs: priorRunJobs(), RunID: 41}, nil
+		}
+		return Baseline{}, nil
+	}
+	opts := testOptions()
+	buf := captureLog(&opts)
+	p := New(f, nil, opts)
+
+	if _, _, ok := p.baselineShape(context.Background(), testRepo, activeRun(42, "CI", "v1")); !ok {
+		t.Fatal("expected the tag-ref seed")
+	}
+	if want := []string{"refs/heads/v1", "refs/tags/v1"}; !reflect.DeepEqual(refs, want) {
+		t.Errorf("refs asked = %q, want %q", refs, want)
+	}
+	if !strings.Contains(buf.String(), `source="same ref"`) {
+		t.Errorf("log = %q, want the tag counted as the run's own ref", buf.String())
+	}
+}
+
 // A prior run the forge finds but reports no jobs for is not a usable seed.
 func TestBaselineShape_EmptyJobsIsNotASeed(t *testing.T) {
 	f := newFakeForge(t)

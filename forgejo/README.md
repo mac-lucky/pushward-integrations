@@ -25,11 +25,14 @@ Forgejo Actions --> pushward-forgejo --> pushward-server --> APNs --> PushWard i
   jobs, so the step count would otherwise climb (1/2 -> 3/4 -> 5/6). The bridge seeds the shape
   from a finished run of the same workflow, which already ran the whole DAG: the last run this
   bridge watched to completion, else the last successful run on the same ref, else the workflow's
-  last run on any ref. Pull request runs (`#17`) look under their own head ref first; tag builds
-  and fresh branches, which have no earlier run of their own, seed from the branch they came from.
+  last run on any ref. Pull request runs (`#17`) look under their own head ref first; a bare name
+  is tried as a branch and then as a tag, since the API does not say which it is; a fresh branch
+  or a first-time tag, which has no earlier run of its own, seeds from the workflow's last run on
+  any ref.
 - **Duration-sized step pills** (`step_weights`, opt-in). Each group's pill is sized by how long
-  it held the run up last time: first shard start to last shard end, so matrix shards that queue
-  behind each other on a busy runner size the pill by their sum.
+  it was busy last time: the union of its shards' spans, so matrix shards that queue behind each
+  other on a busy runner size the pill by their sum, while an idle gap between a shard and its
+  re-run does not count.
 - **A live ETA on the running step** (`live_progress`, on by default). iOS fills the current
   pill and counts it down between polls, anchored to when the step's first shard started - even
   one that has already finished - and measured the same way the pill is. A step the prior run did
@@ -158,16 +161,27 @@ GitHub's in ways that matter, and they are all covered by tests and by the fixtu
   rows well after the run (nightly maintenance touched rows one and two days later on a
   production instance), which read literally made a seven-minute run's steps weigh forty hours.
   The bridge believes a completion only up to a minute past the run's own `stopped`; a later one
-  leaves the job unmeasured. A run whose rows were all rewritten is seeded from its `duration`
-  split evenly over the groups.
+  leaves the job unmeasured. A run whose rows were all rewritten is seeded from its length split
+  evenly over the groups, and the groups a partial join could not time take that even share too.
+- A cancelled run can carry the epoch as its `stopped`, which the bridge reads as "no stop". Such
+  a run bounds completions from its `started` plus twelve hours instead, and reports no length
+  of its own, so nothing is invented from the fallback bound.
 - `/actions/tasks` takes only `page`, `limit` and `status` - there is no `run_id`, `workflow_id`
   or `ref` filter, so a run's own rows can only be found by walking the repo-wide list. That
   absence is why the join is page-bounded rather than a single targeted request; re-check it
   before assuming the walk can be removed. The live join reads the newest page unfiltered, so a
-  run in flight is measured from its own rows the moment it finishes.
+  run in flight is measured from its own rows the moment it finishes. The list shifts under a walk
+  while a live run adds rows, so one row can be served on two consecutive pages; each task id is
+  joined once.
 - A run's `prettyref` is the bare branch name for a push, `#17` for a pull request (its head ref
   is `refs/pull/17/head`, which is what the `ref` filter needs) and the bare tag name for a tag
-  push. The runs `ref` filter matches the fully-qualified ref only.
+  push, under the same `push` event and with no `ref` or `head_branch` field to tell them apart.
+  The runs `ref` filter matches one fully-qualified ref exactly, so a bare name is looked up as
+  `refs/heads/<name>` and then `refs/tags/<name>`.
+- A repo with Actions switched off, a repo that does not exist and a repo the token cannot see
+  all answer the runs probe with the same JSON 404 (`"The target couldn't be found."`) and are
+  written off for thirty minutes. A 404 without that message is the reverse proxy answering for
+  an instance mid-restart; it is an error like any other and the next tick retries.
 - `workflow_id` is a filename string, and there is no workflow display name anywhere in the API.
 - Runs held for approval (`blocked`) are not tracked: they may never execute.
 
@@ -179,8 +193,9 @@ GitHub's in ways that matter, and they are all covered by tests and by the fixtu
 | Steps show as `1/1` | The bridge could not read the run's jobs; check the token's repo access |
 | Pills are all the same width | `step_weights` is off, or no finished run of that workflow exists yet on any ref. The `seeded steps from prior run` line says where the seed came from (`source`) and whether anything was measured (`weights_source`) |
 | No ETA countdown | Expected on the very first run of a workflow - nothing has been measured yet, not even an average to estimate from. After that, expected on any step that finishes in under a few seconds. The bridge logs `live progress not anchored` once per step with the reason |
-| ETA counts down from hours | The prior run's task rows were rewritten after the fact (see the API notes). Fixed in 0.3.0: a completion later than the run's own stop is no longer believed |
-| No ETA on pull request or tag runs | Fixed in 0.3.0: PR runs look under `refs/pull/N/head`, tag builds and fresh branches seed from the workflow's last run on any ref |
+| ETA counts down from hours | The prior run's task rows were rewritten after the fact (see the API notes). Fixed in 0.3.0: a completion later than the run's own stop is no longer believed; since 0.4.0 a run with no stop of its own bounds completions from its start |
+| No ETA on pull request or tag runs | PR runs look under `refs/pull/N/head`, tag runs under `refs/tags/<tag>` (0.3.0 tried tags as branches and fell through to any ref; fixed in 0.4.0); a fresh branch or first-time tag seeds from the workflow's last run on any ref |
+| `failed to get runs` with a 404 during a redeploy | The reverse proxy answered for the instance; retried on the next tick rather than written off. A repo genuinely gone or with Actions off logs `repo has no Actions or is not visible to the token` at Info |
 | Two cards per build | The relay's `/forgejo` webhook is configured as well; see above |
 | Connection timeouts | The instance is not reachable from the container's network |
 

@@ -303,20 +303,26 @@ func splitRepo(repo string) (owner, name string, err error) {
 	return parts[0], parts[1], nil
 }
 
-// FullRef converts a run's bare prettyref into the fully-qualified ref the runs
-// `ref` filter requires. Filtering on the bare name matches nothing at all -
-// silently, with an HTTP 200 and an empty list. A pull request's prettyref is
-// "#17", standing for refs/pull/17/head. A tag push's is the bare tag name and
-// maps to a refs/heads/ ref that matches nothing, which the poller's any-ref
-// rung then covers.
-func FullRef(branch string) string {
-	if branch == "" || strings.HasPrefix(branch, "refs/") {
-		return branch
+// CandidateRefs lists the `ref` filter values a run's prettyref may stand for,
+// most specific first, ending with "" for any ref. The filter matches one
+// fully-qualified ref exactly and a bare name never - silently, with a 200 and
+// an empty list. A pull request's prettyref is "#17", standing for
+// refs/pull/17/head. Anything else is a bare name the wire does not qualify: a
+// tag push carries the tag name under the same "push" event as a branch push,
+// with no ref field to tell them apart, so both forms are tried, the branch
+// first because it is most of the traffic. An already-qualified ref is taken
+// as given.
+func CandidateRefs(prettyRef string) []string {
+	switch {
+	case prettyRef == "":
+		return []string{""}
+	case strings.HasPrefix(prettyRef, "refs/"):
+		return []string{prettyRef, ""}
 	}
-	if n, ok := strings.CutPrefix(branch, "#"); ok && n != "" && strings.Trim(n, "0123456789") == "" {
-		return "refs/pull/" + n + "/head"
+	if n, ok := strings.CutPrefix(prettyRef, "#"); ok && n != "" && strings.Trim(n, "0123456789") == "" {
+		return []string{"refs/pull/" + n + "/head", ""}
 	}
-	return "refs/heads/" + branch
+	return []string{"refs/heads/" + prettyRef, "refs/tags/" + prettyRef, ""}
 }
 
 func (c *Client) runsURL(owner, name string, q url.Values) string {
@@ -410,7 +416,7 @@ func (c *Client) GetRun(ctx context.Context, repo string, runID int64) (*Run, er
 }
 
 // GetLatestFinishedRun returns the most recent terminal run of the same workflow
-// on ref - a fully-qualified ref, see FullRef - or on any ref when ref is blank.
+// on ref - one of CandidateRefs' values - or on any ref when ref is blank.
 // It seeds a stable step total.
 //
 // Forgejo has no "completed" umbrella status the way GitHub does, so this runs

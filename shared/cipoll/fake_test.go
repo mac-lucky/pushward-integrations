@@ -39,6 +39,8 @@ type fakeForge struct {
 	getRun     func(repo string, runID int64) (*Run, error)
 	// baseline left nil means "no usable prior run", the common case.
 	baseline func(repo, workflowKey, ref string, wantTimings bool) (Baseline, error)
+	// candidateRefs left nil is the plain ladder: the head branch, then any ref.
+	candidateRefs func(run Run) []string
 	// outcome left nil collapses to Success/Failed, the simpler of the two
 	// mappings the real adapters implement.
 	outcome func(run Run, anyFailed bool) (string, string)
@@ -102,6 +104,19 @@ func (f *fakeForge) LiveJobs(_ context.Context, repo string, runID int64) ([]ci.
 		return nil, nil
 	}
 	return hook(repo, runID)
+}
+
+func (f *fakeForge) CandidateRefs(run Run) []string {
+	f.mu.Lock()
+	hook := f.candidateRefs
+	f.mu.Unlock()
+	if hook != nil {
+		return hook(run)
+	}
+	if run.HeadBranch == "" {
+		return []string{""}
+	}
+	return []string{run.HeadBranch, ""}
 }
 
 func (f *fakeForge) BaselineJobs(_ context.Context, repo, workflowKey, ref string, wantTimings bool) (Baseline, error) {

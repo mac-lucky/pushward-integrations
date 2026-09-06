@@ -96,6 +96,16 @@ func (f *forge) LiveJobs(ctx context.Context, repo string, runID int64) ([]ci.Jo
 	return toCIJobs(jobs), nil
 }
 
+// CandidateRefs is the head branch, then any branch: GitHub's runs `branch`
+// filter takes the name as the run reports it, tag pushes included, so one rung
+// covers both.
+func (f *forge) CandidateRefs(run cipoll.Run) []string {
+	if run.HeadBranch == "" {
+		return []string{""}
+	}
+	return []string{run.HeadBranch, ""}
+}
+
 // BaselineJobs looks up the workflow's latest finished run on ref, a branch
 // name, or on any branch when ref is blank.
 //

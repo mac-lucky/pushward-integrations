@@ -28,7 +28,7 @@ type Run struct {
 	Conclusion string // "" | ci.ConclusionSuccess | Failure | Cancelled | Skipped
 	RawStatus  string // Forgejo's own value, kept for logs
 
-	HeadBranch string // the bare prettyref; see fullRef before querying with it
+	HeadBranch string // the bare prettyref; see CandidateRefs before querying with it
 	HeadSHA    string
 	Event      string // trigger_event, falling back to event
 
