@@ -29,6 +29,12 @@ type LabeledPoint struct {
 	Point  pushward.HistoryPoint
 }
 
+// truncationMark ends a series key cut to the server's 32-rune limit. It is
+// rendered on the widget, so it is product typography and exempt from the
+// repo's non-ASCII rule: written as the character itself, never as an escape,
+// which is what keeps the exemption auditable.
+const truncationMark = "…"
+
 // SeriesKey builds a display name from metric labels.
 // If preferLabel is set and present, use its value.
 // If only one label exists, use its value.
@@ -60,7 +66,7 @@ func SeriesKey(labels map[string]string, preferLabel string) string {
 	}
 
 	if utf8.RuneCountInString(key) > 32 {
-		key = string([]rune(key)[:31]) + "\u2026"
+		key = string([]rune(key)[:31]) + truncationMark
 	}
 	return key
 }
