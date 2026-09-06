@@ -53,6 +53,17 @@ type runsProbe struct {
 	usedAt time.Time
 }
 
+// runProbe is the cached answer to one run's re-read. The loop re-reads a run
+// on every tick where its visible jobs are all done, to confirm the run itself
+// is; between job waves that is every tick for minutes, and the run object does
+// not change until the end, so each re-read answers 304 and is not billed.
+type runProbe struct {
+	etag string
+	run  WorkflowRun
+	// usedAt is when this entry was last read or written, for cacheRetention.
+	usedAt time.Time
+}
+
 // workflowPresence is what we know about whether a repo has any workflows.
 // Repos with none still answer the runs probe with an empty 200, indistinguishable
 // from "nothing running right now", so it takes a separate lookup to tell them
@@ -83,9 +94,11 @@ type Client struct {
 	remaining int
 	resetAt   time.Time
 	login     string // cached login of the token's user (lazy)
-	// runsCache and workflows are keyed by "owner/repo".
+	// runsCache and workflows are keyed by "owner/repo"; runCache by
+	// "owner/repo#runID".
 	runsCache map[string]runsProbe
 	workflows map[string]workflowPresence
+	runCache  map[string]runProbe
 }
 
 func NewClient(token string) *Client {
@@ -96,6 +109,7 @@ func NewClient(token string) *Client {
 		remaining:  -1, // unknown until first response
 		runsCache:  make(map[string]runsProbe),
 		workflows:  make(map[string]workflowPresence),
+		runCache:   make(map[string]runProbe),
 	}
 }
 
@@ -592,27 +606,60 @@ func (c *Client) pruneCaches() {
 			delete(c.workflows, repo)
 		}
 	}
+	for key, e := range c.runCache {
+		if e.usedAt.Before(cutoff) {
+			delete(c.runCache, key)
+		}
+	}
 }
 
 // GetRun fetches a single workflow run so callers can consult the run's own
 // authoritative Status/Conclusion rather than inferring completion from the
 // (lazily-created) job list.
+//
+// Conditional, like the idle probe: the poller asks on every tick where all
+// visible jobs are done, which between job waves is every tick, and a 304 is
+// free. A terminal answer drops the entry, since nothing asks about a run that
+// has ended.
 func (c *Client) GetRun(ctx context.Context, repo string, runID int64) (*WorkflowRun, error) {
 	owner, name, err := splitRepo(repo)
 	if err != nil {
 		return nil, err
 	}
+	key := fmt.Sprintf("%s#%d", repo, runID)
+
+	c.mu.Lock()
+	cached := c.runCache[key]
+	c.mu.Unlock()
 
 	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs/%d", c.baseURL, owner, name, runID)
-	body, err := c.doWithRetry(ctx, url, "requesting workflow run")
+	resp, err := c.doConditional(ctx, url, "requesting workflow run", cached.etag)
 	if err != nil {
 		return nil, err
 	}
 
+	if resp.notModified {
+		c.mu.Lock()
+		if e, ok := c.runCache[key]; ok {
+			e.usedAt = time.Now()
+			c.runCache[key] = e
+		}
+		c.mu.Unlock()
+		run := cached.run
+		return &run, nil
+	}
+
 	var run WorkflowRun
-	if err := json.Unmarshal(body, &run); err != nil {
+	if err := json.Unmarshal(resp.body, &run); err != nil {
 		return nil, fmt.Errorf("decoding workflow run: %w", err)
 	}
+	c.mu.Lock()
+	if run.Status == "completed" || resp.etag == "" {
+		delete(c.runCache, key)
+	} else {
+		c.runCache[key] = runProbe{etag: resp.etag, run: run, usedAt: time.Now()}
+	}
+	c.mu.Unlock()
 	return &run, nil
 }
 

@@ -897,6 +897,8 @@ func TestPruneCaches_DropsReposNothingAsksAbout(t *testing.T) {
 	c.runsCache["owner/live"] = runsProbe{etag: `"y"`, usedAt: fresh}
 	c.workflows["owner/gone"] = workflowPresence{has: true, usedAt: stale}
 	c.workflows["owner/live"] = workflowPresence{has: true, usedAt: fresh}
+	c.runCache["owner/gone#1"] = runProbe{etag: `"z"`, usedAt: stale}
+	c.runCache["owner/live#2"] = runProbe{etag: `"w"`, usedAt: fresh}
 	c.mu.Unlock()
 
 	// Discovery is where the sweep runs.
@@ -917,6 +919,12 @@ func TestPruneCaches_DropsReposNothingAsksAbout(t *testing.T) {
 	}
 	if _, ok := c.workflows["owner/live"]; !ok {
 		t.Error("workflows dropped a live repo")
+	}
+	if _, ok := c.runCache["owner/gone#1"]; ok {
+		t.Error("runCache kept an entry nothing has asked about")
+	}
+	if _, ok := c.runCache["owner/live#2"]; !ok {
+		t.Error("runCache dropped a live run")
 	}
 }
 
@@ -1078,5 +1086,77 @@ func TestDoRequest_RateLimitDefault(t *testing.T) {
 	_, err := c.doWithRetry(ctx, c.baseURL+"/test", "test")
 	if err == nil {
 		t.Fatal("expected error (context should timeout before 60s default retry)")
+	}
+}
+
+// The run re-read is the request the poller makes on every tick where all
+// visible jobs are done, which between job waves is every tick. Nothing about
+// the run changes until it ends, so a 304 must answer from cache, and a terminal
+// answer must drop the entry: nothing asks about a run that has ended.
+func TestGetRun_ConditionalRequestAnswersFromCache(t *testing.T) {
+	const etag = `W/"run7"`
+	var calls atomic.Int32
+	var sawIfNoneMatch atomic.Value
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/actions/runs/7", func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		sawIfNoneMatch.Store(r.Header.Get("If-None-Match"))
+		w.Header().Set("ETag", etag)
+		switch n {
+		case 2:
+			w.WriteHeader(http.StatusNotModified)
+		case 3:
+			_ = json.NewEncoder(w).Encode(WorkflowRun{ID: 7, Name: "CI", Status: "completed", Conclusion: "success"})
+		default:
+			_ = json.NewEncoder(w).Encode(WorkflowRun{ID: 7, Name: "CI", Status: "in_progress"})
+		}
+	})
+	c := testClient(t, mux)
+
+	first, err := c.GetRun(context.Background(), "owner/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Status != "in_progress" {
+		t.Fatalf("first read = %+v, want the in-progress run", first)
+	}
+	if got := sawIfNoneMatch.Load(); got != "" {
+		t.Errorf("first read sent If-None-Match %q, want none", got)
+	}
+
+	second, err := c.GetRun(context.Background(), "owner/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sawIfNoneMatch.Load(); got != etag {
+		t.Errorf("second read sent If-None-Match %q, want %q", got, etag)
+	}
+	if second.ID != 7 || second.Status != "in_progress" {
+		t.Fatalf("304 answered %+v, want the cached run", second)
+	}
+	// A copy, not the cache's own value.
+	second.Status = "mutated"
+
+	third, err := c.GetRun(context.Background(), "owner/repo", 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if third.Status != "completed" {
+		t.Fatalf("terminal read = %+v, want completed", third)
+	}
+	c.mu.Lock()
+	_, kept := c.runCache["owner/repo#7"]
+	c.mu.Unlock()
+	if kept {
+		t.Error("a terminal answer must drop the cached entry")
+	}
+
+	// With the entry gone, the next read is unconditional again.
+	if _, err := c.GetRun(context.Background(), "owner/repo", 7); err != nil {
+		t.Fatal(err)
+	}
+	if got := sawIfNoneMatch.Load(); got != "" {
+		t.Errorf("read after a terminal answer sent If-None-Match %q, want none", got)
 	}
 }
