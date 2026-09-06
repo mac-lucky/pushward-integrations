@@ -1,6 +1,7 @@
 package cipoll
 
 import (
+	"maps"
 	"slices"
 	"sync"
 
@@ -22,9 +23,10 @@ type seedEntry struct {
 	// not the clamped maximum the card displayed, which may have carried phantom
 	// steps over from its own seed.
 	shape ci.StepInfo
-	// weights is ci.GroupWeights over the run's jobs as the bridge last saw them,
-	// nil when nothing was measurable. Never mutated once stored: readers hand
-	// the same map straight to trackedRun.stepWeightByName.
+	// weights is ci.GroupWeights over the run's jobs as the bridge last saw them:
+	// a group it could not time is absent, and nil when nothing was measurable.
+	// Never mutated once stored: readers hand the same map straight to
+	// trackedRun.stepWeightByName.
 	weights map[string]float64
 	runID   int64
 	success bool
@@ -96,8 +98,10 @@ func (c *shapeCache) get(repo, workflow string) (seedEntry, bool) {
 }
 
 // mergeWeights fills the groups fresh could not measure from prev, the stored
-// measurement of the same labels. Neither input is mutated; the result is nil
-// only when both are.
+// measurement of the same labels. A group is unmeasured by being absent, so
+// this is an overlay: fresh wins wherever it measured, floor values included,
+// and prev supplies the rest. Neither input is mutated; the result is nil only
+// when both are.
 func mergeWeights(fresh, prev map[string]float64) map[string]float64 {
 	if prev == nil {
 		return fresh
@@ -105,13 +109,8 @@ func mergeWeights(fresh, prev map[string]float64) map[string]float64 {
 	if fresh == nil {
 		return prev
 	}
-	out := make(map[string]float64, len(fresh))
-	for name, w := range fresh {
-		if w <= ci.StepWeightFloor && prev[name] > ci.StepWeightFloor {
-			w = prev[name]
-		}
-		out[name] = w
-	}
+	out := maps.Clone(prev)
+	maps.Copy(out, fresh)
 	return out
 }
 

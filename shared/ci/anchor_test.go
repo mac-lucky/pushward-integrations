@@ -70,42 +70,47 @@ func TestLiveAnchor(t *testing.T) {
 			wantWhy: DeclineEstimateSpent,
 		},
 		{
-			// GroupWeights seeds unmeasurable groups to the floor, so a floor value
-			// is a pill width, not a duration - and here it is the ONLY value, so
-			// the run measured nothing and there is no mean to fall back to either.
-			name:    "floor weight is not a measurement",
+			// A floor entry is a real measurement: the group took up to a second.
+			// Its window is spent long before a poll can send it, which is the
+			// gate that declines; the old code read the floor as "unmeasured" and
+			// counted the group down to the mean instead.
+			name:    "a floor-valued entry is a one-second measurement",
 			info:    StepInfo{CurrentStep: 2, CurrentStepName: "Build", CurrentStepStartedAt: startedAt},
 			weights: map[string]float64{"Build": StepWeightFloor},
-			wantWhy: DeclineUnmeasured,
+			wantWhy: DeclineEstimateSpent,
 		},
 		{
-			// The Forgejo case: its durations come from a lossy tasks join, so most
-			// groups come back at the floor while a couple are measured. The pill is
-			// already drawn at the mean; the ETA now agrees with it instead of
-			// leaving the card static for the whole run.
-			name: "unmeasured group animates toward the mean of the run",
+			// The case the sentinel got wrong: a group that really finishes in a
+			// second, next to a long one. It used to animate for 451s.
+			name:    "a one-second group does not animate toward the mean",
+			info:    StepInfo{CurrentStep: 2, CurrentStepName: "changes", CurrentStepStartedAt: now.Add(-5 * time.Second)},
+			weights: map[string]float64{"build": 900, "changes": 1},
+			wantWhy: DeclineEstimateSpent,
+		},
+		{
+			// The Forgejo case: its durations come from a lossy tasks join, so some
+			// groups have no entry while a couple are measured. The pill is already
+			// drawn at the mean; the ETA agrees with it instead of leaving the card
+			// static for the whole run. A job added since the prior run takes the
+			// same path.
+			name: "group with no entry animates toward the mean of the run",
 			info: StepInfo{
 				CurrentStep: 2, CurrentStepName: "build",
 				CurrentStepStartedAt: now.Add(-5 * time.Second),
 			},
-			weights: map[string]float64{
-				"build": StepWeightFloor, "unit-tests": StepWeightFloor,
-				"nginx-behaviour": 77, "unit-tests-1": 55,
-			},
-			wantOK: true,
-			start:  now.Add(-5 * time.Second).Unix(),
-			// (1 + 1 + 77 + 55) / 4 = 33.5, rounded to 34.
-			end: now.Add(-5*time.Second).Unix() + 34,
+			weights: map[string]float64{"nginx-behaviour": 77, "unit-tests-1": 55},
+			wantOK:  true,
+			start:   now.Add(-5 * time.Second).Unix(),
+			end:     now.Add(-5*time.Second).Unix() + 66,
 		},
 		{
-			// A group the prior run never revealed at all - a job added since - gets
-			// the same neutral estimate rather than a static bar.
-			name:    "group absent from the prior run falls back too",
-			info:    StepInfo{CurrentStep: 2, CurrentStepName: "Deploy", CurrentStepStartedAt: startedAt},
-			weights: map[string]float64{"Build": 300, "Test": 100},
-			wantOK:  true,
-			start:   startedAt.Unix(),
-			end:     startedAt.Unix() + 200,
+			// A measured group that happens to be named like the placeholder is
+			// still the placeholder when ComputeSteps says so, and its start is
+			// another group's. The guard sits before the lookup for that reason.
+			name:    "queued placeholder declines even with a weight under its name",
+			info:    StepInfo{CurrentStep: 2, CurrentStepName: QueuedStepName, CurrentStepStartedAt: startedAt},
+			weights: map[string]float64{QueuedStepName: 300},
+			wantWhy: DeclineQueued,
 		},
 		{
 			// The fallback is an estimate, not an excuse to skip the ceiling. The

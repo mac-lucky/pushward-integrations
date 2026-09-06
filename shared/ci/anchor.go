@@ -34,7 +34,9 @@ const (
 	// DeclineNoStart means the forge has not stamped the running group's start.
 	DeclineNoStart AnchorDecline = "forge has not stamped a start"
 	// DeclineEstimateSpent means the group is already at or past its estimate.
-	// Expected for any group that finishes in less than one poll interval.
+	// Expected for any group that finishes in less than one poll interval, and
+	// for a group measured at the floor, whose one-second window is spent
+	// before a poll can send it.
 	DeclineEstimateSpent AnchorDecline = "estimate already spent"
 )
 
@@ -47,7 +49,7 @@ const (
 // stopped it. iOS renders the static bar in exactly those cases anyway, so a
 // window sent regardless would buy nothing and cost a high-priority push.
 //
-// A group the prior run did not measure is NOT one of those cases: it animates
+// A group the prior run has no entry for is NOT one of those cases: it animates
 // toward meanWeight, the same neutral estimate ProjectWeights already draws its
 // pill at. The two must agree - refusing only the ETA put a counter that would not
 // guess above a pill already sized by that guess - and on a forge whose durations
@@ -67,18 +69,21 @@ func LiveAnchor(info StepInfo, byName map[string]float64, now time.Time, maxWind
 	if info.CurrentStep < 1 {
 		return 0, 0, false, DeclineNoStepRunning
 	}
-	// GroupWeights seeds every group it saw to StepWeightFloor, measured or not, so
-	// a floor value carries no duration information: it means "draw a thin pill",
-	// not "this took a second".
+	// Before the lookup, not inside the unmeasured branch: a job named "Queued"
+	// is a real group with a real weight, and ComputeSteps reports the
+	// placeholder with the start of whichever group is next in line, so
+	// anchoring it would count another group's clock down under this name.
+	if info.CurrentStepName == QueuedStepName {
+		return 0, 0, false, DeclineQueued
+	}
 	secs, known := byName[info.CurrentStepName]
-	if !known || secs <= StepWeightFloor {
-		if info.CurrentStepName == QueuedStepName {
-			return 0, 0, false, DeclineQueued
-		}
-		// A mean at or below the floor means every group came back seeded, or there
-		// is no history at all - which averages to zero and fails the same check.
-		mean, _ := meanWeight(byName)
-		if mean <= StepWeightFloor {
+	if !known {
+		// Every entry is a measurement, so absence is the one unmeasured case: a
+		// group the prior run could not time, or never ran. Estimate at the
+		// mean, which is what ProjectWeights drew the pill at; no history at all
+		// has no mean either.
+		mean, ok := meanWeight(byName)
+		if !ok {
 			return 0, 0, false, DeclineUnmeasured
 		}
 		secs = mean

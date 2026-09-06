@@ -53,15 +53,24 @@ func TestShapeCache_KeepsMeasuredWeightsOverUnmeasured(t *testing.T) {
 	}
 
 	// Half a page: the groups the new run measured win, the rest keep the stored
-	// value. Build's earlier 300 stands; Test's fresh 45 replaces its 40.
-	partial := map[string]float64{"Lint": 6, "Build": ci.StepWeightFloor, "Test": 45}
+	// value. Build, absent from the fresh map, keeps its earlier 300; Test's
+	// fresh 45 replaces its 40.
+	partial := map[string]float64{"Lint": 6, "Test": 45}
 	c.put(testRepo, "99", seedEntry{shape: threeStepShape(), weights: partial, runID: 43, success: true})
 	got, _ = c.get(testRepo, "99")
 	if want := map[string]float64{"Lint": 6, "Build": 300, "Test": 45}; !reflect.DeepEqual(got.weights, want) {
 		t.Errorf("weights = %v, want the merge %v", got.weights, want)
 	}
-	if !reflect.DeepEqual(partial, map[string]float64{"Lint": 6, "Build": ci.StepWeightFloor, "Test": 45}) {
+	if !reflect.DeepEqual(partial, map[string]float64{"Lint": 6, "Test": 45}) {
 		t.Error("put must not mutate the caller's map")
+	}
+
+	// A fresh floor value is a one-second measurement, not a gap to fill: it
+	// beats the stored 300.
+	c.put(testRepo, "99", seedEntry{shape: threeStepShape(), weights: map[string]float64{"Build": ci.StepWeightFloor}, runID: 44, success: true})
+	got, _ = c.get(testRepo, "99")
+	if want := map[string]float64{"Lint": 6, "Build": ci.StepWeightFloor, "Test": 45}; !reflect.DeepEqual(got.weights, want) {
+		t.Errorf("weights = %v, want the fresh second kept: %v", got.weights, want)
 	}
 
 	// A different shape is a different workflow definition: its weights would

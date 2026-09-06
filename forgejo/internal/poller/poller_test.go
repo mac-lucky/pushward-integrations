@@ -781,8 +781,8 @@ func TestBaselineJobs_PassesTheRunStopToTheJoin(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := ci.GroupWeights(base.Jobs)
-	if got["build"] != ci.StepWeightFloor {
-		t.Errorf("build = %v, want the floor for a completion after the run's stop", got["build"])
+	if _, ok := got["build"]; ok {
+		t.Errorf("build = %v, want it unmeasured for a completion after the run's stop", got["build"])
 	}
 	if got["lint"] != 5 || got["deploy"] != 40 {
 		t.Errorf("weights = %v, want the intact rows measured", got)

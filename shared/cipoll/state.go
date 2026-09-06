@@ -36,11 +36,12 @@ type trackedRun struct {
 	maxStepLabels []string
 	maxStepColors []string
 	// stepWeightByName sizes the pills from the prior run's per-group durations,
-	// keyed by group label. Historical (never recomputed from the live,
-	// in-progress jobs) and read-only after seeding; projected onto the current
-	// step_labels at send time, so a weight always tracks its own label even if
-	// the forge reveals the groups in a different order. Nil means no usable
-	// prior run - callers then omit step_weights and pills render equal-width.
+	// keyed by group label. An entry is a measurement or a run-duration share; a
+	// group with no entry draws at the mean. Historical (never recomputed from
+	// the live, in-progress jobs) and read-only after seeding; projected onto
+	// the current step_labels at send time, so a weight always tracks its own
+	// label even if the forge reveals the groups in a different order. Nil means
+	// no usable prior run - callers then send equal weights, see payloadWeights.
 	stepWeightByName map[string]float64
 	// shapeSent is the maxTotalSteps value at the time we last included
 	// step_rows/step_labels/step_weights in a merge-patch. When unchanged across

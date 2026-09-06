@@ -1,68 +1,124 @@
 package ci
 
-import "time"
+import (
+	"slices"
+	"time"
+)
 
-// StepWeightFloor is the minimum weight any step group receives, so a step with
-// a near-zero or unmeasurable duration still renders as a thin pill instead of
-// vanishing, and clock skew (completed before started) can't yield a
-// zero/negative weight.
-//
-// It doubles as the "unmeasured" sentinel: GroupWeights seeds every group it
-// saw to the floor whether or not it could time it, so a value at or below the
-// floor carries no duration information. LiveAnchor relies on that.
+// StepWeightFloor is the minimum weight a measured step group receives, so a
+// sub-second group still renders as a thin pill instead of vanishing. It is a
+// render floor and nothing more: a group at the floor took up to one second. A
+// group the run could not time has no entry at all; see GroupWeights.
 const StepWeightFloor = 1.0
 
+// shardSpan is one job's stamped interval; either side may be zero.
+type shardSpan struct{ start, end time.Time }
+
 // GroupWeights maps each step group's label to a pill weight, sized by how long
-// that group ran in the given (finished) run. A group's weight is its wall-clock
-// SPAN: from the earliest start among its jobs to the latest completion. Matrix
-// shards that run in parallel span about as long as the slowest one; shards that
-// queue behind each other on a busy runner span their sum. Either way it is the
-// time the group held the run up, and it starts where ComputeSteps anchors the
-// live window - the group's first start - so the pill and the countdown agree.
-// A job stamped on one side only still contributes that side; only a group with
-// neither is unmeasurable. Weights are in seconds; the client normalizes. Keyed
-// by group name (not index) so ProjectWeights can re-attach them to the current
-// run's labels even if the forge reveals the groups in a different order.
+// that group ran in the given (finished) run. A group's weight is its BUSY time:
+// the union of its shards' [start, end] intervals, so parallel matrix shards
+// weigh about as long as the slowest one, shards queued behind each other on a
+// busy runner weigh their sum, and a shard requeued or re-run after an idle gap
+// adds its own length and not the gap. Either way it is time the group was
+// working, and it is measured from the group's first start, where ComputeSteps
+// anchors the live window, so the pill and the countdown agree. A gap in the
+// prior run is not time the next run is expected to spend. Weights are in
+// seconds; the client normalizes. Keyed by group name (not index) so
+// ProjectWeights can re-attach them to the current run's labels even if the
+// forge reveals the groups in a different order.
 //
-// Returns nil when no group has a measurable span (the run never finished, or
-// timestamps are missing), which is the signal that there is nothing to size
-// pills by - not a signal to omit the wire field, which is never safe on a
-// reused slug. See UniformWeights.
+// Every entry is a measurement. A group the run could not time is absent, and
+// the readers already handle that: ProjectWeights draws it at the mean of the
+// timed groups and LiveAnchor counts it down to the same. Returns nil when no
+// group could be timed (the run never finished, or timestamps are missing),
+// which is the signal that there is nothing to size pills by - not a signal to
+// omit the wire field, which is never safe on a reused slug. See
+// UniformWeights.
 func GroupWeights(jobs []Job) map[string]float64 {
-	type bounds struct{ start, end time.Time }
-	spans := make(map[string]bounds)
+	type group struct {
+		first, last time.Time
+		shards      []shardSpan
+	}
+	groups := make(map[string]*group)
 	for _, job := range jobs {
 		base := BaseJobName(job.Name)
-		b := spans[base]
-		b.start = earliest(b.start, job.StartedAt)
-		b.end = latest(b.end, job.CompletedAt)
-		spans[base] = b
+		g, ok := groups[base]
+		if !ok {
+			g = &group{}
+			groups[base] = g
+		}
+		g.first = earliest(g.first, job.StartedAt)
+		g.last = latest(g.last, job.CompletedAt)
+		if !job.StartedAt.IsZero() || !job.CompletedAt.IsZero() {
+			g.shards = append(g.shards, shardSpan{job.StartedAt, job.CompletedAt})
+		}
 	}
 
-	weights := make(map[string]float64, len(spans))
-	measured := false
-	for base, b := range spans {
-		weights[base] = StepWeightFloor
-		if b.start.IsZero() || b.end.IsZero() {
+	var weights map[string]float64
+	for base, g := range groups {
+		busy, ok := busyTime(g.shards, g.first, g.last)
+		if !ok {
 			continue
 		}
-		// A non-positive span is clock skew (completed before started), not a
-		// fast group: leave it at the floor rather than inventing a duration.
-		if d := b.end.Sub(b.start); d > 0 {
-			measured = true
-			weights[base] = max(StepWeightFloor, d.Seconds())
+		if weights == nil {
+			weights = make(map[string]float64, len(groups))
 		}
-	}
-	if !measured {
-		return nil
+		weights[base] = max(StepWeightFloor, busy.Seconds())
 	}
 	return weights
+}
+
+// busyTime is how long at least one shard of the group was running: the union
+// of the shards' intervals. A shard stamped on one side borrows the other from
+// the group (a start-only shard runs to the group's last end, an end-only one
+// from its first start), which still says when the group began or ended, and
+// reduces to the group's outer span when no shard is fully stamped. That is
+// also the limit of the union: a start-only shard ahead of a gap spans it, and
+// the run clamp in FillWeights is the backstop.
+//
+// ok is false with nothing to sum: no start at all, no end at all, or only
+// pairs whose completion precedes their start, which is clock skew rather than
+// speed. A zero-length pair is a measurement of nothing, not a missing one: a
+// forge that stamps a skipped job with both sides at once should keep that
+// job's hairline rather than hand it the mean.
+func busyTime(shards []shardSpan, first, last time.Time) (time.Duration, bool) {
+	if first.IsZero() || last.IsZero() {
+		return 0, false
+	}
+	ivs := make([]shardSpan, 0, len(shards))
+	for _, s := range shards {
+		if s.start.IsZero() {
+			s.start = first
+		}
+		if s.end.IsZero() {
+			s.end = last
+		}
+		if s.end.Before(s.start) {
+			continue
+		}
+		ivs = append(ivs, s)
+	}
+	if len(ivs) == 0 {
+		return 0, false
+	}
+	slices.SortFunc(ivs, func(a, b shardSpan) int { return a.start.Compare(b.start) })
+	var total time.Duration
+	cur := ivs[0]
+	for _, s := range ivs[1:] {
+		if !s.start.After(cur.end) {
+			cur.end = latest(cur.end, s.end)
+			continue
+		}
+		total += cur.end.Sub(cur.start)
+		cur = s
+	}
+	return total + cur.end.Sub(cur.start), true
 }
 
 // earliest returns the earlier of cur and ts, treating a zero ts as "unknown"
 // rather than as the epoch. It is the one definition of "when a group started"
 // that ComputeSteps and GroupWeights share, which is what keeps the live window
-// anchored where the measured span begins.
+// anchored where the measured busy time begins.
 func earliest(cur, ts time.Time) time.Time {
 	if !ts.IsZero() && (cur.IsZero() || ts.Before(cur)) {
 		return ts
@@ -82,41 +138,66 @@ func latest(cur, ts time.Time) time.Time {
 type WeightsSource string
 
 const (
-	WeightsMeasured WeightsSource = "measured"
-	WeightsSplit    WeightsSource = "run-duration split"
-	WeightsNone     WeightsSource = "none"
+	WeightsMeasured      WeightsSource = "measured"
+	WeightsMeasuredSplit WeightsSource = "measured + split"
+	WeightsSplit         WeightsSource = "run-duration split"
+	WeightsNone          WeightsSource = "none"
 )
 
 // BaselineWeights is what a prior run contributes to sizing and anchoring the
-// next one: its groups' measured spans, or - when no group could be measured but
-// the run's own length is known - that length spread evenly over labels, so the
-// pills stay equal and each step counts down toward the run's average rather
-// than not at all. Either way no group is allowed to outweigh the run it was
-// part of: a shard re-run hours later, or a task row a forge touched after the
-// fact, would otherwise stretch a span across the gap. A zero run duration
-// neither splits nor clamps.
+// next one: its groups' measured busy times, with the run's length spread
+// evenly over the groups it could not time, or - when it timed none but its
+// own length is known - over all of them, so the pills stay equal and each
+// step counts down toward the run's average rather than not at all. See
+// FillWeights for the rules.
 func BaselineWeights(jobs []Job, labels []string, run time.Duration) (map[string]float64, WeightsSource) {
-	if weights := GroupWeights(jobs); weights != nil {
-		// Only the measured path can exceed the run: an even split is run/N, which
-		// is at most the run itself.
-		if limit := run.Seconds(); limit > StepWeightFloor {
-			for name, w := range weights {
-				if w > limit {
-					weights[name] = limit
-				}
-			}
+	return FillWeights(GroupWeights(jobs), labels, run)
+}
+
+// FillWeights completes a set of measured weights against the run they came
+// from. Two things happen. No group is allowed to outweigh the run it was part
+// of: a shard re-run hours later, or a task row a forge touched after the fact,
+// would otherwise stretch a busy time across the gap. And a label the run could
+// not time takes the run's even share (its length over the label count), not
+// the mean of the timed groups: one recovered one-second job would otherwise
+// drag every other pill to a hairline and hand the countdown a one-second
+// estimate, leaving the card worse off than if nothing had been recovered at
+// all. The share is run/N rather than what is left after the timed groups,
+// because groups that ran in series consume the whole run and would leave
+// nothing to share.
+//
+// A zero run neither clamps nor splits; with nothing measured either, the
+// result is nil. measured is not mutated.
+func FillWeights(measured map[string]float64, labels []string, run time.Duration) (map[string]float64, WeightsSource) {
+	even := EvenWeights(labels, run)
+	if measured == nil {
+		if even == nil {
+			return nil, WeightsNone
 		}
-		return weights, WeightsMeasured
+		return even, WeightsSplit
 	}
-	if weights := EvenWeights(labels, run); weights != nil {
-		return weights, WeightsSplit
+	weights := make(map[string]float64, len(measured)+len(even))
+	limit := run.Seconds()
+	for name, w := range measured {
+		if limit > StepWeightFloor && w > limit {
+			w = limit
+		}
+		weights[name] = w
 	}
-	return nil, WeightsNone
+	source := WeightsMeasured
+	for name, share := range even {
+		if _, ok := weights[name]; !ok {
+			weights[name] = share
+			source = WeightsMeasuredSplit
+		}
+	}
+	return weights, source
 }
 
 // EvenWeights spreads a run's wall-clock evenly over its step groups. Returns
 // nil when there is nothing to spread, or when the share would not clear
-// StepWeightFloor, so the "nil means unmeasured" convention holds.
+// StepWeightFloor: every pill would be a hairline and every window already
+// spent, so there is no estimate worth having.
 func EvenWeights(labels []string, total time.Duration) map[string]float64 {
 	if len(labels) == 0 || total <= 0 {
 		return nil
@@ -132,16 +213,11 @@ func EvenWeights(labels []string, total time.Duration) map[string]float64 {
 	return out
 }
 
-// meanWeight is the neutral duration estimate for a group the prior run did not
-// measure: the mean of every weight in byName, floored. ok is false when there is
-// no history to average at all, which lets ProjectWeights tell "no history" apart
-// from "the mean happens to be small" - LiveAnchor does not need the distinction,
-// since an absent history averages to zero and fails its floor check anyway.
-//
-// Floor entries are deliberately included in the average. GroupWeights seeds every
-// group it saw to the floor, so excluding them would compute the mean of only the
-// slow groups and hand an unmeasured group an estimate biased high; counting them
-// keeps it the mean of the run.
+// meanWeight is the neutral duration estimate for a group with no entry: the
+// mean of every weight in byName, floored. Every entry is a measurement, a
+// one-second group included, so this is the mean of what the run timed. ok is
+// false with nothing to average at all, which is the one case with no estimate:
+// ProjectWeights returns nil on it and LiveAnchor declines.
 func meanWeight(byName map[string]float64) (float64, bool) {
 	if len(byName) == 0 {
 		return 0, false
@@ -158,9 +234,10 @@ func meanWeight(byName map[string]float64) (float64, bool) {
 }
 
 // ProjectWeights builds a per-step weight slice aligned to labels, looking each
-// label up in the name-keyed historical weights. A label with no history (a job
-// added since the prior run) gets meanWeight, a neutral estimate. Each weight
-// tracks its own label regardless of group order.
+// label up in the name-keyed historical weights. A label with no entry (a job
+// added since the prior run, or one that run could not time) gets meanWeight,
+// a neutral estimate. Each weight tracks its own label regardless of group
+// order.
 //
 // The result is len(labels), which is NOT the same as total_steps: a caller that
 // has a total but no labels yet (a seed built after the jobs endpoint failed)

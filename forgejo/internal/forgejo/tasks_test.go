@@ -208,7 +208,8 @@ func TestJoinTasksBoundsCompletionByTheRunStop(t *testing.T) {
 	}
 
 	// Mixed rows, as one runner lane's rows were rewritten and another's were
-	// not: only the intact group is measured, the other floors and takes the mean.
+	// not: only the intact group is measured, the other is left out and draws
+	// at the mean.
 	jobs := []Job{
 		{ID: 1, TaskID: 1, Name: "analysis", RawStatus: StatusSuccess},
 		{ID: 2, TaskID: 2, Name: "test", RawStatus: StatusSuccess},
@@ -219,8 +220,8 @@ func TestJoinTasksBoundsCompletionByTheRunStop(t *testing.T) {
 	}
 	joinTasks(jobs, tasks, 62, stopped)
 	weights := ci.GroupWeights(toCIJobsForTest(jobs))
-	if weights["analysis"] != ci.StepWeightFloor || weights["test"] != 326 {
-		t.Errorf("weights = %v, want analysis at the floor and test=326", weights)
+	if _, ok := weights["analysis"]; ok || weights["test"] != 326 {
+		t.Errorf("weights = %v, want analysis unmeasured and test=326", weights)
 	}
 }
 

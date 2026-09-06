@@ -103,7 +103,7 @@ func (c *Client) stampLiveTimings(ctx context.Context, repo string, jobs []Job) 
 // run itself stopped, the bound on what a row's updated_at may claim.
 //
 // Partial results are deliberate: an unmatched job stays unmeasured, and
-// ci.GroupWeights floors that group into a thin pill rather than dropping it.
+// ci.GroupWeights leaves that group out, so it draws at the mean of the rest.
 func (c *Client) stampHistoricTimings(ctx context.Context, repo string, jobs []Job, indexInRepo int64, stoppedAt time.Time) []Job {
 	if !c.opts.HistoryTimings {
 		return jobs
