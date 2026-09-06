@@ -259,6 +259,14 @@ func (e *clientError) Error() string {
 	return fmt.Sprintf("client error %d for %s", e.status, e.url)
 }
 
+// apiNotFound reports a 404 that Forgejo itself sent rather than whatever sits
+// in front of it: the API always attaches a message, and a reverse proxy
+// answering for an instance mid-redeploy sends text/plain "404 page not found"
+// for every path.
+func (e *clientError) apiNotFound() bool {
+	return e.status == http.StatusNotFound && e.message != ""
+}
+
 // apiMessage pulls the "message" field out of a Forgejo error body. It is where
 // a permission failure names the scope it wanted, e.g.
 // "token does not have at least one of required scope(s): [read:repository]" -
@@ -338,13 +346,17 @@ func (c *Client) GetActiveRuns(ctx context.Context, repo string) ([]Run, error) 
 	}
 	runs, err := c.fetchRuns(ctx, c.runsURL(owner, name, q), "get active runs")
 	if err != nil {
-		// A 404 here means the repo has no Actions rather than that something
-		// went wrong: the endpoint does not exist when the unit is disabled.
-		// Treat it as "nothing running" and stop asking for a while.
+		// Forgejo answers a repo whose Actions unit is disabled, a repo that does
+		// not exist and one the token cannot see with the same JSON 404 ("The
+		// target couldn't be found."), and none of the three produces a run
+		// until something changes: all are written off for a while. A 404 with
+		// no API message is not Forgejo's, and writing the repo off on one
+		// blinded new-run detection for noActionsTTL with nothing above Info in
+		// the log; it is an error like any other, and the next tick retries.
 		var ce *clientError
-		if errors.As(err, &ce) && ce.status == http.StatusNotFound {
+		if errors.As(err, &ce) && ce.apiNotFound() {
 			c.markActionsDisabled(repo)
-			slog.Info("repo has no Actions, skipping it until the next re-check",
+			slog.Info("repo has no Actions or is not visible to the token, skipping it until the next re-check",
 				"repo", repo, "recheck_in", noActionsTTL)
 			return nil, nil
 		}

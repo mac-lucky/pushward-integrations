@@ -650,6 +650,8 @@ func TestGetActiveRunsSkipsReposWithoutActions(t *testing.T) {
 	c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		calls.Add(1)
 		w.WriteHeader(http.StatusNotFound)
+		// The JSON message is what marks the 404 as Forgejo's own rather than a
+		// proxy's; see TestGetActiveRunsStillErrorsOnRealFailures.
 		_, _ = w.Write([]byte(`{"message":"The target couldn't be found."}`))
 	}))
 
@@ -699,19 +701,45 @@ func TestActionsDisabledExpires(t *testing.T) {
 	}
 }
 
-// TestGetActiveRunsStillErrorsOnRealFailures: only 404 means "no Actions"; a 403
-// or a 500 is a genuine problem and must not be swallowed as "nothing running".
+// TestGetActiveRunsStillErrorsOnRealFailures: only Forgejo's own JSON 404 means
+// "no Actions"; a 403, a 500, or a 404 from the reverse proxy in front of an
+// instance mid-redeploy is a genuine problem and must not be swallowed as
+// "nothing running". The proxy case is the one that bit: text/plain "404 page
+// not found" wrote every repo off for half an hour of blind detection.
 func TestGetActiveRunsStillErrorsOnRealFailures(t *testing.T) {
-	for _, status := range []int{http.StatusForbidden, http.StatusInternalServerError} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
+	cases := []struct {
+		name        string
+		status      int
+		contentType string
+		body        string
+	}{
+		{name: "forbidden", status: http.StatusForbidden},
+		{name: "server error", status: http.StatusInternalServerError},
+		{name: "proxy 404", status: http.StatusNotFound, contentType: "text/plain; charset=utf-8", body: "404 page not found\n"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls atomic.Int32
 			c := testClient(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(status)
+				calls.Add(1)
+				if tc.contentType != "" {
+					w.Header().Set("Content-Type", tc.contentType)
+				}
+				w.WriteHeader(tc.status)
+				_, _ = w.Write([]byte(tc.body))
 			}))
 			if _, err := c.GetActiveRuns(context.Background(), "acme/app"); err == nil {
-				t.Errorf("status %d was swallowed", status)
+				t.Errorf("status %d was swallowed", tc.status)
 			}
 			if c.actionsDisabled("acme/app") {
-				t.Errorf("status %d must not write the repo off", status)
+				t.Errorf("status %d must not write the repo off", tc.status)
+			}
+			// The next tick asks again rather than serving the write-off. (A 5xx
+			// is retried within one call, so the count is compared, not fixed.)
+			before := calls.Load()
+			_, _ = c.GetActiveRuns(context.Background(), "acme/app")
+			if n := calls.Load(); n <= before {
+				t.Errorf("made no request on the next tick (%d before, %d after): the failure must be retried", before, n)
 			}
 		})
 	}

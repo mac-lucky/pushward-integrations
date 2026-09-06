@@ -335,7 +335,10 @@ func TestGetRunError(t *testing.T) {
 func TestActiveRunsTreats404AsNoActions(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, _ *http.Request) {
+		// Forgejo's own 404 carries a message; a bare one is a proxy's and is
+		// an error instead.
 		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"message":"The target couldn't be found."}`))
 	})
 	f := testForge(t, mux)
 
