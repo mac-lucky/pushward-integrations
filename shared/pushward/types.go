@@ -44,6 +44,10 @@ const (
 // the alert template only. Raised from 32 in server v1.11.0.
 const MaxSeverityLabelRunes = 40
 
+// MaxCompactLabelRunes caps content.compact_label, the text shown in the
+// Dynamic Island compact leading ear on every template.
+const MaxCompactLabelRunes = 4
+
 // DismissalTTLMax mirrors the server's dismissal_ttl ceiling: iOS will not hold
 // an ended Live Activity on the Lock Screen longer than 4h.
 const DismissalTTLMax = 14400
@@ -312,17 +316,21 @@ type ApprovalAnswer struct {
 // Unused fields use omitempty and won't appear in JSON.
 type Content struct {
 	// Core fields (all templates)
-	Template        string  `json:"template"`
-	Progress        float64 `json:"progress"`
-	State           string  `json:"state,omitempty"`
-	Icon            string  `json:"icon,omitempty"`
-	Subtitle        string  `json:"subtitle,omitempty"`
-	AccentColor     string  `json:"accent_color,omitempty"`
-	BackgroundColor string  `json:"background_color,omitempty"`
-	TextColor       string  `json:"text_color,omitempty"`
-	RemainingTime   *int    `json:"remaining_time,omitempty"`
-	URL             string  `json:"url,omitempty"`
-	SecondaryURL    string  `json:"secondary_url,omitempty"`
+	Template string  `json:"template"`
+	Progress float64 `json:"progress"`
+	State    string  `json:"state,omitempty"`
+	Icon     string  `json:"icon,omitempty"`
+	Subtitle string  `json:"subtitle,omitempty"`
+	// CompactLabel replaces the icon (or the steps ring / timeline stack) in
+	// the Dynamic Island compact leading ear, on every template. At most
+	// MaxCompactLabelRunes. Empty keeps the per-template default.
+	CompactLabel    string `json:"compact_label,omitempty"`
+	AccentColor     string `json:"accent_color,omitempty"`
+	BackgroundColor string `json:"background_color,omitempty"`
+	TextColor       string `json:"text_color,omitempty"`
+	RemainingTime   *int   `json:"remaining_time,omitempty"`
+	URL             string `json:"url,omitempty"`
+	SecondaryURL    string `json:"secondary_url,omitempty"`
 
 	// Tap-action routing (any template). tap_action overrides the widget-wide
 	// tap target; url_action / secondary_url_action render as routed buttons
@@ -491,17 +499,19 @@ type UpdateRequest struct {
 // to delete the field. Adding a new pointer field without omitempty is a
 // silent correctness bug.
 type ContentPatch struct {
-	Template        *string  `json:"template,omitempty"`
-	Progress        *float64 `json:"progress,omitempty"`
-	State           *string  `json:"state,omitempty"`
-	Icon            *string  `json:"icon,omitempty"`
-	Subtitle        *string  `json:"subtitle,omitempty"`
-	AccentColor     *string  `json:"accent_color,omitempty"`
-	BackgroundColor *string  `json:"background_color,omitempty"`
-	TextColor       *string  `json:"text_color,omitempty"`
-	RemainingTime   *int     `json:"remaining_time,omitempty"`
-	URL             *string  `json:"url,omitempty"`
-	SecondaryURL    *string  `json:"secondary_url,omitempty"`
+	Template *string  `json:"template,omitempty"`
+	Progress *float64 `json:"progress,omitempty"`
+	State    *string  `json:"state,omitempty"`
+	Icon     *string  `json:"icon,omitempty"`
+	Subtitle *string  `json:"subtitle,omitempty"`
+	// CompactLabel: same rules as the matching Content field.
+	CompactLabel    *string `json:"compact_label,omitempty"`
+	AccentColor     *string `json:"accent_color,omitempty"`
+	BackgroundColor *string `json:"background_color,omitempty"`
+	TextColor       *string `json:"text_color,omitempty"`
+	RemainingTime   *int    `json:"remaining_time,omitempty"`
+	URL             *string `json:"url,omitempty"`
+	SecondaryURL    *string `json:"secondary_url,omitempty"`
 
 	// Tap-action routing (any template). Each slot is a *TapAction: nil is
 	// omitted (preserve server-side). A present value is deep-merged into the

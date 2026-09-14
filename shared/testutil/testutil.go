@@ -106,6 +106,7 @@ type apiContent struct {
 	State              string                             `json:"state,omitempty"`
 	Icon               string                             `json:"icon,omitempty"`
 	Subtitle           string                             `json:"subtitle,omitempty"`
+	CompactLabel       string                             `json:"compact_label,omitempty"`
 	AccentColor        string                             `json:"accent_color,omitempty"`
 	BackgroundColor    string                             `json:"background_color,omitempty"`
 	TextColor          string                             `json:"text_color,omitempty"`
@@ -721,6 +722,9 @@ func validateContent(c *apiContent) error {
 	}
 	if utf8.RuneCountInString(c.Subtitle) > 256 {
 		return fmt.Errorf("subtitle must be at most 256 runes")
+	}
+	if utf8.RuneCountInString(c.CompactLabel) > pushward.MaxCompactLabelRunes {
+		return fmt.Errorf("compact_label must be at most %d runes", pushward.MaxCompactLabelRunes)
 	}
 	if utf8.RuneCountInString(c.CompletionMessage) > 512 {
 		return fmt.Errorf("completion_message must be at most 512 runes")

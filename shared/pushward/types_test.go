@@ -170,6 +170,16 @@ func TestMediaWireNames(t *testing.T) {
 	}
 }
 
+// TestContentPatchEmptyMarshalsToEmptyObject is the whole-struct form of the
+// omitempty rule: a zero ContentPatch must serialize as {} or a future field
+// without omitempty would send null and delete the stored value under
+// merge-patch.
+func TestContentPatchEmptyMarshalsToEmptyObject(t *testing.T) {
+	if got := string(mustJSON(t, ContentPatch{})); got != "{}" {
+		t.Errorf("json.Marshal(ContentPatch{}) = %s, want {}", got)
+	}
+}
+
 // TestApprovalWireNames pins the snake_case keys of the approval template on
 // both Content and ContentPatch, and that an empty patch leaks none of them
 // (the TestMediaWireNames rule: a nil pointer without omitempty marshals as

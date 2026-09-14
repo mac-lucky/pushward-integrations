@@ -334,7 +334,7 @@ func TestValidateMedia(t *testing.T) {
 	}{
 		{
 			name: "full contract",
-			body: media(`"media_title":"Snooze","subtitle":"SZA","playback_state":"playing","position_seconds":47.5,"duration_seconds":214,"position_at":` + now + `,"volume":0.35,"favorite":true,` +
+			body: media(`"media_title":"Snooze","subtitle":"SZA","compact_label":"SOS","playback_state":"playing","position_seconds":47.5,"duration_seconds":214,"position_at":` + now + `,"volume":0.35,"favorite":true,` +
 				`"image_url":"https://example.com/art.jpg","image_shape":"square","image_thumbhash":"` + stdHash + `",` +
 				`"controls":{"previous":{"url":"https://ha.example/api/webhook/pw-prev"},"play_pause":{"url":"https://ha.example/api/webhook/pw-toggle","method":"POST"},` +
 				`"play":{"url":"https://ha.example/api/webhook/pw-play"},"pause":{"url":"https://ha.example/api/webhook/pw-pause"},"next":{"url":"https://ha.example/api/webhook/pw-next"},` +
@@ -398,6 +398,24 @@ func TestValidateMedia(t *testing.T) {
 		{
 			name:       "media_title over the bound",
 			body:       media(`"media_title":"` + strings.Repeat("t", 129) + `"`),
+			wantStatus: 400,
+		},
+		{
+			// "Tokyo Stock Exchange" in kanji: 4 runes, 12 bytes. The cap
+			// counts runes, so this passes while 5 ASCII letters fail.
+			name:       "compact_label at the bound",
+			body:       media(`"compact_label":"\u6771\u4eac\u8a3c\u5238"`),
+			wantStatus: 200,
+		},
+		{
+			name:       "compact_label over the bound",
+			body:       media(`"compact_label":"TNYAX"`),
+			wantStatus: 400,
+		},
+		{
+			// compact_label is a base field, so the cap holds on every template.
+			name:       "compact_label over the bound on generic",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"compact_label":"TNYAX"}}`,
 			wantStatus: 400,
 		},
 		{
