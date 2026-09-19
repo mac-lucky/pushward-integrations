@@ -3,7 +3,7 @@
 
 # PushWard for Grafana
 
-[![CI/CD Grafana](https://github.com/mac-lucky/pushward-integrations/actions/workflows/grafana-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/grafana-ci-cd.yml)
+[![CI](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml)
 [![Image](https://img.shields.io/badge/ghcr.io-pushward--grafana-2496ED?logo=docker&logoColor=white)](https://github.com/mac-lucky/pushward-integrations/pkgs/container/pushward-grafana)
 
 Turns Grafana alerts into [PushWard](https://pushward.app) **Live Activity timelines** on iPhone - a live sparkline of the firing metric on the Dynamic Island and Lock Screen, backfilled from Prometheus / VictoriaMetrics history and updated as the metric moves. It can also poll PromQL on a schedule and publish the results as PushWard **iOS Home / Lock Screen widgets**.
@@ -249,7 +249,7 @@ docker build -f grafana/Dockerfile --build-arg GO_VERSION=1.26.5 -t pushward-gra
 
 ## CI/CD & Releases
 
-CI runs via [`grafana-ci-cd.yml`](../.github/workflows/grafana-ci-cd.yml) on PRs and pushes to `main` (path-filtered to `grafana/**` and `shared/**`). Images publish to **GHCR only** - `ghcr.io/mac-lucky/pushward-grafana` (a Docker Hub name is configured but `push_to_dockerhub` is `false`).
+CI runs via [`ci.yml`](../.github/workflows/ci.yml) on PRs and pushes to `main`; the Grafana leg builds when `grafana/**` or `shared/**` changes. Images publish to **GHCR only** - `ghcr.io/mac-lucky/pushward-grafana` (a Docker Hub name is configured but `push_to_dockerhub` is `false`).
 
 | Trigger | GHCR tags | Purpose |
 |---|---|---|

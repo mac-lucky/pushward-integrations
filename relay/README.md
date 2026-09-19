@@ -2,7 +2,7 @@
 [![App Store](https://img.shields.io/badge/App_Store-Download-0D96F6?style=for-the-badge&logo=apple&logoColor=white)](https://apps.apple.com/app/id6759689999)
 [![Docs](https://img.shields.io/badge/Docs-API_Reference-5B4FE5?style=for-the-badge&logo=readthedocs&logoColor=white)](https://pushward.app)
 
-[![CI/CD Relay](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml)
+[![CI](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml)
 [![Image](https://img.shields.io/badge/ghcr.io-pushward--relay-2496ED?logo=docker&logoColor=white)](https://github.com/mac-lucky/pushward-integrations/pkgs/container/pushward-relay)
 
 # PushWard Relay

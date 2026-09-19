@@ -1,0 +1,177 @@
+name: CI
+
+# One workflow for the whole workspace, so every pull request reports the same
+# "All checks passed" check and branch protection can require it. Each bridge
+# still builds only when its own directory, shared/ or the workspace files
+# change; the legs that do not run count as passing. Release tags are handled
+# by release.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      bridges: ${{ steps.diff.outputs.bridges }}
+      shared: ${{ steps.diff.outputs.shared }}
+      go: ${{ steps.diff.outputs.go }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # A push is diffed against its "before" commit, which can be several
+          # commits back.
+          fetch-depth: 0
+
+      - name: Diff against the base
+        id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+
+          # A pull request checks out its merge commit, whose first parent is
+          # the base branch tip. A dispatch, or a push whose "before" commit is
+          # unknown (all zeros, or gone after a force push), runs everything.
+          all=false
+          files=""
+          case "$EVENT" in
+            pull_request) files=$(git diff --name-only HEAD^1 HEAD) ;;
+            push)
+              if git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+                files=$(git diff --name-only "$BEFORE" HEAD)
+              else
+                all=true
+              fi
+              ;;
+            *) all=true ;;
+          esac
+          echo "all=${all}"
+          echo "${files}"
+
+          changed() { [ "$all" = true ] || grep -Eq "$1" <<<"$files"; }
+
+          # Every bridge builds against shared/ through go.work, so a change
+          # there, or to this workflow, rebuilds all of them.
+          everything='^(shared/|go\.work|\.github/workflows/ci\.yml$)'
+
+          bridges=()
+          for b in backrest bambulab forgejo github grafana relay sabnzbd; do
+            if changed "^${b}/" || changed "$everything"; then
+              bridges+=("$b")
+            fi
+          done
+          echo "bridges=$(jq -nc '$ARGS.positional' --args "${bridges[@]}")" >> "$GITHUB_OUTPUT"
+
+          shared=false
+          changed "$everything" && shared=true
+          echo "shared=${shared}" >> "$GITHUB_OUTPUT"
+
+          go=false
+          changed '\.go$|(^|/)go\.(mod|sum)$|^go\.work|^\.golangci\.yml$|^\.github/workflows/ci\.yml$' && go=true
+          echo "go=${go}" >> "$GITHUB_OUTPUT"
+
+          cat "$GITHUB_OUTPUT"
+
+  bridge:
+    name: ${{ matrix.bridge }}
+    needs: changes
+    if: needs.changes.outputs.bridges != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        bridge: ${{ fromJSON(needs.changes.outputs.bridges) }}
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    with:
+      app_name: "pushward-${{ matrix.bridge }}"
+      ghcr_image: "ghcr.io/mac-lucky/pushward-${{ matrix.bridge }}"
+      dockerhub_image: "maclucky/pushward-${{ matrix.bridge }}"
+      push_to_dockerhub: false
+      main_branch: "main"
+      # Talos deployments consume the :main dev channel between releases. The
+      # relay deploys release tags only.
+      enable_main_dev_tag: ${{ matrix.bridge != 'relay' }}
+      build_context: "."
+      dockerfile_path: "./${{ matrix.bridge }}/Dockerfile"
+      go_module_path: "./${{ matrix.bridge }}"
+      enable_go_tests: true
+      go_test_args: "-race -count=1 -v"
+      # the lint job below runs govet and staticcheck
+      code_analysis_tools: '["govulncheck", "gosec"]'
+      enable_container_tests: false
+      enable_kubernetes_tests: false
+    secrets: inherit
+
+  # The bridges run go test rooted at their own module, so nothing else ever
+  # executes the shared module's suite.
+  shared:
+    name: Test shared module
+    needs: changes
+    if: needs.changes.outputs.shared == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: shared
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: shared/go.mod
+          cache-dependency-path: shared/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Test
+        run: go test -race -count=1 ./...
+
+  # Lints every go.work module, not only the changed ones: a shared/ change can
+  # break a bridge's lint without touching the bridge.
+  lint:
+    name: golangci-lint
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/golangci-lint-reusable.yml@master
+
+  # Branch protection requires this one name. The bridge legs are named after
+  # whatever changed, so no rule could list them.
+  all-checks:
+    name: All checks passed
+    runs-on: ubuntu-latest
+    needs: [changes, bridge, shared, lint]
+    if: ${{ always() }}
+    steps:
+      # skipped counts as a pass: a pull request touching one bridge skips the
+      # other six, and one touching no Go at all skips everything but changes.
+      - name: Fail if any job did not succeed
+        if: ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}
+        run: |
+          echo "::error::one or more jobs failed or were cancelled"
+          exit 1

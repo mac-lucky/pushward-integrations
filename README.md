@@ -3,14 +3,7 @@
 
 # PushWard Integrations
 
-[![CI/CD Backrest](https://github.com/mac-lucky/pushward-integrations/actions/workflows/backrest-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/backrest-ci-cd.yml)
-[![CI/CD Forgejo](https://github.com/mac-lucky/pushward-integrations/actions/workflows/forgejo-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/forgejo-ci-cd.yml)
-[![CI/CD GitHub](https://github.com/mac-lucky/pushward-integrations/actions/workflows/github-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/github-ci-cd.yml)
-[![CI/CD SABnzbd](https://github.com/mac-lucky/pushward-integrations/actions/workflows/sabnzbd-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/sabnzbd-ci-cd.yml)
-[![CI/CD BambuLab](https://github.com/mac-lucky/pushward-integrations/actions/workflows/bambulab-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/bambulab-ci-cd.yml)
-[![CI/CD Grafana](https://github.com/mac-lucky/pushward-integrations/actions/workflows/grafana-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/grafana-ci-cd.yml)
-[![CI/CD Relay](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml)
-[![golangci-lint](https://github.com/mac-lucky/pushward-integrations/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/golangci-lint.yml)
+[![CI](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml)
 
 Turn events from the services you already run - GitHub Actions, Forgejo Actions, SABnzbd, a Bambu Lab printer, Grafana, and ~19 self-hosted apps behind the relay - into real-time **PushWard Live Activities, widgets, and push notifications** on your iPhone (Dynamic Island + Lock Screen). This is a Go [workspace](https://go.dev/ref/mod#workspaces) of small "bridge" programs, each shipped as its own Docker image.
 
@@ -228,7 +221,7 @@ PUSHWARD_DATABASE_DSN='postgres://USER:PASS@HOST:5432/DB?sslmode=disable' \
 # Tests (CI runs Go tests with -race -count=1 -v)
 go test ./shared/... ./github/... ./forgejo/... ./sabnzbd/... ./bambulab/... ./grafana/... ./backrest/... ./relay/... -race -count=1 -v
 
-# Lint, one module at a time (matches CI: golangci-lint v2.11.4)
+# Lint, one module at a time (matches CI)
 for m in shared github forgejo sabnzbd bambulab grafana backrest relay; do
   (cd "$m" && golangci-lint run ./...)
 done
@@ -254,10 +247,10 @@ Each image builds from a `golang:<ver>-alpine` builder into an `alpine:3.23` run
 
 ## CI/CD & Releases
 
-Every per-bridge CI and the release workflow call the reusable `mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master`; the lint workflow calls `golangci-lint-reusable.yml@master`.
+CI and the release workflow both build bridges with the reusable `mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master`; lint uses `golangci-lint-reusable.yml@master`.
 
-- **Per-bridge CI** (`<bridge>-ci-cd.yml`) is path-filtered to `<bridge>/**` and `shared/**`, so a change to `shared/` triggers all seven.
-- **Lint** (`golangci-lint.yml`) reads the `use` entries out of `go.work` and fans out to one `golangci-lint` v2.11.4 job per module, so every module is linted on its own and one failure does not mask the rest.
+- **CI** (`ci.yml`) runs on every pull request and every push to `main`. It diffs the change and builds only the bridges whose directory changed; a change to `shared/`, `go.work` or `ci.yml` itself builds all seven and runs the shared module's tests. Its last job, `All checks passed`, is the required check on `main` and counts skipped legs as passing.
+- **Lint** (the `lint` job in `ci.yml`) reads the `use` entries out of `go.work` and fans out to one `golangci-lint` job per module, so every module is linted on its own and one failure does not mask the rest.
 - **Release** (`release.yml`) fires on per-bridge tags `<bridge>/v*`, parses the bridge + version, builds that one bridge, and creates a per-bridge GitHub Release with auto-generated, categorized notes (`.github/release.yml`).
 
 Bridges are versioned **independently**.
@@ -295,7 +288,7 @@ Bridges call the public pushward-server REST surface - `POST`/`PATCH /activities
 3. **Reuse `shared`.** Load config with `shared/config`, talk to the server with `shared/pushward`, and (for webhook bridges) serve `/health` + `/ready` via `shared/server.NewMux`.
 4. **Add a `config.example.yml`** with the `pushward.*` block and your bridge-specific keys, and a `<bridge>/README.md`.
 5. **Add a `Dockerfile`** that builds from the repo root and `COPY`s `shared/` (copy an existing bridge's Dockerfile).
-6. **Wire CI/CD.** Add `.github/workflows/<bridge>-ci-cd.yml` (path-filtered to `<bridge>/**` and `shared/**`) and a `<bridge>` job + tag pattern `<bridge>/v*` in `release.yml`.
+6. **Wire CI/CD.** Add the bridge to the loop in the `changes` job of `.github/workflows/ci.yml`, and a `<bridge>` job + tag pattern `<bridge>/v*` in `release.yml`.
 
 To add a **provider to the relay** instead, see the "Adding a New Relay Provider" guide in [`CLAUDE.md`](./CLAUDE.md) and the [relay README](./relay/).
 

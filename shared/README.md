@@ -1,7 +1,6 @@
 [![Website](https://img.shields.io/badge/pushward.app-5B4FE5?style=for-the-badge&logo=safari&logoColor=white)](https://pushward.app)
 [![App Store](https://img.shields.io/badge/App_Store-Download-0D96F6?style=for-the-badge&logo=apple&logoColor=white)](https://apps.apple.com/app/id6759689999)
-[![golangci-lint](https://github.com/mac-lucky/pushward-integrations/actions/workflows/golangci-lint.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/golangci-lint.yml)
-[![CI/CD Relay](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/relay-ci-cd.yml)
+[![CI](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml)
 
 # PushWard Integrations - Shared Library
 
@@ -256,10 +255,10 @@ Or from the repo root (the Go workspace):
 go test ./shared/... -v -count=1
 ```
 
-Lint matches CI (`golangci-lint` `v2.11.4`, run at the workspace root):
+Lint the module the way CI does, from inside it (`golangci-lint run` at the workspace root lints nothing):
 
 ```bash
-golangci-lint run
+cd shared && golangci-lint run ./...
 ```
 
 Every bridge CI runs its tests with the race detector (`-race -count=1 -v`); add `-race` locally when touching shared code those bridges exercise.

@@ -1,6 +1,6 @@
 [![Website](https://img.shields.io/badge/pushward.app-5B4FE5?style=for-the-badge&logo=safari&logoColor=white)](https://pushward.app)
 [![App Store](https://img.shields.io/badge/App_Store-Download-0D96F6?style=for-the-badge&logo=apple&logoColor=white)](https://apps.apple.com/app/id6759689999)
-[![CI/CD GitHub](https://github.com/mac-lucky/pushward-integrations/actions/workflows/github-ci-cd.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/github-ci-cd.yml)
+[![CI](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml)
 [![Image](https://img.shields.io/badge/ghcr.io-pushward--github-2496ED?logo=docker&logoColor=white)](https://github.com/mac-lucky/pushward-integrations/pkgs/container/pushward-github)
 
 # PushWard for GitHub Actions
@@ -208,7 +208,7 @@ docker build -f github/Dockerfile --build-arg GO_VERSION=1.26.5 -t pushward-gith
 
 ## CI/CD & Releases
 
-Bridges are versioned independently. The per-bridge workflow `.github/workflows/github-ci-cd.yml` runs on changes to `github/**` or `shared/**` and calls the shared `go-cicd-reusable.yml`. Images publish to **GHCR only** (`push_to_dockerhub: false`).
+Bridges are versioned independently. `.github/workflows/ci.yml` builds this bridge when `github/**` or `shared/**` changes and calls the shared `go-cicd-reusable.yml`. Images publish to **GHCR only** (`push_to_dockerhub: false`).
 
 | Trigger | GHCR tags published |
 |---|---|
