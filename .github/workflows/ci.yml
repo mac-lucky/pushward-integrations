@@ -13,11 +13,7 @@ on:
     branches: [main]
   workflow_dispatch:
 
-permissions:
-  contents: read
-  packages: write
-  security-events: write
-  actions: read
+permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -40,6 +36,7 @@ jobs:
           # A push is diffed against its "before" commit, which can be several
           # commits back.
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Diff against the base
         id: diff
@@ -101,6 +98,13 @@ jobs:
       matrix:
         bridge: ${{ fromJSON(needs.changes.outputs.bridges) }}
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    # packages: write for the :main dev images, security-events: write for the
+    # SARIF uploads.
+    permissions:
+      contents: read
+      packages: write
+      security-events: write
+      actions: read
     with:
       app_name: "pushward-${{ matrix.bridge }}"
       ghcr_image: "ghcr.io/mac-lucky/pushward-${{ matrix.bridge }}"
@@ -119,7 +123,6 @@ jobs:
       code_analysis_tools: '["govulncheck", "gosec"]'
       enable_container_tests: false
       enable_kubernetes_tests: false
-    secrets: inherit
 
   # The bridges run go test rooted at their own module, so nothing else ever
   # executes the shared module's suite.
@@ -136,6 +139,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
 
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7

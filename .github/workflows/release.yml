@@ -15,11 +15,8 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
-permissions:
-  contents: write
-  packages: write
-  security-events: write
-  actions: read
+# Grants sit on the bridge jobs, the only ones that publish; parse needs none.
+permissions: {}
 
 jobs:
   parse:
@@ -43,6 +40,11 @@ jobs:
     needs: parse
     if: needs.parse.outputs.bridge == 'backrest'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: write
+      packages: write
+      security-events: write
+      actions: read
     with:
       app_name: "pushward-backrest"
       ghcr_image: "ghcr.io/mac-lucky/pushward-backrest"
@@ -57,12 +59,16 @@ jobs:
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./backrest ./shared"
-    secrets: inherit
 
   bambulab:
     needs: parse
     if: needs.parse.outputs.bridge == 'bambulab'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: write
+      packages: write
+      security-events: write
+      actions: read
     with:
       app_name: "pushward-bambulab"
       ghcr_image: "ghcr.io/mac-lucky/pushward-bambulab"
@@ -77,12 +83,16 @@ jobs:
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./bambulab ./shared"
-    secrets: inherit
 
   forgejo:
     needs: parse
     if: needs.parse.outputs.bridge == 'forgejo'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: write
+      packages: write
+      security-events: write
+      actions: read
     with:
       app_name: "pushward-forgejo"
       ghcr_image: "ghcr.io/mac-lucky/pushward-forgejo"
@@ -97,12 +107,16 @@ jobs:
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./forgejo ./shared"
-    secrets: inherit
 
   github:
     needs: parse
     if: needs.parse.outputs.bridge == 'github'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: write
+      packages: write
+      security-events: write
+      actions: read
     with:
       app_name: "pushward-github"
       ghcr_image: "ghcr.io/mac-lucky/pushward-github"
@@ -117,12 +131,16 @@ jobs:
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./github ./shared"
-    secrets: inherit
 
   grafana:
     needs: parse
     if: needs.parse.outputs.bridge == 'grafana'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: write
+      packages: write
+      security-events: write
+      actions: read
     with:
       app_name: "pushward-grafana"
       ghcr_image: "ghcr.io/mac-lucky/pushward-grafana"
@@ -137,12 +155,16 @@ jobs:
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./grafana ./shared"
-    secrets: inherit
 
   relay:
     needs: parse
     if: needs.parse.outputs.bridge == 'relay'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: write
+      packages: write
+      security-events: write
+      actions: read
     with:
       app_name: "pushward-relay"
       ghcr_image: "ghcr.io/mac-lucky/pushward-relay"
@@ -157,12 +179,16 @@ jobs:
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./relay ./shared"
-    secrets: inherit
 
   sabnzbd:
     needs: parse
     if: needs.parse.outputs.bridge == 'sabnzbd'
     uses: mac-lucky/actions-shared-workflows/.github/workflows/go-cicd-reusable.yml@master
+    permissions:
+      contents: write
+      packages: write
+      security-events: write
+      actions: read
     with:
       app_name: "pushward-sabnzbd"
       ghcr_image: "ghcr.io/mac-lucky/pushward-sabnzbd"
@@ -177,4 +203,3 @@ jobs:
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./sabnzbd ./shared"
-    secrets: inherit
