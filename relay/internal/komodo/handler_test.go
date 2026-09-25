@@ -269,8 +269,36 @@ func TestOneShotCustomPassive(t *testing.T) {
 	if notif.Body != "Nightly backup complete" {
 		t.Errorf("expected custom message body, got %q", notif.Body)
 	}
+	if notif.Title != "Komodo" || notif.Subtitle != "" {
+		t.Errorf("expected title Komodo and no subtitle, got %q / %q", notif.Title, notif.Subtitle)
+	}
 	if notif.Level != pushward.LevelPassive { // OK
 		t.Errorf("expected passive for OK, got %s", notif.Level)
+	}
+}
+
+func TestOneShotCustomSourcePrefix(t *testing.T) {
+	h, calls, mu := newHandler(t)
+	send(t, h, `{
+		"ts": 1730000000000, "resolved": false, "level": "CRITICAL",
+		"target": {"type": "System", "id": "system"},
+		"data": {"type": "Custom", "data": {"message": "Reconcile: forgejo failed at deploy: exit 1", "details": "forgejo at deploy: exit 1"}}
+	}`)
+
+	recorded := testutil.GetCalls(calls, mu)
+	if len(recorded) != 1 {
+		t.Fatalf("expected 1 notification, got %d", len(recorded))
+	}
+	var notif pushward.SendNotificationRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &notif)
+	if notif.Title != "Reconcile" {
+		t.Errorf("expected title from the message prefix, got %q", notif.Title)
+	}
+	if notif.Subtitle != "Komodo" {
+		t.Errorf("expected subtitle Komodo, got %q", notif.Subtitle)
+	}
+	if notif.Body != "forgejo failed at deploy: exit 1" {
+		t.Errorf("expected the rest of the message as body, got %q", notif.Body)
 	}
 }
 

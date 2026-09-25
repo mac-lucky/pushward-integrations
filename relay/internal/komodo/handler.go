@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strconv"
+	"strings"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -255,6 +256,12 @@ func (h *Handler) handleOneShot(ctx context.Context, userKey string, log *slog.L
 	name := resourceName(p)
 	notif := h.notification(p, name, oneShotCollapseID(p))
 	notif.Body = summarize(&p.Data)
+	if p.Data.Type == "Custom" {
+		notif.Title, notif.Subtitle = "Komodo", ""
+		if src, rest, ok := customSource(p.Data.Data.Message); ok {
+			notif.Title, notif.Subtitle, notif.Body = src, "Komodo", text.Truncate(rest, 120)
+		}
+	}
 	notif.Level = ov.LevelOr(oneShotLevel(p.Level))
 	if err := pwClient.SendNotification(ctx, notif); err != nil {
 		log.Error("failed to send notification", "type", p.Data.Type, "error", err)
@@ -307,6 +314,17 @@ func resourceName(p *komodoPayload) string {
 	default:
 		return "Komodo"
 	}
+}
+
+// customSource splits a Custom alert's "Source: text" message. Custom alerts
+// (SendAlert from an Action or Procedure) all target System/"system", which
+// names nothing, so the prefix is the only name the alert carries.
+func customSource(msg string) (src, rest string, ok bool) {
+	src, rest, ok = strings.Cut(msg, ": ")
+	if !ok || src == "" || rest == "" || len(src) > 40 {
+		return "", "", false
+	}
+	return src, rest, true
 }
 
 func subtitle(name string) string {
