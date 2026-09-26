@@ -928,6 +928,52 @@ func TestPruneCaches_DropsReposNothingAsksAbout(t *testing.T) {
 	}
 }
 
+// With an explicit repo list there is no discovery, so the idle probe sweeps
+// too. runCache is keyed by run, and a run evicted before a re-read saw it finish
+// would otherwise stay cached for good.
+func TestGetInProgressRuns_SweepsTheCachesWithoutDiscovery(t *testing.T) {
+	mux := http.NewServeMux()
+	workflowsRoute(mux, "owner/repo")
+	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{})
+	})
+	c := testClient(t, mux)
+
+	stale := time.Now().Add(-cacheRetention - time.Minute)
+	c.mu.Lock()
+	c.runCache["owner/repo#1"] = runProbe{etag: `"z"`, usedAt: stale}
+	c.runCache["owner/repo#2"] = runProbe{etag: `"w"`, usedAt: time.Now()}
+	c.mu.Unlock()
+
+	if _, err := c.GetInProgressRuns(context.Background(), "owner/repo"); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	_, kept := c.runCache["owner/repo#1"]
+	_, live := c.runCache["owner/repo#2"]
+	c.mu.Unlock()
+	if kept {
+		t.Error("runCache kept a run nothing has asked about")
+	}
+	if !live {
+		t.Error("runCache dropped a live run")
+	}
+
+	// The probe runs once per repo per pass; the sweep waits out pruneInterval.
+	c.mu.Lock()
+	c.runCache["owner/repo#3"] = runProbe{etag: `"v"`, usedAt: stale}
+	c.mu.Unlock()
+	if _, err := c.GetInProgressRuns(context.Background(), "owner/repo"); err != nil {
+		t.Fatal(err)
+	}
+	c.mu.Lock()
+	_, kept = c.runCache["owner/repo#3"]
+	c.mu.Unlock()
+	if !kept {
+		t.Error("swept again inside pruneInterval")
+	}
+}
+
 func TestRateLimitError_String(t *testing.T) {
 	e := &rateLimitError{retryAfter: 60 * time.Second, url: "https://example.com"}
 	if got := e.Error(); got == "" {

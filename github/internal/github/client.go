@@ -42,6 +42,11 @@ const noWorkflowsTTL = 30 * time.Minute
 // which is one rate-limit window.
 const cacheRetention = 2 * time.Hour
 
+// pruneInterval spaces the cache sweeps. The idle probe runs the sweep, once per
+// repo per pass, and an entry only has to go some time after cacheRetention, not
+// on the dot.
+const pruneInterval = 10 * time.Minute
+
 // runsProbe is the cached answer to one repo's in-progress-runs probe. GitHub
 // does not count a conditional request that answers 304 against the primary rate
 // limit, so caching the decoded runs alongside the ETag turns the poll every idle
@@ -99,6 +104,8 @@ type Client struct {
 	runsCache map[string]runsProbe
 	workflows map[string]workflowPresence
 	runCache  map[string]runProbe
+	// prunedAt is when pruneCaches last swept, for pruneInterval.
+	prunedAt time.Time
 }
 
 func NewClient(token string) *Client {
@@ -456,6 +463,8 @@ func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]Workflow
 		return nil, err
 	}
 
+	c.pruneCaches()
+
 	has, err := c.hasWorkflows(ctx, repo)
 	if err != nil {
 		return nil, err
@@ -588,14 +597,23 @@ func (c *Client) markWorkflows(repo string, has bool, etag string) {
 	c.mu.Unlock()
 }
 
-// pruneCaches drops entries for repos nothing has asked about in cacheRetention.
-// Called from discovery rather than on a timer: it is the one place that already
-// runs periodically without being per-repo, and a pruned entry costs only the one
-// request that re-establishes its ETag.
+// pruneCaches drops entries for repos nothing has asked about in cacheRetention,
+// at most once per pruneInterval. A pruned entry costs only the one request that
+// re-establishes its ETag.
+//
+// Called from discovery and from the idle probe rather than on a timer. The probe
+// is the one that matters: with an explicit repo list there is no discovery at
+// all, and runCache is keyed by run, so every run evicted before its re-read saw
+// it finish would otherwise stay cached for the life of the process.
 func (c *Client) pruneCaches() {
-	cutoff := time.Now().Add(-cacheRetention)
+	now := time.Now()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if now.Sub(c.prunedAt) < pruneInterval {
+		return
+	}
+	c.prunedAt = now
+	cutoff := now.Add(-cacheRetention)
 	for repo, e := range c.runsCache {
 		if e.usedAt.Before(cutoff) {
 			delete(c.runsCache, repo)
@@ -760,8 +778,7 @@ func (c *Client) authenticatedLogin(ctx context.Context) (string, error) {
 //
 // Archived and disabled repos are filtered out.
 func (c *Client) ListRepos(ctx context.Context, owner string) ([]string, error) {
-	// Discovery is the periodic non-per-repo call, so it is where the per-repo
-	// caches get swept.
+	// Discovery sweeps the per-repo caches too; see pruneCaches.
 	c.pruneCaches()
 
 	login, err := c.authenticatedLogin(ctx)
