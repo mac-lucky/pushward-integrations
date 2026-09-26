@@ -268,6 +268,16 @@ func runningBackup(id int64, bytesDone, totalBytes int64) backrest.Operation {
 	}
 }
 
+// endedAgo re-dates a finished fixture to end d before testClock, keeping its
+// length. The fixtures date from weeks before the clock, and a finished row the
+// bridge never saw running is only announced when it ended recently.
+func endedAgo(op *backrest.Operation, d time.Duration) {
+	length := time.Duration(op.UnixTimeEnd.Int64()-op.UnixTimeStart.Int64()) * time.Millisecond
+	end := testClock.Add(-d)
+	op.UnixTimeEnd = backrest.Int64(end.UnixMilli())
+	op.UnixTimeStart = backrest.Int64(end.Add(-length).UnixMilli())
+}
+
 // finishedBackup is a completed backup stamped with an end time, which is what
 // decides whether the first poll announces it.
 func finishedBackup(t *testing.T, id int64, endedAgo time.Duration) backrest.Operation {
@@ -1300,8 +1310,10 @@ func TestStateWordingIsPinnedToTheRelayProvider(t *testing.T) {
 func TestFinishedRepoTasksRenderTheirOwnOutcome(t *testing.T) {
 	prune := loadOp(t, "prune_success.json")
 	prune.ID = 900
+	endedAgo(&prune, time.Minute)
 	check := loadOp(t, "check_error.json")
 	check.ID = 901
+	endedAgo(&check, time.Minute)
 
 	br := &fakeBackrest{
 		windows: [][]backrest.Operation{{}, {prune, check}},
@@ -1402,9 +1414,9 @@ func TestTerminalRowIsAnnouncedOnce(t *testing.T) {
 }
 
 // The done set is what keeps a terminal row from being announced twice, and it
-// grows by one entry per operation the bridge ever sees. A row that has scrolled
-// out of the query window cannot come back, so its entry is a slow leak on a
-// process meant to run for months.
+// grows by one entry per operation the bridge ever sees. Once a row has scrolled
+// out of the query window its entry is a slow leak on a process meant to run for
+// months; a row that scrolls back in is TestAnOldRowBackInTheWindowIsNotAnnounced.
 func TestBookkeepingIsDroppedOnceARowLeavesTheWindow(t *testing.T) {
 	old := finishedBackup(t, 777, 24*time.Hour)
 	br := &fakeBackrest{windows: [][]backrest.Operation{{old}, {}}}
@@ -1425,6 +1437,68 @@ func TestBookkeepingIsDroppedOnceARowLeavesTheWindow(t *testing.T) {
 	if left := len(h.p.done); left != 0 {
 		t.Errorf("the done set still holds %d entries for a row that is gone, want 0", left)
 	}
+}
+
+// Backrest ranks the query window by start time and deletes rows from inside it,
+// so a row the done set let go of can come back days later. It is history, not
+// an outcome that just landed: in production a failed backup from the week
+// before came back and was announced as Failed every morning.
+func TestAnOldRowBackInTheWindowIsNotAnnounced(t *testing.T) {
+	old := finishedBackup(t, 13154, 3*24*time.Hour)
+	old.Status = backrest.StatusError
+	br := &fakeBackrest{windows: [][]backrest.Operation{
+		{old}, // priming records it as history
+		{},    // it scrolls out, and the done set forgets it
+		{old}, // and back in
+		{old},
+	}}
+	h := newHarness(t, testConfig(), br)
+
+	for range 4 {
+		h.poll(t)
+		h.advance(30 * time.Second)
+	}
+
+	if calls := h.recorded(); len(calls) != 0 {
+		t.Fatalf("announced a row that ended 3 days ago in %d calls: %+v", len(calls), calls)
+	}
+}
+
+// An operation short enough to start and finish between two polls is never
+// seen running. Its first sight is the finished row, and it still gets its card.
+func TestAShortOperationBetweenPollsIsAnnounced(t *testing.T) {
+	short := finishedBackup(t, 13200, 10*time.Second)
+	br := &fakeBackrest{windows: [][]backrest.Operation{{}, {short}}}
+	h := newHarness(t, testConfig(), br)
+
+	h.poll(t)
+	h.advance(30 * time.Second)
+	h.poll(t)
+
+	calls := waitForEnded(t, h, 0)
+	if calls[0].Method != "POST" || calls[0].Path != "/activities" {
+		t.Fatalf("first call = %s %s, want the activity created", calls[0].Method, calls[0].Path)
+	}
+	final := content(t, calls[len(calls)-1])
+	if !strings.HasPrefix(final.State, stateComplete) {
+		t.Errorf("state = %q, want the completion line", final.State)
+	}
+}
+
+// A zero stale_timeout leaves the TTL to the server, but it cannot close the
+// adoption window along with it: every operation short enough to finish
+// between two polls would go unannounced.
+func TestAZeroStaleTimeoutStillAnnouncesAShortOperation(t *testing.T) {
+	cfg := testConfig()
+	cfg.PushWard.StaleTimeout = 0
+	short := finishedBackup(t, 13200, 10*time.Second)
+	br := &fakeBackrest{windows: [][]backrest.Operation{{}, {short}}}
+	h := newHarness(t, cfg, br)
+
+	h.poll(t)
+	h.poll(t)
+
+	waitForEnded(t, h, 0)
 }
 
 // waitForUntracked blocks until the two-phase end has dropped its bookkeeping,

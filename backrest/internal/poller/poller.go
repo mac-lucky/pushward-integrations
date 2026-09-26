@@ -12,6 +12,7 @@ import (
 
 	"github.com/mac-lucky/pushward-integrations/backrest/internal/backrest"
 	"github.com/mac-lucky/pushward-integrations/backrest/internal/config"
+	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -262,8 +263,10 @@ func (p *Poller) poll(ctx context.Context) error {
 			p.prime(ctx, op)
 		case op.Running():
 			p.handleRunning(ctx, op)
-		case op.Terminal():
+		case op.Terminal() && p.isTracked(id):
 			p.handleTerminal(ctx, op)
+		case op.Terminal():
+			p.adoptFinished(ctx, op)
 		}
 	}
 
@@ -273,28 +276,54 @@ func (p *Poller) poll(ctx context.Context) error {
 }
 
 // prime decides what the first poll makes of an operation. One still running is
-// picked up normally on the next tick, and a finished one is only recorded.
-//
-// The exception is an operation that ended inside the stale timeout. A rollout
-// or a node drain restarts this process routinely, and when that happens
-// mid-backup the backup finishes in the gap: the previous process left an
-// activity on the Lock Screen, and nothing else is going to close it before the
-// server's stale timeout does, still showing the progress it stopped at. So
-// anything that ended inside that same window is announced and closed out here.
-// Re-adopting the slug is safe because creating an activity upserts on it.
-//
-// The cost is that an outcome the previous process did manage to announce is
-// announced a second time, because telling the two apart needs a read of the
-// activity that the client has no call for.
+// picked up normally on the next tick, and a finished one goes through
+// adoptFinished, which records it without a word unless it has only just ended.
 func (p *Poller) prime(ctx context.Context, op *backrest.Operation) {
-	if !op.Terminal() {
-		return
+	if op.Terminal() {
+		p.adoptFinished(ctx, op)
 	}
-	if p.endedWithin(op, p.cfg.PushWard.StaleTimeout) {
+}
+
+// adoptFinished decides what to make of a finished operation the bridge has no
+// record of: it is announced when it ended inside the stale timeout, and only
+// marked done otherwise.
+//
+// On the first poll that is every row in the window. A rollout or a node drain
+// restarts this process routinely, and when that happens mid-backup the backup
+// finishes in the gap: the previous process left an activity on the Lock
+// Screen, and nothing else is going to close it before the server's stale
+// timeout does, still showing the progress it stopped at. So anything that
+// ended inside that same window is announced and closed out here. Re-adopting
+// the slug is safe because creating an activity upserts on it. The cost is that
+// an outcome the previous process did manage to announce is announced a second
+// time, because telling the two apart needs a read of the activity that the
+// client has no call for.
+//
+// After that it is mostly an operation that started and finished between two
+// polls, which is new and gets its card. But it can also be an old one coming
+// back: Backrest ranks the window by start time, not by id, and deletes rows
+// from inside it (its daily garbage collection, the pending rows it keeps for
+// scheduled tasks), so an operation pruneDone let go of can reappear days
+// later. Announced as if it had just landed, a week-old failed backup would put
+// a Failed card on the phone every day it slid back in.
+func (p *Poller) adoptFinished(ctx context.Context, op *backrest.Operation) {
+	if p.endedWithin(op, p.adoptWindow()) {
 		p.handleTerminal(ctx, op)
 		return
 	}
 	p.markDone(op.ID.Int64())
+}
+
+// adoptWindow is how recently a finished operation must have ended for
+// adoptFinished to announce it: the stale timeout, since that is how long an
+// activity left behind survives on the server. A zero stale_timeout takes the
+// server's default, which the bridge cannot read; the shipped default is the
+// best estimate of it, and a zero window would drop every short operation.
+func (p *Poller) adoptWindow() time.Duration {
+	if d := p.cfg.PushWard.StaleTimeout; d > 0 {
+		return d
+	}
+	return sharedconfig.DefaultPushWardConfig().StaleTimeout
 }
 
 // endedWithin reports whether the operation's finish stamp sits within d of
@@ -306,8 +335,7 @@ func (p *Poller) prime(ctx context.Context, op *backrest.Operation) {
 // NTP correction, dates a finish in the future, and a one-sided window reads
 // that as maximally recent and announces the whole query window on every
 // restart. Skew of a few seconds still lands inside, which is what a genuinely
-// just-finished backup needs. A zero d - stale_timeout left to the server's own
-// default - adopts nothing, since the window is then unknown.
+// just-finished backup needs.
 func (p *Poller) endedWithin(op *backrest.Operation, d time.Duration) bool {
 	ms := op.UnixTimeEnd.Int64()
 	if ms <= 0 {
@@ -329,9 +357,17 @@ func (p *Poller) isDone(id int64) bool {
 	return p.done[id]
 }
 
+func (p *Poller) isTracked(id int64) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	_, ok := p.tracked[id]
+	return ok
+}
+
 // pruneDone drops bookkeeping for operations that have scrolled out of the
-// query window. They cannot come back, so keeping them would be a slow leak on
-// a process meant to run for months.
+// query window, since keeping them would be a slow leak on a process meant to
+// run for months. One can scroll back in; adoptFinished is what keeps it from
+// being announced a second time.
 func (p *Poller) pruneDone(seen map[int64]bool) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
