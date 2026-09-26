@@ -103,7 +103,7 @@ docker run \
   ghcr.io/mac-lucky/pushward-github:latest
 ```
 
-The relay additionally needs a PostgreSQL DSN and exposes a second (internal-only) metrics port:
+The relay also needs a PostgreSQL DSN and exposes a second (internal-only) metrics port:
 
 ```bash
 docker run -p 8090:8090 -p 9090:9090 \

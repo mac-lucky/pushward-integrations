@@ -35,7 +35,7 @@ Grafana POSTs a firing alert to `POST /webhook`. The bridge resolves the series'
 ## Prerequisites
 
 - A running **PushWard server** (public production base: `https://api.pushward.app`).
-- A PushWard **integration key** (`hlk_` prefix). Publishing widgets additionally requires the key's **`widgets` scope** (the server returns `403` on the first widget create otherwise).
+- A PushWard **integration key** (`hlk_` prefix). Publishing widgets also requires the key's **`widgets` scope** (the server returns `403` on the first widget create otherwise).
 - A **Prometheus or VictoriaMetrics** endpoint reachable from the bridge - queried directly for series history and instant values.
 - A **Grafana** instance configured to send alert webhooks to this bridge.
 - *(Optional)* A **Grafana service-account token** (Editor role) to enable PromQL auto-extraction and missed-resolve recovery.
