@@ -3213,6 +3213,48 @@ func TestPollActive_CompletionCachesTheObservedShape(t *testing.T) {
 	}
 }
 
+// A re-run keeps the creation stamp of the run it repeats, so a length measured
+// from creation files days for a run of minutes, and FillWeights splits that
+// over every group the next run could not time.
+func TestPollActive_CompletionMeasuresTheRunFromItsStart(t *testing.T) {
+	now := time.Now()
+	weekOld := now.Add(-7 * 24 * time.Hour)
+	for _, tc := range []struct {
+		name             string
+		reread, detected time.Time
+		created          time.Time
+		want             time.Duration
+	}{
+		{"re-read start", now.Add(-5 * time.Minute), time.Time{}, weekOld, 5 * time.Minute},
+		{"start seen at detection", time.Time{}, now.Add(-3 * time.Minute), weekOld, 3 * time.Minute},
+		{"no start at all", time.Time{}, time.Time{}, now.Add(-4 * time.Minute), 4 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFakeForge(t)
+			f.liveJobs = func(string, int64) ([]ci.Job, error) { return priorRunJobs(), nil }
+			f.getRun = func(_ string, runID int64) (*Run, error) {
+				run := terminalRun(runID, ci.ConclusionSuccess)
+				run.StartedAt = tc.reread
+				return run, nil
+			}
+			tracked := liveTrackedRun(nil)
+			tracked.createdAt = tc.created
+			tracked.startedAt = tc.detected
+			p, patches := trackedPoller(t, testOptions(), f, tracked)
+
+			if err := p.pollActive(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			patches(2)
+
+			entry, _ := p.seeds.get(testRepo, "99", "main")
+			if entry.duration < tc.want || entry.duration > tc.want+time.Minute {
+				t.Errorf("duration = %v, want about %v", entry.duration, tc.want)
+			}
+		})
+	}
+}
+
 func TestPollActive_CompletionSkipsCacheWithoutWorkflowKey(t *testing.T) {
 	f := newFakeForge(t)
 	f.liveJobs = func(string, int64) ([]ci.Job, error) { return priorRunJobs(), nil }

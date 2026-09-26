@@ -48,7 +48,8 @@ type Run struct {
 	CreatedAt time.Time
 	// StartedAt is when the run's latest attempt started, zero while it is still
 	// queued or where the forge does not say. A re-run keeps its ID and restarts
-	// this, which is how the loop tells a new attempt from the one it closed.
+	// this, which is how the loop tells a new attempt from the one it closed,
+	// and it is what a finished run's length is measured from.
 	StartedAt time.Time
 
 	// HTMLURL is the run's page, and RepoURL the card's secondary link. Both

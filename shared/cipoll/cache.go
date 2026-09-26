@@ -29,10 +29,11 @@ type seedEntry struct {
 	// Never mutated once stored: readers hand the same map straight to
 	// trackedRun.stepWeightByName.
 	weights map[string]float64
-	// duration is how long the run took, from its creation to the tick that saw
-	// it finish, so a run nothing could be measured on still seeds an even
-	// split, and a group the join missed takes its share (see ci.FillWeights).
-	// Zero when the forge reported no creation time.
+	// duration is how long the run took, from its latest attempt's start (its
+	// creation where the forge reports no start) to the tick that saw it
+	// finish, so a run nothing could be measured on still seeds an even split,
+	// and a group the join missed takes its share (see ci.FillWeights). Zero
+	// when the forge reported neither.
 	duration time.Duration
 	runID    int64
 	success  bool

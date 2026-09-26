@@ -22,14 +22,15 @@ type trackedRun struct {
 	RepoURL string
 	// Ref is the head branch as the forge reported it, the key the seed cache
 	// files the run under when it finishes, and createdAt is the forge's own
-	// creation stamp, from which the run's length is measured then. Both are
-	// kept from detection so the completion tick does not depend on what the
-	// adapter's re-read fills in.
+	// creation stamp, which the run's length is measured from then when the
+	// forge reports no start. Both are kept from detection so the completion
+	// tick does not depend on what the adapter's re-read fills in.
 	Ref       string
 	createdAt time.Time
 	// startedAt is the start of the attempt on screen, refreshed from the
 	// terminal re-read because a run detected while queued had none yet. The
-	// end records it next to RunID; see endedRun.
+	// end records it next to RunID (see endedRun), and the seed cache measures
+	// the run's length from it.
 	startedAt  time.Time
 	LastUpdate time.Time
 	trackedAt  time.Time // when this run was first tracked; bounds absolute lifetime

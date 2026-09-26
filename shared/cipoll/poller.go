@@ -1077,11 +1077,17 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				if p.opts.Render.WantTimings() {
 					measured = ci.GroupWeights(jobs)
 				}
-				// The run's length from its creation: over-counts by the queue wait
-				// and up to one interval of detection lag, the trade the github
-				// adapter's creation fallback already makes.
+				// The run's length from its attempt's start, over-counting by up to
+				// one interval of detection lag. Not from creation: a re-run keeps the
+				// original's creation stamp, so a re-run of last week's run would file
+				// a week-long run. Creation stands in only for a forge that reports no
+				// start, adding the queue wait, the trade the github adapter's
+				// creation fallback already makes.
 				var length time.Duration
-				if !tCreatedAt.IsZero() {
+				switch {
+				case !started.IsZero():
+					length = time.Since(started)
+				case !tCreatedAt.IsZero():
 					length = time.Since(tCreatedAt)
 				}
 				p.seeds.put(repo, run.WorkflowKey, tRef, seedEntry{
