@@ -146,6 +146,7 @@ func TestToRun(t *testing.T) {
 		HeadBranch:   "master",
 		Event:        "push",
 		CreatedAt:    created,
+		StartedAt:    created.Add(time.Minute),
 		HTMLURL:      "https://forgejo.example.com/acme/app/actions/runs/33",
 		RepoHTMLURL:  "https://forgejo.example.com/acme/app",
 		RepoFullName: testRepo,
@@ -161,6 +162,7 @@ func TestToRun(t *testing.T) {
 		HeadBranch:  "master",
 		Event:       "push",
 		CreatedAt:   created,
+		StartedAt:   created.Add(time.Minute),
 		HTMLURL:     "https://forgejo.example.com/acme/app/actions/runs/33",
 		RepoURL:     "https://forgejo.example.com/acme/app",
 	}

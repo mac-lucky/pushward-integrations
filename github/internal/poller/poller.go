@@ -185,6 +185,7 @@ func toRun(repo string, w ghclient.WorkflowRun) cipoll.Run {
 		RawStatus:   w.Status,
 		HeadBranch:  w.HeadBranch,
 		CreatedAt:   w.CreatedAt,
+		StartedAt:   w.RunStartedAt,
 		HTMLURL:     w.HTMLURL,
 		RepoURL:     "https://github.com/" + repo,
 	}

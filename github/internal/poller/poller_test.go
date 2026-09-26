@@ -71,14 +71,15 @@ func hasWorkflowsRoute(mux *http.ServeMux) {
 func TestToRun(t *testing.T) {
 	created := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 	got := toRun(testRepo, ghclient.WorkflowRun{
-		ID:         42,
-		Name:       "CI",
-		Status:     ci.StatusInProgress,
-		Conclusion: "",
-		CreatedAt:  created,
-		HeadBranch: "main",
-		WorkflowID: 99,
-		HTMLURL:    "https://github.com/owner/repo/actions/runs/42",
+		ID:           42,
+		Name:         "CI",
+		Status:       ci.StatusInProgress,
+		Conclusion:   "",
+		CreatedAt:    created,
+		RunStartedAt: created.Add(time.Minute),
+		HeadBranch:   "main",
+		WorkflowID:   99,
+		HTMLURL:      "https://github.com/owner/repo/actions/runs/42",
 	})
 
 	want := cipoll.Run{
@@ -89,6 +90,7 @@ func TestToRun(t *testing.T) {
 		RawStatus:   ci.StatusInProgress,
 		HeadBranch:  "main",
 		CreatedAt:   created,
+		StartedAt:   created.Add(time.Minute),
 		HTMLURL:     "https://github.com/owner/repo/actions/runs/42",
 		RepoURL:     "https://github.com/owner/repo",
 	}

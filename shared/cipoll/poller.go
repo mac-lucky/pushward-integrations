@@ -133,7 +133,7 @@ type Poller struct {
 	// answered from a cache - and without this the loop would card, seed and
 	// end it a second time. Bounded by the watched set: refreshRepos drops the
 	// keys that leave it. Guarded by mu.
-	lastEnded map[string]int64
+	lastEnded map[string]endedRun
 }
 
 func New(forge Forge, pw *pushward.Client, opts Options) *Poller {
@@ -155,7 +155,7 @@ func New(forge Forge, pw *pushward.Client, opts Options) *Poller {
 		tracked:   make(map[string]*trackedRun),
 		repos:     opts.Repos,
 		seeds:     newShapeCache(maxSeeds),
-		lastEnded: make(map[string]int64),
+		lastEnded: make(map[string]endedRun),
 	}
 }
 
@@ -520,21 +520,25 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			continue // leave any pending end intact
 		}
 
-		// Pick the most recently created run
-		run := runs[0]
-		for _, r := range runs[1:] {
-			if r.CreatedAt.After(run.CreatedAt) {
-				run = r
+		// Pick the most recently created run the loop has not already closed.
+		// The closed one is dropped before the pick, not after it: an older run
+		// still going after a newer one ended is a legitimate card, and a list
+		// still reporting the newer one must not hide it.
+		p.mu.Lock()
+		last, hasLast := p.lastEnded[repo]
+		p.mu.Unlock()
+		var run Run
+		found := false
+		for _, r := range runs {
+			if hasLast && last.closed(r) {
+				p.log.Debug("ignoring a run the loop already ended", "repo", repo, "run_id", r.ID)
+				continue
+			}
+			if !found || r.CreatedAt.After(run.CreatedAt) {
+				run, found = r, true
 			}
 		}
-
-		// Equality only: an older run still going after a newer one ended is a
-		// legitimate card, and a run the loop closed is not.
-		p.mu.Lock()
-		ended := p.lastEnded[repo] == run.ID
-		p.mu.Unlock()
-		if ended {
-			p.log.Debug("ignoring a run the loop already ended", "repo", repo, "run_id", run.ID)
+		if !found {
 			continue
 		}
 
@@ -587,6 +591,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 			RepoURL:    run.RepoURL,
 			Ref:        run.HeadBranch,
 			createdAt:  run.CreatedAt,
+			startedAt:  run.StartedAt,
 			LastUpdate: time.Now(),
 			trackedAt:  time.Now(),
 			// Assume an animation is running until proven otherwise. The slug is
@@ -949,6 +954,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		tRepoURL := t.RepoURL
 		tRef := t.Ref
 		tCreatedAt := t.createdAt
+		tStartedAt := t.startedAt
 		p.mu.Unlock()
 
 		jobs, err := p.forge.LiveJobs(ctx, repo, tRunID)
@@ -1051,6 +1057,18 @@ func (p *Poller) pollActive(ctx context.Context) error {
 				// than skipping it.
 				info = betweenWaves(info, observed, lastProgress)
 			} else {
+				// The attempt's start as the finished run reports it: one detected
+				// while still queued had none to give then, and the end records it
+				// so a re-run of this ID is not taken for the attempt just closed.
+				started := run.StartedAt
+				if started.IsZero() {
+					started = tStartedAt
+				}
+				p.mu.Lock()
+				if tt, ok := p.tracked[repo]; ok {
+					tt.startedAt = started
+				}
+				p.mu.Unlock()
 				// File the run as the seed for its workflow's next one: the observed
 				// shape, and durations measured from the live timestamps as this last
 				// tick saw them. Outside p.mu, and before the end is scheduled; the next
@@ -1231,6 +1249,7 @@ func (p *Poller) scheduleEnd(ctx context.Context, repo string, content pushward.
 	}
 	slug := t.Slug
 	runID := t.RunID
+	ended := endedRun{id: t.RunID, startedAt: t.startedAt}
 	endDelay := p.opts.PushWard.EndDelay
 	displayTime := p.opts.PushWard.EndDisplayTime
 	// Detach from the caller's context so delivery is not cut off mid-flight by
@@ -1281,7 +1300,7 @@ func (p *Poller) scheduleEnd(ctx context.Context, repo string, content pushward.
 			// remembering which run this was so a lagging list cannot revive it.
 			p.mu.Lock()
 			if current, ok := p.tracked[repo]; ok && current.RunID == runID {
-				p.lastEnded[repo] = runID
+				p.lastEnded[repo] = ended
 				delete(p.tracked, repo)
 			}
 			p.mu.Unlock()

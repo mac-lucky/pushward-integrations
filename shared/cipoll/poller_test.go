@@ -3320,6 +3320,24 @@ func TestPollActive_LogsUnanchoredOncePerStep(t *testing.T) {
 	}
 }
 
+// waitForEnd waits for phase 2 to retire the repo's tracked run and returns what
+// it recorded. The ENDED frame reaches the mock before the callback takes the
+// lock to record it, so counting frames alone races the read on a loaded box.
+func waitForEnd(t *testing.T, p *Poller) (ended endedRun, stillTracked bool) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		p.mu.Lock()
+		_, stillTracked = p.tracked[testRepo]
+		ended = p.lastEnded[testRepo]
+		p.mu.Unlock()
+		if !stillTracked || time.Now().After(deadline) {
+			return ended, stillTracked
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+}
+
 // TestPollIdle_IgnoresTheRunItJustEnded covers a forge whose active list lags
 // its runs, or answers a conditional request from a cache: the run the loop
 // just closed comes back as active, and without the guard it would be carded,
@@ -3340,12 +3358,9 @@ func TestPollIdle_IgnoresTheRunItJustEnded(t *testing.T) {
 	if got := patches(2); len(got) != 2 {
 		t.Fatalf("expected both end frames, got %d", len(got))
 	}
-	p.mu.Lock()
-	_, still := p.tracked[testRepo]
-	remembered := p.lastEnded[testRepo]
-	p.mu.Unlock()
-	if still || remembered != 42 {
-		t.Fatalf("after the end: tracked=%v lastEnded=%d, want gone and 42", still, remembered)
+	remembered, still := waitForEnd(t, p)
+	if still || remembered.id != 42 {
+		t.Fatalf("after the end: tracked=%v lastEnded=%d, want gone and 42", still, remembered.id)
 	}
 
 	// The same run re-reported: nothing is created.
@@ -3375,14 +3390,148 @@ func TestPollIdle_IgnoresTheRunItJustEnded(t *testing.T) {
 	}
 }
 
+// "Re-run failed jobs" keeps the run's ID on both forges, so the guard above has
+// to tell the attempt it closed from a new one by when each started. The run was
+// picked up while queued, with no start yet, so the end has to record the one
+// the terminal re-read reports.
+func TestPollIdle_TracksAReRunOfTheRunItEnded(t *testing.T) {
+	first := time.Now().Add(-10 * time.Minute)
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) { return priorRunJobs(), nil }
+	f.getRun = func(_ string, runID int64) (*Run, error) {
+		run := terminalRun(runID, ci.ConclusionFailure)
+		run.StartedAt = first
+		return run, nil
+	}
+	tracked := liveTrackedRun(nil)
+	tracked.RunID = 123
+	p, patches := trackedPoller(t, testOptions(), f, tracked)
+	p.repos = []string{testRepo}
+
+	if err := p.pollActive(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	patches(2)
+	ended, _ := waitForEnd(t, p)
+	if ended.id != 123 || !ended.startedAt.Equal(first) {
+		t.Fatalf("lastEnded = %+v, want run 123 started at %v", ended, first)
+	}
+
+	reported := activeRun(123, "CI", "main")
+	reported.StartedAt = first
+	f.activeRuns = func(string) ([]Run, error) { return []Run{reported}, nil }
+
+	// The closed attempt, still listed.
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	_, revived := p.tracked[testRepo]
+	p.mu.Unlock()
+	if revived {
+		t.Fatal("the attempt the loop closed must not be tracked again")
+	}
+
+	// The re-run: same ID, later start.
+	reported.StartedAt = first.Add(5 * time.Minute)
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	tr, ok := p.tracked[testRepo]
+	p.mu.Unlock()
+	if !ok || tr.RunID != 123 {
+		t.Fatalf("tracked = %+v ok=%v, want the re-run of 123 tracked", tr, ok)
+	}
+	if got := patches(4); len(got) != 3 {
+		t.Errorf("patches = %d, want the two end frames and the re-run's seed", len(got))
+	}
+}
+
+// Forgejo zeroes a re-run's start until a runner picks it up, so a queued re-run
+// of the closed attempt reports no start at all, and still gets its card.
+func TestPollIdle_TracksAQueuedReRun(t *testing.T) {
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		return []ci.Job{job("Build", ci.StatusQueued, "")}, nil
+	}
+	queued := activeRun(123, "CI", "main")
+	queued.Status, queued.RawStatus = ci.StatusQueued, ci.StatusQueued
+	f.activeRuns = func(string) ([]Run, error) { return []Run{queued}, nil }
+	p, _, _ := newTestPoller(t, testOptions(), f)
+	p.lastEnded[testRepo] = endedRun{id: 123, startedAt: time.Now().Add(-time.Hour)}
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	tr, ok := p.tracked[testRepo]
+	p.mu.Unlock()
+	if !ok || tr.RunID != 123 {
+		t.Fatalf("tracked = %+v ok=%v, want the queued re-run of 123", tr, ok)
+	}
+}
+
+func TestEndedRunClosed(t *testing.T) {
+	start := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name  string
+		ended endedRun
+		run   Run
+		want  bool
+	}{
+		{"the closed attempt", endedRun{123, start}, Run{ID: 123, StartedAt: start}, true},
+		{"an older stamp", endedRun{123, start}, Run{ID: 123, StartedAt: start.Add(-time.Minute)}, true},
+		{"a re-run that started", endedRun{123, start}, Run{ID: 123, StartedAt: start.Add(time.Minute)}, false},
+		{"a re-run still queued", endedRun{123, start}, Run{ID: 123}, false},
+		{"a forge that reports no start", endedRun{id: 123}, Run{ID: 123}, true},
+		{"a re-run of one cancelled before it started", endedRun{id: 123}, Run{ID: 123, StartedAt: start}, false},
+		{"another run", endedRun{123, start}, Run{ID: 124, StartedAt: start}, false},
+	} {
+		if got := tc.ended.closed(tc.run); got != tc.want {
+			t.Errorf("%s: closed = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The closed run is dropped before the newest is picked. Picking first let a
+// list still reporting the newer run hide an older one that is still going.
+func TestPollIdle_OlderRunOutlivesTheOneItEnded(t *testing.T) {
+	now := time.Now()
+	f := newFakeForge(t)
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		return []ci.Job{job("Build", ci.StatusInProgress, "")}, nil
+	}
+	f.activeRuns = func(string) ([]Run, error) {
+		older := activeRun(10, "Nightly", "main")
+		older.CreatedAt = now.Add(-time.Hour)
+		closed := activeRun(20, "CI", "main")
+		closed.CreatedAt = now
+		closed.StartedAt = now
+		return []Run{older, closed}, nil
+	}
+	p, _, _ := newTestPoller(t, testOptions(), f)
+	p.lastEnded[testRepo] = endedRun{id: 20, startedAt: now}
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	tr, ok := p.tracked[testRepo]
+	p.mu.Unlock()
+	if !ok || tr.RunID != 10 {
+		t.Fatalf("tracked = %+v ok=%v, want the older run 10", tr, ok)
+	}
+}
+
 func TestRefreshRepos_PrunesLastEnded(t *testing.T) {
 	f := newFakeForge(t)
 	f.repos = []string{"owner/kept"}
 	opts := testOptions()
 	opts.Owner = "owner"
 	p := New(f, nil, opts)
-	p.lastEnded["owner/kept"] = 1
-	p.lastEnded["owner/gone"] = 2
+	p.lastEnded["owner/kept"] = endedRun{id: 1}
+	p.lastEnded["owner/gone"] = endedRun{id: 2}
 
 	if err := p.refreshRepos(context.Background()); err != nil {
 		t.Fatal(err)
@@ -3390,7 +3539,7 @@ func TestRefreshRepos_PrunesLastEnded(t *testing.T) {
 	if _, ok := p.lastEnded["owner/gone"]; ok {
 		t.Error("a repo that left the watched set must not keep its last-ended run")
 	}
-	if p.lastEnded["owner/kept"] != 1 {
+	if p.lastEnded["owner/kept"].id != 1 {
 		t.Error("a watched repo keeps its last-ended run")
 	}
 }

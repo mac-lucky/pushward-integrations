@@ -25,8 +25,12 @@ type trackedRun struct {
 	// creation stamp, from which the run's length is measured then. Both are
 	// kept from detection so the completion tick does not depend on what the
 	// adapter's re-read fills in.
-	Ref        string
-	createdAt  time.Time
+	Ref       string
+	createdAt time.Time
+	// startedAt is the start of the attempt on screen, refreshed from the
+	// terminal re-read because a run detected while queued had none yet. The
+	// end records it next to RunID; see endedRun.
+	startedAt  time.Time
 	LastUpdate time.Time
 	trackedAt  time.Time // when this run was first tracked; bounds absolute lifetime
 	// endTimers is non-nil once a two-phase end is pending. The TimerGroup
@@ -84,6 +88,33 @@ type trackedRun struct {
 	// declined is the last "live progress not anchored" line written for this
 	// run, so a step that cannot animate is reported once.
 	declined declined
+}
+
+// endedRun is the attempt the loop last closed on a repo. The start is kept
+// alongside the ID because a re-run keeps the ID on both forges, and only the
+// start says the run is going again.
+type endedRun struct {
+	id        int64
+	startedAt time.Time
+}
+
+// closed reports whether run is the attempt e records rather than a later
+// re-run of it.
+//
+// A run reporting no start is still queued: Forgejo zeroes `started` on a
+// re-run until a runner picks it up. It is the closed attempt only when that
+// attempt had no start either, which covers a forge that never reports one and
+// a run cancelled before it started. A lagging list cannot replay the closed
+// attempt as startless: GitHub lists only in-progress runs, every one of them
+// stamped, and Forgejo's active list is never answered from a cache.
+func (e endedRun) closed(run Run) bool {
+	if run.ID != e.id {
+		return false
+	}
+	if run.StartedAt.IsZero() {
+		return e.startedAt.IsZero()
+	}
+	return !run.StartedAt.After(e.startedAt)
 }
 
 // declined is one "live progress not anchored" line: the step it was written

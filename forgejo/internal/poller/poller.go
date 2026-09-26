@@ -167,6 +167,7 @@ func (f *forge) toRun(repo string, r fjclient.Run) cipoll.Run {
 		HeadBranch:  r.HeadBranch,
 		Event:       r.Event,
 		CreatedAt:   r.CreatedAt,
+		StartedAt:   r.StartedAt,
 		// The API's own html_url, never one built locally: Forgejo derives it from
 		// the run's index_in_repo, not the id this bridge fetches by.
 		HTMLURL: r.HTMLURL,
