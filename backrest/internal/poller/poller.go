@@ -93,11 +93,14 @@ type tracked struct {
 	subtitle string
 	seeded   bool
 	// preempted is set once the server has evicted the activity to make room
-	// for a higher-priority one. Content patches are refused from then on, so
-	// progress is held back until the operation ends; the two-phase close
-	// carries an explicit state, which is what the server accepts to bring the
-	// activity back for its outcome.
+	// for a higher-priority one. Content patches are refused while it stays
+	// evicted, so progress is held back and one patch goes out per heartbeat
+	// to find out whether the server has since promoted it back into a freed
+	// slot. The first one that lands clears the flag. The two-phase close
+	// carries an explicit state, which the server accepts either way.
 	preempted bool
+	// probedAt is when the last patch went out to the preempted activity.
+	probedAt time.Time
 
 	// Push throttle. lastPhase is the coarse step, not the rendered state line:
 	// that line carries a byte count and a transfer rate which move on nearly
@@ -412,9 +415,17 @@ func (p *Poller) track(op *backrest.Operation) *tracked {
 // landed so a failed send is simply re-evaluated on the next tick.
 func (p *Poller) push(ctx context.Context, t *tracked, op *backrest.Operation, content pushward.Content, phase string, now time.Time) error {
 	if t.preempted {
-		// Nothing to send: a content patch would be refused until a frame
-		// carries an explicit state, and scheduleEnd is where that happens.
-		return nil
+		// The server promotes a preempted activity back to ongoing on its own
+		// once a slot frees up, and from then on takes content patches again;
+		// until then it refuses every one the same way. An explicit ongoing
+		// would override the eviction and restart the card, so what goes out
+		// is the plain patch, at the heartbeat's pace: promotion restarts
+		// the stale clock, and a patch that lands within half of it keeps the
+		// card from being swept while the operation is still running.
+		if now.Sub(t.probedAt) < p.heartbeat() {
+			return nil
+		}
+		t.probedAt = now
 	}
 	var err error
 	if !t.seeded {
@@ -424,11 +435,23 @@ func (p *Poller) push(ctx context.Context, t *tracked, op *backrest.Operation, c
 	}
 	if err != nil {
 		if isPreempted(err) {
-			t.preempted = true
 			t.failingSince = time.Time{}
-			slog.Info("activity preempted by the server, holding progress until the operation ends",
-				"slug", t.slug, "op", t.opID)
+			if !t.preempted {
+				t.preempted = true
+				t.probedAt = now
+				slog.Info("activity preempted by the server, holding progress until it is promoted back",
+					"slug", t.slug, "op", t.opID)
+			}
 			return nil
+		}
+		if t.preempted {
+			// A retry that failed some other way is not counted toward
+			// maxSendFailureWindow: the next one is a heartbeat away, which
+			// outlasts the window on the defaults, so two would abandon the
+			// operation and drop its close. The error still keeps a terminal
+			// operation from closing this tick; on the next, the retry is not
+			// due and the close goes ahead.
+			return err
 		}
 		if t.failingSince.IsZero() {
 			t.failingSince = now
@@ -439,6 +462,10 @@ func (p *Poller) push(ctx context.Context, t *tracked, op *backrest.Operation, c
 			p.abandon(t)
 		}
 		return err
+	}
+	if t.preempted {
+		t.preempted = false
+		slog.Info("activity promoted back by the server, resuming updates", "slug", t.slug, "op", t.opID)
 	}
 	t.failingSince = time.Time{}
 	t.markPushed(content, phase, now)
@@ -605,7 +632,8 @@ func (p *Poller) patch(ctx context.Context, t *tracked, content pushward.Content
 // isPreempted reports whether the server refused a frame because it has
 // evicted the activity for a higher-priority one. The stored state is then
 // "preempted", which a state-less PATCH inherits and the server rejects as not
-// client-settable; retrying the same patch every tick can never succeed.
+// client-settable, so retrying on every tick cannot succeed until the server
+// promotes the activity back.
 func isPreempted(err error) bool {
 	var he *pushward.HTTPError
 	if !errors.As(err, &he) || he.StatusCode != http.StatusUnprocessableEntity {

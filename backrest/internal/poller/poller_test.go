@@ -2213,12 +2213,13 @@ func TestShouldPushTriggersIndependently(t *testing.T) {
 	}
 }
 
-// preemptingServer records every PushWard call and, from the n-th content-only
-// PATCH on, answers the way the server does once it has evicted the activity
-// for a higher-priority one: a 422 whose detail names the stored state. Frames
-// that carry an explicit state keep succeeding, which is what lets the
-// two-phase close through.
-func preemptingServer(t *testing.T, from int) (*httptest.Server, *[]testutil.APICall, *sync.Mutex) {
+// preemptingServer records every PushWard call and answers the n-th content-only
+// PATCH (counting from 1) with the status answer picks. A 422 is the refusal the
+// server sends while it has the activity evicted for a higher-priority one, its
+// detail naming the stored state; a 200 is what it sends once it has promoted
+// it back. Frames that carry an explicit state always succeed, which is what
+// lets the two-phase close through.
+func preemptingServer(t *testing.T, answer func(n int) int) (*httptest.Server, *[]testutil.APICall, *sync.Mutex) {
 	t.Helper()
 	var calls []testutil.APICall
 	var mu sync.Mutex
@@ -2243,15 +2244,15 @@ func preemptingServer(t *testing.T, from int) (*httptest.Server, *[]testutil.API
 			State string `json:"state"`
 		}
 		_ = json.Unmarshal(body, &probe)
-		refuse := false
+		status := http.StatusOK
 		if probe.State == "" {
 			mu.Lock()
 			contentOnly++
-			refuse = contentOnly >= from
+			status = answer(contentOnly)
 			mu.Unlock()
 		}
-		if !refuse {
-			w.WriteHeader(http.StatusOK)
+		if status != http.StatusUnprocessableEntity {
+			w.WriteHeader(status)
 			return
 		}
 		w.Header().Set("Content-Type", "application/problem+json")
@@ -2276,7 +2277,7 @@ func TestPreemptedActivityHoldsProgressUntilTheEnd(t *testing.T) {
 		{runningBackup(1, 700, 1000)}, // 70%: must not be sent
 		{finishedBackup(t, 1, time.Second)},
 	}}
-	srv, calls, mu := preemptingServer(t, 1)
+	srv, calls, mu := preemptingServer(t, func(int) int { return http.StatusUnprocessableEntity })
 	h := wire(t, testConfig(), br, srv, calls, mu)
 
 	h.poll(t)
@@ -2291,7 +2292,7 @@ func TestPreemptedActivityHoldsProgressUntilTheEnd(t *testing.T) {
 	h.advance(10 * time.Second)
 	h.poll(t)
 	if got := len(h.recorded()); got != mark {
-		t.Fatalf("calls after preemption = %d, want %d: a preempted activity must not be patched", got, mark)
+		t.Fatalf("calls after preemption = %d, want %d: a preempted activity must not be patched every tick", got, mark)
 	}
 
 	h.advance(10 * time.Second)
@@ -2300,6 +2301,141 @@ func TestPreemptedActivityHoldsProgressUntilTheEnd(t *testing.T) {
 	for _, c := range recorded[mark:] {
 		if c.Method == "PATCH" && activityState(t, c) == "" {
 			t.Errorf("content-only PATCH sent after preemption: %s", c.Body)
+		}
+	}
+	final := content(t, recorded[len(recorded)-1])
+	if !strings.HasPrefix(final.State, stateComplete) {
+		t.Errorf("state = %q, want the completion line", final.State)
+	}
+}
+
+// The server promotes a preempted activity back once a slot frees up, and from
+// then on takes content patches again. Holding progress until the end would
+// freeze the promoted card until the stale sweep ended it mid-backup, so the
+// poller retries once per heartbeat: a refusal keeps it holding, and the first
+// patch that lands puts it back on its normal updates.
+func TestPreemptedActivityResumesOncePromoted(t *testing.T) {
+	br := &fakeBackrest{windows: [][]backrest.Operation{
+		{runningBackup(1, 0, 1000)},   // priming window
+		{runningBackup(1, 100, 1000)}, // create + seed at 10%
+		{runningBackup(1, 300, 1000)}, // 30%: refused, the server has preempted it
+		{runningBackup(1, 400, 1000)}, // 40%: held, no retry due yet
+		{runningBackup(1, 500, 1000)}, // a heartbeat on: retried, still refused
+		{runningBackup(1, 600, 1000)}, // another heartbeat: lands, it was promoted
+		{runningBackup(1, 800, 1000)}, // 80%: an ordinary tick
+	}}
+	// The frame that meets the eviction and the first retry are refused.
+	srv, calls, mu := preemptingServer(t, func(n int) int {
+		if n <= 2 {
+			return http.StatusUnprocessableEntity
+		}
+		return http.StatusOK
+	})
+	h := wire(t, testConfig(), br, srv, calls, mu)
+	heartbeat := h.p.heartbeat()
+
+	h.poll(t)
+	h.poll(t)
+	h.advance(10 * time.Second)
+	h.poll(t)
+	if got := h.pushCount(); got != 2 {
+		t.Fatalf("pushes up to the refusal = %d, want 2 (seed + the refused frame)", got)
+	}
+
+	h.advance(10 * time.Second)
+	h.poll(t)
+	if got := h.pushCount(); got != 2 {
+		t.Fatalf("pushes before a heartbeat passed = %d, want 2", got)
+	}
+
+	h.advance(heartbeat)
+	h.poll(t)
+	if got := h.pushCount(); got != 3 {
+		t.Fatalf("pushes after one heartbeat = %d, want 3 (one retry)", got)
+	}
+	if !h.p.tracked[1].preempted {
+		t.Fatal("a refused retry must leave the activity marked preempted")
+	}
+
+	h.advance(heartbeat)
+	h.poll(t)
+	if got := h.pushCount(); got != 4 {
+		t.Fatalf("pushes after two heartbeats = %d, want 4", got)
+	}
+	if h.p.tracked[1].preempted {
+		t.Fatal("a retry that landed must clear the preempted flag")
+	}
+
+	h.advance(10 * time.Second)
+	h.poll(t)
+	recorded := h.recorded()
+	if got := h.pushCount(); got != 5 {
+		t.Fatalf("pushes after promotion = %d, want 5: updates did not resume", got)
+	}
+	last := recorded[len(recorded)-1]
+	if state := activityState(t, last); state != "" {
+		t.Errorf("state = %q, want a content-only patch: an explicit ongoing would force the activity back", state)
+	}
+	if got := content(t, last).Progress; got != 0.8 {
+		t.Errorf("progress = %v, want 0.8", got)
+	}
+}
+
+// A retry that fails some other way - PushWard down, a 5xx past the client's
+// own retries - must not count toward the give-up window. The retries are a
+// heartbeat apart, 15 minutes on the defaults against a 10-minute window, so
+// two failures would abandon the operation and it would never close.
+func TestPreemptedRetryFailuresDoNotAbandon(t *testing.T) {
+	br := &fakeBackrest{windows: [][]backrest.Operation{
+		{runningBackup(1, 0, 1000)},   // priming window
+		{runningBackup(1, 100, 1000)}, // create + seed at 10%
+		{runningBackup(1, 300, 1000)}, // 30%: refused, the server has preempted it
+		{runningBackup(1, 400, 1000)}, // retry fails
+		{runningBackup(1, 500, 1000)}, // retry fails again, past the window
+		{finishedBackup(t, 1, time.Second)},
+	}}
+	// A 400 rather than a 5xx so the client fails fast instead of spending its
+	// own retry budget; either way it is not the preempted refusal.
+	srv, calls, mu := preemptingServer(t, func(n int) int {
+		if n == 1 {
+			return http.StatusUnprocessableEntity
+		}
+		return http.StatusBadRequest
+	})
+	h := wire(t, testConfig(), br, srv, calls, mu)
+
+	h.poll(t)
+	h.poll(t)
+	h.advance(10 * time.Second)
+	h.poll(t)
+	// Literals rather than the heartbeat: what matters is that the failures are
+	// further apart than the give-up window.
+	h.advance(16 * time.Minute)
+	h.poll(t)
+	h.advance(16 * time.Minute)
+	h.poll(t)
+	if got := h.pushCount(); got != 4 {
+		t.Fatalf("pushes = %d, want 4 (seed, the refused frame, two failed retries)", got)
+	}
+	if _, ok := h.p.tracked[1]; !ok || h.p.isDone(1) {
+		t.Fatal("the operation was abandoned over failed retries")
+	}
+
+	// The finish lands when a retry is due, and that retry fails too. The error
+	// holds the close back for this tick only.
+	h.advance(16 * time.Minute)
+	h.poll(t)
+	mark := len(h.recorded())
+	if got := h.pushCount(); got != 5 {
+		t.Fatalf("pushes = %d, want 5 (the retry carrying the completion frame)", got)
+	}
+
+	h.advance(10 * time.Second)
+	h.poll(t)
+	recorded := waitForEnded(t, h, mark)
+	for _, c := range recorded[mark:] {
+		if c.Method == "PATCH" && activityState(t, c) == "" {
+			t.Errorf("content-only PATCH in the close: %s", c.Body)
 		}
 	}
 	final := content(t, recorded[len(recorded)-1])
