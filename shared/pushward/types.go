@@ -925,6 +925,41 @@ type SendNotificationRequest struct {
 	Push *bool `json:"push,omitempty"`
 }
 
+// ScheduleNotificationRequest is the body for POST /notifications/scheduled:
+// a notification plus when to send it. SendAt must be in the future and at
+// most 30 days ahead. The send counts against the notification quota when it
+// happens, not when it is scheduled.
+type ScheduleNotificationRequest struct {
+	SendNotificationRequest
+	SendAt time.Time `json:"send_at"`
+}
+
+// Scheduled notification statuses. Canceling deletes the schedule, so there
+// is no canceled state.
+const (
+	ScheduledStatusScheduled = "scheduled"
+	ScheduledStatusSending   = "sending"
+	ScheduledStatusSent      = "sent"
+	ScheduledStatusFailed    = "failed"
+)
+
+// ScheduledNotification is a notification queued for SendAt, as returned by
+// the /notifications/scheduled endpoints. The embedded request echoes the
+// content and SendAt; NotificationID, SentAt and Delivery are set once it is sent, and
+// FailureReason ("quota_exceeded", "key_revoked" or "internal_error") when it
+// failed.
+type ScheduledNotification struct {
+	ID     int64  `json:"id"`
+	Status string `json:"status"`
+	ScheduleNotificationRequest
+	CreatedAt      time.Time  `json:"created_at"`
+	SentAt         *time.Time `json:"sent_at,omitempty"`
+	NotificationID *int64     `json:"notification_id,omitempty"`
+	Delivery       string     `json:"delivery,omitempty"`
+	Reason         string     `json:"reason,omitempty"`
+	FailureReason  string     `json:"failure_reason,omitempty"`
+}
+
 // sourceDisplayNames maps source identifiers to their human-readable display names.
 var sourceDisplayNames = map[string]string{
 	"grafana":         "Grafana",

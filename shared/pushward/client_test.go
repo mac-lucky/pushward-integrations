@@ -1882,3 +1882,106 @@ func TestDoWithRetry_HugeRetryAfterRespectsTheBudget(t *testing.T) {
 		t.Errorf("the call should return without sleeping, took %s", elapsed)
 	}
 }
+
+// --- Scheduled notifications ---
+
+func TestScheduleNotification_SendsBodyAndDecodesSchedule(t *testing.T) {
+	var got map[string]any
+	var gotPath, gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod = r.URL.Path, r.Method
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":7,"status":"scheduled","send_at":"2026-10-01T18:00:00Z",
+			"title":"Bins","body":"Take them out","source":"grafana","created_at":"2026-09-27T12:00:00Z"}`))
+	}))
+	defer srv.Close()
+
+	sendAt := time.Date(2026, 10, 1, 18, 0, 0, 0, time.UTC)
+	sn, err := NewClient(srv.URL, "hlk_test").ScheduleNotification(context.Background(), ScheduleNotificationRequest{
+		SendNotificationRequest: SendNotificationRequest{Title: "Bins", Body: "Take them out", Source: "grafana"},
+		SendAt:                  sendAt,
+	})
+	if err != nil {
+		t.Fatalf("ScheduleNotification: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/notifications/scheduled" {
+		t.Errorf("request = %s %s, want POST /notifications/scheduled", gotMethod, gotPath)
+	}
+	if got["send_at"] != "2026-10-01T18:00:00Z" || got["title"] != "Bins" {
+		t.Errorf("body = %v, want flat notification fields plus send_at", got)
+	}
+	if got["source_display_name"] != "Grafana" {
+		t.Errorf("source_display_name = %v, want it filled like SendNotification", got["source_display_name"])
+	}
+	if sn.ID != 7 || sn.Status != ScheduledStatusScheduled || !sn.SendAt.Equal(sendAt) || sn.Title != "Bins" {
+		t.Errorf("schedule = %+v", sn)
+	}
+}
+
+func TestScheduleNotification_LimitIsTyped(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"status":409,"code":"scheduled_notification.limit_exceeded","detail":"limit"}`))
+	}))
+	defer srv.Close()
+
+	_, err := NewClient(srv.URL, "hlk_test").ScheduleNotification(context.Background(), ScheduleNotificationRequest{
+		SendNotificationRequest: SendNotificationRequest{Title: "t", Body: "b"},
+		SendAt:                  time.Now().Add(time.Hour),
+	})
+	var he *HTTPError
+	if !errors.As(err, &he) || he.Code != ErrCodeScheduledNotificationLimit {
+		t.Fatalf("err = %v, want *HTTPError %s", err, ErrCodeScheduledNotificationLimit)
+	}
+	if calls.Load() != 1 {
+		t.Errorf("calls = %d, want 1 (409 is not retried)", calls.Load())
+	}
+}
+
+func TestListGetCancelScheduledNotifications(t *testing.T) {
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.RequestURI())
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/notifications/scheduled":
+			_, _ = w.Write([]byte(`{"items":[{"id":3,"status":"sent","send_at":"2026-10-01T18:00:00Z","title":"t","body":"b",
+				"created_at":"2026-09-27T12:00:00Z","sent_at":"2026-10-01T18:00:04Z","notification_id":991,"delivery":"all"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/notifications/scheduled/3":
+			_, _ = w.Write([]byte(`{"id":3,"status":"failed","send_at":"2026-10-01T18:00:00Z","title":"t","body":"b",
+				"created_at":"2026-09-27T12:00:00Z","failure_reason":"quota_exceeded"}`))
+		case r.Method == http.MethodDelete && r.URL.Path == "/notifications/scheduled/3":
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "hlk_test")
+	ctx := context.Background()
+
+	items, err := c.ListScheduledNotifications(ctx, ScheduledStatusSent)
+	if err != nil || len(items) != 1 {
+		t.Fatalf("List: %v, %d items", err, len(items))
+	}
+	if items[0].NotificationID == nil || *items[0].NotificationID != 991 || items[0].SentAt == nil || items[0].Delivery != "all" {
+		t.Errorf("sent item = %+v", items[0])
+	}
+	sn, err := c.GetScheduledNotification(ctx, 3)
+	if err != nil || sn.Status != ScheduledStatusFailed || sn.FailureReason != "quota_exceeded" {
+		t.Fatalf("Get: %+v, %v", sn, err)
+	}
+	if err := c.CancelScheduledNotification(ctx, 3); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	want := []string{
+		"GET /notifications/scheduled?limit=100&status=sent",
+		"GET /notifications/scheduled/3",
+		"DELETE /notifications/scheduled/3",
+	}
+	if strings.Join(requests, "\n") != strings.Join(want, "\n") {
+		t.Errorf("requests =\n%s\nwant\n%s", strings.Join(requests, "\n"), strings.Join(want, "\n"))
+	}
+}

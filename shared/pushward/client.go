@@ -378,6 +378,11 @@ const (
 	ErrCodeSubscriptionRequired         = "subscription.required"
 	ErrCodeSubscriptionOwnerInactive    = "subscription.owner_inactive"
 	ErrCodeWidgetTokenNotPermitted      = "widget.token_not_permitted"
+
+	ErrCodeScheduledNotificationInvalid  = "scheduled_notification.invalid"
+	ErrCodeScheduledNotificationNotFound = "scheduled_notification.not_found"
+	ErrCodeScheduledNotificationLimit    = "scheduled_notification.limit_exceeded"
+	ErrCodeScheduledNotificationInFlight = "scheduled_notification.in_flight"
 )
 
 // problem is the parsed RFC 9457 error body. It is an internal parsing
@@ -680,6 +685,60 @@ func (c *Client) SendNotification(ctx context.Context, req SendNotificationReque
 	req.FillSourceDisplayName()
 	return c.doWithRetry(ctx, "notify", http.MethodPost,
 		fmt.Sprintf("%s/notifications", c.baseURL), "", req, nil)
+}
+
+// ScheduleNotification queues a notification for req.SendAt via
+// POST /notifications/scheduled and returns the schedule. At most 20 can be
+// pending per account; one more fails with a *HTTPError whose Code is
+// ErrCodeScheduledNotificationLimit. An account already out of notification
+// quota gets the same quota.exceeded error as SendNotification. The list, get
+// and cancel calls below only see schedules this client's key created.
+func (c *Client) ScheduleNotification(ctx context.Context, req ScheduleNotificationRequest) (*ScheduledNotification, error) {
+	req.FillSourceDisplayName()
+	var sn ScheduledNotification
+	if err := c.doWithRetryInto(ctx, "notify.schedule", http.MethodPost,
+		fmt.Sprintf("%s/notifications/scheduled", c.baseURL), "", req, nil, &sn); err != nil {
+		return nil, err
+	}
+	return &sn, nil
+}
+
+// ListScheduledNotifications lists schedules via GET /notifications/scheduled,
+// soonest first. status is "scheduled" (pending, including ones being sent),
+// "sent", "failed" or "all"; empty means the server default, "scheduled".
+func (c *Client) ListScheduledNotifications(ctx context.Context, status string) ([]ScheduledNotification, error) {
+	endpoint := fmt.Sprintf("%s/notifications/scheduled?limit=100", c.baseURL)
+	if status != "" {
+		endpoint += "&status=" + url.QueryEscape(status)
+	}
+	var out struct {
+		Items []ScheduledNotification `json:"items"`
+	}
+	if err := c.doWithRetryInto(ctx, "notify.schedule.list", http.MethodGet, endpoint, "", nil, nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Items, nil
+}
+
+// GetScheduledNotification reads one schedule. A missing id returns a
+// *HTTPError with Code ErrCodeScheduledNotificationNotFound.
+func (c *Client) GetScheduledNotification(ctx context.Context, id int64) (*ScheduledNotification, error) {
+	var sn ScheduledNotification
+	if err := c.doWithRetryInto(ctx, "notify.schedule.get", http.MethodGet, c.scheduledNotificationURL(id), "", nil, nil, &sn); err != nil {
+		return nil, err
+	}
+	return &sn, nil
+}
+
+// CancelScheduledNotification cancels a pending schedule via
+// DELETE /notifications/scheduled/{id}. One already being sent returns a
+// *HTTPError with Code ErrCodeScheduledNotificationInFlight.
+func (c *Client) CancelScheduledNotification(ctx context.Context, id int64) error {
+	return c.doWithRetry(ctx, "notify.schedule.cancel", http.MethodDelete, c.scheduledNotificationURL(id), "", nil, nil)
+}
+
+func (c *Client) scheduledNotificationURL(id int64) string {
+	return fmt.Sprintf("%s/notifications/scheduled/%d", c.baseURL, id)
 }
 
 // CreateWidget creates (or upserts) a widget via POST /widgets. The server
