@@ -125,6 +125,9 @@ func TestClassOf(t *testing.T) {
 		{"sig", "a", TypeString, ClassSecret},
 		{"hmac", "a", TypeString, ClassSecret},
 		{"sort.key", "name", TypeString, ClassEnum},
+		{"partition_key", "name", TypeString, ClassEnum},
+		{"commit_hash", "name", TypeString, ClassEnum},
+		{"phone_type", "mobile", TypeString, ClassEnum},
 		{"pattern", "name", TypeString, ClassEnum},
 		{"database", "name", TypeString, ClassEnum},
 
@@ -140,6 +143,27 @@ func TestClassOf(t *testing.T) {
 	for _, c := range cases {
 		if got := ClassOf(c.path, Field{Path: c.path, Value: c.value, Type: c.typ}); got != c.want {
 			t.Errorf("ClassOf(%s = %q) = %s, want %s", c.path, c.value, got, c.want)
+		}
+	}
+}
+
+// Keys that name a credential or personal data, in the forms services use.
+func TestSecretKeys(t *testing.T) {
+	for _, k := range []string{
+		"password_confirmation", "passwordConfirm", "password_repeat", "password_new", "passwordHash", "pass_word",
+		"api_key_v2", "token_v1", "webhookSecretV2", "secretValue", "SecretString", "secret_base64",
+		"private_key_pem", "privateKeyPem", "private_key_b64", "client_secret_encoded", "credentialsJson",
+		"service_account_json", "serviceAccountKey", "sa_key", "account_key", "id_token",
+		"cookies.JSESSIONID", "headers.cookie", "headers.Cookie[]", "auth.bearer", "authentication.token",
+		"credentials.user.password", "x-hub-signature", "X-Gitlab-Token", "x-slack-signature",
+		"authorization_header", "AuthHeader", "api_secret_key", "stripe_sk", "sk", "aws_secret",
+		"AWS_SECRET_ACCESS_KEY", "conn_str", "access_code", "auth_code", "mfa_code", "totp_secret",
+		"env.GITHUB_TOKEN", "variables.DB_PASSWORD", "config.stripe.secret", "new_password2",
+		"ssn", "tax_id", "card_number", "cvv", "cvc", "iban", "account_number", "routing_number",
+		"phone", "phone_number", "dob", "date_of_birth",
+	} {
+		if c := ClassOf(k, Field{Path: k, Value: "hunter2", Type: TypeString}); c != ClassSecret {
+			t.Errorf("ClassOf(%s) = %s, want secret", k, c)
 		}
 	}
 }
@@ -199,10 +223,31 @@ func TestDisplay(t *testing.T) {
 		{"url", "https://maker.example.com/with/key/dQw4w9WgXcQzR8kPlM2vbN", TypeString, "https://maker.example.com/with/key/..."},
 		{"url", "https://example.com/MyProjectReport/2024", TypeString, "https://example.com/MyProjectReport/2024"},
 
+		{
+			"url", "https://prod-00.westus.logic.example.com:443/workflows/" + testHex32 + "/triggers/manual/paths/invoke?sig=abc", TypeString,
+			"https://prod-00.westus.logic.example.com:443/workflows/.../triggers/manual/paths/invoke",
+		},
+		{"url", "https://user:pass@[fe80::1]:8080/x", TypeString, "https://[fe80::1]:8080/x"},
+		{"url", "https://anna.smith@example.com@evil.example.com/", TypeString, "https://evil.example.com/"},
+		{"url", "https://example.com/unsubscribe/anna%2Bnews%40example.com", TypeString, "https://example.com/unsubscribe/..."},
+		{"url", "https://example.com/?" + testGitHub, TypeString, "https://example.com/"},
+		{"url", "https://example.com/a#access_token=" + testGitHub, TypeString, "https://example.com/a"},
+		{"url", "https://example.com/p/Zm9vYmFyYmF6cXV4", TypeString, "https://example.com/p/..."},
+		{"url", "https://eo0123456789abcdef0123456789abcd.m.pipedream.example/", TypeString, "https://....m.pipedream.example/"},
+		{"url", "https://o1e4h293f27xsvz8.tunnel.example.app/hook", TypeString, "https://....tunnel.example.app/hook"},
+		{"url", "https://production-db-01.example.com/", TypeString, "https://production-db-01.example.com/"},
+
 		// Userinfo in any scheme.
 		{"message", "db at postgres://app:hunter2@db:5432/app is down", TypeString, "db at postgres://[redacted]@db:5432/app is down"},
 		{"message", "cache redis://:hunter2@cache:6379 gone", TypeString, "cache redis://[redacted]@cache:6379 gone"},
 		{"message", "queue amqp://guest:guest@mq/vhost and ftp://u:p@files/x", TypeString, "queue amqp://[redacted]@mq/vhost and ftp://[redacted]@files/x"},
+
+		{"message", "cannot reach mongodb+srv://admin:Pa55word@cluster0/test", TypeString, "cannot reach mongodb+srv://[redacted]@cluster0/test"},
+
+		// Command lines.
+		{"message", "run mysql -u root -phunter2 now", TypeString, "run mysql -u root -p[redacted] now"},
+		{"message", "--password hunter2 given", TypeString, "--password [redacted] given"},
+		{"message", "pg_dump --no-owner -p 5432 db", TypeString, "pg_dump --no-owner -p 5432 db"},
 
 		// key=value forms.
 		{"message", "login pass=abc pin: 1234 otp=123456", TypeString, "login pass=[redacted] pin: [redacted] otp=[redacted]"},
@@ -212,12 +257,18 @@ func TestDisplay(t *testing.T) {
 		{"message", `body {\"password\":\"hunter2\"} sent`, TypeString, `body {\"password\":[redacted]} sent`},
 		{"message", "q password=a,b;c&d next", TypeString, "q password=[redacted] next"},
 		{"message", "the compass: north and bypass: on", TypeString, "the compass: north and bypass: on"},
+		{"message", "https://x.example.com/ key=q7Xk2Vb9Rt", TypeString, "https://x.example.com/ key=[redacted]"},
+		{"message", "Authorization: Digest username=anna, response=" + testHex32, TypeString, "Authorization: Digest username=anna, response=[redacted]"},
+		{"message", "credentials: anna:hunter2", TypeString, "credentials: [redacted]"},
+		{"message", "PASSWORD: Hunter2!", TypeString, "PASSWORD: [redacted]"},
+		{"message", "key NRAK-" + strings.Repeat("A1", 13) + "B bad", TypeString, "key [redacted] bad"},
 
 		// Personal data.
 		{"message", "call (415) 555-1234 or 415-555-1234", TypeString, "call [redacted] or [redacted]"},
 		{"message", "ssn 123-45-6789 on file", TypeString, "ssn [redacted] on file"},
 		{"message", "to de89 3704 0044 0532 0130 00 soon", TypeString, "to [redacted] soon"},
 		{"message", "mail anna@ex\u00e4mple.de now", TypeString, "mail [email] now"},
+		{"message", "mail anna(at)example.com or ANNA@EXAMPLE.COM", TypeString, "mail [email] or [email]"},
 		{"user", "anna@ex\u00e4mple.de", TypeString, "[email]"},
 	}
 	for _, c := range cases {
@@ -237,12 +288,16 @@ func TestDisplay(t *testing.T) {
 
 var userinfoPassword = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://[^/?#\s@]*:[^/?#\s@]*@`)
 
-// Hook keys generated at random must not survive Display. The rules cannot
-// catch every draw (a key without digits and with many vowels reads as
-// words), but they must catch nearly all.
-func TestDisplayHookKeys(t *testing.T) {
-	rng := rand.New(rand.NewPCG(1, 2)) // #nosec G404 -- a fixed seed, so the rate is stable
-	const alnum = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+// Secrets drawn at random must not survive Display, whatever carries them.
+// The rules cannot catch every draw (a key without digits and with many
+// vowels reads as words), but they must catch nearly all.
+func TestDisplayGeneratedSecrets(t *testing.T) {
+	rng := rand.New(rand.NewPCG(1, 2)) // #nosec G404 -- a fixed seed, so the rates are stable
+	const (
+		alnum = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+		lower = "abcdefghijklmnopqrstuvwxyz0123456789"
+		hex   = "0123456789abcdef"
+	)
 	draw := func(alphabet string, n int) string {
 		b := make([]byte, n)
 		for i := range b {
@@ -250,32 +305,52 @@ func TestDisplayHookKeys(t *testing.T) {
 		}
 		return string(b)
 	}
-	upper := alnum[:26] + alnum[52:]
-	cases := map[string]func() (string, string){
-		"slack": func() (string, string) {
-			key := draw(alnum, 24)
-			return "https://hooks.slack.com/services/T" + draw(upper, 8) + "/B" + draw(upper, 10) + "/" + key, key
-		},
-		"ifttt": func() (string, string) {
-			key := draw(alnum+"-_", 22)
-			return "https://maker.ifttt.com/trigger/door/with/key/" + key, key
-		},
+	same := func(s string) string { return s }
+	cases := []struct {
+		name, path string
+		secret     func() string
+		wrap       func(string) string
+	}{
+		{"slack hook", "url", func() string { return draw(alnum, 24) }, func(s string) string { return "https://hooks.slack.com/services/T0A1B2C3D/B0A1B2C3D/" + s }},
+		{"slack hook in text", "message", func() string { return draw(alnum, 24) }, func(s string) string { return "posted to https://hooks.slack.com/services/T0/B0/" + s + " ok" }},
+		{"ifttt key", "url", func() string { return draw(alnum+"-_", 22) }, func(s string) string { return "https://maker.ifttt.com/trigger/door/with/key/" + s }},
+		{"discord hook", "url", func() string { return draw(alnum+"-_", 68) }, func(s string) string { return "https://discord.com/api/webhooks/123456789012345678/" + s }},
+		{"google key in text", "message", func() string { return "AIza" + draw(alnum+"-_", 35) }, func(s string) string { return "maps key " + s + " expired" }},
+		{"sendgrid key in text", "message", func() string { return "SG." + draw(alnum+"-_", 22) + "." + draw(alnum+"-_", 43) }, func(s string) string { return "mail key " + s + " revoked" }},
+		{"npm token", "note", func() string { return "npm_" + draw(alnum, 36) }, same},
+		{"shopify token in a path", "url", func() string { return "shpat_" + draw(hex, 32) }, func(s string) string { return "https://example.com/t/" + s }},
+		{"new relic key in text", "message", func() string { return "NRAK-" + draw(alnum[:26]+alnum[52:], 27) }, func(s string) string { return "key " + s + " bad" }},
+		{"generated host", "url", func() string { return "eo" + draw(hex, 30) }, func(s string) string { return "https://" + s + ".m.pipedream.net/" }},
+		{"tunnel host", "url", func() string { return draw(lower, 16) }, func(s string) string { return "https://" + s + ".ngrok-free.app/hook" }},
+		{"20 alnum", "note", func() string { return draw(alnum, 20) }, same},
+		{"32 alnum", "note", func() string { return draw(alnum, 32) }, same},
+		{"44 base64", "note", func() string { return draw(alnum+"+/", 43) + "=" }, same},
+		{"32 lower alnum", "note", func() string { return draw(lower, 32) }, same},
 	}
-	for name, gen := range cases {
-		const n = 2000
+	for _, c := range cases {
+		const n = 1000
 		missed := 0
 		for range n {
-			u, key := gen()
-			if strings.Contains(Display("url", Field{Path: "url", Value: u, Type: TypeString}, 200), key) {
+			secret := c.secret()
+			v := capRunes(c.wrap(secret), MaxValueRunes)
+			if shows(Display(c.path, Field{Path: c.path, Value: v, Type: TypeString}, 4*MaxValueRunes), secret) {
 				missed++
 			}
 		}
-		if rate := float64(missed) / n; rate >= 0.03 {
-			t.Errorf("%s: %d of %d keys shown (%.1f%%), want under 3%%", name, missed, n, 100*rate)
-		} else {
-			t.Logf("%s: %d of %d keys shown", name, missed, n)
+		if missed >= n/50 {
+			t.Errorf("%s: %d of %d shown, want under 2%%", c.name, missed, n)
 		}
 	}
+}
+
+// shows reports whether any 12 characters of secret appear in out.
+func shows(out, secret string) bool {
+	for i := 0; i+12 <= len(secret); i++ {
+		if strings.Contains(out, secret[i:i+12]) {
+			return true
+		}
+	}
+	return len(secret) < 12 && strings.Contains(out, secret)
 }
 
 func FuzzDisplay(f *testing.F) {

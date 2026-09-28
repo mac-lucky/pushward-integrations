@@ -256,7 +256,8 @@ var (
 // keys, and keys with a generated token in them ("custom.cf_<random>", see
 // randomKey).
 func NormalizeKey(key string) string {
-	if !utf8.ValidString(key) {
+	// Too long for any path; Flatten skips such keys before asking.
+	if len(key) > MaxPathBytes || !utf8.ValidString(key) {
 		return "*"
 	}
 	switch {
@@ -264,7 +265,9 @@ func NormalizeKey(key string) string {
 		return "*"
 	case hexKey.MatchString(key) && digit.MatchString(key):
 		return "*"
-	case emailIn.MatchString(key), phoneIn.MatchString(key), usPhoneIn.MatchString(key):
+	case emailIn.MatchString(key), phoneIn.MatchString(key), usPhoneIn.MatchString(key), ssnIn.MatchString(key):
+		return "*"
+	case cardIn.MatchString(key) && luhnValid(key):
 		return "*"
 	case credentialWord.MatchString(key), randomKey(key):
 		return "*"
@@ -273,10 +276,12 @@ func NormalizeKey(key string) string {
 }
 
 // randomKey reports whether a piece of key between separators, dashes and
-// underscores included, is a generated token of its own: a header name like
+// underscores included, is a generated token of its own, or a whole run of
+// token characters is one by a stricter vowel test: a header name like
 // "X-Amz-Content-SHA256" is words, however random it looks as a whole.
 func randomKey(key string) bool {
-	return len(key) >= 16 && anyRun(key, pieceByte, func(p string) bool { return randomToken(p) || keyToken(p) })
+	return len(key) >= 16 && (anyRun(key, pieceByte, func(p string) bool { return randomToken(p) || keyToken(p) }) ||
+		anyRun(key, tokenByte, func(r string) bool { return randomTokenVowels(r, 1, 4) }))
 }
 
 func pieceByte(c byte) bool {

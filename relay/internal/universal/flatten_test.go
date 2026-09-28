@@ -2,6 +2,7 @@ package universal
 
 import (
 	"fmt"
+	"math/rand/v2"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -157,6 +158,11 @@ func TestNormalizeKey(t *testing.T) {
 		"tblQx7Rk2Vb9Nm4Zc":                  "*",
 		"user:anna@example.com":              "*",
 		"(415) 555-1234":                     "*",
+		"Anna <anna@example.com>":            "*",
+		"415-555-1234":                       "*",
+		"123-45-6789":                        "*",
+		"4111 1111 1111 1111":                "*",
+		"q7Xk-2Vb9_Rt4N-m8Zc3W":              "*",
 	}
 	for in, want := range cases {
 		if got := NormalizeKey(in); got != want {
@@ -207,5 +213,30 @@ func TestFlattenHugeKey(t *testing.T) {
 	fields, truncated := flatten(t, `{"`+huge+`": {"a": 1}, "ok": 2}`)
 	if !truncated || strings.Join(paths(fields), ",") != "ok" {
 		t.Errorf("paths = %v truncated = %v, want the huge key skipped", paths(fields), truncated)
+	}
+}
+
+// Generated keys collapse to "*" often enough to keep fingerprints stable;
+// the stricter key rules let some through rather than collapse a real name.
+func TestNormalizeKeyGenerated(t *testing.T) {
+	rng := rand.New(rand.NewPCG(3, 4)) // #nosec G404 -- a fixed seed, so the rates are stable
+	const alnum = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+	for _, c := range []struct {
+		alphabet string
+		n, most  int // most keys of 1000 kept as they are
+	}{{alnum, 32, 120}, {alnum + "-_", 43, 120}, {alnum, 20, 220}} {
+		kept := 0
+		for range 1000 {
+			b := make([]byte, c.n)
+			for i := range b {
+				b[i] = c.alphabet[rng.IntN(len(c.alphabet))]
+			}
+			if NormalizeKey(string(b)) != "*" {
+				kept++
+			}
+		}
+		if kept > c.most {
+			t.Errorf("%d random keys of %d characters over %d symbols kept, want at most %d", kept, c.n, len(c.alphabet), c.most)
+		}
 	}
 }
