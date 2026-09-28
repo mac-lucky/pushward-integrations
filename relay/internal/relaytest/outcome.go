@@ -27,8 +27,7 @@ func Calls(calls []testutil.APICall) []Call {
 
 // NormalizeCalls converts recorded calls with the fields that depend on the
 // clock dropped, so two runs of one fixture compare equal: content.fired_at
-// and content.end_date, and the action URLs of a notification, whose tokens
-// carry an expiry. Bodies come out with their keys sorted.
+// and content.end_date. Bodies come out with their keys sorted.
 func NormalizeCalls(calls []testutil.APICall) []Call {
 	out := Calls(calls)
 	for i := range out {
@@ -51,13 +50,6 @@ func normalizeBody(raw json.RawMessage) json.RawMessage {
 		delete(content, "fired_at")
 		delete(content, "end_date")
 	}
-	if actions, ok := body["actions"].([]any); ok {
-		for _, a := range actions {
-			if m, ok := a.(map[string]any); ok {
-				delete(m, "url")
-			}
-		}
-	}
 	b, err := json.Marshal(body)
 	if err != nil {
 		return raw
@@ -70,8 +62,7 @@ func normalizeBody(raw json.RawMessage) json.RawMessage {
 // card, notification when there are only notifications, and empty when the
 // handler made no call. Title is the card's name, else the notification's
 // title; Body is the card's first state line, else the notification's body.
-// Lifecycle is ended or ongoing for a card and empty otherwise. The universal
-// route's mapping review is not part of the event and is left out.
+// Lifecycle is ended or ongoing for a card and empty otherwise.
 type Outcome struct {
 	Kind      string `json:"kind,omitempty"`
 	Title     string `json:"title,omitempty"`
@@ -80,9 +71,6 @@ type Outcome struct {
 	Lifecycle string `json:"lifecycle,omitempty"`
 	Severity  string `json:"severity,omitempty"`
 }
-
-// reviewThread is the thread universalhook sends its mapping reviews on.
-const reviewThread = "universal-review"
 
 // OutcomeOf reads the Outcome off calls.
 func OutcomeOf(calls []testutil.APICall) Outcome {
@@ -94,13 +82,12 @@ func OutcomeOf(calls []testutil.APICall) Outcome {
 	)
 	for _, c := range calls {
 		var b struct {
-			Name     string `json:"name"`
-			State    string `json:"state"`
-			Title    string `json:"title"`
-			Body     string `json:"body"`
-			URL      string `json:"url"`
-			ThreadID string `json:"thread_id"`
-			Content  struct {
+			Name    string `json:"name"`
+			State   string `json:"state"`
+			Title   string `json:"title"`
+			Body    string `json:"body"`
+			URL     string `json:"url"`
+			Content struct {
 				Template string `json:"template"`
 				State    string `json:"state"`
 				URL      string `json:"url"`
@@ -121,7 +108,7 @@ func OutcomeOf(calls []testutil.APICall) Outcome {
 				o.Severity = b.Content.Severity
 			}
 			ended = ended || b.State == "ended"
-		case c.Method == http.MethodPost && c.Path == "/notifications" && b.ThreadID != reviewThread:
+		case c.Method == http.MethodPost && c.Path == "/notifications":
 			notified = true
 			notifTitles = appendNonEmpty(notifTitles, b.Title)
 			notifBodies = appendNonEmpty(notifBodies, b.Body)

@@ -5,8 +5,6 @@
 package relaytest
 
 import (
-	"bytes"
-	"encoding/base64"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -62,14 +60,9 @@ func Base() config.BaseProviderConfig {
 	}
 }
 
-// UniversalConfig is the universal route's config for tests: Base plus a
-// public URL and a fixed review key.
+// UniversalConfig is the universal route's config for tests.
 func UniversalConfig() *config.UniversalConfig {
-	return &config.UniversalConfig{
-		BaseProviderConfig: Base(),
-		PublicURL:          "https://relay.example.com",
-		ReviewKey:          base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{0x42}, 32)),
-	}
+	return &config.UniversalConfig{BaseProviderConfig: Base()}
 }
 
 // Register adds a provider's routes to api and returns its handler, so the
@@ -163,16 +156,10 @@ func Universal(dir, source string) Route {
 	return Route{Provider: "universal", Path: path, Dir: dir, Register: registerUniversal}
 }
 
-// registerUniversal registers the universal route the way main does: its
-// store hashes keys strictly, and its mappings live in memory.
-func registerUniversal(t *testing.T, api huma.API, store state.Store, pool *client.Pool) any {
-	t.Helper()
-	h, err := universalhook.RegisterRoutes(api, state.KeyHashing(store, state.KeyModeStrict),
-		state.NewMemoryMappingStore(), pool, UniversalConfig(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return h
+// registerUniversal registers the universal route the way main does, with a
+// store that hashes keys strictly.
+func registerUniversal(_ *testing.T, api huma.API, store state.Store, pool *client.Pool) any {
+	return universalhook.RegisterRoutes(api, state.KeyHashing(store, state.KeyModeStrict), pool, UniversalConfig(), nil)
 }
 
 // primes names the fixture that has to reach a handler before the one keyed

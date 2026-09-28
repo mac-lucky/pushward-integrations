@@ -1,11 +1,8 @@
 package config
 
 import (
-	"encoding/base64"
 	"fmt"
-	"net/url"
 	"os"
-	"strings"
 	"time"
 
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
@@ -250,43 +247,13 @@ type TrueNASConfig struct {
 	BaseProviderConfig `yaml:",inline"`
 }
 
-// UniversalConfig holds the universal webhook route, POST /universal, which maps
-// any JSON payload onto PushWard content and asks the user to review each new
-// payload shape. It is off by default: it needs a review key.
+// UniversalConfig holds the universal webhook route, POST /universal, which
+// turns any JSON payload into a notification, its title, body and link picked
+// from the payload. It is off by default.
 type UniversalConfig struct {
 	BaseProviderConfig `yaml:",inline"`
-	// PublicURL is the relay's external base URL, such as
-	// https://relay.pushward.app, with no trailing slash. The review and edit
-	// links in notifications point at it.
-	PublicURL string `yaml:"public_url"`
-	// ReviewKey signs those links: base64, at least 32 bytes once decoded.
-	// ReviewKeyFile reads it from a file instead; set one of the two.
-	// Rotating it voids every link already sent.
-	ReviewKey     string `yaml:"review_key"`
-	ReviewKeyFile string `yaml:"review_key_file"`
 	// Ranker lets a trained ranker propose mappings ahead of the heuristic.
 	Ranker bool `yaml:"ranker"`
-}
-
-// minReviewKeyBytes is the HMAC-SHA256 key length below which the key, not
-// the hash, is the weak part.
-const minReviewKeyBytes = 32
-
-const maxPublicURLBytes = 128
-
-// ReviewKeyBytes decodes ReviewKey. Standard and URL-safe base64 are both
-// accepted, with or without padding.
-func (u *UniversalConfig) ReviewKeyBytes() ([]byte, error) {
-	k := strings.TrimSpace(u.ReviewKey)
-	for _, enc := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
-		if b, err := enc.DecodeString(k); err == nil {
-			if len(b) < minReviewKeyBytes {
-				return nil, fmt.Errorf("providers.universal.review_key: %d bytes, want at least %d", len(b), minReviewKeyBytes)
-			}
-			return b, nil
-		}
-	}
-	return nil, fmt.Errorf("providers.universal.review_key: not base64")
 }
 
 // Load reads the config from a YAML file and applies environment variable overrides.
@@ -524,10 +491,6 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
-	if err := cfg.validateUniversal(); err != nil {
-		return nil, err
-	}
-
 	if cfg.CircuitBreaker.Threshold < 1 {
 		return nil, fmt.Errorf("circuit_breaker.threshold must be >= 1, got %d", cfg.CircuitBreaker.Threshold)
 	}
@@ -597,15 +560,6 @@ func (cfg *Config) applyEnvOverrides() error {
 	}
 	if err := sharedconfig.EnvBool("PUSHWARD_UNIVERSAL_ENABLED", &cfg.Providers.Universal.Enabled); err != nil {
 		return err
-	}
-	if v := os.Getenv("PUSHWARD_UNIVERSAL_PUBLIC_URL"); v != "" {
-		cfg.Providers.Universal.PublicURL = v
-	}
-	if v := os.Getenv("PUSHWARD_UNIVERSAL_REVIEW_KEY"); v != "" {
-		cfg.Providers.Universal.ReviewKey = v
-	}
-	if v := os.Getenv("PUSHWARD_UNIVERSAL_REVIEW_KEY_FILE"); v != "" {
-		cfg.Providers.Universal.ReviewKeyFile = v
 	}
 	if err := sharedconfig.EnvBool("PUSHWARD_UNIVERSAL_RANKER", &cfg.Providers.Universal.Ranker); err != nil {
 		return err
@@ -724,43 +678,6 @@ func (cfg *Config) validateState() error {
 		return nil
 	}
 	return fmt.Errorf("state.key_mode: must be compat or hashed, got %q", cfg.State.KeyMode)
-}
-
-// validateUniversal checks the universal route's links and key, and reads the
-// key file, only when the route is on: it is off by default and needs neither
-// otherwise.
-func (cfg *Config) validateUniversal() error {
-	u := &cfg.Providers.Universal
-	if !u.Enabled {
-		return nil
-	}
-	p, err := url.Parse(u.PublicURL)
-	switch {
-	case err != nil || (p.Scheme != "http" && p.Scheme != "https") || p.Host == "":
-		return fmt.Errorf("providers.universal.public_url must be an http(s) URL with a host, got %q", u.PublicURL)
-	case p.User != nil || p.RawQuery != "" || p.Fragment != "" || strings.HasSuffix(u.PublicURL, "?") || strings.HasSuffix(u.PublicURL, "#"):
-		return fmt.Errorf("providers.universal.public_url must not carry userinfo, a query or a fragment, got %q", u.PublicURL)
-	case strings.HasSuffix(u.PublicURL, "/"):
-		return fmt.Errorf("providers.universal.public_url must not end in a slash, got %q", u.PublicURL)
-	case len(u.PublicURL) > maxPublicURLBytes:
-		// Every review carries three links under it, in a push capped at 4 KiB.
-		return fmt.Errorf("providers.universal.public_url must be at most %d bytes, got %d", maxPublicURLBytes, len(u.PublicURL))
-	}
-	if u.ReviewKeyFile != "" {
-		if u.ReviewKey != "" {
-			return fmt.Errorf("providers.universal: set review_key or review_key_file, not both")
-		}
-		b, err := os.ReadFile(u.ReviewKeyFile) // #nosec G304 -- path comes from config, not user input
-		if err != nil {
-			return fmt.Errorf("providers.universal.review_key_file: %w", err)
-		}
-		u.ReviewKey = strings.TrimSpace(string(b))
-	}
-	if u.ReviewKey == "" {
-		return fmt.Errorf("providers.universal.review_key is required when the universal route is enabled (set PUSHWARD_UNIVERSAL_REVIEW_KEY)")
-	}
-	_, err = u.ReviewKeyBytes()
-	return err
 }
 
 func (cfg *Config) validateModes() error {

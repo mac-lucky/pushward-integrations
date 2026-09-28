@@ -1,6 +1,7 @@
 package humautil
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -50,5 +51,14 @@ func TestNewIgnoredCarriesTheReason(t *testing.T) {
 	// NewOK stays detail-free so the field is omitted for every other provider.
 	if ok := NewOK(); ok.Body.Status != "ok" || ok.Body.Detail != "" {
 		t.Errorf("NewOK() = %+v", ok.Body)
+	}
+}
+
+func TestHidden(t *testing.T) {
+	_, api := NewTestAPI()
+	RegisterWebhook(api, "/hidden", "post-hidden", "Hidden", "", nil,
+		func(context.Context, *struct{}) (*WebhookResponse, error) { return NewOK(), nil }, Hidden)
+	if p := api.OpenAPI().Paths["/hidden"]; p != nil {
+		t.Error("a Hidden webhook must not be in the OpenAPI document")
 	}
 }

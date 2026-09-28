@@ -1,7 +1,6 @@
 package auth
 
 import (
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"strings"
@@ -69,19 +68,5 @@ func TestKeyDigest(t *testing.T) {
 	}
 	if !strings.HasPrefix(got, KeyHash("hlk_x")) || !strings.HasPrefix(got, MapKeyPrefix("hlk_x")) {
 		t.Errorf("KeyHash/MapKeyPrefix are not prefixes of KeyDigest %s", got)
-	}
-}
-
-func TestUniversalDigest(t *testing.T) {
-	d := UniversalDigest("hlk_x")
-	if d == KeyDigest("hlk_x") {
-		t.Fatal("UniversalDigest must differ from KeyDigest")
-	}
-	want := sha256.Sum256([]byte("pushward-relay/universal/v1\x00hlk_x"))
-	if d != want {
-		t.Errorf("UniversalDigest(hlk_x) = %x, want %x", d, want)
-	}
-	if UniversalDigest("hlk_y") == d {
-		t.Error("two keys share a digest")
 	}
 }

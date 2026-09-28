@@ -113,34 +113,6 @@ func RegisterWebhook[I, O any](api huma.API, path, operationID, summary, descrip
 	huma.Register(api, op, handler)
 }
 
-// Operation metadata AuthMiddleware reads. An operation whose "auth" is "none"
-// runs without an integration key.
-const (
-	metaAuth = "auth"
-	authNone = "none"
-)
-
-// maxPublicBodyBytes is the body limit of a public route. Its credential is
-// in the path, and nothing it does needs a body.
-const maxPublicBodyBytes = 1024
-
-// RegisterPublic registers a POST endpoint that takes no integration key,
-// because its path carries a signed capability of its own (a review link
-// tapped on a notification). It is hidden from the OpenAPI document and
-// accepts at most 1 KiB of body.
-func RegisterPublic[I, O any](api huma.API, path, operationID, summary string, handler func(ctx context.Context, input *I) (*O, error)) {
-	huma.Register(api, huma.Operation{
-		OperationID:   operationID,
-		Method:        http.MethodPost,
-		Path:          path,
-		Summary:       summary,
-		Hidden:        true,
-		MaxBodyBytes:  maxPublicBodyBytes,
-		DefaultStatus: http.StatusOK,
-		Metadata:      map[string]any{metaAuth: authNone},
-	}, handler)
-}
-
 // RegisterDelete registers a DELETE webhook endpoint with the same defaults as
 // RegisterWebhook (RegisterWebhook is POST-only). Used by providers whose
 // upstream clears an alert with a DELETE call (e.g. the OpsGenie protocol

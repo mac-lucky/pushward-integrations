@@ -436,14 +436,15 @@ func anyRun(s string, in func(byte) bool, fn func(string) bool) bool {
 	return false
 }
 
-// Display renders a field's sample for the review notification and the
-// editor. Secrets and emails are replaced whole. A URL keeps its scheme, host
-// and path, with userinfo, query, fragment and path parameters dropped and
-// the secret parts of its host and path shown as "...". Everything else is
-// cut to maxRunes with what looks secret inside it masked: credentials,
-// key=value secrets, generated tokens, long hex (unless the key names an id
-// or a digest), userinfo in any URL, emails, card numbers, IBANs, phone and
-// social security numbers; http(s) URLs inside it are shown as above.
+// Display renders a field's sample for text a person reads, such as the
+// lines of a notification with no body of its own. Secrets and emails are
+// replaced whole. A URL keeps its scheme, host and path, with userinfo,
+// query, fragment and path parameters dropped and the secret parts of its
+// host and path shown as "...". Everything else is cut to maxRunes with what
+// looks secret inside it masked: credentials, key=value secrets, generated
+// tokens, long hex (unless the key names an id or a digest), userinfo in any
+// URL, emails, card numbers, IBANs, phone and social security numbers;
+// http(s) URLs inside it are shown as above.
 //
 // Values arrive already cut to MaxValueRunes by Flatten, so a credential cut
 // in half by that cap can slip past the patterns.

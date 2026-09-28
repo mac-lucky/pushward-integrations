@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -13,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
@@ -55,10 +53,11 @@ var fixtureRoutes = map[string]string{
 }
 
 // stateful are the providers whose fixtures leave a relay_state row behind.
-// changedetection, unmanic and bazarr are handed no store at all.
+// changedetection, unmanic and bazarr are handed no store at all, and the
+// universal route opens no card for a payload it does not know.
 var stateful = []string{
 	"argocd", "backrest", "gatus", "gitea", "grafana", "jellyfin", "komodo",
-	"overseerr", "paperless", "proxmox", "starr", "truenas", "universal", "uptimekuma",
+	"overseerr", "paperless", "proxmox", "starr", "truenas", "uptimekuma",
 }
 
 // loadConfig returns the production defaults, every provider on, with the
@@ -70,9 +69,6 @@ func loadConfig(t *testing.T, keyMode string) *config.Config {
 	for _, name := range []string{"GRAFANA", "ARGOCD", "STARR", "GITEA", "UNIVERSAL"} {
 		t.Setenv("PUSHWARD_"+name+"_ENABLED", "true")
 	}
-	t.Setenv("PUSHWARD_UNIVERSAL_PUBLIC_URL", "https://relay.example.com")
-	t.Setenv("PUSHWARD_UNIVERSAL_REVIEW_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)))
-	t.Setenv("PUSHWARD_UNIVERSAL_REVIEW_KEY_FILE", "")
 	t.Setenv("PUSHWARD_STARR_MODE", "")
 	cfg, err := config.Load("")
 	if err != nil {
@@ -98,15 +94,11 @@ func TestRegisterProviders_KeyMode(t *testing.T) {
 			lifecycle.SetRetryDelay(10 * time.Millisecond)
 			srv, _, _ := testutil.MockPushWardServer(t)
 			mem := state.NewMemoryStore()
-			mappings := state.NewMemoryMappingStore()
 			mux, api := humautil.NewTestAPI()
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
 
-			r, err := registerProviders(ctx, api, mem, mappings, client.NewPool(srv.URL, nil), loadConfig(t, tt.mode), poster.Disabled{})
-			if err != nil {
-				t.Fatal(err)
-			}
+			r := registerProviders(ctx, api, mem, client.NewPool(srv.URL, nil), loadConfig(t, tt.mode), poster.Disabled{})
 			t.Cleanup(func() {
 				r.argocd.StopAll()
 				for _, e := range r.enders {
@@ -180,20 +172,6 @@ func TestRegisterProviders_KeyMode(t *testing.T) {
 			for _, p := range stateful {
 				if perProvider[p] == 0 {
 					t.Errorf("no %s rows: the fixtures no longer exercise its store", p)
-				}
-			}
-			rows := mappings.Rows()
-			if len(rows) == 0 {
-				t.Error("no universal mappings: the fixtures no longer exercise the mapping store")
-			}
-			for _, row := range rows {
-				if row.KeyHash != auth.UniversalDigest(testKey) {
-					t.Errorf("mapping stored under key hash %x, want the universal digest of the test key", row.KeyHash[:4])
-				}
-				for _, col := range [][]byte{row.Mapping, row.Shape, row.Proposal, row.Samples, row.Candidates} {
-					if bytes.Contains(col, []byte("hlk_")) {
-						t.Errorf("mapping row carries a raw key: %s", col)
-					}
 				}
 			}
 		})

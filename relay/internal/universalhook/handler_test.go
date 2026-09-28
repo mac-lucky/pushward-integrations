@@ -2,17 +2,21 @@ package universalhook
 
 import (
 	"bytes"
-	"encoding/base64"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/prometheus/client_golang/prometheus"
 
@@ -20,20 +24,15 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/state/statetest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/universal"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
-const (
-	testKey   = "hlk_universal_test"
-	publicURL = "https://relay.example.com"
-)
-
-var reviewKey = bytes.Repeat([]byte{0x42}, 32)
+const testKey = "hlk_universal_test"
 
 func testConfig() *config.UniversalConfig {
 	return &config.UniversalConfig{
@@ -45,41 +44,37 @@ func testConfig() *config.UniversalConfig {
 			EndDelay:       10 * time.Millisecond,
 			EndDisplayTime: 10 * time.Millisecond,
 		},
-		PublicURL: publicURL,
-		ReviewKey: base64.StdEncoding.EncodeToString(reviewKey),
 	}
 }
 
 type harness struct {
-	mux      http.Handler
-	calls    *[]testutil.APICall
-	mu       *sync.Mutex
-	store    state.Store
-	mappings state.MappingStore
-	h        *Handler
+	mux   http.Handler
+	calls *[]testutil.APICall
+	mu    *sync.Mutex
+	store state.Store
+	h     *Handler
 }
 
-func newHarness(t *testing.T, mappings state.MappingStore) *harness {
+func newHarness(t *testing.T) *harness {
 	t.Helper()
 	lifecycle.SetRetryDelay(10 * time.Millisecond)
 	srv, calls, mu := testutil.MockPushWardServer(t)
-	return newHarnessAt(t, srv.URL, calls, mu, state.NewMemoryStore(), mappings)
+	return newHarnessAt(t, srv.URL, calls, mu, nil)
 }
 
-// newHarnessAt registers the routes against a PushWard server at url, with
-// store as the relay_state store under the strict key hashing main applies.
-func newHarnessAt(t *testing.T, url string, calls *[]testutil.APICall, mu *sync.Mutex, store state.Store, mappings state.MappingStore) *harness {
+// newHarnessAt registers the route against a PushWard server at url, with
+// the relay_state store under the strict key hashing main applies. A nil
+// proposer is the heuristic.
+func newHarnessAt(t *testing.T, url string, calls *[]testutil.APICall, mu *sync.Mutex, proposer universal.Proposer) *harness {
 	t.Helper()
 	mux, api := humautil.NewTestAPI()
-	h, err := RegisterRoutes(api, state.KeyHashing(store, state.KeyModeStrict), mappings, client.NewPool(url, nil), testConfig(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	store := state.NewMemoryStore()
+	h := RegisterRoutes(api, state.KeyHashing(store, state.KeyModeStrict), client.NewPool(url, nil), testConfig(), proposer)
 	t.Cleanup(func() {
 		h.ender.StopAll()
 		h.ender.Wait()
 	})
-	return &harness{mux: mux, calls: calls, mu: mu, store: store, mappings: mappings, h: h}
+	return &harness{mux: mux, calls: calls, mu: mu, store: store, h: h}
 }
 
 func (hs *harness) post(t *testing.T, target string, body []byte) *httptest.ResponseRecorder {
@@ -92,18 +87,29 @@ func (hs *harness) post(t *testing.T, target string, body []byte) *httptest.Resp
 	return w
 }
 
-// tap does what the phone does for a silent action: a bare POST to its URL,
-// with no integration key.
-func (hs *harness) tap(t *testing.T, action pushward.NotificationAction) *httptest.ResponseRecorder {
+// deliverAs sends a payload through the heuristic's whole mapping, its kind
+// included, the way a preset of that kind is delivered. The route itself
+// sends a payload it does not know as a plain notification, so the card path
+// is driven from here.
+func (hs *harness) deliverAs(t *testing.T, source, channels string, body []byte) error {
 	t.Helper()
-	path, ok := strings.CutPrefix(action.URL, publicURL)
-	if !ok {
-		t.Fatalf("action %s URL %q is not under the public URL", action.ID, action.URL)
+	fields, truncated, err := universal.Flatten(bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
 	}
-	req := httptest.NewRequest(action.Method, path, nil)
-	w := httptest.NewRecorder()
-	hs.mux.ServeHTTP(w, req)
-	return w
+	shapes := universal.ShapesOf(fields)
+	m := universal.NewMapping(universal.ProposeShapes(shapes), shapes)
+	ctx := context.Background()
+	if channels != "" {
+		ov, err := overrides.Parse(url.Values{"channels": {channels}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx = context.WithValue(ctx, overrides.ContextKey(), ov)
+	}
+	r := &request{key: testKey, source: source, fields: fields, shapes: shapes, truncated: truncated, log: slog.Default()}
+	_, err = hs.h.deliver(ctx, r, m, "preset")
+	return err
 }
 
 func (hs *harness) snapshot() []testutil.APICall {
@@ -132,15 +138,15 @@ func notifications(t *testing.T, calls []testutil.APICall) []pushward.SendNotifi
 	return out
 }
 
-func reviews(t *testing.T, calls []testutil.APICall) []pushward.SendNotificationRequest {
+// only is the single call a webhook made, which must be a notification.
+func only(t *testing.T, hs *harness) pushward.SendNotificationRequest {
 	t.Helper()
-	var out []pushward.SendNotificationRequest
-	for _, n := range notifications(t, calls) {
-		if n.ThreadID == "universal-review" {
-			out = append(out, n)
-		}
+	calls := hs.snapshot()
+	ns := notifications(t, calls)
+	if len(calls) != 1 || len(ns) != 1 {
+		t.Fatalf("got %d calls, want one notification: %+v", len(calls), calls)
 	}
-	return out
+	return ns[0]
 }
 
 func activityCalls(calls []testutil.APICall) int {
@@ -151,29 +157,6 @@ func activityCalls(calls []testutil.APICall) int {
 		}
 	}
 	return n
-}
-
-func action(t *testing.T, n pushward.SendNotificationRequest, id string) pushward.NotificationAction {
-	t.Helper()
-	for _, a := range n.Actions {
-		if a.ID == id {
-			return a
-		}
-	}
-	t.Fatalf("notification %q has no %q action", n.Title, id)
-	return pushward.NotificationAction{}
-}
-
-func mappingRow(t *testing.T, hs *harness, source string) *state.MappingRow {
-	t.Helper()
-	rows := hs.mappings.(*state.MemoryMappingStore).Rows()
-	for i := range rows {
-		if rows[i].Source == source {
-			return &rows[i]
-		}
-	}
-	t.Fatalf("no mapping row for source %q (%d rows)", source, len(rows))
-	return nil
 }
 
 // counterValue reads a counter from the default registry, matching the given
@@ -201,302 +184,300 @@ func counterValue(t *testing.T, name string, labels map[string]string) float64 {
 	return 0
 }
 
-func TestNewShapeDeliversAndReviewsOnce(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	body := fixture(t, "plain_notify.json")
-
-	if w := hs.post(t, "/universal?source=backups", body); w.Code != http.StatusOK {
+func TestPlainNotification(t *testing.T) {
+	events := func() float64 {
+		return counterValue(t, "pushward_relay_universal_events_total", map[string]string{"via": "proposer", "kind": "notification"})
+	}
+	start := events()
+	hs := newHarness(t)
+	if w := hs.post(t, "/universal?source=backups", fixture(t, "plain_notify.json")); w.Code != http.StatusOK {
 		t.Fatalf("got %d %s", w.Code, w.Body.String())
 	}
-	ns := notifications(t, hs.snapshot())
-	if len(ns) != 2 {
-		t.Fatalf("got %d notifications, want the event and its review", len(ns))
+	n := only(t, hs)
+	if n.Title != "Nightly backup finished" || n.Body != "Backed up 14 volumes to the offsite bucket in 4m12s." {
+		t.Errorf("title/body = %q / %q", n.Title, n.Body)
 	}
-	ev, rv := ns[0], ns[1]
-	if ev.Title != "Nightly backup finished" || !strings.HasPrefix(ev.Body, "Backed up 14 volumes") {
-		t.Errorf("event notification = %q / %q", ev.Title, ev.Body)
+	if n.URL != "https://backups.example.com/runs/2026-09-28" || n.Source != "backups" || n.ThreadID != "universal-backups" {
+		t.Errorf("url/source/thread = %q %q %q", n.URL, n.Source, n.ThreadID)
 	}
-	if ev.Source != "backups" || ev.ThreadID != "universal-backups" || ev.URL != "https://backups.example.com/runs/2026-09-28" {
-		t.Errorf("event notification source/thread/url = %q %q %q", ev.Source, ev.ThreadID, ev.URL)
+	if n.Level != pushward.LevelActive || len(n.Actions) != 0 || n.CollapseID != "" || n.ActivitySlug != "" {
+		t.Errorf("level %q, %d actions, collapse %q, slug %q", n.Level, len(n.Actions), n.CollapseID, n.ActivitySlug)
 	}
-
-	if rv.Title != "Check mapping: backups" || rv.ThreadID != "universal-review" || rv.Level != pushward.LevelActive {
-		t.Errorf("review title/thread/level = %q %q %q", rv.Title, rv.ThreadID, rv.Level)
+	if got := events() - start; got != 1 {
+		t.Errorf("events_total grew by %v, want 1", got)
 	}
-	if !strings.HasPrefix(rv.Body, "Sent as a notification.\nTitle <- title = \"Nightly backup finished\"") {
-		t.Errorf("review body = %q", rv.Body)
-	}
-	if rv.Metadata["kind"] != "notification" || len(rv.Metadata["fp"]) != 16 {
-		t.Errorf("review metadata = %v", rv.Metadata)
-	}
-	if len(rv.Actions) != 3 {
-		t.Fatalf("review has %d actions, want 3", len(rv.Actions))
-	}
-	accept, reject, edit := action(t, rv, "accept"), action(t, rv, "reject"), action(t, rv, "edit")
-	checks := []struct {
-		a                              pushward.NotificationAction
-		title, prefix, method          string
-		foreground, destructive, authn bool
-	}{
-		{accept, "Looks right", publicURL + ReviewPath, http.MethodPost, false, false, true},
-		{reject, "Send raw instead", publicURL + ReviewPath, http.MethodPost, false, true, true},
-		{edit, "Edit", publicURL + EditPath, "", true, false, true},
-	}
-	for _, c := range checks {
-		if c.a.Title != c.title || !strings.HasPrefix(c.a.URL, c.prefix) || c.a.Method != c.method ||
-			c.a.Foreground != c.foreground || c.a.Destructive != c.destructive || c.a.AuthenticationRequired != c.authn {
-			t.Errorf("action %s = %+v", c.a.ID, c.a)
-		}
+	if rows := hs.store.(*state.MemoryStore).Rows(); len(rows) != 0 {
+		t.Errorf("a plain notification left %d relay_state rows", len(rows))
 	}
 
-	row := mappingRow(t, hs, "backups")
-	if row.Status != state.MappingPending || row.ReviewSentAt == nil || row.Proposer != "heuristic/1" {
-		t.Errorf("row status %s, review sent %v, proposer %q", row.Status, row.ReviewSentAt, row.Proposer)
-	}
-
-	// The same shape again: delivered, not reviewed a second time.
-	if w := hs.post(t, "/universal?source=backups", body); w.Code != http.StatusOK {
-		t.Fatalf("got %d %s", w.Code, w.Body.String())
-	}
-	calls := hs.snapshot()
-	if n, r := len(notifications(t, calls)), len(reviews(t, calls)); n != 3 || r != 1 {
-		t.Errorf("after a second event: %d notifications, %d reviews; want 3 and 1", n, r)
+	// The same payload again is just another notification.
+	hs.post(t, "/universal?source=backups", fixture(t, "plain_notify.json"))
+	if n := len(notifications(t, hs.snapshot())); n != 2 {
+		t.Errorf("%d notifications after a second event, want 2", n)
 	}
 }
 
-func TestAcceptWithoutKey(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	body := fixture(t, "plain_notify.json")
-	hs.post(t, "/universal", body)
-	rv := reviews(t, hs.snapshot())[0]
-
-	w := hs.tap(t, action(t, rv, "accept"))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"ok"`) {
-		t.Fatalf("accept: %d %s", w.Code, w.Body.String())
-	}
-	if w := hs.tap(t, action(t, rv, "accept")); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"status":"idempotent"`) {
-		t.Errorf("second accept: %d %s", w.Code, w.Body.String())
-	}
-	if w := hs.tap(t, action(t, rv, "reject")); w.Code != http.StatusConflict {
-		t.Errorf("reject after accept: %d %s", w.Code, w.Body.String())
-	}
-	if row := mappingRow(t, hs, ""); row.Status != state.MappingConfirmed || row.Rev != 1 || row.ExpiresAt != nil {
-		t.Errorf("row after accept: status %s rev %d expires %v", row.Status, row.Rev, row.ExpiresAt)
-	}
-
-	before := len(hs.snapshot())
-	hs.post(t, "/universal", body)
-	calls := hs.snapshot()[before:]
-	ns := notifications(t, calls)
-	if len(ns) != 1 || ns[0].Title != "Nightly backup finished" {
-		t.Fatalf("a confirmed shape sends its event only, got %+v", ns)
-	}
-}
-
-func TestRejectSendsRaw(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	body := fixture(t, "plain_notify.json")
-	hs.post(t, "/universal?source=backups", body)
-	rv := reviews(t, hs.snapshot())[0]
-	if w := hs.tap(t, action(t, rv, "reject")); w.Code != http.StatusOK {
-		t.Fatalf("reject: %d %s", w.Code, w.Body.String())
-	}
-
-	before := len(hs.snapshot())
-	if w := hs.post(t, "/universal?source=backups", body); w.Code != http.StatusOK {
-		t.Fatalf("got %d %s", w.Code, w.Body.String())
-	}
-	ns := notifications(t, hs.snapshot()[before:])
-	if len(ns) != 1 {
-		t.Fatalf("got %d notifications, want the raw one", len(ns))
-	}
-	raw := ns[0]
-	if raw.Title != "backups" || raw.Level != pushward.LevelPassive {
-		t.Errorf("raw title/level = %q %q", raw.Title, raw.Level)
-	}
-	if !strings.HasPrefix(raw.Body, "title: Nightly backup finished"+text.SepDot+"message: Backed up") {
-		t.Errorf("raw body = %q", raw.Body)
-	}
-	if strings.Count(raw.Body, text.SepDot) > rawLines-1 {
-		t.Errorf("raw body has more than %d lines: %q", rawLines, raw.Body)
-	}
-	if len(raw.Actions) != 1 {
-		t.Fatalf("raw notification has %d actions, want Edit only", len(raw.Actions))
-	}
-	if e := raw.Actions[0]; e.ID != "edit" || e.Title != "Edit" || !e.Foreground || !strings.HasPrefix(e.URL, publicURL+EditPath) {
-		t.Errorf("edit action = %+v", e)
-	}
-}
-
-func TestPendingCap(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	capHits := func() float64 {
-		return counterValue(t, "pushward_relay_universal_cap_hits_total", map[string]string{"cap": "pending"})
-	}
-	start := capHits()
-	for i := range state.MaxPending + 1 {
-		body := fmt.Appendf(nil, `{"title":"Job %d","message":"finished","extra_%d":"x"}`, i, i)
-		if w := hs.post(t, "/universal", body); w.Code != http.StatusOK {
-			t.Fatalf("shape %d: %d %s", i, w.Code, w.Body.String())
-		}
-	}
-	calls := hs.snapshot()
-	if n, r := len(notifications(t, calls)), len(reviews(t, calls)); n != 2*state.MaxPending+1 || r != state.MaxPending {
-		t.Errorf("%d notifications and %d reviews, want every event and %d reviews", n, r, state.MaxPending)
-	}
-	if got := capHits() - start; got != 1 {
-		t.Errorf("cap hits grew by %v, want 1", got)
-	}
-	if n := len(hs.mappings.(*state.MemoryMappingStore).Rows()); n != state.MaxPending {
-		t.Errorf("%d rows stored, want %d", n, state.MaxPending)
-	}
-}
-
-func TestAlertFiringThenResolved(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	if w := hs.post(t, "/universal?source=alertmanager", fixture(t, "alertmanager_firing.json")); w.Code != http.StatusOK {
-		t.Fatalf("firing: %d %s", w.Code, w.Body.String())
-	}
-	calls := hs.snapshot()
-	// create, ongoing frame, the alert notification, the review
-	if len(calls) != 4 || calls[0].Path != "/activities" || calls[1].Method != http.MethodPatch {
-		t.Fatalf("firing calls = %+v", calls)
-	}
-	var create struct {
-		Slug     string `json:"slug"`
-		Name     string `json:"name"`
-		Priority int    `json:"priority"`
-	}
-	testutil.UnmarshalBody(t, calls[0].Body, &create)
-	if !strings.HasPrefix(create.Slug, "u-alertmanager-") || create.Name != "DiskAlmostFull" || create.Priority != 3 {
-		t.Errorf("create = %+v", create)
-	}
-	c := testutil.LastActivityUpdate(t, calls)
-	if c.Template != pushward.TemplateAlert || c.Severity != "critical" || c.AccentColor != pushward.ColorRed ||
-		c.Subtitle != "alertmanager" || c.FiredAt == nil || !strings.HasPrefix(c.State, "Only 41 GiB left") {
-		t.Errorf("firing content = %+v", c)
-	}
-	ns := notifications(t, calls)
-	if rv := reviews(t, calls); len(rv) != 1 || !strings.Contains(rv[0].Body, "Matched on <- alerts[].fingerprint\n") || strings.Contains(rv[0].Body, "4f1c2d9e8a7b6c5d") {
-		t.Errorf("the review must name the correlation field without its value: %+v", rv)
-	}
-	if ns[0].Level != pushward.LevelTimeSensitive || ns[0].ActivitySlug != create.Slug || ns[0].CollapseID != create.Slug {
-		t.Errorf("alert notification level/slug/collapse = %q %q %q", ns[0].Level, ns[0].ActivitySlug, ns[0].CollapseID)
-	}
-
-	if w := hs.post(t, "/universal?source=alertmanager", fixture(t, "alertmanager_resolved.json")); w.Code != http.StatusOK {
-		t.Fatalf("resolved: %d %s", w.Code, w.Body.String())
-	}
-	// + the resolved notification, then the two end phases
-	calls = testutil.WaitForCalls(t, hs.calls, hs.mu, 7, 5*time.Second)
-	if len(calls) != 7 {
-		t.Fatalf("got %d calls, want 7: %+v", len(calls), calls)
-	}
-	var end pushward.UpdateRequest
-	testutil.UnmarshalBody(t, calls[len(calls)-1].Body, &end)
-	if calls[len(calls)-1].Path != "/activities/"+create.Slug || end.State != pushward.StateEnded || end.Content.State != "Resolved" ||
-		end.Content.AccentColor != pushward.ColorGreen {
-		t.Errorf("last call %s %s = %+v", calls[len(calls)-1].Method, calls[len(calls)-1].Path, end)
-	}
-	resolved := notifications(t, calls)[2]
-	if resolved.Level != pushward.LevelPassive || !strings.HasPrefix(resolved.Body, "Resolved"+text.SepDot) {
-		t.Errorf("resolved notification = %q %q", resolved.Level, resolved.Body)
-	}
-	if n := len(reviews(t, calls)); n != 1 {
-		t.Errorf("%d reviews for one shape", n)
-	}
-}
-
-func TestProgressRunThenDone(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	hs.post(t, "/universal?source=ci", fixture(t, "ci_progress_running.json"))
-	calls := hs.snapshot()
-	// create, frame, review: a progress start notifies nobody
-	if len(calls) != 3 || len(notifications(t, calls)) != 1 {
-		t.Fatalf("running calls = %+v", calls)
-	}
-	c := testutil.LastActivityUpdate(t, calls)
-	if c.Template != pushward.TemplateGeneric || c.Progress != 0.45 || c.State != "Running" {
-		t.Errorf("running content = %+v", c)
-	}
-
-	hs.post(t, "/universal?source=ci", fixture(t, "ci_progress_done.json"))
-	calls = testutil.WaitForCalls(t, hs.calls, hs.mu, 6, 5*time.Second)
-	if len(calls) != 6 {
-		t.Fatalf("got %d calls, want 6: %+v", len(calls), calls)
-	}
-	end := testutil.LastActivityUpdate(t, calls)
-	if end.State != "Done" || end.Progress != 1 || end.AccentColor != pushward.ColorGreen {
-		t.Errorf("done content = %+v", end)
-	}
-	done := notifications(t, calls)[1]
-	if done.Level != pushward.LevelPassive || !strings.HasPrefix(done.Body, "Done"+text.SepDot) {
-		t.Errorf("done notification = %q %q", done.Level, done.Body)
-	}
-}
-
-// A progress frame without a value keeps the bar where the last one left it.
-func TestProgressWithoutValueKeepsLast(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	hs.post(t, "/universal?source=ci", fixture(t, "ci_progress_running.json"))
-	noValue := bytes.Replace(fixture(t, "ci_progress_running.json"), []byte(`"progress": 45,`), nil, 1)
-	if w := hs.post(t, "/universal?source=ci", noValue); w.Code != http.StatusOK {
-		t.Fatalf("second frame: %d %s", w.Code, w.Body.String())
-	}
-	if c := testutil.LastActivityUpdate(t, hs.snapshot()); c.Progress != 0.45 {
-		t.Errorf("progress after a frame without a value = %v, want 0.45", c.Progress)
-	}
-}
-
-// A card the server refuses for good still reaches the user as a notification.
-func TestActivityRefusedFallsBackToNotification(t *testing.T) {
-	lifecycle.SetRetryDelay(10 * time.Millisecond)
-	srv, calls, mu := testutil.MockPushWardServerRejecting(t, 0, http.StatusConflict)
-	hs := newHarnessAt(t, srv.URL, calls, mu, state.NewMemoryStore(), state.NewMemoryMappingStore())
-	if w := hs.post(t, "/universal?source=am", fixture(t, "alertmanager_firing.json")); w.Code != http.StatusOK {
-		t.Fatalf("firing: %d %s", w.Code, w.Body.String())
-	}
-	var delivered int
-	for _, n := range notifications(t, hs.snapshot()) {
-		if n.ThreadID != "universal-review" {
-			delivered++
-		}
-	}
-	if delivered != 1 {
-		t.Errorf("%d fallback notifications, want 1", delivered)
-	}
-}
-
-func TestChannelsNotificationMakesNoActivityCalls(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
+// A payload the heuristic reads as an alert or a CI run still makes one
+// notification per event, at the default level: no card, no end.
+func TestUnknownShapesOpenNoCard(t *testing.T) {
+	hs := newHarness(t)
 	for _, name := range []string{"alertmanager_firing.json", "alertmanager_resolved.json", "ci_progress_running.json", "ci_progress_done.json"} {
-		if w := hs.post(t, "/universal?channels=notification", fixture(t, name)); w.Code != http.StatusOK {
+		before := len(hs.snapshot())
+		if w := hs.post(t, "/universal?source=am", fixture(t, name)); w.Code != http.StatusOK {
 			t.Fatalf("%s: %d %s", name, w.Code, w.Body.String())
 		}
+		calls := testutil.WaitForCalls(t, hs.calls, hs.mu, before+1, time.Second)[before:]
+		ns := notifications(t, calls)
+		if len(calls) != 1 || len(ns) != 1 {
+			t.Fatalf("%s: %d calls, want one notification: %+v", name, len(calls), calls)
+		}
+		if n := ns[0]; n.Level != pushward.LevelActive || n.CollapseID != "" || n.ActivitySlug != "" || n.Title == "" {
+			t.Errorf("%s: %+v", name, n)
+		}
 	}
-	calls := hs.snapshot()
-	if n := activityCalls(calls); n != 0 {
-		t.Errorf("%d activity calls under channels=notification", n)
+	firing := notifications(t, hs.snapshot())[0]
+	if firing.Title != "DiskAlmostFull" || firing.Body != "Only 41 GiB left on /srv, filling at about 6 GiB a day." ||
+		firing.URL != "https://alertmanager.example.com" {
+		t.Errorf("firing = %q / %q / %q", firing.Title, firing.Body, firing.URL)
 	}
-	// firing, resolved, progress start and end, and two reviews
-	if n := len(notifications(t, calls)); n != 6 {
-		t.Errorf("%d notifications, want 6", n)
+	time.Sleep(50 * time.Millisecond) // past EndDelay and EndDisplayTime
+	if n := activityCalls(hs.snapshot()); n != 0 {
+		t.Errorf("%d activity calls", n)
 	}
 }
 
-// channels=activity suppresses the event's notification but not the review:
-// the review is how the user fixes the mapping at all.
-func TestChannelsActivityStillReviews(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	hs.post(t, "/universal?channels=activity", fixture(t, "plain_notify.json"))
-	ns := notifications(t, hs.snapshot())
-	if len(ns) != 1 || ns[0].ThreadID != "universal-review" {
-		t.Errorf("notifications = %+v, want the review only", ns)
+func TestTitleFallsBackToSource(t *testing.T) {
+	body := []byte(`{"id":"8d3f5a1e-27c4-4b9e-a0f6-5c2d9e7b1a43","value":42,"ok":true}`)
+	for _, tt := range []struct{ target, title string }{
+		{"/universal?source=my-app", "My app"},
+		{"/universal?source=nas2", "Nas2"},
+		{"/universal", "Webhook"},
+	} {
+		t.Run(tt.target, func(t *testing.T) {
+			hs := newHarness(t)
+			if w := hs.post(t, tt.target, body); w.Code != http.StatusOK {
+				t.Fatalf("got %d %s", w.Code, w.Body.String())
+			}
+			n := only(t, hs)
+			// The id says nothing to a person and is left out.
+			if n.Title != tt.title || n.Body != "Value: 42\nOk: true" {
+				t.Errorf("title/body = %q / %q", n.Title, n.Body)
+			}
+		})
+	}
+}
+
+// With no body field, the body lists the payload's most readable fields: text
+// the heuristic ranks as body-like first, the rest in payload order, four at
+// most. Ids, times and links are left out.
+func TestDetailLines(t *testing.T) {
+	hs := newHarness(t)
+	body := []byte(`{
+		"name": "Disk check",
+		"status": "warning",
+		"host": "nas-01",
+		"mount": "/srv",
+		"used_pct": 93,
+		"checked_at": "2026-09-28T03:04:12Z",
+		"check_id": "8d3f5a1e-27c4-4b9e-a0f6-5c2d9e7b1a43",
+		"url": "https://grafana.example.com/d/disk",
+		"spare": "unused"
+	}`)
+	if w := hs.post(t, "/universal", body); w.Code != http.StatusOK {
+		t.Fatalf("got %d %s", w.Code, w.Body.String())
+	}
+	n := only(t, hs)
+	if n.Title != "Disk check" || n.URL != "https://grafana.example.com/d/disk" {
+		t.Errorf("title/url = %q %q", n.Title, n.URL)
+	}
+	if want := "Mount: /srv\nStatus: warning\nHost: nas-01\nSpare: unused"; n.Body != want {
+		t.Errorf("body = %q, want %q", n.Body, want)
+	}
+}
+
+// A body that only repeats the title is replaced by the detail lines, which
+// leave out both fields.
+func TestBodyRepeatingTitle(t *testing.T) {
+	hs := newHarness(t)
+	hs.post(t, "/universal", []byte(`{"title":"Backup done","message":"backup done","host":"nas-01"}`))
+	if n := only(t, hs); n.Title != "Backup done" || n.Body != "Host: nas-01" {
+		t.Errorf("title/body = %q / %q", n.Title, n.Body)
+	}
+}
+
+// A payload with nothing readable keeps Apply's own body.
+func TestNothingReadable(t *testing.T) {
+	hs := newHarness(t)
+	hs.post(t, "/universal?source=pinger", []byte(`{"id":"8d3f5a1e-27c4-4b9e-a0f6-5c2d9e7b1a43","at":"2026-09-28T03:04:12Z"}`))
+	if n := only(t, hs); n.Title != "Pinger" || n.Body != "Event from Pinger" {
+		t.Errorf("title/body = %q / %q", n.Title, n.Body)
+	}
+}
+
+// Detail lines show values through Display: a field whose key names a
+// secret is left out, and secrets, emails, URL credentials and queries
+// inside text are masked. None of the synthetic secrets below may reach the
+// notification.
+func TestDetailLinesRedact(t *testing.T) {
+	const (
+		jwt    = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1bml2ZXJzYWwtdGVzdCJ9.c2lnbmF0dXJlLW5vdC1yZWFs"
+		apiKey = "k9Fq2LmZ7xRw4TnB8vYc1HsJ6dPe3GaU" // #nosec G101 -- synthetic
+		pass   = "correct-horse-battery-staple"
+	)
+	body := fmt.Appendf(nil, `{
+		"title": "Sync failed",
+		"api_key": %q,
+		"dsn": "postgres://admin:%s@db:5432/app",
+		"contact": "ops bob@example.com",
+		"mirror": "from https://sync:%s@mirror.example.com/repo?token=%s",
+		"seen": "jwt %s expired"
+	}`, apiKey, pass, pass, apiKey, jwt)
+	hs := newHarness(t)
+	if w := hs.post(t, "/universal?source=sync", body); w.Code != http.StatusOK {
+		t.Fatalf("got %d %s", w.Code, w.Body.String())
+	}
+	n := only(t, hs)
+	want := "Contact: ops [email]\nMirror: from https://mirror.example.com/repo\nSeen: jwt [redacted] expired"
+	if n.Title != "Sync failed" || n.Body != want {
+		t.Errorf("title/body = %q / %q, want body %q", n.Title, n.Body, want)
+	}
+	b, _ := json.Marshal(n)
+	for _, s := range []string{jwt, apiKey, pass, "eyJhbGci", "bob@", "sync:", "token", testKey} {
+		if bytes.Contains(b, []byte(s)) {
+			t.Errorf("notification carries %q: %s", s, b)
+		}
+	}
+}
+
+// A payload of long keys and values that escape to six bytes of JSON, the
+// longest source and the longest link still makes a request inside the push
+// budget, with labels cut to size.
+func TestDetailLinesWorstCase(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"link":"https://example.com/` + strings.Repeat("p", 2000) + `"`)
+	for i := range 250 {
+		fmt.Fprintf(&b, `,"section_%03d_with_a_rather_long_descriptive_name":%q`, i, strings.Repeat("<>&", 80))
+	}
+	b.WriteString(`}`)
+	source := strings.Repeat("s", 32)
+
+	hs := newHarness(t)
+	if w := hs.post(t, "/universal?source="+source, []byte(b.String())); w.Code != http.StatusOK {
+		t.Fatalf("got %d %s", w.Code, w.Body.String())
+	}
+	calls := hs.snapshot()
+	n := only(t, hs)
+	if len(calls[0].Body) > maxNotificationBytes {
+		t.Errorf("request is %d bytes, over %d", len(calls[0].Body), maxNotificationBytes)
+	}
+	if !strings.HasPrefix(n.URL, "https://example.com/ppp") || n.Title != "S"+strings.Repeat("s", 31) {
+		t.Errorf("title/url = %q %q", n.Title, n.URL)
+	}
+	for line := range strings.SplitSeq(n.Body, "\n") {
+		lbl, _, ok := strings.Cut(line, ": ")
+		if !ok || utf8.RuneCountInString(lbl) > detailLabelRunes {
+			t.Errorf("line %q", line)
+		}
+	}
+}
+
+// The lines stay inside any budget even when every character of their values
+// escapes to six bytes of JSON.
+func TestDetailLinesBudget(t *testing.T) {
+	var fields []universal.Field
+	for i := range 10 {
+		path := strings.Repeat(string(rune('a'+i)), universal.MaxPathBytes)
+		value := strings.Repeat("<>&", universal.MaxValueRunes/3)
+		fields = append(fields, universal.Field{Path: path, Value: value, Type: universal.TypeString})
+	}
+	shapes := universal.ShapesOf(fields)
+	for _, budget := range []int{0, 100, 700, maxNotificationBytes} {
+		body := detailLines(fields, shapes, universal.Mapping{}, budget)
+		if n := jsonLen(body); n > budget {
+			t.Errorf("budget %d: body is %d bytes of JSON", budget, n)
+		}
+		if lines := strings.Count(body, "\n") + 1; body != "" && lines > maxDetailLines {
+			t.Errorf("budget %d: %d lines", budget, lines)
+		}
+	}
+	if got := detailLines(fields, shapes, universal.Mapping{}, maxNotificationBytes); strings.Count(got, "\n") != maxDetailLines-1 {
+		t.Errorf("a full budget should hold %d lines: %q", maxDetailLines, got)
+	}
+	if got := detailLines(nil, nil, universal.Mapping{}, maxNotificationBytes); got != "" {
+		t.Errorf("detailLines(nil) = %q", got)
+	}
+}
+
+func TestHumanize(t *testing.T) {
+	for in, want := range map[string]string{
+		"my-app":            "My app",
+		"disk_used":         "Disk used",
+		"diskUsed":          "Disk used",
+		"alerts[].labels.x": "X",
+		"a.b.*.status_text": "Status text",
+		"":                  "",
+		"[]":                "",
+	} {
+		if got := humanize(in); got != want {
+			t.Errorf("humanize(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if got := sourceTitle(""); got != "Webhook" {
+		t.Errorf("sourceTitle(\"\") = %q", got)
+	}
+}
+
+type stubProposer struct {
+	res universal.Result
+	err error
+}
+
+func (p stubProposer) Propose(context.Context, universal.Input) (universal.Result, error) {
+	return p.res, p.err
+}
+
+// Only the proposer's title, body and link are used: a kind, a severity or a
+// correlation id it picks changes nothing, so a notification is never
+// time-sensitive and never collapses into another.
+func TestProposerPicksTextOnly(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	hs := newHarnessAt(t, srv.URL, calls, mu, stubProposer{res: universal.Result{Proposal: universal.Proposal{
+		Title:       "title",
+		Body:        "message",
+		Correlation: "host",
+		Severity:    "level",
+		Lifecycle:   "status",
+		Kind:        universal.KindAlert,
+	}}})
+	hs.post(t, "/universal", []byte(`{"title":"Disk full","message":"Only 41 GiB left","host":"nas-01","level":"critical","status":"firing"}`))
+	n := only(t, hs)
+	if n.Title != "Disk full" || n.Body != "Only 41 GiB left" || n.Level != pushward.LevelActive || n.CollapseID != "" {
+		t.Errorf("notification = %+v", n)
+	}
+}
+
+// A proposer that fails is replaced by the heuristic.
+func TestProposerErrorUsesHeuristic(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	hs := newHarnessAt(t, srv.URL, calls, mu, stubProposer{err: errors.New("model down")})
+	hs.post(t, "/universal", fixture(t, "plain_notify.json"))
+	if n := only(t, hs); n.Title != "Nightly backup finished" {
+		t.Errorf("title = %q", n.Title)
+	}
+}
+
+func TestChannelsActivitySendsNothing(t *testing.T) {
+	hs := newHarness(t)
+	if w := hs.post(t, "/universal?channels=activity", fixture(t, "plain_notify.json")); w.Code != http.StatusOK {
+		t.Fatalf("got %d %s", w.Code, w.Body.String())
+	}
+	if calls := hs.snapshot(); len(calls) != 0 {
+		t.Errorf("calls = %+v, want none", calls)
 	}
 }
 
 func TestBadBodies(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
+	hs := newHarness(t)
 	for _, body := range []string{`{"a":`, `"hello"`, `42`, `true`, `null`, `not json`, ``} {
 		if w := hs.post(t, "/universal", []byte(body)); w.Code != http.StatusBadRequest {
 			t.Errorf("body %q: got %d, want 400", body, w.Code)
@@ -515,7 +496,7 @@ func TestBadBodies(t *testing.T) {
 }
 
 func TestNoKeyIsUnauthorized(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
+	hs := newHarness(t)
 	req := httptest.NewRequest(http.MethodPost, "/universal", strings.NewReader(`{"a":1}`))
 	w := httptest.NewRecorder()
 	hs.mux.ServeHTTP(w, req)
@@ -524,335 +505,146 @@ func TestNoKeyIsUnauthorized(t *testing.T) {
 	}
 }
 
-func TestMappingStoreDownStillDelivers(t *testing.T) {
-	hs := newHarness(t, statetest.FailingMappingStore{})
-	if w := hs.post(t, "/universal", fixture(t, "plain_notify.json")); w.Code != http.StatusOK {
-		t.Fatalf("got %d %s", w.Code, w.Body.String())
-	}
-	ns := notifications(t, hs.snapshot())
-	if len(ns) != 1 || ns[0].Title != "Nightly backup finished" {
-		t.Errorf("notifications = %+v, want the event and no review", ns)
-	}
-
-	hs.post(t, "/universal", fixture(t, "alertmanager_firing.json"))
-	if activityCalls(hs.snapshot()) != 2 {
-		t.Error("an alert must still open its card with the mapping store down")
-	}
-}
-
-// No review for a delivery that failed in a way a retry can fix (an unknown
-// key here; the client does not retry it, so the test stays fast); the retry
-// that gets through sends it.
-func TestReviewWaitsForDelivery(t *testing.T) {
-	var mu sync.Mutex
-	fail := true
-	var calls []testutil.APICall
-	var cmu sync.Mutex
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := new(bytes.Buffer)
-		_, _ = body.ReadFrom(r.Body)
-		cmu.Lock()
-		calls = append(calls, testutil.APICall{Method: r.Method, Path: r.URL.Path, Body: body.Bytes()})
-		cmu.Unlock()
-		mu.Lock()
-		defer mu.Unlock()
-		if fail {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"id":1}`))
-	}))
-	t.Cleanup(srv.Close)
-	hs := newHarnessAt(t, srv.URL, &calls, &cmu, state.NewMemoryStore(), state.NewMemoryMappingStore())
-	body := fixture(t, "plain_notify.json")
-
-	if w := hs.post(t, "/universal", body); w.Code == http.StatusOK {
-		t.Fatal("a failed delivery must fail the request")
-	}
-	if n := len(reviews(t, hs.snapshot())); n != 0 {
-		t.Fatalf("%d reviews after a failed delivery", n)
-	}
-	mu.Lock()
-	fail = false
-	mu.Unlock()
-	if w := hs.post(t, "/universal", body); w.Code != http.StatusOK {
-		t.Fatalf("retry: %d %s", w.Code, w.Body.String())
-	}
-	if n := len(reviews(t, hs.snapshot())); n != 1 {
-		t.Errorf("%d reviews after the retry, want 1", n)
-	}
-}
-
-// A delivery the server refuses for good still gets its review, with the
-// refusal in it: every retry would be refused the same way, and the review is
-// the user's only way to fix the mapping.
-func TestPermanentRefusalStillReviewed(t *testing.T) {
-	var mu sync.Mutex
-	var calls []testutil.APICall
-	refused := false
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body := new(bytes.Buffer)
-		_, _ = body.ReadFrom(r.Body)
-		mu.Lock()
-		defer mu.Unlock()
-		calls = append(calls, testutil.APICall{Method: r.Method, Path: r.URL.Path, Body: body.Bytes()})
-		if !refused {
-			refused = true
-			w.WriteHeader(http.StatusUnprocessableEntity)
-			return
-		}
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write([]byte(`{"id":1}`))
-	}))
-	t.Cleanup(srv.Close)
-	hs := newHarnessAt(t, srv.URL, &calls, &mu, state.NewMemoryStore(), state.NewMemoryMappingStore())
-
-	if w := hs.post(t, "/universal", fixture(t, "plain_notify.json")); w.Code == http.StatusOK {
-		t.Fatal("a refused delivery must fail the request")
-	}
-	rs := reviews(t, hs.snapshot())
-	if len(rs) != 1 {
-		t.Fatalf("%d reviews after a refused delivery, want 1", len(rs))
-	}
-	if !strings.Contains(rs[0].Body, "Delivery was refused") {
-		t.Errorf("review body does not mention the refusal: %q", rs[0].Body)
-	}
-}
-
-// Synthetic secrets: none of them may reach a review, a notification's text
-// or any stored column. The delivered notification keeps its link whole: it
-// is the sender's own URL, going to the sender's own device, and a signed
-// link with its query cut off does not open.
-func TestSecretsStayOut(t *testing.T) {
-	const (
-		jwt    = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1bml2ZXJzYWwtdGVzdCJ9.c2lnbmF0dXJlLW5vdC1yZWFs"
-		apiKey = "k9Fq2LmZ7xRw4TnB8vYc1HsJ6dPe3GaU" // #nosec G101 -- synthetic
-		pass   = "correct-horse-battery-staple"
-	)
-	body := fmt.Appendf(nil, `{
-		"title": "Deploy finished",
-		"message": "Version 2.4.1 is live on web-01",
-		"token": %q,
-		"api_key": %q,
-		"auth": {"password": %q, "user": "deploy"},
-		"link": "https://deploy.example.com/runs/77?token=%s"
-	}`, jwt, apiKey, pass, jwt)
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	if w := hs.post(t, "/universal?source=deploys", body); w.Code != http.StatusOK {
-		t.Fatalf("got %d %s", w.Code, w.Body.String())
-	}
-	rv := reviews(t, hs.snapshot())
-	if len(rv) != 1 {
-		t.Fatalf("%d reviews", len(rv))
-	}
-	secrets := []string{jwt, apiKey, pass, "eyJhbGci", testKey}
-	for _, n := range notifications(t, hs.snapshot()) {
-		if n.ThreadID != "universal-review" {
-			n.URL = ""
-		}
-		b, _ := json.Marshal(n)
-		for _, s := range secrets {
-			if bytes.Contains(b, []byte(s)) {
-				t.Errorf("notification %q carries %q: %s", n.Title, s, b)
-			}
-		}
-	}
-	for _, row := range hs.mappings.(*state.MemoryMappingStore).Rows() {
-		for name, col := range map[string][]byte{"mapping": row.Mapping, "shape": row.Shape, "proposal": row.Proposal, "samples": row.Samples, "candidates": row.Candidates} {
-			for _, s := range secrets {
-				if bytes.Contains(col, []byte(s)) {
-					t.Errorf("stored %s carries %q: %s", name, s, col)
-				}
-			}
-		}
-		var samples map[string]string
-		if err := json.Unmarshal(row.Samples, &samples); err != nil {
-			t.Fatal(err)
-		}
-		if samples["token"] != "[redacted]" || samples["api_key"] != "[redacted]" || samples["auth.password"] != "[redacted]" {
-			t.Errorf("secret samples = %q %q %q", samples["token"], samples["api_key"], samples["auth.password"])
-		}
-	}
-	for _, r := range hs.store.(*state.MemoryStore).Rows() {
-		if strings.Contains(r.UserKey, testKey) {
-			t.Errorf("relay_state row under the raw key: %+v", r)
-		}
-	}
-}
-
-// A 256-field payload with long keys and values, and the longest source,
-// still makes a review that fits the push.
-func TestReviewSizeWorstCase(t *testing.T) {
-	var b strings.Builder
-	b.WriteString(`{`)
-	long := strings.Repeat("word ", 60)
-	names := []string{"title", "message", "url", "id", "progress", "severity", "status"}
-	for i := range 256 {
-		if i > 0 {
-			b.WriteString(",")
-		}
-		key := fmt.Sprintf("section_%03d_with_a_rather_long_descriptive_name.%s", i, names[i%len(names)])
-		switch names[i%len(names)] {
-		case "url":
-			fmt.Fprintf(&b, `%q:%q`, key, "https://example.com/"+strings.Repeat("p", 200))
-		case "progress":
-			fmt.Fprintf(&b, `%q:%d`, key, i%100)
-		case "severity":
-			fmt.Fprintf(&b, `%q:"critical"`, key)
-		case "status":
-			fmt.Fprintf(&b, `%q:"firing"`, key)
-		default:
-			fmt.Fprintf(&b, `%q:%q`, key, long)
-		}
-	}
-	b.WriteString(`}`)
-	source := strings.Repeat("s", maxSourceLen)
-
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	if w := hs.post(t, "/universal?source="+source, []byte(b.String())); w.Code != http.StatusOK {
-		t.Fatalf("got %d %s", w.Code, w.Body.String())
-	}
-	var found bool
-	for _, c := range hs.snapshot() {
-		var n pushward.SendNotificationRequest
-		if c.Path != "/notifications" {
-			continue
-		}
-		testutil.UnmarshalBody(t, c.Body, &n)
-		if n.ThreadID != "universal-review" {
-			continue
-		}
-		found = true
-		if len(c.Body) > maxReviewBytes {
-			t.Errorf("review request is %d bytes, over %d", len(c.Body), maxReviewBytes)
-		}
-	}
-	if !found {
-		t.Fatal("no review sent")
-	}
-	row := mappingRow(t, hs, source)
-	if len(row.Samples) > maxSamplesBytes || len(row.Shape) > 16<<10+1024 {
-		t.Errorf("stored samples %d bytes, shape %d bytes", len(row.Samples), len(row.Shape))
-	}
-}
-
-// The body budget holds for any mapping, not just what the heuristic
-// proposes: every role on a 256-byte path with full value tables.
-func TestReviewRequestBudget(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	m, fields := worstMapping()
-	r := &request{
-		pk:     state.MappingKey{Source: strings.Repeat("s", maxSourceLen)},
-		fields: fields,
-	}
-	req, err := hs.h.reviewRequest(r, m, hs.h.reviewExpiry())
-	if err != nil {
-		t.Fatal(err)
-	}
-	b, err := json.Marshal(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(b) > maxReviewBytes {
-		t.Errorf("review request is %d bytes, over %d", len(b), maxReviewBytes)
-	}
-	if !strings.HasPrefix(req.Body, "Sent as an alert card.\nTitle <- ...") {
-		t.Errorf("body = %q", req.Body)
-	}
-}
-
-func TestReviewLinks(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	body := fixture(t, "plain_notify.json")
-	hs.post(t, "/universal", body)
-	row := mappingRow(t, hs, "")
-
-	mint := func(c Claims) pushward.NotificationAction {
-		tok, err := Mint(reviewKey, c)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return pushward.NotificationAction{ID: "x", URL: publicURL + ReviewPath + tok, Method: http.MethodPost}
-	}
-	claims := Claims{Scope: ScopeAccept, Expires: *row.ExpiresAt, KeyHash: row.KeyHash, Fingerprint: row.Fingerprint}
-
-	// A link for an earlier proposal of this shape carries another expiry.
-	older := claims
-	older.Expires = row.ExpiresAt.Add(-time.Hour)
-	if w := hs.tap(t, mint(older)); w.Code != http.StatusNotFound {
-		t.Errorf("link for another proposal: %d", w.Code)
-	}
-	// An edit link is not a review link.
-	edit := claims
-	edit.Scope = ScopeEdit
-	if w := hs.tap(t, mint(edit)); w.Code != http.StatusNotFound {
-		t.Errorf("edit token on the review route: %d", w.Code)
-	}
-	if w := hs.tap(t, pushward.NotificationAction{URL: publicURL + ReviewPath + "bm90LWEtdG9rZW4", Method: http.MethodPost}); w.Code != http.StatusNotFound {
-		t.Errorf("garbage token: %d", w.Code)
-	}
-	// An authentic link past its expiry says so.
-	hs.h.now = func() time.Time { return row.ExpiresAt.Add(time.Second) }
-	if w := hs.tap(t, mint(claims)); w.Code != http.StatusGone {
-		t.Errorf("expired link: %d", w.Code)
-	}
-	hs.h.now = time.Now
-	if w := hs.tap(t, mint(claims)); w.Code != http.StatusOK {
-		t.Errorf("the real link: %d %s", w.Code, w.Body.String())
-	}
-	// GET is not a route.
-	req := httptest.NewRequest(http.MethodGet, ReviewPath+"x", nil)
-	w := httptest.NewRecorder()
-	hs.mux.ServeHTTP(w, req)
-	if w.Code == http.StatusOK {
-		t.Error("GET on a review link must not decide anything")
-	}
-}
-
-// A review token with \r or \n in it is another spelling of the same bytes
-// to the base64 decoder, and must not decide anything.
-func TestReviewLinkOneSpelling(t *testing.T) {
-	hs := newHarness(t, state.NewMemoryMappingStore())
-	hs.post(t, "/universal", fixture(t, "plain_notify.json"))
-	accept := action(t, reviews(t, hs.snapshot())[0], "accept")
-	prefix := publicURL + ReviewPath
-	tok := strings.TrimPrefix(accept.URL, prefix)
-	for _, ins := range []string{"%0A", "%0D", "%0D%0A"} {
-		bad := accept
-		bad.URL = prefix + tok[:7] + ins + tok[7:]
-		if w := hs.tap(t, bad); w.Code != http.StatusNotFound {
-			t.Errorf("token with %s: %d", ins, w.Code)
-		}
-	}
-	if row := mappingRow(t, hs, ""); row.Status != state.MappingPending {
-		t.Fatalf("a respelled token decided the row: %s", row.Status)
-	}
-	if w := hs.tap(t, accept); w.Code != http.StatusOK {
-		t.Errorf("the token itself: %d", w.Code)
-	}
-}
-
 func TestUpstreamRefusalSurfacesUnchanged(t *testing.T) {
 	testutil.AssertUpstreamRefusalSurfaces(t, func(t *testing.T, status int) *httptest.ResponseRecorder {
 		srv, calls, mu := testutil.MockPushWardServerRejecting(t, status, status)
-		hs := newHarnessAt(t, srv.URL, calls, mu, state.NewMemoryStore(), state.NewMemoryMappingStore())
+		hs := newHarnessAt(t, srv.URL, calls, mu, nil)
 		return hs.post(t, "/universal", fixture(t, "plain_notify.json"))
 	})
 }
 
-func TestIsCapabilityPath(t *testing.T) {
-	for path, want := range map[string]bool{
-		"/universal/review/abc": true,
-		"/universal/edit/abc":   true,
-		"/universal/list/abc":   true,
-		"/universal":            false,
-		"/universal/review":     false,
-		"/grafana":              false,
-	} {
-		if got := IsCapabilityPath(path); got != want {
-			t.Errorf("IsCapabilityPath(%q) = %v", path, got)
+// A delivery the server refuses fails the request, so the sender retries.
+func TestFailedDeliveryFailsRequest(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServerRejecting(t, http.StatusUnprocessableEntity, 0)
+	hs := newHarnessAt(t, srv.URL, calls, mu, nil)
+	if w := hs.post(t, "/universal", fixture(t, "plain_notify.json")); w.Code == http.StatusOK {
+		t.Errorf("a refused notification answered %d", w.Code)
+	}
+}
+
+func TestAlertFiringThenResolved(t *testing.T) {
+	hs := newHarness(t)
+	if err := hs.deliverAs(t, "alertmanager", "", fixture(t, "alertmanager_firing.json")); err != nil {
+		t.Fatalf("firing: %v", err)
+	}
+	calls := hs.snapshot()
+	// create, ongoing frame, the alert notification
+	if len(calls) != 3 || calls[0].Path != "/activities" || calls[1].Method != http.MethodPatch {
+		t.Fatalf("firing calls = %+v", calls)
+	}
+	var create struct {
+		Slug     string `json:"slug"`
+		Name     string `json:"name"`
+		Priority int    `json:"priority"`
+	}
+	testutil.UnmarshalBody(t, calls[0].Body, &create)
+	if !strings.HasPrefix(create.Slug, "u-alertmanager-") || create.Name != "DiskAlmostFull" || create.Priority != 3 {
+		t.Errorf("create = %+v", create)
+	}
+	c := testutil.LastActivityUpdate(t, calls)
+	if c.Template != pushward.TemplateAlert || c.Severity != "critical" || c.AccentColor != pushward.ColorRed ||
+		c.Subtitle != "alertmanager" || c.FiredAt == nil || !strings.HasPrefix(c.State, "Only 41 GiB left") {
+		t.Errorf("firing content = %+v", c)
+	}
+	ns := notifications(t, calls)
+	if ns[0].Level != pushward.LevelTimeSensitive || ns[0].ActivitySlug != create.Slug || ns[0].CollapseID != create.Slug {
+		t.Errorf("alert notification level/slug/collapse = %q %q %q", ns[0].Level, ns[0].ActivitySlug, ns[0].CollapseID)
+	}
+
+	if err := hs.deliverAs(t, "alertmanager", "", fixture(t, "alertmanager_resolved.json")); err != nil {
+		t.Fatalf("resolved: %v", err)
+	}
+	// + the resolved notification, then the two end phases
+	calls = testutil.WaitForCalls(t, hs.calls, hs.mu, 6, 5*time.Second)
+	if len(calls) != 6 {
+		t.Fatalf("got %d calls, want 6: %+v", len(calls), calls)
+	}
+	var end pushward.UpdateRequest
+	testutil.UnmarshalBody(t, calls[len(calls)-1].Body, &end)
+	if calls[len(calls)-1].Path != "/activities/"+create.Slug || end.State != pushward.StateEnded || end.Content.State != "Resolved" ||
+		end.Content.AccentColor != pushward.ColorGreen {
+		t.Errorf("last call %s %s = %+v", calls[len(calls)-1].Method, calls[len(calls)-1].Path, end)
+	}
+	resolved := notifications(t, calls)[1]
+	if resolved.Level != pushward.LevelPassive || !strings.HasPrefix(resolved.Body, "Resolved"+text.SepDot) {
+		t.Errorf("resolved notification = %q %q", resolved.Level, resolved.Body)
+	}
+}
+
+func TestProgressRunThenDone(t *testing.T) {
+	hs := newHarness(t)
+	if err := hs.deliverAs(t, "ci", "", fixture(t, "ci_progress_running.json")); err != nil {
+		t.Fatal(err)
+	}
+	calls := hs.snapshot()
+	// create and frame: a progress start notifies nobody
+	if len(calls) != 2 || len(notifications(t, calls)) != 0 {
+		t.Fatalf("running calls = %+v", calls)
+	}
+	c := testutil.LastActivityUpdate(t, calls)
+	if c.Template != pushward.TemplateGeneric || c.Progress != 0.45 || c.State != "Running" {
+		t.Errorf("running content = %+v", c)
+	}
+
+	if err := hs.deliverAs(t, "ci", "", fixture(t, "ci_progress_done.json")); err != nil {
+		t.Fatal(err)
+	}
+	calls = testutil.WaitForCalls(t, hs.calls, hs.mu, 5, 5*time.Second)
+	if len(calls) != 5 {
+		t.Fatalf("got %d calls, want 5: %+v", len(calls), calls)
+	}
+	end := testutil.LastActivityUpdate(t, calls)
+	if end.State != "Done" || end.Progress != 1 || end.AccentColor != pushward.ColorGreen {
+		t.Errorf("done content = %+v", end)
+	}
+	done := notifications(t, calls)[0]
+	if done.Level != pushward.LevelPassive || !strings.HasPrefix(done.Body, "Done"+text.SepDot) {
+		t.Errorf("done notification = %q %q", done.Level, done.Body)
+	}
+}
+
+// A progress frame without a value keeps the bar where the last one left it.
+func TestProgressWithoutValueKeepsLast(t *testing.T) {
+	hs := newHarness(t)
+	if err := hs.deliverAs(t, "ci", "", fixture(t, "ci_progress_running.json")); err != nil {
+		t.Fatal(err)
+	}
+	noValue := bytes.Replace(fixture(t, "ci_progress_running.json"), []byte(`"progress": 45,`), nil, 1)
+	if err := hs.deliverAs(t, "ci", "", noValue); err != nil {
+		t.Fatalf("second frame: %v", err)
+	}
+	if c := testutil.LastActivityUpdate(t, hs.snapshot()); c.Progress != 0.45 {
+		t.Errorf("progress after a frame without a value = %v, want 0.45", c.Progress)
+	}
+}
+
+// A card the server refuses for good still reaches the user as a notification.
+func TestActivityRefusedFallsBackToNotification(t *testing.T) {
+	lifecycle.SetRetryDelay(10 * time.Millisecond)
+	srv, calls, mu := testutil.MockPushWardServerRejecting(t, 0, http.StatusConflict)
+	hs := newHarnessAt(t, srv.URL, calls, mu, nil)
+	if err := hs.deliverAs(t, "am", "", fixture(t, "alertmanager_firing.json")); err != nil {
+		t.Fatalf("firing: %v", err)
+	}
+	if n := len(notifications(t, hs.snapshot())); n != 1 {
+		t.Errorf("%d fallback notifications, want 1", n)
+	}
+}
+
+func TestChannelsNotificationMakesNoActivityCalls(t *testing.T) {
+	hs := newHarness(t)
+	for _, name := range []string{"alertmanager_firing.json", "alertmanager_resolved.json", "ci_progress_running.json", "ci_progress_done.json"} {
+		if err := hs.deliverAs(t, "", "notification", fixture(t, name)); err != nil {
+			t.Fatalf("%s: %v", name, err)
 		}
+	}
+	calls := hs.snapshot()
+	if n := activityCalls(calls); n != 0 {
+		t.Errorf("%d activity calls under channels=notification", n)
+	}
+	// firing, resolved, progress start and end
+	if n := len(notifications(t, calls)); n != 4 {
+		t.Errorf("%d notifications, want 4", n)
 	}
 }
 
@@ -866,30 +658,6 @@ func TestFailed(t *testing.T) {
 			t.Errorf("failed(%q) = %v", raw, got)
 		}
 	}
-}
-
-// worstMapping maps every role to a path of the longest length Flatten
-// keeps, with full value tables of the longest keys, over 256-rune values.
-func worstMapping() (universal.Mapping, []universal.Field) {
-	m := universal.Mapping{
-		V:               universal.MappingVersion,
-		Kind:            universal.KindAlert,
-		Paths:           map[universal.Role]string{},
-		SeverityValues:  map[string]string{},
-		LifecycleValues: map[string]string{},
-	}
-	var fields []universal.Field
-	for i, role := range universal.Roles {
-		path := strings.Repeat(string(rune('a'+i)), universal.MaxPathBytes)
-		m.Paths[role] = path
-		fields = append(fields, universal.Field{Path: path, Value: strings.Repeat("value ", 50)[:universal.MaxValueRunes], Type: universal.TypeString})
-	}
-	for i := range universal.MaxTableEntries {
-		k := fmt.Sprintf("%02d", i) + strings.Repeat("k", universal.MaxTableKeyRunes-2)
-		m.SeverityValues[k] = universal.SeverityCritical
-		m.LifecycleValues[k] = universal.LifecycleEnded
-	}
-	return m, fields
 }
 
 func TestLevelOf(t *testing.T) {
@@ -912,25 +680,65 @@ func TestLevelOf(t *testing.T) {
 	}
 }
 
-// The raw notification for a rejected shape stays inside the push budget even
-// when every character of its values escapes to six bytes of JSON.
-func TestRawBodyBudget(t *testing.T) {
-	var fields []universal.Field
-	for i := range 10 {
-		path := strings.Repeat(string(rune('a'+i)), universal.MaxPathBytes)
-		value := strings.Repeat("<>&", universal.MaxValueRunes/3)
-		fields = append(fields, universal.Field{Path: path, Value: value, Type: universal.TypeString})
-	}
-	for _, budget := range []int{0, 100, 700, maxReviewBytes} {
-		body := rawBody(fields, budget)
-		if body == "No values" {
-			continue
-		}
-		if n := jsonLen(body); n > budget {
-			t.Errorf("budget %d: body is %d bytes of JSON", budget, n)
+// A body with nothing to add past the title, and no readable field to fill
+// it, says where the event came from; the server needs a body.
+func TestBodyFallback(t *testing.T) {
+	const id = `"id":"8d3f5a1e-27c4-4b9e-a0f6-5c2d9e7b1a43"`
+	for _, c := range []struct{ target, body, title, text string }{
+		{"/universal", `{"title":"Backup done","message":"backup done",` + id + `}`, "Backup done", "Webhook event"},
+		{"/universal?source=nas-backup", `{"title":"Event",` + id + `}`, "Event", "Event from Nas backup"},
+		{"/universal?source=-", `{` + id + `}`, "Webhook", "Webhook event"},
+	} {
+		hs := newHarness(t)
+		hs.post(t, c.target, []byte(c.body))
+		if n := only(t, hs); n.Title != c.title || n.Body != c.text {
+			t.Errorf("%s %s: title/body = %q / %q, want %q / %q", c.target, c.body, n.Title, n.Body, c.title, c.text)
 		}
 	}
-	if got := rawBody(nil, maxReviewBytes); got != "No values" {
-		t.Errorf("rawBody(nil) = %q", got)
+}
+
+// A value's own line breaks are folded, so each field is one labelled line
+// and the line cap holds.
+func TestDetailLinesOneLineEach(t *testing.T) {
+	hs := newHarness(t)
+	hs.post(t, "/universal", []byte(`{"title":"Build finished","stage":"a\nb\nc\nd","env":"x\r\nZone: eu","host":"p\tq"}`))
+	n := only(t, hs)
+	want := "Stage: a b c d\nEnv: x Zone: eu\nHost: p q"
+	if n.Body != want {
+		t.Errorf("body = %q, want %q", n.Body, want)
+	}
+}
+
+// Filled tight, the request the client sends stays inside the push budget,
+// display name included. A title, link and values that escape to six bytes of
+// JSON leave the four lines about the room they take, and the value length
+// steps a rune at a time, so some run ends within a few bytes of the budget.
+func TestDetailLinesBudgetSweep(t *testing.T) {
+	source := strings.Repeat("s", 32)
+	link := "https://example.com/?" + strings.Repeat("a&", 117)
+	for n := 95; n <= 100; n++ {
+		for k := 40; k <= 60; k++ {
+			title := strings.Repeat("<<a", 34)[:n]
+			var b strings.Builder
+			fmt.Fprintf(&b, `{"title":%q,"link":%q`, title, link)
+			for i := range 4 {
+				fmt.Fprintf(&b, `,"remarks_about_the_nightly_sync_part_%02d":%q`, i, strings.Repeat("<>&", 20)[:k])
+			}
+			b.WriteString(`}`)
+			hs := newHarness(t)
+			if w := hs.post(t, "/universal?source="+source, []byte(b.String())); w.Code != http.StatusOK {
+				t.Fatalf("title %d: got %d %s", n, w.Code, w.Body.String())
+			}
+			calls := hs.snapshot()
+			if len(calls) != 1 {
+				t.Fatalf("title %d: %d calls", n, len(calls))
+			}
+			if size := len(calls[0].Body); size > maxNotificationBytes {
+				t.Errorf("title %d: request is %d bytes, over %d", n, size, maxNotificationBytes)
+			}
+			if !bytes.Contains(calls[0].Body, []byte(`"source_display_name"`)) {
+				t.Fatalf("title %d: the request has no display name, so the sweep proves nothing", n)
+			}
+		}
 	}
 }

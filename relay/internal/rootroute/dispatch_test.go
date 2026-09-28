@@ -47,6 +47,24 @@ func TestDispatchMatchesDedicatedRoutes(t *testing.T) {
 					if got.Pattern != "POST "+Universal || got.Status != http.StatusOK {
 						t.Errorf("POST / went to %q with %d, want 200 from POST %s: %s", got.Pattern, got.Status, Universal, got.Response)
 					}
+					// A shape the route does not know is one plain
+					// notification.
+					calls := relaytest.Calls(got.Calls)
+					if len(calls) != 1 || calls[0].Method != http.MethodPost || calls[0].Path != "/notifications" {
+						t.Fatalf("calls = %s, want one notification", dump(calls))
+					}
+					var n struct {
+						Title   string            `json:"title"`
+						Body    string            `json:"body"`
+						Level   string            `json:"level"`
+						Actions []json.RawMessage `json:"actions"`
+					}
+					if err := json.Unmarshal(calls[0].Body, &n); err != nil {
+						t.Fatal(err)
+					}
+					if n.Title == "" || n.Body == "" || n.Level != "active" || len(n.Actions) != 0 {
+						t.Errorf("notification = %s", calls[0].Body)
+					}
 					return
 				}
 				if got.Pattern != "POST "+rt.Path {

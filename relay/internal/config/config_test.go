@@ -1,9 +1,7 @@
 package config
 
 import (
-	"encoding/base64"
-	"os"
-	"path/filepath"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -33,9 +31,6 @@ var relayEnvVars = []string{
 	"PUSHWARD_POSTER_ALLOW_PRIVATE_HOSTS",
 	"PUSHWARD_STATE_KEY_MODE",
 	"PUSHWARD_UNIVERSAL_ENABLED",
-	"PUSHWARD_UNIVERSAL_PUBLIC_URL",
-	"PUSHWARD_UNIVERSAL_REVIEW_KEY",
-	"PUSHWARD_UNIVERSAL_REVIEW_KEY_FILE",
 	"PUSHWARD_UNIVERSAL_RANKER",
 }
 
@@ -621,101 +616,25 @@ func TestDefaultDismissalDelay(t *testing.T) {
 	}
 }
 
+// The universal route needs nothing but its switch.
 func TestUniversalConfig(t *testing.T) {
-	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
-	short := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 31)))
-	keyFile := filepath.Join(t.TempDir(), "review.key")
-	if err := os.WriteFile(keyFile, []byte(key+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	tests := []struct {
-		name    string
-		env     map[string]string
-		wantErr string
-	}{
-		{name: "off by default needs nothing"},
-		{name: "on with a url and a key", env: map[string]string{
-			"PUSHWARD_UNIVERSAL_ENABLED":    "true",
-			"PUSHWARD_UNIVERSAL_PUBLIC_URL": "https://relay.example.com",
-			"PUSHWARD_UNIVERSAL_REVIEW_KEY": key,
-		}},
-		{name: "a path prefix is fine", env: map[string]string{
-			"PUSHWARD_UNIVERSAL_ENABLED":    "true",
-			"PUSHWARD_UNIVERSAL_PUBLIC_URL": "http://10.0.0.5:8090/relay",
-			"PUSHWARD_UNIVERSAL_REVIEW_KEY": key,
-		}},
-		{name: "the key from a file", env: map[string]string{
-			"PUSHWARD_UNIVERSAL_ENABLED":         "true",
-			"PUSHWARD_UNIVERSAL_PUBLIC_URL":      "https://relay.example.com",
-			"PUSHWARD_UNIVERSAL_REVIEW_KEY_FILE": keyFile,
-		}},
-		{name: "no key", wantErr: "review_key is required", env: map[string]string{
-			"PUSHWARD_UNIVERSAL_ENABLED":    "true",
-			"PUSHWARD_UNIVERSAL_PUBLIC_URL": "https://relay.example.com",
-		}},
-		{name: "both key and file", wantErr: "not both", env: map[string]string{
-			"PUSHWARD_UNIVERSAL_ENABLED":         "true",
-			"PUSHWARD_UNIVERSAL_PUBLIC_URL":      "https://relay.example.com",
-			"PUSHWARD_UNIVERSAL_REVIEW_KEY":      key,
-			"PUSHWARD_UNIVERSAL_REVIEW_KEY_FILE": keyFile,
-		}},
-		{name: "a short key", wantErr: "31 bytes", env: map[string]string{
-			"PUSHWARD_UNIVERSAL_ENABLED":    "true",
-			"PUSHWARD_UNIVERSAL_PUBLIC_URL": "https://relay.example.com",
-			"PUSHWARD_UNIVERSAL_REVIEW_KEY": short,
-		}},
-		{name: "a key that is not base64", wantErr: "not base64", env: map[string]string{
-			"PUSHWARD_UNIVERSAL_ENABLED":    "true",
-			"PUSHWARD_UNIVERSAL_PUBLIC_URL": "https://relay.example.com",
-			"PUSHWARD_UNIVERSAL_REVIEW_KEY": "not a key!",
-		}},
-		{name: "no url", wantErr: "public_url", env: map[string]string{
-			"PUSHWARD_UNIVERSAL_ENABLED":    "true",
-			"PUSHWARD_UNIVERSAL_REVIEW_KEY": key,
-		}},
-		{name: "a trailing slash", wantErr: "slash", env: map[string]string{
-			"PUSHWARD_UNIVERSAL_ENABLED":    "true",
-			"PUSHWARD_UNIVERSAL_PUBLIC_URL": "https://relay.example.com/",
-			"PUSHWARD_UNIVERSAL_REVIEW_KEY": key,
-		}},
-		{name: "not http", wantErr: "public_url", env: map[string]string{
-			"PUSHWARD_UNIVERSAL_ENABLED":    "true",
-			"PUSHWARD_UNIVERSAL_PUBLIC_URL": "ftp://relay.example.com",
-			"PUSHWARD_UNIVERSAL_REVIEW_KEY": key,
-		}},
-		{name: "a query", wantErr: "query", env: map[string]string{
-			"PUSHWARD_UNIVERSAL_ENABLED":    "true",
-			"PUSHWARD_UNIVERSAL_PUBLIC_URL": "https://relay.example.com?x=1",
-			"PUSHWARD_UNIVERSAL_REVIEW_KEY": key,
-		}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
 			clearRelayEnv(t)
 			t.Setenv("PUSHWARD_DATABASE_DSN", "postgres://relay@localhost/relay")
-			for k, v := range tt.env {
-				t.Setenv(k, v)
+			if enabled {
+				t.Setenv("PUSHWARD_UNIVERSAL_ENABLED", "true")
 			}
 			cfg, err := Load("")
-			if tt.wantErr != "" {
-				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("Load() error = %v, want one containing %q", err, tt.wantErr)
-				}
-				return
-			}
 			if err != nil {
 				t.Fatalf("Load() error = %v", err)
 			}
 			u := cfg.Providers.Universal
+			if u.Enabled != enabled {
+				t.Errorf("Enabled = %v, want %v", u.Enabled, enabled)
+			}
 			if u.Priority != 3 || u.StaleTimeout != 4*time.Hour || u.EndDelay != 5*time.Second || u.EndDisplayTime != 4*time.Second {
 				t.Errorf("defaults changed: %+v", u.BaseProviderConfig)
-			}
-			if !u.Enabled {
-				return
-			}
-			if b, err := u.ReviewKeyBytes(); err != nil || len(b) != 32 {
-				t.Errorf("ReviewKeyBytes() = %d bytes, %v", len(b), err)
 			}
 		})
 	}

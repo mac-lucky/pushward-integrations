@@ -26,20 +26,20 @@ const (
 	gradeNA      = "n/a"
 )
 
-var roles = []string{"kind", "title", "body", "url", "lifecycle", "severity"}
+// roles are what a notification shows. The route sends every payload as a
+// plain notification, so kind, lifecycle and severity are not scored.
+var roles = []string{"title", "body", "url"}
 
 // floors are the lowest credit per role the universal route may score over
-// the fixtures: the measured value less 0.05, rounded down to 0.05, so a
-// single fixture moving cannot trip one. Credit is exact plus half of
-// partial, over the scored fixtures. Raise a floor when the heuristic
+// the fixtures: the measured value (title .446, body .169, url .870) less
+// about two fixtures of slack, so one regressed fixture does not fail CI but
+// a trend does. Credit is exact plus
+// half of partial, over the scored fixtures. Raise a floor when the heuristic
 // improves; lowering one needs a reason.
 var floors = map[string]float64{
-	"kind":      0.25,
-	"title":     0.35,
-	"body":      0.15,
-	"url":       0.80,
-	"lifecycle": 0.10,
-	"severity":  0.30,
+	"title": 0.42,
+	"body":  0.14,
+	"url":   0.84,
 }
 
 type scored struct {
@@ -102,7 +102,7 @@ func TestUniversalScorecard(t *testing.T) {
 		}
 		if credit < floors[role]-1e-9 {
 			t.Errorf("%s: credit %.3f is below its floor %.2f", role, credit, floors[role])
-		} else if next := math.Floor((credit-0.05)*20) / 20; next > floors[role]+1e-9 {
+		} else if next := math.Floor(credit*100+1e-9) / 100; next > floors[role]+1e-9 {
 			t.Logf("%s: credit %.3f; the floor can go up to %.2f", role, credit, next)
 		}
 	}
@@ -114,23 +114,10 @@ func TestUniversalScorecard(t *testing.T) {
 
 func grades(ded, uni relaytest.Outcome) map[string]string {
 	return map[string]string{
-		"kind":      gradeEnum(ded.Kind, uni.Kind),
-		"title":     gradeText(ded.Title, uni.Title),
-		"body":      gradeText(ded.Body, uni.Body),
-		"url":       gradeText(ded.URL, uni.URL),
-		"lifecycle": gradeEnum(ded.Lifecycle, uni.Lifecycle),
-		"severity":  gradeEnum(ded.Severity, uni.Severity),
+		"title": gradeText(ded.Title, uni.Title),
+		"body":  gradeText(ded.Body, uni.Body),
+		"url":   gradeText(ded.URL, uni.URL),
 	}
-}
-
-func gradeEnum(want, got string) string {
-	switch {
-	case want == "":
-		return gradeNA
-	case got == want:
-		return gradeExact
-	}
-	return gradeMiss
 }
 
 // gradeText is exact on equal text and partial when one contains the other or

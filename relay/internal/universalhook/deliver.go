@@ -14,14 +14,6 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
-// Mapping statuses as universal_applies_total labels them.
-const (
-	statusNew       = "new"
-	statusPending   = "pending"
-	statusConfirmed = "confirmed"
-	statusRejected  = "rejected"
-)
-
 // Text caps. Flatten has already cut every value to universal.MaxValueRunes.
 const (
 	maxTitleRunes = 100
@@ -33,12 +25,13 @@ type activity struct {
 	slug, mapKey string
 }
 
-// deliver sends one payload through a mapping. A failed delivery is the
-// request's failure, so the sender retries it. The error stays the client's:
-// refusal reads its status, and handleWebhook turns it into the response.
-func (h *Handler) deliver(ctx context.Context, r *request, m universal.Mapping, status string) (*humautil.WebhookResponse, error) {
-	ev := universal.Apply(m, r.fields, r.source())
-	metrics.UniversalAppliesTotal.WithLabelValues(status, string(ev.Kind)).Inc()
+// deliver sends one payload through a mapping; via is where the mapping came
+// from. A failed delivery is the request's failure, so the sender retries it.
+// The error stays the client's: refused reads its status, and handleWebhook
+// turns it into the response.
+func (h *Handler) deliver(ctx context.Context, r *request, m universal.Mapping, via string) (*humautil.WebhookResponse, error) {
+	ev := universal.Apply(m, r.fields, r.source)
+	metrics.UniversalEventsTotal.WithLabelValues(via, string(ev.Kind)).Inc()
 	countFallbacks(m, ev)
 
 	resp := humautil.NewOK()
@@ -67,22 +60,48 @@ func countFallbacks(m universal.Mapping, ev universal.Event) {
 	}
 }
 
+// deliverNotification sends ev as a notification of its own. A title the
+// mapping found no value for is the source's name, and a body it found none
+// for, or one that only repeats the title, is a few lines of the payload's
+// most readable fields.
 func (h *Handler) deliverNotification(ctx context.Context, r *request, m universal.Mapping, ev universal.Event) error {
 	if !overrides.FromContext(ctx).AllowsNotification() {
 		return nil
 	}
-	return h.notify(ctx, r, m, ev, "", levelOf(m, ev), "")
+	if !hasValue(m, r.fields, universal.RoleTitle) {
+		ev.Title = sourceTitle(r.source)
+	}
+	req := h.notification(ctx, r, ev, "", levelOf(m, ev), "")
+	if !hasValue(m, r.fields, universal.RoleBody) || strings.EqualFold(ev.Body, ev.Title) {
+		// The client adds the display name on send; it counts against the
+		// budget too.
+		req.FillSourceDisplayName()
+		req.Body = ""
+		base, err := json.Marshal(req)
+		if err != nil {
+			return err
+		}
+		req.Body = detailLines(r.fields, r.shapes, m, maxNotificationBytes-len(base))
+		if req.Body == "" {
+			req.Body = fallbackBody(r.source)
+		}
+	}
+	return h.clients.SendNotification(ctx, r.key, r.log, req)
 }
 
 // notify sends ev as a notification. slug links it to a card that exists;
 // prefix, when set, leads the body ("Resolved").
-func (h *Handler) notify(ctx context.Context, r *request, m universal.Mapping, ev universal.Event, slug, level, prefix string) error {
+func (h *Handler) notify(ctx context.Context, r *request, ev universal.Event, slug, level, prefix string) error {
+	return h.clients.SendNotification(ctx, r.key, r.log, h.notification(ctx, r, ev, slug, level, prefix))
+}
+
+func (h *Handler) notification(ctx context.Context, r *request, ev universal.Event, slug, level, prefix string) pushward.SendNotificationRequest {
 	req := pushward.SendNotificationRequest{
 		Title:        text.TruncateHard(ev.Title, maxTitleRunes),
 		Body:         ev.Body,
 		URL:          ev.URL,
-		Source:       r.source(),
-		ThreadID:     threadID(r.source()),
+		Source:       r.source,
+		ThreadID:     threadID(r.source),
 		Level:        overrides.FromContext(ctx).LevelOr(level),
 		ActivitySlug: slug,
 		Push:         pushward.BoolPtr(true),
@@ -91,9 +110,9 @@ func (h *Handler) notify(ctx context.Context, r *request, m universal.Mapping, e
 		req.Body = prefix + text.SepDot + ev.Body
 	}
 	if ev.CorrelationKey != "" {
-		req.CollapseID = activitySlug(r.source(), ev.CorrelationKey)
+		req.CollapseID = activitySlug(r.source, ev.CorrelationKey)
 	}
-	return h.clients.SendNotification(ctx, r.key, r.log, req)
+	return req
 }
 
 func threadID(source string) string {
@@ -157,10 +176,10 @@ func (h *Handler) deliverActivity(ctx context.Context, r *request, m universal.M
 		}
 		return ignored(humautil.StatusIgnoredActivity, "the mapping has no correlation or title value to key a Live Activity on"), nil
 	}
-	slug := activitySlug(r.source(), id)
+	slug := activitySlug(r.source, id)
 	a := activity{slug: slug, mapKey: "act:" + slug}
 	if ev.Lifecycle == universal.LifecycleEnded {
-		return humautil.NewOK(), h.end(ctx, r, m, ev, a)
+		return humautil.NewOK(), h.end(ctx, r, ev, a)
 	}
 	return humautil.NewOK(), h.ongoing(ctx, r, m, ev, a)
 }
@@ -172,7 +191,7 @@ func (h *Handler) ongoing(ctx context.Context, r *request, m universal.Mapping, 
 		// The push is the only delivery left, so its failure is the
 		// request's.
 		if ov.NotifyFallback(alert) {
-			return h.notify(ctx, r, m, ev, "", levelOf(m, ev), "")
+			return h.notify(ctx, r, ev, "", levelOf(m, ev), "")
 		}
 		return nil
 	}
@@ -197,8 +216,8 @@ func (h *Handler) ongoing(ctx context.Context, r *request, m universal.Mapping, 
 			// A card the server refuses for good (the activity limit, a key
 			// without activity rights) would be refused on every retry; the
 			// event still reaches the user as a plain notification.
-			if _, permanent := refusal(err); permanent {
-				if nerr := h.notify(ctx, r, m, ev, "", levelOf(m, ev), ""); nerr == nil {
+			if refused(err) {
+				if nerr := h.notify(ctx, r, ev, "", levelOf(m, ev), ""); nerr == nil {
 					return nil
 				}
 			}
@@ -225,7 +244,7 @@ func (h *Handler) ongoing(ctx context.Context, r *request, m universal.Mapping, 
 	if isNew && ov.NotifyFallback(alert) {
 		// The card already carries the event, so a failed push is logged
 		// by the pool and not the request's failure.
-		_ = h.notify(ctx, r, m, ev, a.slug, levelOf(m, ev), "")
+		_ = h.notify(ctx, r, ev, a.slug, levelOf(m, ev), "")
 	}
 	return nil
 }
@@ -258,7 +277,7 @@ func (h *Handler) card(ctx context.Context, r *request, a activity) (cardState, 
 	return c, true, nil
 }
 
-func (h *Handler) end(ctx context.Context, r *request, m universal.Mapping, ev universal.Event, a activity) error {
+func (h *Handler) end(ctx context.Context, r *request, ev universal.Event, a activity) error {
 	ov := overrides.FromContext(ctx)
 	content, outcome := h.finalContent(r, ev)
 
@@ -289,7 +308,7 @@ func (h *Handler) end(ctx context.Context, r *request, m universal.Mapping, ev u
 	if tracked {
 		slug = a.slug
 	}
-	err := h.notify(ctx, r, m, ev, slug, level, outcome)
+	err := h.notify(ctx, r, ev, slug, level, outcome)
 	if tracked {
 		// The card carries the outcome.
 		return nil
@@ -303,7 +322,7 @@ func (h *Handler) alertContent(r *request, ev universal.Event, isNew bool) pushw
 		Progress:    1,
 		State:       text.TruncateHard(ev.Body, maxStateRunes),
 		Icon:        pushward.SeverityIcon(ev.Severity, "exclamationmark.triangle.fill"),
-		Subtitle:    r.source(),
+		Subtitle:    r.source,
 		AccentColor: pushward.SeverityColor(ev.Severity),
 		Severity:    ev.Severity,
 		URL:         ev.URL,
@@ -325,7 +344,7 @@ func (h *Handler) progressContent(r *request, ev universal.Event) pushward.Conte
 		Template:    pushward.TemplateGeneric,
 		State:       text.TruncateHard(state, maxStateRunes),
 		Icon:        "arrow.triangle.2.circlepath",
-		Subtitle:    r.source(),
+		Subtitle:    r.source,
 		AccentColor: pushward.ColorBlue,
 		URL:         ev.URL,
 	}
@@ -344,7 +363,7 @@ func (h *Handler) finalContent(r *request, ev universal.Event) (pushward.Content
 			Progress:    1,
 			State:       "Resolved",
 			Icon:        "checkmark.circle.fill",
-			Subtitle:    r.source(),
+			Subtitle:    r.source,
 			AccentColor: pushward.ColorGreen,
 			Severity:    universal.SeverityInfo,
 			URL:         ev.URL,
@@ -355,7 +374,7 @@ func (h *Handler) finalContent(r *request, ev universal.Event) (pushward.Content
 		Progress:    1,
 		State:       "Done",
 		Icon:        "checkmark.circle.fill",
-		Subtitle:    r.source(),
+		Subtitle:    r.source,
 		AccentColor: pushward.ColorGreen,
 		URL:         ev.URL,
 	}

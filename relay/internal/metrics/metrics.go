@@ -116,44 +116,16 @@ var (
 // Universal webhook metrics. Every label takes values from a closed set in
 // relay code; the ?source= slug is caller-chosen, so it is never a label.
 var (
-	// UniversalProposalsTotal counts mappings proposed for new payload shapes.
-	// result is created, deduped (another replica stored the shape first),
-	// cap_pending or store_error.
-	UniversalProposalsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+	// UniversalEventsTotal counts universal webhooks delivered. via is where
+	// the mapping came from: preset, or proposer for the plain notification
+	// a payload no preset knows becomes. kind is notification, alert or
+	// progress.
+	UniversalEventsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "pushward_relay",
 		Subsystem: "universal",
-		Name:      "proposals_total",
-		Help:      "Mappings proposed for new universal webhook shapes, by kind and outcome.",
-	}, []string{"kind", "result"})
-
-	// UniversalReviewsTotal counts review link taps. decision is accept,
-	// reject or unknown (a link that did not parse); result is ok,
-	// idempotent, conflict, not_found, expired or error.
-	UniversalReviewsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "pushward_relay",
-		Subsystem: "universal",
-		Name:      "reviews_total",
-		Help:      "Universal mapping review decisions, by decision and outcome.",
-	}, []string{"decision", "result"})
-
-	// UniversalAppliesTotal counts payloads delivered through a mapping. status
-	// is new, pending, confirmed or rejected; kind is notification, alert,
-	// progress, or raw for a rejected shape.
-	UniversalAppliesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "pushward_relay",
-		Subsystem: "universal",
-		Name:      "applies_total",
-		Help:      "Universal webhooks delivered, by mapping status and kind.",
-	}, []string{"status", "kind"})
-
-	// UniversalCapHitsTotal counts rows refused (pending) or evicted
-	// (confirmed, rejected) at a tenant's cap.
-	UniversalCapHitsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "pushward_relay",
-		Subsystem: "universal",
-		Name:      "cap_hits_total",
-		Help:      "Universal mappings refused or evicted at a per-tenant cap, by cap.",
-	}, []string{"cap"})
+		Name:      "events_total",
+		Help:      "Universal webhooks delivered, by where the mapping came from and kind.",
+	}, []string{"via", "kind"})
 
 	// UniversalProposerFallbackTotal counts proposals the primary proposer
 	// could not make, by universal.Fallback's reason.
@@ -173,34 +145,6 @@ var (
 		Name:      "value_fallback_total",
 		Help:      "Universal severity and lifecycle values missing from the mapping table, by role and fallback.",
 	}, []string{"role", "from"})
-
-	// UniversalSweptTotal counts what the periodic sweep removed: pending,
-	// idle or samples.
-	UniversalSweptTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "pushward_relay",
-		Subsystem: "universal",
-		Name:      "swept_total",
-		Help:      "Universal mapping rows and samples removed by the sweep, by what.",
-	}, []string{"what"})
-
-	// UniversalEditorRequestsTotal counts mapping editor requests. op is
-	// view, save, raw or list; result is ok, invalid, stale, notfound,
-	// expired, forbidden, ratelimited or error.
-	UniversalEditorRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
-		Namespace: "pushward_relay",
-		Subsystem: "universal",
-		Name:      "editor_requests_total",
-		Help:      "Universal mapping editor requests, by operation and outcome.",
-	}, []string{"op", "result"})
-
-	// UniversalMappings is the number of live mappings across all tenants, by
-	// status, as of the last sweep.
-	UniversalMappings = promauto.NewGaugeVec(prometheus.GaugeOpts{
-		Namespace: "pushward_relay",
-		Subsystem: "universal",
-		Name:      "mappings",
-		Help:      "Live universal mappings across all tenants, by status.",
-	}, []string{"status"})
 )
 
 // Handler returns the Prometheus metrics HTTP handler.

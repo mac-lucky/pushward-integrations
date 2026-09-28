@@ -24,7 +24,6 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/rootroute"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/telemetry"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/universalhook"
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/poster"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -167,31 +166,9 @@ func main() {
 		slog.Info("poster images disabled")
 	}
 
-	// Universal webhook mappings, only when the route is on: the table is
-	// not created otherwise.
-	var mappings state.MappingStore
-	if cfg.Providers.Universal.Enabled {
-		ms, err := state.NewMappingStore(ctx, pool)
-		if err != nil {
-			slog.Error("failed to initialize universal mapping store", "error", err)
-			os.Exit(1)
-		}
-		mappings = ms
-	}
-
 	// Provider handlers. The store they get is wrapped for key hashing;
 	// the state cleanup below uses the raw one.
-	providers, err := registerProviders(ctx, api, store, mappings, clients, cfg, posters)
-	if err != nil {
-		slog.Error("failed to register providers", "error", err)
-		os.Exit(1)
-	}
-
-	// The mapping editor is plain HTML on the mux, outside huma: no
-	// integration key, and HTML error pages.
-	if providers.universal != nil {
-		universalhook.RegisterEditor(mux, providers.universal)
-	}
+	providers := registerProviders(ctx, api, store, clients, cfg, posters)
 
 	// POST / dispatches to the route of the provider that sent the payload,
 	// else to /universal. It reads which routes exist, so it comes after
@@ -210,7 +187,9 @@ func main() {
 				}
 				return r.Method
 			}),
-			otelhttp.WithFilter(traced),
+			otelhttp.WithFilter(func(r *http.Request) bool {
+				return r.URL.Path != "/health" && r.URL.Path != "/ready"
+			}),
 		)
 	}
 
@@ -223,11 +202,6 @@ func main() {
 		}
 		if n := ratelimit.SweepStale(5 * time.Minute); n > 0 {
 			slog.Debug("rate limiter sweep", "removed", n)
-		}
-		if providers.universal != nil {
-			if n := providers.universal.SweepLinkLimiters(); n > 0 {
-				slog.Debug("links limiter sweep", "removed", n)
-			}
 		}
 	})
 	defer stateCleanup.Stop()
@@ -244,15 +218,6 @@ func main() {
 		metrics.CircuitBreakerOpen.Set(val)
 	})
 	defer metricsCollect.Stop()
-
-	// Every replica sweeps; each statement is idempotent. The first run is
-	// synchronous so the mapping gauge exists from startup.
-	var mappingSweep syncx.Periodic
-	if mappings != nil {
-		sweepMappings(ctx, mappings)
-		mappingSweep.Start(ctx, 10*time.Minute, func(ctx context.Context) { sweepMappings(ctx, mappings) })
-		defer mappingSweep.Stop()
-	}
 
 	// Internal-only metrics server. Scraped via in-cluster ServiceMonitor.
 	// Shut down after the main server so Prometheus can scrape final drain metrics.
@@ -303,11 +268,4 @@ func main() {
 	}
 
 	slog.Info("shutdown complete")
-}
-
-// traced reports whether a request gets a trace. Probes are noise, and the
-// review, edit and list links carry their credential in the path, so they
-// stay out of traces altogether.
-func traced(r *http.Request) bool {
-	return r.URL.Path != "/health" && r.URL.Path != "/ready" && !universalhook.IsCapabilityPath(r.URL.Path)
 }

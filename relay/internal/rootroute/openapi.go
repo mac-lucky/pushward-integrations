@@ -24,14 +24,15 @@ func Document(api huma.API) {
 		Description: "Takes a webhook from any service. A payload recognised as one of the relay's providers, " +
 			"from its headers (the Radarr, Sonarr and Prowlarr User-Agent; Gitea and Forgejo " +
 			"Actions events) or its body, is handled exactly as if it had been posted to that " +
-			"provider's route. Anything else goes to the universal route, which maps arbitrary JSON " +
-			"onto a notification or Live Activity; with that route off, it gets 404.",
+			"provider's route. Anything else goes to the universal route: a payload a preset " +
+			"knows is mapped the way the preset says, anything else becomes a notification; with " +
+			"that route off, it gets 404.",
 		Tags:     []string{"Root"},
 		Security: []map[string][]string{{"bearerAuth": {}}},
 		Parameters: []*huma.Param{{
 			Name:        "source",
 			In:          "query",
-			Description: "Names the sending service for the universal route, so its payloads get mappings of their own",
+			Description: "Names the sending service for the universal route: its notifications are grouped under it, and one with no title of its own is titled after it",
 			Schema:      &huma.Schema{Type: huma.TypeString, MaxLength: &maxSourceLen, Pattern: "^[a-z0-9-]*$"},
 		}},
 		RequestBody: &huma.RequestBody{
