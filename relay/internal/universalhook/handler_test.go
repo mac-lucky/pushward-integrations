@@ -868,6 +868,10 @@ func TestFailure(t *testing.T) {
 		{"COMPLETED", "FAILURE", "FAILURE"},
 		{"FINALIZED", "ABORTED", "ABORTED"},
 		{"COMPLETED", "SUCCESS", ""},
+		{"COMPLETED", "UNSTABLE", "UNSTABLE"},
+		{"skipped", "cancellation", ""},
+		{"not_run", "timeout", ""},
+		{"neutral", "canceled", ""},
 		{"completed", "fix-failure", ""},
 		{"completed", "Retry the failed upload", ""},
 		{"success", "failure", ""},
@@ -893,5 +897,60 @@ func TestPresetJenkinsFailureEndsRed(t *testing.T) {
 	testutil.UnmarshalBody(t, calls[len(calls)-1].Body, &end)
 	if end.State != pushward.StateEnded || end.Content.AccentColor != pushward.ColorRed || end.Content.State != "Failure" {
 		t.Errorf("end = %+v", end)
+	}
+}
+
+// withValue returns a preset fixture with one top-level or nested string
+// replaced, for events the fixtures have no file of their own for.
+func withValue(t *testing.T, name, from, to string) []byte {
+	t.Helper()
+	b := presetFixture(t, name)
+	out := bytes.Replace(b, []byte(from), []byte(to), 1)
+	if bytes.Equal(out, b) {
+		t.Fatalf("%s has no %s", name, from)
+	}
+	return out
+}
+
+// A note on an Opsgenie alert changes its open card and never opens one:
+// after the close it is dropped instead of reopening the alert loudly.
+func TestPresetUpdateNeverOpensACard(t *testing.T) {
+	hs := newPresetHarness(t)
+	note := withValue(t, "opsgenie_create.json", `"action": "Create"`, `"action": "AddNote"`)
+	w := hs.post(t, "/universal", note)
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "not open") {
+		t.Fatalf("note on no card: %d %s", w.Code, w.Body.String())
+	}
+	if calls := hs.snapshot(); len(calls) != 0 {
+		t.Fatalf("a note on no card made calls: %+v", calls)
+	}
+
+	hs.post(t, "/universal", presetFixture(t, "opsgenie_create.json"))
+	opened := len(hs.snapshot())
+	if w := hs.post(t, "/universal", note); w.Code != http.StatusOK || strings.Contains(w.Body.String(), "ignored") {
+		t.Fatalf("note on an open card: %d %s", w.Code, w.Body.String())
+	}
+	calls := hs.snapshot()
+	if len(calls) != opened+1 || calls[len(calls)-1].Method != http.MethodPatch {
+		t.Errorf("a note on an open card should make one update, got %+v", calls[opened:])
+	}
+}
+
+// Jenkins's FINALIZED after COMPLETED ends a card that is already ending: no
+// second end, no second push.
+func TestPresetSecondEndIsDropped(t *testing.T) {
+	hs := newPresetHarness(t)
+	for _, b := range [][]byte{
+		presetFixture(t, "jenkins-notification_started.json"),
+		presetFixture(t, "jenkins-notification_completed.json"),
+		withValue(t, "jenkins-notification_completed.json", `"phase": "COMPLETED"`, `"phase": "FINALIZED"`),
+	} {
+		if w := hs.post(t, "/universal", b); w.Code != http.StatusOK {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	if n := len(notifications(t, hs.snapshot())); n != 1 {
+		t.Errorf("%d notifications, want the one end push", n)
 	}
 }

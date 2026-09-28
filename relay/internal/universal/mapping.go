@@ -9,7 +9,7 @@ import (
 	"unicode/utf8"
 )
 
-// MappingVersion is the version of the stored Mapping layout.
+// MappingVersion is the version of the Mapping JSON layout.
 const MappingVersion = 1
 
 // Progress scales: how a progress sample reads as a fraction.
@@ -89,7 +89,7 @@ func progressScale(key string, f *ShapeField) string {
 
 var (
 	severityStates  = []string{SeverityCritical, SeverityWarning, SeverityInfo}
-	lifecycleStates = []string{LifecycleOngoing, LifecycleEnded}
+	lifecycleStates = []string{LifecycleOngoing, LifecycleEnded, LifecycleUpdate}
 )
 
 func table(in map[string]string, f *ShapeField, states []string) map[string]string {
@@ -126,17 +126,17 @@ func lastKey(path string) string {
 	return segs[len(segs)-1]
 }
 
-// Shape is the stored form of a payload's shapes.
+// Shape is the serialized form of a payload's shapes.
 type Shape struct {
 	V         int          `json:"v"`
 	Truncated bool         `json:"truncated,omitempty"`
 	Fields    []ShapeField `json:"fields"`
 }
 
-// NewShape wraps shapes for storage. Past MaxShapeBytes of json.Marshal
+// NewShape wraps shapes for serializing. Past MaxShapeBytes of json.Marshal
 // output, fields are dropped from the end and Truncated is set; fields whose
 // path is in keep (the mapped ones) are never dropped, so a mapping still
-// validates against its stored shape. ProposeShapes on a truncated shape can
+// validates against the shape. ProposeShapes on a truncated shape can
 // differ from the proposal the full payload got.
 func NewShape(shapes []ShapeField, truncated bool, keep ...string) Shape {
 	s := Shape{V: ShapeVersion, Truncated: truncated, Fields: shapes}
@@ -189,7 +189,7 @@ func AllowedClasses(r Role) []ValueClass {
 	return slices.Clone(allowedClasses[r])
 }
 
-// Mappable reports whether a user may map a field to a role: its class is
+// Mappable reports whether a field may fill a role: its class is
 // allowed, a secret only by value and only as correlation, and progress comes
 // from a JSON number (or a sample without a value).
 func Mappable(r Role, f *ShapeField) bool {

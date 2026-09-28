@@ -178,8 +178,21 @@ func (h *Handler) deliverActivity(ctx context.Context, r *request, m universal.M
 	}
 	slug := activitySlug(r.source, id)
 	a := activity{slug: slug, mapKey: "act:" + slug}
-	if ev.Lifecycle == universal.LifecycleEnded {
+	switch ev.Lifecycle {
+	case universal.LifecycleEnded:
 		return humautil.NewOK(), h.end(ctx, r, ev, a)
+	case universal.LifecycleUpdate:
+		// A note or a new owner changes an open card and nothing else: after
+		// the close it would open a new card, loudly, for bookkeeping.
+		if !overrides.FromContext(ctx).AllowsActivity() {
+			return ignored(humautil.StatusIgnored, "an update to a card, and cards are off for this request"), nil
+		}
+		if h.ender.Pending(r.key, a.mapKey) {
+			return ignored(humautil.StatusIgnored, "an update to a card that is ending"), nil
+		}
+		if _, tracked, err := h.card(ctx, r, a); err == nil && !tracked {
+			return ignored(humautil.StatusIgnored, "an update to a card that is not open"), nil
+		}
 	}
 	return humautil.NewOK(), h.ongoing(ctx, r, m, ev, a)
 }
@@ -287,6 +300,11 @@ func (h *Handler) end(ctx context.Context, r *request, ev universal.Event, a act
 		if err != nil {
 			r.log.Warn("state store read failed, not ending an activity", "slug", a.slug, "error", err)
 		}
+		if ok && h.ender.Pending(r.key, a.mapKey) {
+			// A second end for a card already ending, such as Jenkins's
+			// FINALIZED after COMPLETED: the first one said it all.
+			return nil
+		}
 		if ok {
 			h.ender.ScheduleEnd(r.key, a.mapKey, a.slug, content)
 			tracked = true
@@ -392,25 +410,27 @@ func (h *Handler) finalContent(r *request, ev universal.Event) (pushward.Content
 var failureWords = map[string]bool{
 	"fail": true, "failed": true, "failure": true, "error": true, "errored": true,
 	"aborted": true, "abort": true, "timeout": true, "timedout": true,
-	// Drone: a cancelled build, and one refused approval.
-	"killed": true, "declined": true,
+	// Drone: a cancelled build, and one refused approval. Jenkins: a build
+	// whose tests failed.
+	"killed": true, "declined": true, "unstable": true,
 }
 
-// successWords are end values that already say a run went well, so the body
-// is not asked.
-var successWords = map[string]bool{
-	"success": true, "succeeded": true, "successful": true, "passed": true, "ok": true, "fixed": true,
+// overWords are end values that only say a run is over, not how it went; the
+// body is asked then, and only then.
+var overWords = map[string]bool{
+	"completed": true, "finalized": true, "finished": true, "done": true,
 }
 
 // failure is the value that says a run went wrong, or "" when none does: the
 // lifecycle value that ended it, or, when that only says the run is over
 // ("COMPLETED", "FINALIZED"), a body that is one bare word, which is then the
-// run's status ("FAILURE"). A branch or a sentence is never read that way.
+// run's status ("FAILURE"). After any other end value ("skipped",
+// "success") the body is a branch or a name and is not read.
 func failure(ev universal.Event) string {
 	if failed(ev.LifecycleRaw) {
 		return ev.LifecycleRaw
 	}
-	if successWords[universal.NormValue(ev.LifecycleRaw)] {
+	if !overWords[universal.NormValue(ev.LifecycleRaw)] {
 		return ""
 	}
 	b := strings.TrimSpace(ev.Body)

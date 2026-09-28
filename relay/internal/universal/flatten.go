@@ -1,8 +1,8 @@
 // Package universal maps arbitrary JSON webhooks onto PushWard content. A
-// payload is flattened into candidate fields, the field set is fingerprinted
-// so a mapping is found again for the next event of the same shape, and a
-// deterministic heuristic proposes the first mapping for a shape it has not
-// seen.
+// payload is flattened into candidate fields, a deterministic heuristic (or a
+// ranker that passed its gate) proposes which field fills each role, and
+// Apply reads the payload through a mapping. Fingerprint names a payload's
+// shape by its paths, for the classifier's exports.
 package universal
 
 import (

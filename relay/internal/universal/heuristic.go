@@ -43,6 +43,10 @@ const (
 
 	LifecycleOngoing = "ongoing"
 	LifecycleEnded   = "ended"
+	// LifecycleUpdate changes a card that is open and never opens one: a
+	// note, a new owner. Only a preset's table says it; the heuristic never
+	// does.
+	LifecycleUpdate = "update"
 )
 
 // Proposal is a suggested mapping for one payload shape. Every role holds a

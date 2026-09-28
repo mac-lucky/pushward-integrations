@@ -58,7 +58,7 @@ type RoleScore struct {
 	By   string      `json:"by"`
 }
 
-// Proposer proposes a mapping for a payload shape it has not seen.
+// Proposer proposes a mapping for a payload no preset knows.
 type Proposer interface {
 	Propose(ctx context.Context, in Input) (Result, error)
 }

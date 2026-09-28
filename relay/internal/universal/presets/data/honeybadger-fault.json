@@ -17,7 +17,7 @@
       "lifecycle": "event"
     },
     "lv": {
-      "occurred": "ongoing", "rate_exceeded": "ongoing", "unresolved": "ongoing", "assigned": "ongoing", "commented": "ongoing",
+      "occurred": "ongoing", "rate_exceeded": "ongoing", "unresolved": "ongoing", "assigned": "update", "commented": "update",
       "resolved": "ended"
     }
   },

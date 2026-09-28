@@ -18,10 +18,10 @@
     },
     "sv": {"p1": "critical", "p2": "critical", "p3": "warning", "p4": "info", "p5": "info"},
     "lv": {
-      "create": "ongoing", "acknowledge": "ongoing", "unacknowledge": "ongoing", "escalate": "ongoing",
-      "addnote": "ongoing", "addtags": "ongoing", "removetags": "ongoing", "addteam": "ongoing",
-      "addrecipient": "ongoing", "assignownership": "ongoing", "takeownership": "ongoing",
-      "updatepriority": "ongoing", "updatemessage": "ongoing", "updatedescription": "ongoing",
+      "create": "ongoing", "acknowledge": "update", "unacknowledge": "update", "escalate": "update",
+      "addnote": "update", "addtags": "update", "removetags": "update", "addteam": "update",
+      "addrecipient": "update", "assignownership": "update", "takeownership": "update",
+      "updatepriority": "update", "updatemessage": "update", "updatedescription": "update",
       "close": "ended", "delete": "ended"
     }
   },

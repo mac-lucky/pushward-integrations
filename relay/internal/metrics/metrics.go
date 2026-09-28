@@ -116,7 +116,7 @@ var (
 // Universal webhook metrics. Every label takes values from a closed set in
 // relay code; the ?source= slug is caller-chosen, so it is never a label.
 var (
-	// UniversalEventsTotal counts universal webhooks delivered. via is where
+	// UniversalEventsTotal counts universal webhooks handled. via is where
 	// the mapping came from: preset, or proposer for the plain notification
 	// a payload no preset knows becomes. kind is notification, alert or
 	// progress.
@@ -124,7 +124,7 @@ var (
 		Namespace: "pushward_relay",
 		Subsystem: "universal",
 		Name:      "events_total",
-		Help:      "Universal webhooks delivered, by where the mapping came from and kind.",
+		Help:      "Universal webhooks handled, by where the mapping came from and kind.",
 	}, []string{"via", "kind"})
 
 	// UniversalPresetHitsTotal counts universal webhooks mapped by a preset,

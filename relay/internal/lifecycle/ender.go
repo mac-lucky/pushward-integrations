@@ -249,6 +249,17 @@ func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 	e.mu.Unlock()
 }
 
+// Pending reports whether an end is scheduled for the given key and has not
+// finished. It holds only on this replica: another one may be ending the
+// same activity.
+func (e *Ender) Pending(userKey, mapKey string) bool {
+	timerKey := auth.MapKeyPrefix(userKey) + ":" + mapKey
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	_, ok := e.timers[timerKey]
+	return ok
+}
+
 // StopTimer cancels a pending end timer if one exists for the given key.
 func (e *Ender) StopTimer(userKey, mapKey string) {
 	timerKey := auth.MapKeyPrefix(userKey) + ":" + mapKey
