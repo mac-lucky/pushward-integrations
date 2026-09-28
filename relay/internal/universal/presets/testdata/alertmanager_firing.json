@@ -1,0 +1,22 @@
+{
+  "version": "4",
+  "groupKey": "{}/{severity=\"warning\"}:{alertname=\"HighMemoryUsage\"}",
+  "truncatedAlerts": 0,
+  "status": "firing",
+  "receiver": "phone",
+  "groupLabels": {"alertname": "HighMemoryUsage"},
+  "commonLabels": {"alertname": "HighMemoryUsage", "instance": "web-2:9100", "severity": "warning"},
+  "commonAnnotations": {"summary": "Memory on web-2 above 90% for 10 minutes"},
+  "externalURL": "http://alertmanager.lan:9093",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {"alertname": "HighMemoryUsage", "instance": "web-2:9100", "severity": "warning"},
+      "annotations": {"summary": "Memory on web-2 above 90% for 10 minutes"},
+      "startsAt": "2026-09-28T08:12:00Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.lan:9090/graph?g0.expr=mem_used_ratio",
+      "fingerprint": "a81f03c77e5d2b19"
+    }
+  ]
+}

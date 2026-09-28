@@ -1,0 +1,31 @@
+{
+  "event": {
+    "id": "01EXAMPLE7TRIGGERED0000001",
+    "event_type": "incident.triggered",
+    "resource_type": "incident",
+    "occurred_at": "2026-09-28T09:15:02.214Z",
+    "agent": null,
+    "client": null,
+    "data": {
+      "id": "Q3EXAMPLEINC01",
+      "type": "incident",
+      "self": "https://api.pagerduty.com/incidents/Q3EXAMPLEINC01",
+      "html_url": "https://example.pagerduty.com/incidents/Q3EXAMPLEINC01",
+      "number": 812,
+      "status": "triggered",
+      "incident_key": null,
+      "created_at": "2026-09-28T09:15:01Z",
+      "title": "Checkout latency above 2s",
+      "service": {
+        "html_url": "https://example.pagerduty.com/services/PEXSVC1",
+        "id": "PEXSVC1",
+        "self": "https://api.pagerduty.com/services/PEXSVC1",
+        "summary": "Checkout API",
+        "type": "service_reference"
+      },
+      "urgency": "high",
+      "priority": null,
+      "resolve_reason": null
+    }
+  }
+}

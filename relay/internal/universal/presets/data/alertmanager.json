@@ -1,0 +1,28 @@
+{
+  "id": "alertmanager",
+  "vendor": "Prometheus Alertmanager",
+  "version": 1,
+  "sources": ["alertmanager", "prometheus"],
+  "require": ["receiver", "status", "groupKey", "alerts[].status", "alerts[].labels.alertname", "alerts[].fingerprint"],
+  "forbid": ["orgId", "state", "title", "message", "alerts[].dashboardURL", "alerts[].panelURL", "alerts[].silenceURL", "alerts[].valueString"],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "alerts[].labels.alertname",
+      "body": "alerts[].annotations.summary",
+      "url": "alerts[].generatorURL",
+      "correlation": "groupKey",
+      "severity": "alerts[].labels.severity",
+      "lifecycle": "status"
+    },
+    "sv": {
+      "critical": "critical", "page": "critical", "error": "critical", "high": "critical",
+      "warning": "warning", "warn": "warning", "medium": "warning",
+      "info": "info", "low": "info", "none": "info"
+    },
+    "lv": {"firing": "ongoing", "resolved": "ended"}
+  },
+  "doc": "https://prometheus.io/docs/alerting/latest/configuration/#webhook_config"
+}
