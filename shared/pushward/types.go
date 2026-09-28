@@ -981,9 +981,9 @@ type Recurrence struct {
 
 // ScheduleNotificationRequest is the body for POST /notifications/scheduled:
 // a notification plus when to send it. SendAt must be in the future and at
-// most 30 days ahead. It may be left zero when Recurrence is set: the first
+// most 365 days ahead. It may be left zero when Recurrence is set: the first
 // send is then the first cron match from now, or from SendAt when given, and
-// that first send must still fall within 30 days. Each send counts against
+// that first send must still fall within 365 days. Each send counts against
 // the notification quota when it happens, not when it is scheduled.
 type ScheduleNotificationRequest struct {
 	SendNotificationRequest
@@ -991,20 +991,21 @@ type ScheduleNotificationRequest struct {
 	Recurrence *Recurrence `json:"recurrence,omitempty"`
 }
 
-// Scheduled notification statuses. Canceling deletes the schedule, so there
-// is no canceled state.
+// Scheduled notification statuses. ScheduledStatusCanceled needs server
+// v1.21.0; before it, canceling deleted the schedule.
 const (
 	ScheduledStatusScheduled = "scheduled"
 	ScheduledStatusSending   = "sending"
 	ScheduledStatusSent      = "sent"
 	ScheduledStatusFailed    = "failed"
+	ScheduledStatusCanceled  = "canceled"
 )
 
 // ScheduledNotification is a notification queued for SendAt, as returned by
 // the /notifications/scheduled endpoints. The embedded request echoes the
 // content, SendAt and Recurrence; NotificationID, SentAt and Delivery are set
-// once it is sent, and FailureReason ("quota_exceeded", "key_revoked" or
-// "internal_error") when it failed.
+// once it is sent, FailureReason ("quota_exceeded", "key_revoked" or
+// "internal_error") when it failed, and CanceledAt when it was canceled.
 //
 // A repeating schedule keeps one ID for the whole series. After each send it
 // goes back to ScheduledStatusScheduled with SendAt moved to the next
@@ -1018,6 +1019,7 @@ type ScheduledNotification struct {
 	Occurrence     int        `json:"occurrence,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	SentAt         *time.Time `json:"sent_at,omitempty"`
+	CanceledAt     *time.Time `json:"canceled_at,omitempty"`
 	LastSentAt     *time.Time `json:"last_sent_at,omitempty"`
 	NotificationID *int64     `json:"notification_id,omitempty"`
 	Delivery       string     `json:"delivery,omitempty"`

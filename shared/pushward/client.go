@@ -387,6 +387,9 @@ const (
 	ErrCodeScheduledNotificationInvalid  = "scheduled_notification.invalid"
 	ErrCodeScheduledNotificationNotFound = "scheduled_notification.not_found"
 	ErrCodeScheduledNotificationLimit    = "scheduled_notification.limit_exceeded"
+	// ErrCodeScheduledNotificationInFlight comes only from servers before
+	// v1.21.0, as a 409 on canceling a one-shot while it was being sent.
+	// Treat it as "retry shortly": the send finishes within seconds.
 	ErrCodeScheduledNotificationInFlight = "scheduled_notification.in_flight"
 
 	ErrCodeNotificationAnswerURLUnavailable = "notification.answer_url_unavailable"
@@ -788,8 +791,8 @@ func (c *Client) ScheduleNotification(ctx context.Context, req ScheduleNotificat
 // "scheduled" list is one request. A schedule can carry a 4096-rune body, 8 KB
 // of metadata and ten action webhooks, and a page of 100 large ones can
 // overrun the 1 MiB success-body read in doWithRetryInto; 25 leaves four
-// times the room. 40 pages is 1000 schedules; only a long sent/failed history
-// inside the server's 7-day retention gets near it.
+// times the room. 40 pages is 1000 schedules; only a long history (sent and
+// failed rows are kept 7 days) gets near it.
 const (
 	scheduledListPageSize = 25
 	maxScheduledListPages = 40
@@ -797,9 +800,10 @@ const (
 
 // ListScheduledNotifications lists schedules via GET /notifications/scheduled,
 // following next_cursor for up to 1000 of them. status is "scheduled"
-// (pending, including ones being sent, soonest first), "sent", "failed" or
-// "all" (latest first); empty means the server default, "scheduled". Past the
-// bound the rest is silently left out.
+// (pending, including ones being sent, soonest first), "sent", "failed",
+// "canceled" or "all" (latest first); empty means the server default,
+// "scheduled". The server keeps canceled rows for 24 hours and sent or failed
+// ones for 7 days. Past the bound the rest is silently left out.
 func (c *Client) ListScheduledNotifications(ctx context.Context, status string) ([]ScheduledNotification, error) {
 	base := fmt.Sprintf("%s/notifications/scheduled?limit=%d", c.baseURL, scheduledListPageSize)
 	if status != "" {
@@ -838,13 +842,45 @@ func (c *Client) GetScheduledNotification(ctx context.Context, id int64) (*Sched
 	return &sn, nil
 }
 
+// CancelOption tunes a single CancelScheduledNotification call.
+type CancelOption func(*cancelOptions)
+
+type cancelOptions struct {
+	purge bool
+}
+
+// WithPurge deletes the schedule outright instead of leaving a canceled
+// record, for a caller that is about to re-create it and does not want the
+// old one listed as canceled for a day.
+func WithPurge() CancelOption {
+	return func(o *cancelOptions) { o.purge = true }
+}
+
 // CancelScheduledNotification cancels a schedule via
-// DELETE /notifications/scheduled/{id}. For a repeating one that stops the
-// whole series; if an occurrence is being sent right now, that send still goes
-// out and the series ends after it. Only a one-shot already being sent is
-// refused, with a *HTTPError whose Code is ErrCodeScheduledNotificationInFlight.
-func (c *Client) CancelScheduledNotification(ctx context.Context, id int64) error {
-	return c.doWithRetry(ctx, "notify.schedule.cancel", http.MethodDelete, c.scheduledNotificationURL(id), "", nil, nil)
+// DELETE /notifications/scheduled/{id}. A scheduled one, or one being sent
+// right now, becomes ScheduledStatusCanceled and nothing more is sent; for a
+// repeating one that stops the whole series. The canceled record stays
+// readable for 24 hours, then GET returns 404. Canceling a canceled schedule
+// is a no-op, and a sent or failed one is simply deleted. All of these return
+// nil; an unknown id returns a *HTTPError with Code
+// ErrCodeScheduledNotificationNotFound. WithPurge deletes the schedule in any
+// status, leaving no canceled record.
+//
+// The row lock waits for a send already committing, so a one-shot that got
+// out first counts as sent (deleted) and a series is canceled after that send.
+// A server before v1.21.0 deletes on every cancel, so WithPurge changes
+// nothing there, and it refuses a one-shot being sent with
+// ErrCodeScheduledNotificationInFlight.
+func (c *Client) CancelScheduledNotification(ctx context.Context, id int64, opts ...CancelOption) error {
+	var o cancelOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	endpoint := c.scheduledNotificationURL(id)
+	if o.purge {
+		endpoint += "?purge=true"
+	}
+	return c.doWithRetry(ctx, "notify.schedule.cancel", http.MethodDelete, endpoint, "", nil, nil)
 }
 
 func (c *Client) scheduledNotificationURL(id int64) string {

@@ -2261,3 +2261,73 @@ func TestGetNotificationAnswer_NotFoundIsTyped(t *testing.T) {
 		t.Fatalf("err = %v, want *HTTPError %s", err, ErrCodeNotificationAnswerNotFound)
 	}
 }
+
+func TestCancelScheduledNotification_Purge(t *testing.T) {
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Method+" "+r.URL.RequestURI())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "hlk_test")
+
+	if err := c.CancelScheduledNotification(context.Background(), 3); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	if err := c.CancelScheduledNotification(context.Background(), 4, WithPurge()); err != nil {
+		t.Fatalf("Cancel with purge: %v", err)
+	}
+	want := []string{
+		"DELETE /notifications/scheduled/3",
+		"DELETE /notifications/scheduled/4?purge=true",
+	}
+	if strings.Join(requests, "\n") != strings.Join(want, "\n") {
+		t.Errorf("requests =\n%s\nwant\n%s", strings.Join(requests, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestCancelScheduledNotification_Errors(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status int
+		body   string
+		code   string
+	}{
+		{"unknown id", http.StatusNotFound, `{"status":404,"code":"scheduled_notification.not_found","detail":"scheduled notification not found"}`, ErrCodeScheduledNotificationNotFound},
+		// Servers before v1.21.0 only; the caller retries it, not the client.
+		{"pre-v1.21 in flight", http.StatusConflict, `{"status":409,"code":"scheduled_notification.in_flight","detail":"being sent"}`, ErrCodeScheduledNotificationInFlight},
+	} {
+		var calls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			calls.Add(1)
+			w.WriteHeader(tc.status)
+			_, _ = w.Write([]byte(tc.body))
+		}))
+		err := NewClient(srv.URL, "hlk_test").CancelScheduledNotification(context.Background(), 3)
+		srv.Close()
+		var he *HTTPError
+		if !errors.As(err, &he) || he.StatusCode != tc.status || he.Code != tc.code {
+			t.Errorf("%s: err = %v, want %d *HTTPError %s", tc.name, err, tc.status, tc.code)
+		}
+		if calls.Load() != 1 {
+			t.Errorf("%s: calls = %d, want 1", tc.name, calls.Load())
+		}
+	}
+}
+
+func TestGetScheduledNotification_DecodesCanceled(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":9,"status":"canceled","send_at":"2027-06-01T08:00:00Z","title":"t","body":"b",
+			"created_at":"2026-09-28T12:00:00Z","canceled_at":"2026-09-28T12:05:00Z"}`))
+	}))
+	defer srv.Close()
+
+	sn, err := NewClient(srv.URL, "hlk_test").GetScheduledNotification(context.Background(), 9)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	canceledAt := time.Date(2026, 9, 28, 12, 5, 0, 0, time.UTC)
+	if sn.Status != ScheduledStatusCanceled || sn.CanceledAt == nil || !sn.CanceledAt.Equal(canceledAt) || sn.SentAt != nil {
+		t.Errorf("schedule = %+v", sn)
+	}
+}
