@@ -153,7 +153,9 @@ func shapeOf(f *Field) ShapeField {
 		Path:  f.Path,
 		Type:  f.Type,
 		Class: ClassOf(f.Path, *f),
-		Runes: utf8.RuneCountInString(v),
+		// A link may run to MaxURLRunes; its shape counts as far as any
+		// other value's does.
+		Runes: min(utf8.RuneCountInString(v), MaxValueRunes),
 		Words: countWords(v),
 	}
 	if strings.IndexFunc(v, unicode.IsLetter) >= 0 {

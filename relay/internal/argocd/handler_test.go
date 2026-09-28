@@ -189,9 +189,7 @@ func TestHappyPath_SyncRunning_SyncSucceeded_Deployed(t *testing.T) {
 	}
 
 	// Wait for two-phase end (EndDelay + EndDisplayTime)
-	time.Sleep(100 * time.Millisecond)
-
-	recorded = testutil.GetCalls(calls, mu)
+	recorded = testutil.WaitForCalls(t, calls, mu, 5, 5*time.Second)
 	// create + step1 + step2 + phase1(ONGOING) + phase2(ENDED) = 5
 	if len(recorded) != 5 {
 		t.Fatalf("deployed: expected 5 calls, got %d", len(recorded))
@@ -247,9 +245,7 @@ func TestSyncRunning_ThenSyncFailed(t *testing.T) {
 	}
 
 	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 4, 5*time.Second)
 	// create + step1 + phase1(ONGOING) + phase2(ENDED) = 4
 	if len(recorded) != 4 {
 		t.Fatalf("expected 4 calls, got %d", len(recorded))
@@ -327,9 +323,7 @@ func TestSyncSucceeded_ThenHealthDegraded_ThenDeployed(t *testing.T) {
 	}
 
 	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded = testutil.GetCalls(calls, mu)
+	recorded = testutil.WaitForCalls(t, calls, mu, 6, 5*time.Second)
 	// create + step1 + step2 + degraded(ONGOING) + phase1(ONGOING Deployed) + phase2(ENDED Deployed) = 6
 	if len(recorded) != 6 {
 		t.Fatalf("expected 6 calls total, got %d", len(recorded))
@@ -394,9 +388,7 @@ func TestUntracked_Deployed(t *testing.T) {
 	}
 
 	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 3, 5*time.Second)
 	// create + phase1(ONGOING) + phase2(ENDED) = 3
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 calls, got %d", len(recorded))
@@ -426,9 +418,7 @@ func TestUntracked_SyncFailed(t *testing.T) {
 	}
 
 	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 3, 5*time.Second)
 	// create + phase1(ONGOING) + phase2(ENDED) = 3
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 calls, got %d", len(recorded))
@@ -458,9 +448,7 @@ func TestUntracked_HealthDegraded(t *testing.T) {
 	}
 
 	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 3, 5*time.Second)
 	// create + phase1(ONGOING) + phase2(ENDED) = 3
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 calls, got %d", len(recorded))
@@ -609,9 +597,7 @@ func TestCleanupAfterEnd_RemovesFromStore(t *testing.T) {
 	sendWebhook(t, mux, `{"app":"cleanup-app","event":"deployed","revision":"r1"}`)
 
 	// Wait for two-phase end (EndDelay + EndDisplayTime)
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 4, 5*time.Second)
 	// create + step1 + phase1(ONGOING) + phase2(ENDED) = 4
 	// No DELETE call - server handles cleanup via ended_ttl
 	for _, c := range recorded {
@@ -620,9 +606,11 @@ func TestCleanupAfterEnd_RemovesFromStore(t *testing.T) {
 		}
 	}
 
-	// App should be removed from store immediately after ENDED
-	if appExists(t, h, "cleanup-app") {
-		t.Error("expected app to be removed from store after ENDED")
+	// App should be removed from store right after ENDED
+	for deadline := time.Now().Add(5 * time.Second); appExists(t, h, "cleanup-app"); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("expected app to be removed from store after ENDED")
+		}
 	}
 }
 
@@ -668,9 +656,7 @@ func TestMultipleApps_Independent(t *testing.T) {
 	sendWebhook(t, mux, `{"app":"app-one","event":"deployed","revision":"r1"}`)
 
 	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 6, 5*time.Second)
 	// app-one: create + step1 + phase1(ONGOING) + phase2(ENDED) = 4
 	// app-two: create + step1 = 2
 	// Total = 6
@@ -747,9 +733,7 @@ func TestSyncFailed_AtStep2_PreservesStep(t *testing.T) {
 	sendWebhook(t, mux, `{"app":"my-app","event":"sync-failed","revision":"r1"}`)
 
 	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 5, 5*time.Second)
 	lastCall := recorded[len(recorded)-1]
 	var failReq pushward.UpdateRequest
 	testutil.UnmarshalBody(t, lastCall.Body, &failReq)
@@ -800,9 +784,7 @@ func TestGracePeriod_SlowSync_Created(t *testing.T) {
 	}
 
 	// Wait for grace to expire
-	time.Sleep(150 * time.Millisecond)
-
-	recorded = testutil.GetCalls(calls, mu)
+	recorded = testutil.WaitForCalls(t, calls, mu, 2, 5*time.Second)
 	// create + step1 update = 2
 	if len(recorded) != 2 {
 		t.Fatalf("expected 2 API calls after grace expired, got %d", len(recorded))
@@ -822,9 +804,7 @@ func TestGracePeriod_SlowSync_Created(t *testing.T) {
 	sendWebhook(t, mux, `{"app":"slow-app","event":"deployed","revision":"r1"}`)
 
 	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded = testutil.GetCalls(calls, mu)
+	recorded = testutil.WaitForCalls(t, calls, mu, 5, 5*time.Second)
 	// create + step1 + step2 + phase1(ONGOING) + phase2(ENDED) = 5
 	if len(recorded) != 5 {
 		t.Fatalf("expected 5 API calls total, got %d", len(recorded))
@@ -841,9 +821,7 @@ func TestGracePeriod_SyncSucceededDuringGrace_ExpiresAtStep2(t *testing.T) {
 	sendWebhook(t, mux, `{"app":"step2-app","event":"sync-succeeded","revision":"r1"}`)
 
 	// Grace expires with step at 2
-	time.Sleep(200 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 2, 5*time.Second)
 	if len(recorded) != 2 {
 		t.Fatalf("expected 2 API calls, got %d", len(recorded))
 	}
@@ -876,9 +854,7 @@ func TestGracePeriod_SyncFailed_BypassesGrace(t *testing.T) {
 	sendWebhook(t, mux, `{"app":"fail-app","event":"sync-failed","revision":"r1"}`)
 
 	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded = testutil.GetCalls(calls, mu)
+	recorded = testutil.WaitForCalls(t, calls, mu, 3, 5*time.Second)
 	// create + phase1(ONGOING) + phase2(ENDED) = 3
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 API calls after sync-failed, got %d", len(recorded))
@@ -904,9 +880,7 @@ func TestGracePeriod_HealthDegraded_BypassesGrace(t *testing.T) {
 	sendWebhook(t, mux, `{"app":"deg-app","event":"health-degraded","revision":"r1"}`)
 
 	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 3, 5*time.Second)
 	// create + phase1(ONGOING) + phase2(ENDED) = 3
 	if len(recorded) != 3 {
 		t.Fatalf("expected 3 API calls, got %d", len(recorded))
@@ -990,9 +964,7 @@ func TestGracePeriod_UntrackedSyncSucceeded_GraceExpires(t *testing.T) {
 	// Untracked sync-succeeded with grace - if no deployed arrives, create at step 2
 	sendWebhook(t, mux, `{"app":"untracked-rolling","event":"sync-succeeded","revision":"r1"}`)
 
-	time.Sleep(150 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 2, 5*time.Second)
 	// create + step2 update = 2
 	if len(recorded) != 2 {
 		t.Fatalf("expected 2 API calls, got %d", len(recorded))
@@ -1018,9 +990,7 @@ func TestHealthDegraded_AtStep1_StillEnds(t *testing.T) {
 	sendWebhook(t, mux, `{"app":"step1-app","event":"health-degraded","revision":"rev1"}`)
 
 	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 4, 5*time.Second)
 	// create + step1 + phase1(ONGOING Degraded) + phase2(ENDED Degraded) = 4
 	if len(recorded) != 4 {
 		t.Fatalf("expected 4 calls, got %d", len(recorded))
@@ -1081,9 +1051,7 @@ func TestHealthDegraded_AtStep2_MultipleTimesBeforeDeployed(t *testing.T) {
 
 	// deployed recovers to 100%
 	sendWebhook(t, mux, `{"app":"multi-deg","event":"deployed","revision":"rev1"}`)
-	time.Sleep(100 * time.Millisecond)
-
-	recorded = testutil.GetCalls(calls, mu)
+	recorded = testutil.WaitForCalls(t, calls, mu, 7, 5*time.Second)
 	// +phase1(ONGOING Deployed) + phase2(ENDED Deployed) = 7
 	if len(recorded) != 7 {
 		t.Fatalf("expected 7 calls total, got %d", len(recorded))
@@ -1428,8 +1396,7 @@ func TestScheduleEnd_AppNotInStore(t *testing.T) {
 	// (best-effort). This test now verifies it doesn't panic.
 	h.ender.ScheduleEnd(testKey, "non-existent", "argocd-non-existent", pushward.Content{})
 
-	time.Sleep(200 * time.Millisecond)
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 4, 5*time.Second)
 	// The ender will attempt phase 1 + phase 2 (each retried once = 4 PATCH calls total)
 	if len(recorded) != 4 {
 		t.Errorf("expected 4 best-effort API calls (2 phases x 2 attempts), got %d", len(recorded))
@@ -1446,12 +1413,12 @@ func TestScheduleEnd_UpdateFails(t *testing.T) {
 	// Deploy triggers scheduleEnd (PATCH phase1 fail, PATCH phase2 fail)
 	sendWebhook(t, mux, `{"app":"end-fail","event":"deployed","revision":"r1"}`)
 
-	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	// App should be removed from store even when update fails
-	if appExists(t, h, "end-fail") {
-		t.Error("expected app to be removed from store after end")
+	// App should be removed from store even when update fails: the ender
+	// drops the row right after the ENDED attempt returns.
+	for deadline := time.Now().Add(5 * time.Second); appExists(t, h, "end-fail"); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("expected app to be removed from store after end")
+		}
 	}
 }
 
@@ -1507,8 +1474,7 @@ func TestGraceExpired_DefaultStep(t *testing.T) {
 
 	h.graceExpired(testKey, "weird-app")
 
-	time.Sleep(50 * time.Millisecond)
-	recorded := testutil.GetCalls(calls, mu)
+	recorded := testutil.WaitForCalls(t, calls, mu, 2, 5*time.Second)
 	if len(recorded) != 2 {
 		t.Fatalf("expected 2 calls, got %d", len(recorded))
 	}

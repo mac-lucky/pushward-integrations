@@ -1,6 +1,7 @@
 package universal
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -143,5 +144,20 @@ func TestApplySecrets(t *testing.T) {
 	m.Paths[RoleCorrelation] = "api_token"
 	if ev := Apply(m, fields, "ci"); ev.CorrelationKey != "" {
 		t.Errorf("correlation key = %q from a secret key", ev.CorrelationKey)
+	}
+}
+
+// A link Flatten cut would open the wrong page; a long one it kept is
+// delivered whole.
+func TestApplyCutURL(t *testing.T) {
+	m := Mapping{V: MappingVersion, Kind: KindNotification, Paths: map[Role]string{RoleTitle: "title", RoleURL: "link"}}
+	long := "https://example.com/" + strings.Repeat("p", 1000)
+	fields, _ := flatten(t, `{"title": "Report ready", "link": "`+long+`"}`)
+	if ev := Apply(m, fields, ""); ev.URL != long {
+		t.Errorf("a %d-rune link was not delivered whole", len(long))
+	}
+	fields, _ = flatten(t, `{"title": "Report ready", "link": "`+long+strings.Repeat("q", MaxURLRunes)+`"}`)
+	if ev := Apply(m, fields, ""); ev.URL != "" {
+		t.Errorf("a cut link was delivered: %.40s...", ev.URL)
 	}
 }

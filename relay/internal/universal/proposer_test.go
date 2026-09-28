@@ -162,3 +162,16 @@ func TestFallbackSecondary(t *testing.T) {
 		t.Errorf("By = %q, want the secondary's result", res.By)
 	}
 }
+
+func TestNewInputKeepsShapes(t *testing.T) {
+	fields, _ := flatten(t, `{"title": "Backup finished", "status": "success"}`)
+	shapes := ShapesOf(fields)
+	in := NewInput("backups", fields, shapes, false)
+	if got := in.Shapes(); &got[0] != &shapes[0] {
+		t.Error("NewInput's shapes were computed again")
+	}
+	res, err := (&Fallback{}).Propose(context.Background(), in)
+	if err != nil || !reflect.DeepEqual(res.Proposal, Propose(fields)) {
+		t.Errorf("Propose over NewInput = %+v, %v", res.Proposal, err)
+	}
+}

@@ -26,6 +26,22 @@ func KeyDigest(key string) [32]byte {
 	return sha256.Sum256([]byte(key))
 }
 
+// universalDomain separates UniversalDigest from KeyDigest.
+const universalDomain = "pushward-relay/universal/v1\x00"
+
+// UniversalDigest is the tenant id of the universal route: its mappings table,
+// its review links and the notifications that carry them. It differs from
+// KeyDigest, which is the form pushward-server stores a key in, so none of
+// those places holds a value that can be matched against the server's table.
+func UniversalDigest(key string) [32]byte {
+	h := sha256.New()
+	h.Write([]byte(universalDomain))
+	h.Write([]byte(key))
+	var d [32]byte
+	h.Sum(d[:0])
+	return d
+}
+
 // MapKeyPrefix returns a short hex hash of an API key for use as an
 // in-memory map key prefix. Uses 8 bytes (16 hex chars) of SHA-256
 // for collision resistance across many tenants.

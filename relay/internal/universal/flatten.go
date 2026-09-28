@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -22,6 +23,10 @@ const (
 	MaxPaths      = 256
 	MaxValueRunes = 256
 	MaxPathBytes  = 256
+	// MaxURLRunes is the cap on a string that starts with http:// or
+	// https://, PushWard's own limit on a notification URL. A link cut at
+	// MaxValueRunes would open the wrong page.
+	MaxURLRunes = 2048
 )
 
 // ValueType is the JSON type of a flattened leaf.
@@ -38,11 +43,13 @@ const (
 )
 
 // Field is one leaf of a flattened payload: its normalized path, a sample
-// value capped at MaxValueRunes, and its JSON type.
+// value capped at MaxValueRunes (MaxURLRunes for a link), and its JSON type.
+// Cut is set when the cap shortened the value.
 type Field struct {
 	Path  string    `json:"path"`
 	Value string    `json:"value"`
 	Type  ValueType `json:"type"`
+	Cut   bool      `json:"cut,omitempty"`
 }
 
 var errNotContainer = errors.New("universal: payload is not a JSON object or array")
@@ -223,8 +230,19 @@ func (f *flattener) add(path, value string, typ ValueType) error {
 		return errFull
 	}
 	f.seen[path] = struct{}{}
-	f.fields = append(f.fields, Field{Path: path, Value: capRunes(value, MaxValueRunes), Type: typ})
+	n := MaxValueRunes
+	if typ == TypeString && isLink(value) {
+		n = MaxURLRunes
+	}
+	v := capRunes(value, n)
+	f.fields = append(f.fields, Field{Path: path, Value: v, Type: typ, Cut: len(v) < len(value)})
 	return nil
+}
+
+// isLink reports whether a value starts like an http(s) URL, in any case.
+func isLink(v string) bool {
+	return len(v) >= len("http://") && (strings.EqualFold(v[:len("http://")], "http://") ||
+		len(v) >= len("https://") && strings.EqualFold(v[:len("https://")], "https://"))
 }
 
 func capRunes(s string, n int) string {

@@ -1,0 +1,39 @@
+{
+  "receiver": "pushward",
+  "status": "firing",
+  "alerts": [
+    {
+      "status": "firing",
+      "labels": {
+        "alertname": "DiskAlmostFull",
+        "instance": "nas-01:9100",
+        "mountpoint": "/srv",
+        "severity": "critical"
+      },
+      "annotations": {
+        "summary": "Disk /srv on nas-01 is 93% full",
+        "description": "Only 41 GiB left on /srv, filling at about 6 GiB a day."
+      },
+      "startsAt": "2026-09-27T21:04:10.512Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "https://prometheus.example.com/graph?g0.expr=node_filesystem_avail_bytes",
+      "fingerprint": "4f1c2d9e8a7b6c5d"
+    }
+  ],
+  "groupLabels": {
+    "alertname": "DiskAlmostFull"
+  },
+  "commonLabels": {
+    "alertname": "DiskAlmostFull",
+    "instance": "nas-01:9100",
+    "mountpoint": "/srv",
+    "severity": "critical"
+  },
+  "commonAnnotations": {
+    "summary": "Disk /srv on nas-01 is 93% full"
+  },
+  "externalURL": "https://alertmanager.example.com",
+  "version": "4",
+  "groupKey": "{}:{alertname=\"DiskAlmostFull\"}",
+  "truncatedAlerts": 0
+}

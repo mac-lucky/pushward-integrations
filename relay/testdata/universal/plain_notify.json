@@ -1,0 +1,7 @@
+{
+  "title": "Nightly backup finished",
+  "message": "Backed up 14 volumes to the offsite bucket in 4m12s.",
+  "link": "https://backups.example.com/runs/2026-09-28",
+  "host": "backup-01",
+  "sent_at": "2026-09-28T03:04:12Z"
+}

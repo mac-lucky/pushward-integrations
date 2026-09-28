@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/danielgtaylor/huma/v2"
@@ -18,12 +19,15 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/jellyfin"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/komodo"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overseerr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/paperless"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/proxmox"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/starr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/truenas"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/universal"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/universalhook"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/uptimekuma"
 	"github.com/mac-lucky/pushward-integrations/shared/poster"
@@ -38,8 +42,12 @@ type registered struct {
 
 // registerProviders registers every enabled provider on api. store is wrapped
 // in KeyHashing once, here, so no provider can write a raw hlk_ key to
-// relay_state; the periodic Cleanup keeps using the store main holds.
-func registerProviders(ctx context.Context, api huma.API, store state.Store, clients *client.Pool, cfg *config.Config, posters poster.Source) registered {
+// relay_state; the periodic Cleanup keeps using the store main holds. The
+// universal route gets its own strict wrapper: its rows never existed under a
+// raw key, so it has no twin to read or clean up. mappings may be nil when the
+// universal route is off.
+func registerProviders(ctx context.Context, api huma.API, store state.Store, mappings state.MappingStore, clients *client.Pool, cfg *config.Config, posters poster.Source) (registered, error) {
+	raw := store
 	store = state.KeyHashing(store, state.KeyMode(cfg.State.KeyMode))
 	slog.Info("state key mode", "mode", cfg.State.KeyMode)
 
@@ -148,5 +156,49 @@ func registerProviders(ctx context.Context, api huma.API, store state.Store, cli
 		slog.Info("enabled provider", "provider", "truenas")
 	}
 
-	return r
+	if cfg.Providers.Universal.Enabled {
+		if mappings == nil {
+			return r, errors.New("the universal route needs a mapping store")
+		}
+		// Primary stays nil until a ranker passes its gate; Fallback then
+		// just runs the heuristic.
+		proposer := &universal.Fallback{
+			Secondary: universal.Heuristic{},
+			OnFallback: func(reason string) {
+				metrics.UniversalProposerFallbackTotal.WithLabelValues(reason).Inc()
+			},
+		}
+		uh, err := universalhook.RegisterRoutes(api, state.KeyHashing(raw, state.KeyModeStrict), mappings, clients, &cfg.Providers.Universal, proposer)
+		if err != nil {
+			return r, err
+		}
+		collectEnder(uh)
+		slog.Info("enabled provider", "provider", "universal")
+	}
+
+	return r, nil
+}
+
+// sweepMappings runs the mapping store's sweep and refreshes the mapping
+// gauge.
+func sweepMappings(ctx context.Context, mappings state.MappingStore) {
+	res, err := mappings.Sweep(ctx)
+	if err != nil {
+		slog.Error("universal mapping sweep failed", "error", err)
+	} else {
+		metrics.UniversalSweptTotal.WithLabelValues("pending").Add(float64(res.Pending))
+		metrics.UniversalSweptTotal.WithLabelValues("idle").Add(float64(res.Idle))
+		metrics.UniversalSweptTotal.WithLabelValues("samples").Add(float64(res.Samples))
+		if res.Pending+res.Idle+res.Samples > 0 {
+			slog.Info("universal mapping sweep", "pending", res.Pending, "idle", res.Idle, "samples", res.Samples)
+		}
+	}
+	counts, err := mappings.CountByStatus(ctx)
+	if err != nil {
+		slog.Warn("universal mapping count failed", "error", err)
+		return
+	}
+	for _, s := range []state.MappingStatus{state.MappingPending, state.MappingConfirmed, state.MappingRejected} {
+		metrics.UniversalMappings.WithLabelValues(string(s)).Set(float64(counts[s]))
+	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
@@ -45,6 +47,7 @@ var fixtureRoutes = map[string]string{
 	"radarr":          "/radarr",
 	"sonarr":          "/sonarr",
 	"truenas":         "/truenas/v2/alerts",
+	"universal":       "/universal",
 	"unmanic":         "/unmanic",
 	"uptimekuma":      "/uptimekuma",
 }
@@ -57,7 +60,7 @@ var noFixtures = map[string]bool{"/prowlarr": true}
 // changedetection, unmanic and bazarr are handed no store at all.
 var stateful = []string{
 	"argocd", "backrest", "gatus", "gitea", "grafana", "jellyfin", "komodo",
-	"overseerr", "paperless", "proxmox", "starr", "truenas", "uptimekuma",
+	"overseerr", "paperless", "proxmox", "starr", "truenas", "universal", "uptimekuma",
 }
 
 // loadConfig returns the production defaults, every provider on, with the
@@ -66,9 +69,12 @@ func loadConfig(t *testing.T, keyMode string) *config.Config {
 	t.Helper()
 	t.Setenv("PUSHWARD_DATABASE_DSN", "postgres://relay@localhost/relay")
 	t.Setenv("PUSHWARD_STATE_KEY_MODE", keyMode)
-	for _, name := range []string{"GRAFANA", "ARGOCD", "STARR", "GITEA"} {
+	for _, name := range []string{"GRAFANA", "ARGOCD", "STARR", "GITEA", "UNIVERSAL"} {
 		t.Setenv("PUSHWARD_"+name+"_ENABLED", "true")
 	}
+	t.Setenv("PUSHWARD_UNIVERSAL_PUBLIC_URL", "https://relay.example.com")
+	t.Setenv("PUSHWARD_UNIVERSAL_REVIEW_KEY", base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{1}, 32)))
+	t.Setenv("PUSHWARD_UNIVERSAL_REVIEW_KEY_FILE", "")
 	t.Setenv("PUSHWARD_STARR_MODE", "")
 	cfg, err := config.Load("")
 	if err != nil {
@@ -79,7 +85,8 @@ func loadConfig(t *testing.T, keyMode string) *config.Config {
 
 // TestRegisterProviders_KeyMode posts every fixture to its route through the
 // store registerProviders hands out, then checks the tenant key each row was
-// written under. In hashed mode no row may carry the raw hlk_ key.
+// written under. In hashed mode no row may carry the raw hlk_ key; the
+// universal route hashes in every mode.
 func TestRegisterProviders_KeyMode(t *testing.T) {
 	tests := []struct {
 		mode    string
@@ -93,11 +100,15 @@ func TestRegisterProviders_KeyMode(t *testing.T) {
 			lifecycle.SetRetryDelay(10 * time.Millisecond)
 			srv, _, _ := testutil.MockPushWardServer(t)
 			mem := state.NewMemoryStore()
+			mappings := state.NewMemoryMappingStore()
 			mux, api := humautil.NewTestAPI()
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
 
-			r := registerProviders(ctx, api, mem, client.NewPool(srv.URL, nil), loadConfig(t, tt.mode), poster.Disabled{})
+			r, err := registerProviders(ctx, api, mem, mappings, client.NewPool(srv.URL, nil), loadConfig(t, tt.mode), poster.Disabled{})
+			if err != nil {
+				t.Fatal(err)
+			}
 			t.Cleanup(func() {
 				r.argocd.StopAll()
 				for _, e := range r.enders {
@@ -152,11 +163,15 @@ func TestRegisterProviders_KeyMode(t *testing.T) {
 
 			perProvider := map[string]int{}
 			for _, row := range mem.Rows() {
-				if tt.mode == config.KeyModeHashed && strings.HasPrefix(row.UserKey, "hlk_") {
+				want := tt.wantKey
+				if row.Provider == "universal" {
+					want = state.HashKey(testKey)
+				}
+				if want != testKey && strings.HasPrefix(row.UserKey, "hlk_") {
 					t.Errorf("%s row %s/%s stored the raw key", row.Provider, row.Key, row.SubKey)
 				}
-				if row.UserKey != tt.wantKey {
-					t.Errorf("%s row %s/%s stored under %q, want %q", row.Provider, row.Key, row.SubKey, row.UserKey, tt.wantKey)
+				if row.UserKey != want {
+					t.Errorf("%s row %s/%s stored under %q, want %q", row.Provider, row.Key, row.SubKey, row.UserKey, want)
 				}
 				// The key must not leak into the rest of the row either.
 				if strings.Contains(row.Key, testKey) || strings.Contains(row.SubKey, testKey) || bytes.Contains(row.Value, []byte(testKey)) {
@@ -167,6 +182,20 @@ func TestRegisterProviders_KeyMode(t *testing.T) {
 			for _, p := range stateful {
 				if perProvider[p] == 0 {
 					t.Errorf("no %s rows: the fixtures no longer exercise its store", p)
+				}
+			}
+			rows := mappings.Rows()
+			if len(rows) == 0 {
+				t.Error("no universal mappings: the fixtures no longer exercise the mapping store")
+			}
+			for _, row := range rows {
+				if row.KeyHash != auth.UniversalDigest(testKey) {
+					t.Errorf("mapping stored under key hash %x, want the universal digest of the test key", row.KeyHash[:4])
+				}
+				for _, col := range [][]byte{row.Mapping, row.Shape, row.Proposal, row.Samples, row.Candidates} {
+					if bytes.Contains(col, []byte("hlk_")) {
+						t.Errorf("mapping row carries a raw key: %s", col)
+					}
 				}
 			}
 		})

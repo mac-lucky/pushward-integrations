@@ -17,6 +17,12 @@ type Input struct {
 	shapes []ShapeField
 }
 
+// NewInput returns an Input whose shapes are already known, so no proposer
+// computes them again. shapes must be ShapesOf(fields).
+func NewInput(source string, fields []Field, shapes []ShapeField, truncated bool) Input {
+	return Input{Source: source, Fields: fields, Truncated: truncated, shapes: shapes}
+}
+
 // Shapes returns ShapesOf(in.Fields). Fallback computes them once and hands
 // them to both proposers.
 func (in *Input) Shapes() []ShapeField {

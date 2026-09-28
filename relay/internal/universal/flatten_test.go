@@ -41,15 +41,15 @@ func TestFlattenLeaves(t *testing.T) {
 		t.Error("small payload reported as truncated")
 	}
 	want := []Field{
-		{"status", "firing", TypeString},
-		{"count", "3", TypeNumber},
-		{"ok", "false", TypeBool},
-		{"note", "", TypeNull},
-		{"labels.severity", "critical", TypeString},
-		{"alerts[].name", "a", TypeString},
-		{"alerts[].extra", "1", TypeNumber},
-		{"tags[]", "x", TypeString},
-		{"empty[]", "", TypeEmpty},
+		{Path: "status", Value: "firing", Type: TypeString},
+		{Path: "count", Value: "3", Type: TypeNumber},
+		{Path: "ok", Value: "false", Type: TypeBool},
+		{Path: "note", Value: "", Type: TypeNull},
+		{Path: "labels.severity", Value: "critical", Type: TypeString},
+		{Path: "alerts[].name", Value: "a", Type: TypeString},
+		{Path: "alerts[].extra", Value: "1", Type: TypeNumber},
+		{Path: "tags[]", Value: "x", Type: TypeString},
+		{Path: "empty[]", Value: "", Type: TypeEmpty},
 	}
 	if len(fields) != len(want) {
 		t.Fatalf("got %v, want %v", fields, want)
@@ -125,6 +125,38 @@ func TestFlattenValueCap(t *testing.T) {
 	}
 	if !utf8.ValidString(v) {
 		t.Error("capped value cut a rune in half")
+	}
+	if !fields[0].Cut {
+		t.Error("a capped value must be marked Cut")
+	}
+}
+
+// A link keeps up to MaxURLRunes: cut at MaxValueRunes it would open the
+// wrong page. Only strings that start like one get the longer cap.
+func TestFlattenURLCap(t *testing.T) {
+	link := "https://grafana.example.com/d/abc?" + strings.Repeat("var-host=web&", 60)
+	tooLong := "HTTP://example.com/" + strings.Repeat("p", MaxURLRunes)
+	text := "see https://example.com " + strings.Repeat("x", MaxValueRunes)
+	fields, _ := flatten(t, fmt.Sprintf(`{"link": %q, "huge": %q, "text": %q, "short": "https://example.com"}`, link, tooLong, text))
+	tests := []struct {
+		i     int
+		runes int
+		cut   bool
+	}{
+		{0, utf8.RuneCountInString(link), false},
+		{1, MaxURLRunes, true},
+		{2, MaxValueRunes, true},
+		{3, len("https://example.com"), false},
+	}
+	for _, tt := range tests {
+		f := fields[tt.i]
+		if n := utf8.RuneCountInString(f.Value); n != tt.runes || f.Cut != tt.cut {
+			t.Errorf("%s: %d runes, cut %v; want %d, %v", f.Path, n, f.Cut, tt.runes, tt.cut)
+		}
+	}
+	// The shape of a long link reads like the shape of a capped one.
+	if s := ShapesOf(fields[:1])[0]; s.Runes != MaxValueRunes || !s.Flags.Has(FlagURL) || s.Class != ClassURL {
+		t.Errorf("shape of a long link = %+v", s)
 	}
 }
 

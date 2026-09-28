@@ -85,10 +85,18 @@ func UpstreamError(err error) error {
 // webhookSecurity is the shared security requirement for all webhook endpoints.
 var webhookSecurity = []map[string][]string{{"bearerAuth": {}}}
 
+// MaxWebhookBytes is the body limit of every webhook route.
+const MaxWebhookBytes = 1 << 20
+
+// Hidden keeps an operation out of the OpenAPI document. Pass it to
+// RegisterWebhook for a route that is reached some other way than its path.
+func Hidden(op *huma.Operation) { op.Hidden = true }
+
 // RegisterWebhook registers a POST webhook endpoint with common defaults
-// (1 MB body limit, bearer auth, 200 default status).
-func RegisterWebhook[I, O any](api huma.API, path, operationID, summary, description string, tags []string, handler func(ctx context.Context, input *I) (*O, error)) {
-	huma.Register(api, huma.Operation{
+// (1 MB body limit, bearer auth, 200 default status). opts adjust the
+// operation before it is registered.
+func RegisterWebhook[I, O any](api huma.API, path, operationID, summary, description string, tags []string, handler func(ctx context.Context, input *I) (*O, error), opts ...func(*huma.Operation)) {
+	op := huma.Operation{
 		OperationID:   operationID,
 		Method:        http.MethodPost,
 		Path:          path,
@@ -96,8 +104,40 @@ func RegisterWebhook[I, O any](api huma.API, path, operationID, summary, descrip
 		Description:   description,
 		Tags:          tags,
 		Security:      webhookSecurity,
-		MaxBodyBytes:  1 << 20,
+		MaxBodyBytes:  MaxWebhookBytes,
 		DefaultStatus: http.StatusOK,
+	}
+	for _, o := range opts {
+		o(&op)
+	}
+	huma.Register(api, op, handler)
+}
+
+// Operation metadata AuthMiddleware reads. An operation whose "auth" is "none"
+// runs without an integration key.
+const (
+	metaAuth = "auth"
+	authNone = "none"
+)
+
+// maxPublicBodyBytes is the body limit of a public route. Its credential is
+// in the path, and nothing it does needs a body.
+const maxPublicBodyBytes = 1024
+
+// RegisterPublic registers a POST endpoint that takes no integration key,
+// because its path carries a signed capability of its own (a review link
+// tapped on a notification). It is hidden from the OpenAPI document and
+// accepts at most 1 KiB of body.
+func RegisterPublic[I, O any](api huma.API, path, operationID, summary string, handler func(ctx context.Context, input *I) (*O, error)) {
+	huma.Register(api, huma.Operation{
+		OperationID:   operationID,
+		Method:        http.MethodPost,
+		Path:          path,
+		Summary:       summary,
+		Hidden:        true,
+		MaxBodyBytes:  maxPublicBodyBytes,
+		DefaultStatus: http.StatusOK,
+		Metadata:      map[string]any{metaAuth: authNone},
 	}, handler)
 }
 

@@ -14,9 +14,14 @@ import (
 
 // AuthMiddleware returns a Huma middleware that extracts the hlk_ integration
 // key from the Authorization header and stores it in context.
-// Returns 401 if no valid key is found.
+// Returns 401 if no valid key is found. Operations registered with
+// RegisterPublic are the one exception: they pass through with no key.
 func AuthMiddleware(api huma.API) func(huma.Context, func(huma.Context)) {
 	return func(ctx huma.Context, next func(huma.Context)) {
+		if op := ctx.Operation(); op != nil && op.Metadata[metaAuth] == authNone {
+			next(ctx)
+			return
+		}
 		key := auth.ExtractKey(ctx.Header("Authorization"))
 		if key == "" {
 			// RFC 9110 section 15.5.2 makes a challenge mandatory on a 401.

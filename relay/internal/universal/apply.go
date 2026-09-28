@@ -41,8 +41,8 @@ type Event struct {
 // default; an unknown lifecycle value never ends anything. A sample that
 // classifies as a secret is treated as missing, except that a value-only
 // secret still serves as the correlation id, which is hashed and never shown.
-// A ratio progress between 1 and 100 is read as a percentage. Title is never
-// empty.
+// A ratio progress between 1 and 100 is read as a percentage, and a link that
+// Flatten cut is dropped. Title is never empty.
 func Apply(m Mapping, fields []Field, source string) Event {
 	byPath := make(map[string]*Field, len(m.Paths))
 	for _, p := range m.Paths {
@@ -61,11 +61,16 @@ func Apply(m Mapping, fields []Field, source string) Event {
 		return strings.TrimSpace(f.Value)
 	}
 
+	link := get(RoleURL)
+	// A link Flatten had to cut opens the wrong page, or none.
+	if f := byPath[m.Paths[RoleURL]]; f != nil && f.Cut {
+		link = ""
+	}
 	ev := Event{
 		Kind:           m.Kind,
 		Title:          get(RoleTitle),
 		Body:           get(RoleBody),
-		URL:            text.SanitizeURL(get(RoleURL)),
+		URL:            text.SanitizeURL(link),
 		CorrelationKey: correlationKey(get(RoleCorrelation)),
 		LifecycleRaw:   get(RoleLifecycle),
 	}
