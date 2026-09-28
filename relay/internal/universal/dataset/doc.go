@@ -9,5 +9,6 @@
 // handler and records the PushWard calls it makes; the second runs the
 // heuristic over a JSONL of payloads, or of stored shapes, and writes each
 // field's shape and path tokens with the proposal and the top candidates
-// (UNIVERSAL_TOPK per role, 8 by default).
+// (UNIVERSAL_TOPK per role, 8 by default). UNIVERSAL_FEATURES=1 adds the
+// ranker's options and features, which is what the classifier trains on.
 package dataset

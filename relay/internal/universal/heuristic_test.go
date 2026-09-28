@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"regexp"
 	"slices"
 	"testing"
 )
@@ -218,4 +219,68 @@ func sameTable(got, golden map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// ProposeRanked is ProposeShapes plus the rankings it chose from, and
+// SetTables rebuilds exactly the tables ProposeShapes made.
+func TestProposeRanked(t *testing.T) {
+	for name, fields := range relayFixtures(t) {
+		shapes := ShapesOf(fields)
+		p, ranked := ProposeRanked(shapes)
+		if want := ProposeShapes(shapes); !reflect.DeepEqual(p, want) {
+			t.Errorf("%s: ProposeRanked = %+v, ProposeShapes = %+v", name, p, want)
+		}
+		for i, r := range Roles {
+			if want := RankShapes(shapes, r); !reflect.DeepEqual(ranked[i], want) {
+				t.Errorf("%s: ranked %s differs from RankShapes", name, r)
+			}
+		}
+		q := p
+		q.SeverityValues, q.LifecycleValues = map[string]string{"x": "y"}, nil
+		q.SetTables(shapes)
+		if !reflect.DeepEqual(q, p) {
+			t.Errorf("%s: SetTables = %+v, want %+v", name, q, p)
+		}
+	}
+	var p Proposal
+	p.SetPath(RoleSeverity, "missing")
+	p.SeverityValues = map[string]string{"critical": SeverityCritical}
+	p.SetTables(nil)
+	if p.Severity != "missing" || p.SeverityValues != nil {
+		t.Errorf("SetTables on a path not in the shapes = %+v", p)
+	}
+	for _, r := range Roles {
+		if Reusable(r) != (r == RoleCorrelation || r == RoleURL) || MinScore(r) != minScore[r] {
+			t.Errorf("%s: Reusable %v, MinScore %v", r, Reusable(r), MinScore(r))
+		}
+	}
+	if got := Segments("alerts[].labels.*.name"); !reflect.DeepEqual(got, []string{"alerts", "labels", "name"}) {
+		t.Errorf("Segments = %q", got)
+	}
+}
+
+// splitCamel is the regexp it replaced.
+func TestSplitCamel(t *testing.T) {
+	re := regexp.MustCompile(`([a-z0-9])([A-Z])`)
+	for _, key := range []string{
+		"", "a", "A", "htmlUrl", "htmlURL", "HTMLUrl", "aBC", "aBcD", "a1B2C", "x9Y", "ruleName", "eventType",
+		"already_snake", "Stra\u00dfe", "stra\u00dfeName", "\u00c4bcDef", "\u65e5\u672cId", "a\u00c4B", "k8sPod",
+		"ID", "iD", "a_B",
+	} {
+		if got, want := splitCamel(key), re.ReplaceAllString(key, "${1}_${2}"); got != want {
+			t.Errorf("splitCamel(%q) = %q, want %q", key, got, want)
+		}
+	}
+}
+
+func FuzzSplitCamel(f *testing.F) {
+	re := regexp.MustCompile(`([a-z0-9])([A-Z])`)
+	for _, s := range []string{"htmlUrl", "aBC", "a1B2C", "stra\u00dfeName"} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, key string) {
+		if got, want := splitCamel(key), re.ReplaceAllString(key, "${1}_${2}"); got != want {
+			t.Errorf("splitCamel(%q) = %q, want %q", key, got, want)
+		}
+	})
 }

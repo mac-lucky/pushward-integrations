@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/universal"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/universal/ranker"
 )
 
 // topK is how many ranked candidates per role go out with each proposal, 8
@@ -47,6 +48,13 @@ type proposeOut struct {
 	Proposal    universal.Proposal                       `json:"proposal"`
 	Candidates  map[universal.Role][]universal.Candidate `json:"candidates"`
 	Micros      float64                                  `json:"micros"`
+
+	// With UNIVERSAL_FEATURES=1: the ranker's options per role (its top
+	// ranker.TopK candidates plus none, each with its features), the kind
+	// model's features, and the heuristic's minimum score per role.
+	Options      map[universal.Role][]ranker.Option `json:"options,omitempty"`
+	KindFeatures ranker.Features                    `json:"kind_features,omitempty"`
+	MinScore     map[universal.Role]float64         `json:"min_score,omitempty"`
 }
 
 // fieldOut is a flattened field plus what the heuristic sees of it. Value is
@@ -66,6 +74,7 @@ func TestProposeJSONL(t *testing.T) {
 		t.Skip("UNIVERSAL_PROPOSE_IN / UNIVERSAL_PROPOSE_OUT not set")
 	}
 	k := topK(t)
+	feats := os.Getenv("UNIVERSAL_FEATURES") == "1"
 	src, err := os.Open(in) // #nosec G304 G703 -- path chosen by whoever runs the export
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +97,7 @@ func TestProposeJSONL(t *testing.T) {
 		if err := json.Unmarshal(sc.Bytes(), &rec); err != nil {
 			t.Fatalf("line %d: %v", n+1, err)
 		}
-		if err := enc.Encode(propose(rec, k)); err != nil {
+		if err := enc.Encode(propose(rec, k, feats)); err != nil {
 			t.Fatal(err)
 		}
 		n++
@@ -102,7 +111,7 @@ func TestProposeJSONL(t *testing.T) {
 	t.Logf("proposed %d payloads to %s", n, out)
 }
 
-func propose(rec proposeIn, k int) proposeOut {
+func propose(rec proposeIn, k int, feats bool) proposeOut {
 	res := proposeOut{ID: rec.ID, Candidates: map[universal.Role][]universal.Candidate{}}
 	start := time.Now()
 	var (
@@ -136,6 +145,16 @@ func propose(rec proposeIn, k int) proposeOut {
 	for _, r := range universal.Roles {
 		c := universal.RankShapes(shapes, r)
 		res.Candidates[r] = c[:min(len(c), k)]
+	}
+	if feats {
+		ex := ranker.Extract(shapes)
+		res.Options = make(map[universal.Role][]ranker.Option, len(universal.Roles))
+		res.MinScore = make(map[universal.Role]float64, len(universal.Roles))
+		for i, r := range universal.Roles {
+			res.Options[r] = ex.Options[i]
+			res.MinScore[r] = universal.MinScore(r)
+		}
+		res.KindFeatures = ex.Kind
 	}
 	return res
 }

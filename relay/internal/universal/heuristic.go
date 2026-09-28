@@ -86,6 +86,11 @@ func (p *Proposal) Path(r Role) string {
 	return ""
 }
 
+// SetPath sets the proposed path for a role; "" is none.
+func (p *Proposal) SetPath(r Role, path string) {
+	p.set(r, path)
+}
+
 func (p *Proposal) set(r Role, path string) {
 	switch r {
 	case RoleTitle:
@@ -134,17 +139,26 @@ func Propose(fields []Field) Proposal {
 // proposal its payload did. The value tables are keyed by vocabulary words
 // (normValue form), never by sample text.
 func ProposeShapes(shapes []ShapeField) Proposal {
+	p, _ := ProposeRanked(shapes)
+	return p
+}
+
+// ProposeRanked is ProposeShapes that also returns the candidates it chose
+// from: RankShapes for every role, in Roles order.
+func ProposeRanked(shapes []ShapeField) (Proposal, [][]Candidate) {
 	views := viewsOf(shapes)
 	var p Proposal
+	ranked := make([][]Candidate, len(Roles))
 	used := map[string]bool{}
-	for _, r := range Roles {
-		for _, c := range rank(views, r) {
+	for i, r := range Roles {
+		ranked[i] = rank(views, r)
+		for _, c := range ranked[i] {
 			if c.Score < minScore[r] {
 				break
 			}
 			// Title and body are both text; one field cannot be both, and
 			// neither can double as the lifecycle or severity enum.
-			if used[c.Path] && r != RoleCorrelation && r != RoleURL {
+			if used[c.Path] && !Reusable(r) {
 				continue
 			}
 			p.set(r, c.Path)
@@ -152,10 +166,33 @@ func ProposeShapes(shapes []ShapeField) Proposal {
 			break
 		}
 	}
-	byPath := make(map[string]*ShapeField, len(shapes))
-	for i := range shapes {
-		byPath[shapes[i].Path] = &shapes[i]
-	}
+	byPath := shapesByPath(shapes)
+	p.setTables(byPath)
+	p.Kind = kindOf(views, &p, byPath)
+	return p, ranked
+}
+
+// MinScore is the score a role's best candidate needs before Propose uses it.
+func MinScore(r Role) float64 {
+	return minScore[r]
+}
+
+// Reusable reports whether a role may take a path another role already has.
+// Only correlation and url may: a title can double as the correlation id,
+// never as the body.
+func Reusable(r Role) bool {
+	return r == RoleCorrelation || r == RoleURL
+}
+
+// SetTables rebuilds the severity and lifecycle value tables for the fields p
+// maps, the way ProposeShapes builds them. A proposer that picks its own
+// severity or lifecycle field calls it so the tables describe that field.
+func (p *Proposal) SetTables(shapes []ShapeField) {
+	p.setTables(shapesByPath(shapes))
+}
+
+func (p *Proposal) setTables(byPath map[string]*ShapeField) {
+	p.SeverityValues, p.LifecycleValues = nil, nil
 	if f := byPath[p.Severity]; f != nil && p.Severity != "" {
 		if v := severityValues[f.Vocab]; v != "" {
 			p.SeverityValues = map[string]string{f.Vocab: v}
@@ -166,8 +203,14 @@ func ProposeShapes(shapes []ShapeField) Proposal {
 			p.LifecycleValues = map[string]string{w: v}
 		}
 	}
-	p.Kind = kindOf(views, &p, byPath)
-	return p
+}
+
+func shapesByPath(shapes []ShapeField) map[string]*ShapeField {
+	byPath := make(map[string]*ShapeField, len(shapes))
+	for i := range shapes {
+		byPath[shapes[i].Path] = &shapes[i]
+	}
+	return byPath
 }
 
 // Rank scores every field for a role, best first. Fields that cannot play the
@@ -350,26 +393,58 @@ var (
 )
 
 var (
-	camelBoundary = regexp.MustCompile(`([a-z0-9])([A-Z])`)
-	uuidValue     = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	hexValue      = regexp.MustCompile(`^[0-9a-fA-F]{8,}$`)
-	intValue      = regexp.MustCompile(`^-?[0-9]+$`)
-	timeValue     = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9]{2}:[0-9]{2}.*)?$`)
-	enumValue     = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.:/-]{0,39}$`)
-	idToken       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]{2,127}$`)
+	uuidValue = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	hexValue  = regexp.MustCompile(`^[0-9a-fA-F]{8,}$`)
+	intValue  = regexp.MustCompile(`^-?[0-9]+$`)
+	timeValue = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9]{2}:[0-9]{2}.*)?$`)
+	enumValue = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.:/-]{0,39}$`)
+	idToken   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.:/-]{2,127}$`)
 )
 
 // tokens splits a key into lowercase words: "html_url" and "htmlUrl" both
 // give [html url].
 func tokens(key string) []string {
 	key = strings.TrimSuffix(key, "[]")
-	key = camelBoundary.ReplaceAllString(key, "${1}_${2}")
+	key = splitCamel(key)
 	return strings.FieldsFunc(strings.ToLower(key), func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
 	})
 }
 
-// segments splits a path into its keys, dropping array markers and "*".
+// splitCamel puts "_" between an ASCII lower case letter or digit and the
+// ASCII upper case letter after it: "htmlURL2Go" gives "html_URL2_Go". It
+// is the regexp ([a-z0-9])([A-Z]) -> ${1}_${2}, without the regexp.
+func splitCamel(key string) string {
+	n := 0
+	for i := 1; i < len(key); i++ {
+		if isUpperASCII(key[i]) && isLowerOrDigitASCII(key[i-1]) {
+			n++
+		}
+	}
+	if n == 0 {
+		return key
+	}
+	b := make([]byte, 0, len(key)+n)
+	for i := 0; i < len(key); i++ {
+		if i > 0 && isUpperASCII(key[i]) && isLowerOrDigitASCII(key[i-1]) {
+			b = append(b, '_')
+		}
+		b = append(b, key[i])
+	}
+	return string(b)
+}
+
+func isUpperASCII(c byte) bool { return 'A' <= c && c <= 'Z' }
+
+func isLowerOrDigitASCII(c byte) bool { return 'a' <= c && c <= 'z' || '0' <= c && c <= '9' }
+
+// Segments splits a path into its keys the way the heuristic reads it,
+// dropping array markers and "*": "alerts[].labels.*.name" gives [alerts
+// labels name].
+func Segments(path string) []string {
+	return segments(path)
+}
+
 func segments(path string) []string {
 	parts := strings.Split(path, ".")
 	out := parts[:0]
