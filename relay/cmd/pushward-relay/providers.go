@@ -27,6 +27,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/truenas"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/universal"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/universal/ranker"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/universalhook"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/uptimekuma"
@@ -162,13 +163,17 @@ func registerProviders(ctx context.Context, api huma.API, store state.Store, map
 		if mappings == nil {
 			return r, errors.New("the universal route needs a mapping store")
 		}
-		// Primary stays nil until a ranker passes its gate; Fallback then
-		// just runs the heuristic.
 		proposer := &universal.Fallback{
 			Secondary: universal.Heuristic{},
 			OnFallback: func(reason string) {
 				metrics.UniversalProposerFallbackTotal.WithLabelValues(reason).Inc()
 			},
+		}
+		// The ranker leads only when it is asked for and its embedded weights
+		// passed their gate; otherwise Primary stays nil and Fallback runs the
+		// heuristic alone.
+		if cfg.Providers.Universal.Ranker {
+			proposer.Primary = universalRanker()
 		}
 		uh, err := universalhook.RegisterRoutes(api, state.KeyHashing(raw, state.KeyModeStrict), mappings, clients, &cfg.Providers.Universal, proposer)
 		if err != nil {
@@ -204,4 +209,22 @@ func sweepMappings(ctx context.Context, mappings state.MappingStore) {
 	for _, s := range []state.MappingStatus{state.MappingPending, state.MappingConfirmed, state.MappingRejected} {
 		metrics.UniversalMappings.WithLabelValues(string(s)).Set(float64(counts[s]))
 	}
+}
+
+// universalRanker returns the ranker the embedded weights describe, or nil
+// when they did not pass their gate or do not fit this build, and says which
+// at startup.
+func universalRanker() universal.Proposer {
+	id, pass, err := ranker.Info()
+	p, ok := ranker.New()
+	switch {
+	case ok:
+		slog.Info("universal ranker enabled", "weights", id)
+		return p
+	case err != nil:
+		slog.Warn("universal ranker weights do not load, using the heuristic", "error", err)
+	default:
+		slog.Info("universal ranker weights did not pass their gate, using the heuristic", "weights", id, "pass", pass)
+	}
+	return nil
 }

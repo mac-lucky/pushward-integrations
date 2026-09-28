@@ -154,6 +154,20 @@ All 16 provider blocks default to `enabled: true`. Env toggles exist **only** fo
 | `PUSHWARD_ARGOCD_URL` | `providers.argocd.url` | ArgoCD UI base URL used to build deep links in activities. | _(empty)_ |
 | `PUSHWARD_ARGOCD_SYNC_GRACE_PERIOD` | `providers.argocd.sync_grace_period` | Defers activity creation for fast syncs that complete within this window. `PUSHWARD_SYNC_GRACE_PERIOD` is a legacy fallback. | `10s` |
 
+### Universal webhook
+
+The universal route is the only provider that starts disabled: it needs a public URL and a key to sign its review and edit links.
+
+| Env Variable | Config Key | Description | Default |
+|---|---|---|---|
+| `PUSHWARD_UNIVERSAL_ENABLED` | `providers.universal.enabled` | Turn on the universal route and the mapping editor. | `false` |
+| `PUSHWARD_UNIVERSAL_PUBLIC_URL` | `providers.universal.public_url` | Base URL the relay is reached at, without a trailing slash, e.g. `https://relay.example.com`. Review and edit links are built on it. Up to 128 bytes. | _(required when enabled)_ |
+| `PUSHWARD_UNIVERSAL_REVIEW_KEY` | `providers.universal.review_key` | Base64 key, at least 32 bytes decoded, that signs review, edit and list links (`openssl rand -base64 32`). Changing it voids every link already sent. | _(required when enabled)_ |
+| `PUSHWARD_UNIVERSAL_REVIEW_KEY_FILE` | `providers.universal.review_key_file` | Read the key from a file instead. Set this or the key, not both. | _(empty)_ |
+| `PUSHWARD_UNIVERSAL_RANKER` | `providers.universal.ranker` | Let the built-in ranker propose mappings ahead of the heuristic. It only takes over when the weights shipped with the build passed their evaluation gate; otherwise the relay logs that at startup and keeps the heuristic. | `false` |
+
+The key is read once at startup. With several replicas, restart them all after changing it.
+
 ### Per-provider tuning (YAML only)
 
 Each provider block accepts these keys (defaults vary per provider - see [`config.example.yml`](./config.example.yml)):

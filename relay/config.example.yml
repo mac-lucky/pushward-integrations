@@ -226,3 +226,9 @@ providers:
     # Configure in TrueNAS: System > Alert Services > Add > Type OpsGenie
     # API Key: your hlk_ key   API URL: https://relay.example.com/truenas   (no trailing slash)
     # Pick the Level to forward, then Send Test Alert.
+
+  universal:                               # off by default; see "Universal webhook" in the README
+    enabled: false
+    # public_url: https://relay.example.com  # no trailing slash; review and edit links use it
+    # review_key_file: /run/secrets/universal-review-key  # or review_key: <base64, 32+ bytes>
+    # ranker: false                          # the ranker also needs weights that passed their gate

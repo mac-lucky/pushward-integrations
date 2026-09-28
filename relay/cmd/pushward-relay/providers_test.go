@@ -19,6 +19,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/universal/ranker"
 	"github.com/mac-lucky/pushward-integrations/shared/poster"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
@@ -220,5 +221,14 @@ func TestConfigKeyModesAreStateModes(t *testing.T) {
 			}()
 			state.KeyHashing(state.NewMemoryStore(), state.KeyMode(m))
 		}()
+	}
+}
+
+// The ranker leads only when its embedded weights passed their gate.
+func TestUniversalRankerFollowsItsGate(t *testing.T) {
+	_, pass, err := ranker.Info()
+	want := err == nil && pass
+	if got := universalRanker() != nil; got != want {
+		t.Errorf("universalRanker() enabled = %v, want %v (pass %v, err %v)", got, want, pass, err)
 	}
 }
