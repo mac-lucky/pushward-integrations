@@ -1,7 +1,10 @@
 package universal
 
 import (
+	"encoding/json"
+	"os"
 	"reflect"
+	"slices"
 	"testing"
 )
 
@@ -111,4 +114,106 @@ func TestTokens(t *testing.T) {
 			t.Errorf("tokens(%q) = %v, want %v", in, got, want)
 		}
 	}
+}
+
+func TestValueTail(t *testing.T) {
+	cases := map[string]string{
+		"alert.resolved":         "resolved",
+		"sync-failed":            "failed",
+		"CONDITION_SNAPSHOT_END": "end",
+		"media.play":             "play",
+		"resolved":               "",
+		"Backup complete":        "complete",
+		"Not Resolved":           "",
+		"not-ready":              "",
+		"No Error":               "",
+		"issue.no_error":         "",
+		"non-critical":           "",
+		"un-acknowledged":        "",
+	}
+	for in, want := range cases {
+		if got := valueTail(in); got != want {
+			t.Errorf("valueTail(%q) = %q, want %q", in, got, want)
+		}
+	}
+	for in, want := range map[string]string{"Not Resolved": "", "not-ready": "", "No Error": "", "alert.resolved": LifecycleEnded} {
+		if got := lifecycleOf(in); got != want {
+			t.Errorf("lifecycleOf(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestHeuristicGolden compares the heuristic, fixture by fixture, with what it
+// proposed and ranked before it moved onto shapes (testdata/
+// heuristic_golden.json, made from commit 0ce0d87). Two changes are allowed:
+// value-table keys are normalized (normValue of the old key, or its last
+// word), and Rank leaves out fields a role cannot take, so each old top 8,
+// less those fields, has to be a prefix of today's list.
+func TestHeuristicGolden(t *testing.T) {
+	b, err := os.ReadFile("testdata/heuristic_golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var golden map[string]struct {
+		Proposal   Proposal             `json:"proposal"`
+		Candidates map[Role][]Candidate `json:"candidates"`
+	}
+	if err := json.Unmarshal(b, &golden); err != nil {
+		t.Fatal(err)
+	}
+	fixtures := relayFixtures(t)
+	if len(golden) != len(fixtures) {
+		t.Errorf("golden has %d fixtures, relay/testdata %d", len(golden), len(fixtures))
+	}
+	for name, fields := range fixtures {
+		g, ok := golden[name]
+		if !ok {
+			t.Errorf("%s: not in the golden file", name)
+			continue
+		}
+		got := Propose(fields)
+		if !sameTable(got.SeverityValues, g.Proposal.SeverityValues) || !sameTable(got.LifecycleValues, g.Proposal.LifecycleValues) {
+			t.Errorf("%s: tables %v %v, golden %v %v", name, got.SeverityValues, got.LifecycleValues,
+				g.Proposal.SeverityValues, g.Proposal.LifecycleValues)
+		}
+		got.SeverityValues, got.LifecycleValues = nil, nil
+		want := g.Proposal
+		want.SeverityValues, want.LifecycleValues = nil, nil
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: Propose =\n%+v\ngolden\n%+v", name, got, want)
+		}
+
+		shapes := ShapesOf(fields)
+		byPath := make(map[string]*ShapeField, len(shapes))
+		for i := range shapes {
+			byPath[shapes[i].Path] = &shapes[i]
+		}
+		for _, r := range Roles {
+			old := g.Candidates[r]
+			var kept []Candidate
+			for _, c := range old {
+				if f := byPath[c.Path]; f != nil && rankable(r, f) {
+					kept = append(kept, c)
+				}
+			}
+			cur := Rank(fields, r)
+			prefix := len(cur) >= len(kept) && slices.Equal(cur[:len(kept)], kept)
+			// A golden list shorter than 8 was the whole list.
+			if !prefix || len(old) < 8 && len(cur) != len(kept) {
+				t.Errorf("%s: Rank(%s) =\n%v\ngolden, less what %s cannot take:\n%v", name, r, cur[:min(len(cur), 8)], r, kept)
+			}
+		}
+	}
+}
+
+func sameTable(got, golden map[string]string) bool {
+	if len(got) != len(golden) {
+		return false
+	}
+	for raw, state := range golden {
+		if got[normValue(raw)] != state && (valueTail(raw) == "" || got[valueTail(raw)] != state) {
+			return false
+		}
+	}
+	return true
 }

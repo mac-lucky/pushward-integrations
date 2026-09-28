@@ -141,6 +141,19 @@ func TestNormalizeKey(t *testing.T) {
 		"v2":                                   "v2",
 		"abc123":                               "abc123",
 		"html_url":                             "html_url",
+		"anna@example.com":                     "*",
+		"+48 123 456 789":                      "*",
+		"eyJhbGciOiJIUzI1NiJ9":                 "*",
+		"hlk_3f2b8c1e9d4a":                     "*",
+		testRandom:                             "*",
+		"custom.cf_" + testRandom:              "*",
+		// Long, but words: entropy alone would have collapsed these.
+		"is_auto_renew_enabled_on_trial_end": "is_auto_renew_enabled_on_trial_end",
+		"long_description_link_url_3":        "long_description_link_url_3",
+		"shippingAddressStreet2":             "shippingAddressStreet2",
+		"payload[order][customer][id]":       "payload[order][customer][id]",
+		"X-Amz-Content-SHA256":               "X-Amz-Content-SHA256",
+		"+48":                                "+48",
 	}
 	for in, want := range cases {
 		if got := NormalizeKey(in); got != want {
@@ -156,5 +169,31 @@ func TestFlattenIDKeyedMap(t *testing.T) {
 	}}`)
 	if got := strings.Join(paths(fields), ","); got != "checks.*.status" {
 		t.Errorf("paths = %s, want only the first id-keyed member walked", got)
+	}
+}
+
+func TestFlattenPathBytesCap(t *testing.T) {
+	fit := strings.Repeat("k", MaxPathBytes)
+	fields, truncated := flatten(t, `{"`+fit+`": 1}`)
+	if truncated || len(fields) != 1 {
+		t.Errorf("a %d-byte path was dropped: %v truncated=%v", MaxPathBytes, paths(fields), truncated)
+	}
+
+	over := strings.Repeat("k", MaxPathBytes-1)
+	fields, truncated = flatten(t, `{
+		"a": {"`+over+`": {"deep": 1}, "b": [1]},
+		"c": {"`+over[:MaxPathBytes-3]+`": [1]},
+		"ok": 2
+	}`)
+	if !truncated {
+		t.Error("truncated = false after dropping a long path")
+	}
+	if got := strings.Join(paths(fields), ","); got != "a.b[],ok" {
+		t.Errorf("paths = %s, want the long subtrees gone and their siblings kept", got)
+	}
+	for _, f := range fields {
+		if len(f.Path) > MaxPathBytes {
+			t.Errorf("path of %d bytes", len(f.Path))
+		}
 	}
 }

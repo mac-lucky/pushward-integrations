@@ -21,6 +21,7 @@ const (
 	MaxDepth      = 8
 	MaxPaths      = 256
 	MaxValueRunes = 256
+	MaxPathBytes  = 256
 )
 
 // ValueType is the JSON type of a flattened leaf.
@@ -50,8 +51,9 @@ var errNotContainer = errors.New("universal: payload is not a JSON object or arr
 // contribute only their first element, under "key[]"; keys that look like
 // generated ids (uuids, long hex, numbers, dates) become "*", and only the
 // first such sibling is walked, so a map keyed by ids flattens like an array.
-// Subtrees deeper than MaxDepth are skipped. Once MaxPaths leaves are
-// collected the walk stops and truncated is true.
+// Subtrees deeper than MaxDepth are skipped. A member whose path would pass
+// MaxPathBytes is skipped with its subtree and sets truncated; once MaxPaths
+// leaves are collected the walk stops and truncated is true as well.
 func Flatten(r io.Reader) (fields []Field, truncated bool, err error) {
 	dec := json.NewDecoder(r)
 	dec.UseNumber()
@@ -74,7 +76,7 @@ func Flatten(r io.Reader) (fields []Field, truncated bool, err error) {
 	if err != nil {
 		return nil, false, fmt.Errorf("universal: decode payload: %w", err)
 	}
-	return f.fields, false, nil
+	return f.fields, f.truncated, nil
 }
 
 // errFull stops the walk once MaxPaths leaves are collected. The rest of the
@@ -82,9 +84,10 @@ func Flatten(r io.Reader) (fields []Field, truncated bool, err error) {
 var errFull = errors.New("path cap reached")
 
 type flattener struct {
-	dec    *json.Decoder
-	fields []Field
-	seen   map[string]struct{}
+	dec       *json.Decoder
+	fields    []Field
+	seen      map[string]struct{}
+	truncated bool
 }
 
 // value reads the next value, whose path is already known.
@@ -128,6 +131,14 @@ func (f *flattener) object(path string, depth int) error {
 			skip = skip || walkedStar
 			walkedStar = true
 		}
+		// Measured before the concatenation, so a huge key is never copied.
+		n := len(norm)
+		if path != "" {
+			n += len(path) + 1
+		}
+		if !skip && n > MaxPathBytes {
+			skip, f.truncated = true, true
+		}
 		if skip {
 			if err := f.skip(); err != nil {
 				return err
@@ -150,9 +161,13 @@ func (f *flattener) object(path string, depth int) error {
 // the rest. An empty array is recorded as a leaf.
 func (f *flattener) array(path string, depth int) error {
 	elem := path + "[]"
+	walk := depth <= MaxDepth
+	if walk && len(elem) > MaxPathBytes {
+		walk, f.truncated = false, true
+	}
 	first := true
 	for f.dec.More() {
-		if first && depth <= MaxDepth {
+		if first && walk {
 			if err := f.value(elem, depth); err != nil {
 				return err
 			}
@@ -161,7 +176,7 @@ func (f *flattener) array(path string, depth int) error {
 		}
 		first = false
 	}
-	if first && depth <= MaxDepth {
+	if first && walk {
 		if err := f.add(elem, "", TypeEmpty); err != nil {
 			return err
 		}
@@ -219,16 +234,19 @@ func capRunes(s string, n int) string {
 }
 
 var (
-	uuidKey = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	numKey  = regexp.MustCompile(`^-?[0-9]+(\.[0-9]+)?$`)
-	hexKey  = regexp.MustCompile(`^[0-9a-fA-F]{8,}$`)
-	dateKey = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9:.]+(Z|[+-][0-9]{2}:?[0-9]{2})?)?$`)
-	digit   = regexp.MustCompile(`[0-9]`)
+	uuidKey  = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	numKey   = regexp.MustCompile(`^-?[0-9]+(\.[0-9]+)?$`)
+	hexKey   = regexp.MustCompile(`^[0-9a-fA-F]{8,}$`)
+	dateKey  = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9:.]+(Z|[+-][0-9]{2}:?[0-9]{2})?)?$`)
+	phoneKey = regexp.MustCompile(`^\+[0-9](?:[ ().-]{0,2}[0-9]){7,}$`)
+	digit    = regexp.MustCompile(`[0-9]`)
 )
 
-// NormalizeKey returns "*" for keys that are generated identifiers rather
-// than schema: uuids, pure numbers, dates, and hex strings of 8 or more
-// characters that contain a digit (so a plain word like "deadbeef" survives).
+// NormalizeKey returns "*" for keys that are generated identifiers or
+// personal data rather than schema: uuids, pure numbers, dates, hex strings of
+// 8 or more characters that contain a digit (so a plain word like "deadbeef"
+// survives), email addresses, phone numbers, JWTs and API keys, and keys
+// holding a generated token ("custom.cf_<random>", see randomKey).
 func NormalizeKey(key string) string {
 	if !utf8.ValidString(key) {
 		return "*"
@@ -238,6 +256,24 @@ func NormalizeKey(key string) string {
 		return "*"
 	case hexKey.MatchString(key) && digit.MatchString(key):
 		return "*"
+	case emailValue.MatchString(key), phoneKey.MatchString(key), credentialWord.MatchString(key), randomKey(key):
+		return "*"
 	}
 	return key
+}
+
+// randomKey reports whether a piece of key between separators, dashes and
+// underscores included, is a generated token of its own: a header name like
+// "X-Amz-Content-SHA256" is words, however random it looks as a whole.
+func randomKey(key string) bool {
+	return len(key) >= 20 && anyRun(key, pieceByte, randomToken)
+}
+
+func pieceByte(c byte) bool {
+	return c != '_' && c != '-' && tokenByte(c)
+}
+
+func tokenByte(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' ||
+		c == '+' || c == '/' || c == '=' || c == '_' || c == '-'
 }

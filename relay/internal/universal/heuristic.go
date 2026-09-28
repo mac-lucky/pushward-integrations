@@ -5,7 +5,6 @@ import (
 	"math"
 	"regexp"
 	"slices"
-	"strconv"
 	"strings"
 	"unicode"
 )
@@ -128,10 +127,18 @@ var minScore = map[Role]float64{
 // Propose picks a field for every role and a kind. It is deterministic and
 // cheap enough to run on every unmapped event.
 func Propose(fields []Field) Proposal {
+	return ProposeShapes(ShapesOf(fields))
+}
+
+// ProposeShapes is Propose over shapes, so a stored shape gets the same
+// proposal its payload did. The value tables are keyed by vocabulary words
+// (normValue form), never by sample text.
+func ProposeShapes(shapes []ShapeField) Proposal {
+	views := viewsOf(shapes)
 	var p Proposal
 	used := map[string]bool{}
 	for _, r := range Roles {
-		for _, c := range Rank(fields, r) {
+		for _, c := range rank(views, r) {
 			if c.Score < minScore[r] {
 				break
 			}
@@ -145,35 +152,44 @@ func Propose(fields []Field) Proposal {
 			break
 		}
 	}
-	byPath := make(map[string]Field, len(fields))
-	for _, f := range fields {
-		byPath[f.Path] = f
+	byPath := make(map[string]*ShapeField, len(shapes))
+	for i := range shapes {
+		byPath[shapes[i].Path] = &shapes[i]
 	}
-	if f, ok := byPath[p.Severity]; ok {
-		if v := severityOf(f.Value); v != "" {
-			p.SeverityValues = map[string]string{f.Value: v}
+	if f := byPath[p.Severity]; f != nil && p.Severity != "" {
+		if v := severityValues[f.Vocab]; v != "" {
+			p.SeverityValues = map[string]string{f.Vocab: v}
 		}
 	}
-	if f, ok := byPath[p.Lifecycle]; ok {
-		if v := lifecycleOf(f.Value); v != "" {
-			p.LifecycleValues = map[string]string{f.Value: v}
+	if f := byPath[p.Lifecycle]; f != nil && p.Lifecycle != "" {
+		if w, v := lifecycleWord(f); v != "" {
+			p.LifecycleValues = map[string]string{w: v}
 		}
 	}
-	p.Kind = kindOf(fields, &p, byPath)
+	p.Kind = kindOf(views, &p, byPath)
 	return p
 }
 
 // Rank scores every field for a role, best first. Fields that cannot play the
-// role at all (a boolean title, a non-URL link) are left out. Ties keep
-// document order.
+// role at all (a boolean title, a non-URL link, a secret or an email for
+// anything) are left out. Ties keep document order.
 func Rank(fields []Field, r Role) []Candidate {
-	out := make([]Candidate, 0, len(fields))
-	for i, f := range fields {
-		s := score(r, &f, i)
+	return RankShapes(ShapesOf(fields), r)
+}
+
+// RankShapes is Rank over shapes.
+func RankShapes(shapes []ShapeField, r Role) []Candidate {
+	return rank(viewsOf(shapes), r)
+}
+
+func rank(views []view, r Role) []Candidate {
+	out := make([]Candidate, 0, len(views))
+	for i := range views {
+		s := score(r, &views[i], i)
 		if math.IsInf(s, -1) {
 			continue
 		}
-		out = append(out, Candidate{Path: f.Path, Score: math.Round(s*1000) / 1000})
+		out = append(out, Candidate{Path: views[i].Path, Score: math.Round(s*1000) / 1000})
 	}
 	slices.SortStableFunc(out, func(a, b Candidate) int { return cmp.Compare(b.Score, a.Score) })
 	return out
@@ -366,51 +382,40 @@ func segments(path string) []string {
 	return out
 }
 
-type shape struct {
-	key        []string // tokens of the leaf key
-	parents    []string // tokens of every parent key
-	depth      int
-	inArray    bool
-	str        bool
-	num        float64
-	isNum      bool
-	isURL      bool
-	isTime     bool
-	isID       bool
-	isEnum     bool
-	words      int
-	runes      int
-	hasLetters bool
+// view is a shape with its path split into words, done once per payload
+// rather than once per role.
+type view struct {
+	*ShapeField
+	key     []string // tokens of the leaf key
+	parents []string // tokens of every parent key
+	depth   int
+	inArray bool
 }
 
-func shapeOf(f *Field) shape {
-	segs := segments(f.Path)
-	s := shape{depth: len(segs), inArray: strings.Contains(f.Path, "[]"), str: f.Type == TypeString}
-	if len(segs) > 0 {
-		s.key = tokens(segs[len(segs)-1])
-		for _, p := range segs[:len(segs)-1] {
-			s.parents = append(s.parents, tokens(p)...)
+func viewsOf(shapes []ShapeField) []view {
+	out := make([]view, len(shapes))
+	for i := range shapes {
+		f := &shapes[i]
+		segs := segments(f.Path)
+		v := view{ShapeField: f, depth: len(segs), inArray: strings.Contains(f.Path, "[]")}
+		if len(segs) > 0 {
+			v.key = tokens(segs[len(segs)-1])
+			for _, p := range segs[:len(segs)-1] {
+				v.parents = append(v.parents, tokens(p)...)
+			}
 		}
+		out[i] = v
 	}
-	v := strings.TrimSpace(f.Value)
-	s.runes = len([]rune(v))
-	s.words = len(strings.Fields(v))
-	s.hasLetters = strings.IndexFunc(v, unicode.IsLetter) >= 0
-	if f.Type == TypeNumber {
-		if n, err := strconv.ParseFloat(v, 64); err == nil {
-			s.num, s.isNum = n, true
-			s.isID = intValue.MatchString(v)
-		}
-	}
-	if s.str {
-		lv := strings.ToLower(v)
-		s.isURL = strings.HasPrefix(lv, "http://") || strings.HasPrefix(lv, "https://")
-		s.isTime = timeValue.MatchString(v)
-		s.isID = uuidValue.MatchString(v) || (hexValue.MatchString(v) && strings.ContainsAny(v, "0123456789")) || intValue.MatchString(v)
-		s.isEnum = enumValue.MatchString(v) && !s.isURL && !s.isTime
-	}
-	return s
+	return out
 }
+
+func (v *view) is(f Flags) bool { return v.Flags&f != 0 }
+
+func (v *view) str() bool { return v.Type == TypeString }
+
+func (v *view) isNum() bool { return v.Type == TypeNumber && v.is(FlagNum) }
+
+func (v *view) inRange(ranges ...string) bool { return slices.Contains(ranges, v.Range) }
 
 func wordScore(words map[string]float64, toks []string) float64 {
 	total := 0.0
@@ -426,9 +431,8 @@ func hasAny(toks []string, set map[string]bool) bool {
 	return slices.ContainsFunc(toks, func(t string) bool { return set[t] })
 }
 
-func score(r Role, f *Field, index int) float64 {
-	s := shapeOf(f)
-	if len(s.key) == 0 {
+func score(r Role, v *view, index int) float64 {
+	if len(v.key) == 0 || !rankable(r, v.ShapeField) {
 		return math.Inf(-1)
 	}
 	// Earlier fields win ties: services put the important keys first more
@@ -436,25 +440,25 @@ func score(r Role, f *Field, index int) float64 {
 	order := -0.002 * float64(index)
 	switch r {
 	case RoleTitle:
-		return scoreTitle(&s) + order
+		return scoreTitle(v) + order
 	case RoleBody:
-		return scoreBody(&s) + order
+		return scoreBody(v) + order
 	case RoleURL:
-		return scoreURL(&s) + order
+		return scoreURL(v) + order
 	case RoleCorrelation:
-		return scoreCorrelation(&s, f) + order
+		return scoreCorrelation(v) + order
 	case RoleProgress:
-		return scoreProgress(&s) + order
+		return scoreProgress(v) + order
 	case RoleSeverity:
-		return scoreSeverity(&s, f) + order
+		return scoreSeverity(v) + order
 	case RoleLifecycle:
-		return scoreLifecycle(&s, f) + order
+		return scoreLifecycle(v) + order
 	}
 	return math.Inf(-1)
 }
 
-func scoreTitle(s *shape) float64 {
-	if !s.str || s.runes == 0 || s.isURL || !s.hasLetters {
+func scoreTitle(s *view) float64 {
+	if !s.str() || s.Runes == 0 || s.is(FlagURL) || !s.is(FlagLetters) {
 		return math.Inf(-1)
 	}
 	v := wordScore(titleWords, s.key)
@@ -462,29 +466,29 @@ func scoreTitle(s *shape) float64 {
 		v -= 2
 	}
 	switch {
-	case s.runes <= 2:
+	case s.Runes <= 2:
 		v -= 2
-	case s.runes <= 120:
+	case s.Runes <= 120:
 		v += 0.5
-	case s.runes <= 200:
+	case s.Runes <= 200:
 		v -= 0.5
 	default:
 		v -= 1.5
 	}
-	if s.isID || s.isTime {
+	if s.is(FlagID) || s.is(FlagTime) {
 		v -= 2
 	}
 	if hasAny(s.parents, contextParents) {
 		v -= 1.2
 	}
-	if s.words > 1 {
+	if s.Words > 1 {
 		v += 0.3
 	}
 	return v - 0.15*float64(s.depth) - boolf(s.inArray, 0.3)
 }
 
-func scoreBody(s *shape) float64 {
-	if !s.str || s.runes == 0 || s.isURL || !s.hasLetters {
+func scoreBody(s *view) float64 {
+	if !s.str() || s.Runes == 0 || s.is(FlagURL) || !s.is(FlagLetters) {
 		return math.Inf(-1)
 	}
 	v := wordScore(bodyWords, s.key)
@@ -492,14 +496,14 @@ func scoreBody(s *shape) float64 {
 		v -= 2
 	}
 	switch {
-	case s.words >= 4:
+	case s.Words >= 4:
 		v += 1
-	case s.words >= 2:
+	case s.Words >= 2:
 		v += 0.3
 	default:
 		v -= 1
 	}
-	if s.isID || s.isTime || s.isEnum {
+	if s.is(FlagID) || s.is(FlagTime) || s.is(FlagEnum) {
 		v -= 1.5
 	}
 	if hasAny(s.parents, contextParents) {
@@ -508,8 +512,8 @@ func scoreBody(s *shape) float64 {
 	return v - 0.1*float64(s.depth) - boolf(s.inArray, 0.3)
 }
 
-func scoreURL(s *shape) float64 {
-	if !s.isURL {
+func scoreURL(s *view) float64 {
+	if !s.is(FlagURL) {
 		return math.Inf(-1)
 	}
 	v := 1 + wordScore(urlWords, s.key)
@@ -524,11 +528,11 @@ func scoreURL(s *shape) float64 {
 	return v - 0.1*float64(s.depth) - boolf(s.inArray, 0.3)
 }
 
-func scoreCorrelation(s *shape, f *Field) float64 {
-	if f.Type != TypeString && f.Type != TypeNumber {
+func scoreCorrelation(s *view) float64 {
+	if s.Type != TypeString && s.Type != TypeNumber {
 		return math.Inf(-1)
 	}
-	if s.isURL || s.isTime || s.words > 1 || s.runes == 0 || s.runes > 128 {
+	if s.is(FlagURL) || s.is(FlagTime) || s.Words > 1 || s.Runes == 0 || s.Runes > 128 {
 		return math.Inf(-1)
 	}
 	v := wordScore(corrWords, s.key)
@@ -542,7 +546,7 @@ func scoreCorrelation(s *shape, f *Field) float64 {
 	if !idKey {
 		v -= 1.5
 	}
-	if s.isID || (s.str && idToken.MatchString(strings.TrimSpace(f.Value))) {
+	if s.is(FlagID) || (s.str() && s.is(FlagIDToken)) {
 		v += 0.8
 	}
 	if hasAny(s.key, perDelivery) || hasAny(s.parents, perDelivery) {
@@ -557,8 +561,8 @@ func scoreCorrelation(s *shape, f *Field) float64 {
 	return v - 0.2*float64(s.depth) - boolf(s.inArray, 0.8)
 }
 
-func scoreProgress(s *shape) float64 {
-	if !s.isNum || s.num < 0 || s.num > 100 {
+func scoreProgress(s *view) float64 {
+	if !s.isNum() || !s.inRange(Range0To1, Range1To10, Range10To1h) {
 		return math.Inf(-1)
 	}
 	v := wordScore(progressWords, s.key)
@@ -568,19 +572,19 @@ func scoreProgress(s *shape) float64 {
 	return v - 0.05*float64(s.depth)
 }
 
-func scoreSeverity(s *shape, f *Field) float64 {
-	if f.Type != TypeString && f.Type != TypeNumber {
+func scoreSeverity(s *view) float64 {
+	if s.Type != TypeString && s.Type != TypeNumber {
 		return math.Inf(-1)
 	}
-	if s.words > 2 || s.isURL || s.isTime {
+	if s.Words > 2 || s.is(FlagURL) || s.is(FlagTime) {
 		return math.Inf(-1)
 	}
 	v := wordScore(severityWords, s.key)
-	if _, ok := severityValues[strings.ToLower(strings.TrimSpace(f.Value))]; ok {
+	if _, ok := severityValues[s.Vocab]; ok {
 		v += 2
-	} else if s.isNum && s.num >= 0 && s.num <= 10 {
+	} else if s.isNum() && s.inRange(Range0To1, Range1To10) {
 		v += 0.3
-	} else if !s.isEnum {
+	} else if !s.is(FlagEnum) {
 		v -= 1
 	}
 	if hasAny(s.parents, contextParents) {
@@ -589,21 +593,20 @@ func scoreSeverity(s *shape, f *Field) float64 {
 	return v - 0.1*float64(s.depth) - boolf(s.inArray, 0.3)
 }
 
-func scoreLifecycle(s *shape, f *Field) float64 {
-	if f.Type != TypeString {
+func scoreLifecycle(s *view) float64 {
+	if s.Type != TypeString {
 		return math.Inf(-1)
 	}
-	if s.words > 2 || s.isURL || s.isTime || s.isID {
+	if s.Words > 2 || s.is(FlagURL) || s.is(FlagTime) || s.is(FlagID) {
 		return math.Inf(-1)
 	}
 	v := wordScore(lifecycleWords, s.key)
-	val := normValue(f.Value)
-	if _, ok := lifecycleValues[val]; ok {
+	if _, ok := lifecycleValues[s.Vocab]; ok {
 		v += 2.5
-	} else if last := lastWord(val); lifecycleValues[last] != "" {
-		// "media.play", "issue.resolved", "alert_triggered"
+	} else if _, state := lifecycleWord(s.ShapeField); state != "" {
+		// "media.play", "issue.resolved", "ALERT_TRIGGERED"
 		v += 2
-	} else if !s.isEnum {
+	} else if !s.is(FlagEnum) {
 		v -= 1.5
 	}
 	if hasAny(s.parents, contextParents) {
@@ -612,17 +615,33 @@ func scoreLifecycle(s *shape, f *Field) float64 {
 	return v - 0.1*float64(s.depth) - boolf(s.inArray, 0.4)
 }
 
+var normReplacer = strings.NewReplacer(" ", "_", "-", "_")
+
 func normValue(v string) string {
-	v = strings.ToLower(strings.TrimSpace(v))
-	return strings.NewReplacer(" ", "_", "-", "_").Replace(v)
+	return normReplacer.Replace(strings.ToLower(strings.TrimSpace(v)))
 }
 
-func lastWord(v string) string {
-	i := strings.LastIndexAny(v, "._:/")
+// tailSeparators split a value into words for valueTail: the ones normValue
+// already turned into underscores, as before, plus the path-like ones.
+const tailSeparators = "._:/- "
+
+// valueTail returns a value's last word in normValue form ("alert.resolved",
+// "sync-failed", "CONDITION_SNAPSHOT_END", "Sync failed"), or "" when it has
+// one word only or the word before the last negates it ("Not Resolved",
+// "not-ready", "No Error", "non_critical"): a negated state must not end a
+// card.
+func valueTail(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	i := strings.LastIndexAny(v, tailSeparators)
 	if i < 0 {
-		return v
+		return ""
 	}
-	return v[i+1:]
+	head := v[:i]
+	switch head[strings.LastIndexAny(head, tailSeparators)+1:] {
+	case "not", "no", "non", "un":
+		return ""
+	}
+	return normValue(v[i+1:])
 }
 
 func boolf(b bool, w float64) float64 {
@@ -633,7 +652,7 @@ func boolf(b bool, w float64) float64 {
 }
 
 func severityOf(v string) string {
-	return severityValues[strings.ToLower(strings.TrimSpace(v))]
+	return severityValues[normValue(v)]
 }
 
 func lifecycleOf(v string) string {
@@ -641,12 +660,27 @@ func lifecycleOf(v string) string {
 	if s, ok := lifecycleValues[n]; ok {
 		return s
 	}
-	return lifecycleValues[lastWord(n)]
+	return lifecycleValues[valueTail(v)]
+}
+
+// lifecycleWord is lifecycleOf for a shape. It also returns the word it
+// matched, which keys the proposal's value table.
+func lifecycleWord(f *ShapeField) (word, state string) {
+	if s, ok := lifecycleValues[f.Vocab]; ok {
+		return f.Vocab, s
+	}
+	if s := lifecycleValues[valueTail(f.Vocab)]; s != "" {
+		return f.Vocab, s
+	}
+	if s := lifecycleValues[f.LastWord]; s != "" {
+		return f.LastWord, s
+	}
+	return "", ""
 }
 
 // kindOf votes between alert and progress; a payload that makes a weak case
 // for both is a notification.
-func kindOf(fields []Field, p *Proposal, byPath map[string]Field) Kind {
+func kindOf(views []view, p *Proposal, byPath map[string]*ShapeField) Kind {
 	var alert, progress float64
 	if p.Progress != "" {
 		progress += 3
@@ -654,10 +688,12 @@ func kindOf(fields []Field, p *Proposal, byPath map[string]Field) Kind {
 	if p.Severity != "" {
 		alert += 2
 	}
-	if f, ok := byPath[p.Lifecycle]; ok {
-		n := normValue(f.Value)
-		if !progressStates[n] && !alertStates[n] {
-			n = lastWord(n)
+	if f := byPath[p.Lifecycle]; f != nil && p.Lifecycle != "" {
+		n := f.Vocab
+		if n == "" {
+			n = f.LastWord
+		} else if !progressStates[n] && !alertStates[n] {
+			n = valueTail(n)
 		}
 		if progressStates[n] {
 			progress += 2
@@ -666,21 +702,18 @@ func kindOf(fields []Field, p *Proposal, byPath map[string]Field) Kind {
 			alert += 2.5
 		}
 	}
-	var pathWords []string
-	for _, f := range fields {
-		for _, seg := range segments(f.Path) {
-			pathWords = append(pathWords, tokens(seg)...)
-		}
-		if f.Type == TypeString {
-			// Values name the subject as often as keys do: "object_kind":
-			// "pipeline", "type": "alert".
-			pathWords = append(pathWords, normValue(f.Value))
-		}
+	// Values name the subject as often as keys do: "object_kind":
+	// "pipeline", "type": "alert".
+	var progressWord, alertWord bool
+	for i := range views {
+		v := &views[i]
+		progressWord = progressWord || progressPathWords[v.Vocab] || hasAny(v.key, progressPathWords) || hasAny(v.parents, progressPathWords)
+		alertWord = alertWord || alertPathWords[v.Vocab] || hasAny(v.key, alertPathWords) || hasAny(v.parents, alertPathWords)
 	}
-	if hasAny(pathWords, progressPathWords) {
+	if progressWord {
 		progress++
 	}
-	if hasAny(pathWords, alertPathWords) {
+	if alertWord {
 		alert++
 	}
 	switch {
