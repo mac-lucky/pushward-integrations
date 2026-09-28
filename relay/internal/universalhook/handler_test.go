@@ -911,3 +911,26 @@ func TestLevelOf(t *testing.T) {
 		}
 	}
 }
+
+// The raw notification for a rejected shape stays inside the push budget even
+// when every character of its values escapes to six bytes of JSON.
+func TestRawBodyBudget(t *testing.T) {
+	var fields []universal.Field
+	for i := range 10 {
+		path := strings.Repeat(string(rune('a'+i)), universal.MaxPathBytes)
+		value := strings.Repeat("<>&", universal.MaxValueRunes/3)
+		fields = append(fields, universal.Field{Path: path, Value: value, Type: universal.TypeString})
+	}
+	for _, budget := range []int{0, 100, 700, maxReviewBytes} {
+		body := rawBody(fields, budget)
+		if body == "No values" {
+			continue
+		}
+		if n := jsonLen(body); n > budget {
+			t.Errorf("budget %d: body is %d bytes of JSON", budget, n)
+		}
+	}
+	if got := rawBody(nil, maxReviewBytes); got != "No values" {
+		t.Errorf("rawBody(nil) = %q", got)
+	}
+}

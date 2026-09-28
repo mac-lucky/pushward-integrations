@@ -248,22 +248,8 @@ func (h *Handler) deliverRaw(ctx context.Context, r *request) (*humautil.Webhook
 	if title == "" {
 		title = "Webhook"
 	}
-	lines := make([]string, 0, rawLines)
-	for _, f := range r.fields {
-		if len(lines) == rawLines {
-			break
-		}
-		if v := universal.Display(f.Path, f, sampleRunes); v != "" {
-			lines = append(lines, tailRunes(f.Path, reviewPathRunes)+": "+v)
-		}
-	}
-	body := strings.Join(lines, text.SepDot)
-	if body == "" {
-		body = "No values"
-	}
 	req := pushward.SendNotificationRequest{
 		Title:    title,
-		Body:     body,
 		Source:   r.source(),
 		ThreadID: threadID(r.source()),
 		Level:    ov.LevelOr(pushward.LevelPassive),
@@ -274,10 +260,47 @@ func (h *Handler) deliverRaw(ctx context.Context, r *request) (*humautil.Webhook
 	} else {
 		r.log.Warn("edit link not minted", "error", err)
 	}
+	base, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	req.Body = rawBody(r.fields, maxReviewBytes-len(base))
 	if err := h.clients.SendNotification(ctx, r.key, r.log, req); err != nil {
 		return nil, humautil.UpstreamError(err)
 	}
 	return humautil.NewOK(), nil
+}
+
+// rawBody lists a payload's first fields and their display values, leaving
+// out any line that would take the request past budget bytes of JSON: the
+// server refuses a push over 4 KiB, and escaped characters count several
+// times over.
+func rawBody(fields []universal.Field, budget int) string {
+	lines := make([]string, 0, rawLines)
+	used := 0
+	for _, f := range fields {
+		if len(lines) == rawLines {
+			break
+		}
+		v := universal.Display(f.Path, f, sampleRunes)
+		if v == "" {
+			continue
+		}
+		line := tailRunes(f.Path, reviewPathRunes) + ": " + v
+		cost := jsonLen(line)
+		if len(lines) > 0 {
+			cost += jsonLen(text.SepDot)
+		}
+		if used+cost > budget {
+			continue
+		}
+		lines = append(lines, line)
+		used += cost
+	}
+	if len(lines) == 0 {
+		return "No values"
+	}
+	return strings.Join(lines, text.SepDot)
 }
 
 type reviewInput struct {
