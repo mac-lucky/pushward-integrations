@@ -1,0 +1,21 @@
+{
+  "source": "sentry",
+  "headers": {"User-Agent": "sentry", "Sentry-Hook-Resource": "issue", "Sentry-Hook-Timestamp": "1790500000"},
+  "payload": {
+    "action": "created",
+    "installation": {"uuid": "00000000-0000-4000-8000-000000000201"},
+    "data": {
+      "issue": {
+        "id": "4001",
+        "shortId": "APP-1",
+        "title": "TypeError: Cannot read properties of undefined (reading 'id')",
+        "culprit": "app/components/list",
+        "level": "error",
+        "status": "unresolved",
+        "permalink": "https://acme.sentry.example.com/issues/4001/",
+        "project": {"id": "31", "name": "app", "slug": "app"}
+      }
+    },
+    "actor": {"type": "application", "id": "sentry", "name": "Sentry"}
+  }
+}

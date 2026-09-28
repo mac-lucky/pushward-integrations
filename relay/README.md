@@ -219,6 +219,7 @@ The key itself is only checked when the relay calls PushWard on your behalf, so 
 | POST | `/komodo` | Komodo Custom-alerter webhooks |
 | POST | `/truenas/v2/alerts` | TrueNAS OpsGenie create-alert calls |
 | DELETE | `/truenas/v2/alerts/{id}` | TrueNAS OpsGenie close-alert calls |
+| POST | `/` | Any webhook: handed to the provider that sent it, else to the universal route (see [Root route](#root-route-post-)) |
 | GET | `/health` | Liveness - returns `ok` |
 | GET | `/ready` | Readiness - `ready`, or `503` if the DB ping fails |
 | GET | `/openapi.json` | Auto-generated OpenAPI 3.1 spec |
@@ -276,6 +277,40 @@ https://relay.pushward.app/komodo?channels=notification&priority=8&level=passive
 ```
 
 Note the asymmetry: Live-Activity-only providers (ArgoCD, Proxmox, Gitea/Forgejo, Jellyfin playback) have no one-shot notification to fall back to, so `channels=notification` suppresses their output entirely; notification-only providers (Grafana, Prowlarr, Bazarr) have no Live Activity, so `channels=activity` suppresses theirs.
+
+### Root route: `POST /`
+
+Any of the services below can also post to the relay's root, `https://relay.pushward.app/`, instead of its own path. The relay looks at the headers and the top level of the JSON body, and a payload it recognises is handled exactly as if it had been posted to that provider's route: same auth, rate limits, query parameters, response, and the provider's `enabled` flag. When a service lets you set the path, use its own route anyway; detection is deliberately conservative.
+
+| Route | Recognised by |
+|---|---|
+| `/radarr`, `/sonarr`, `/prowlarr` | a `User-Agent` starting `Radarr/`, `Sonarr/` or `Prowlarr/`, and a string `eventType` |
+| `/gitea` | an `X-Gitea-Event` or `X-Forgejo-Event` header, and a `workflow_run` or `workflow_job` object |
+| `/forgejo` | an `X-Forgejo-Event` header and a `run` object |
+| `/grafana` | an `alerts` array and a `groupKey`, plus `"version": "1"` or a numeric `orgId` (Alertmanager's own `"version": "4"` is not Grafana) |
+| `/argocd` | a non-empty `app`, and `event` one of `sync-running`, `sync-succeeded`, `deployed`, `sync-failed`, `health-degraded` |
+| `/backrest` | an `event` like `CONDITION_SNAPSHOT_START` |
+| `/changedetection` | `diff_url`, plus `url` or `preview_url` |
+| `/gatus` | `endpoint_name`, and `status` `TRIGGERED` or `RESOLVED` |
+| `/jellyfin` | `NotificationType`, plus `ServerId`, `ServerName` or `ServerVersion` |
+| `/komodo` | a numeric `ts`, a boolean `resolved`, `level` `OK`/`WARNING`/`CRITICAL`, a `target` object, and a `data` object with a `type` |
+| `/overseerr` | `notification_type` `MEDIA_*`, `ISSUE_*` or `TEST_NOTIFICATION`, plus `subject` |
+| `/paperless` | `event` `added` or `updated` with a numeric `doc_id`, or `consumption_started` with a `filename` |
+| `/proxmox` | `type`, `title`, `message`, `severity` and `hostname`, with a Proxmox severity and notification type |
+| `/uptimekuma` | `msg`, with `heartbeat` (numeric `status`) and `monitor` objects, or both `null` (the test notification) |
+| `/bazarr`, `/unmanic` | Apprise's JSON (`version`, `title`, `message`, `type`) with a title starting `Bazarr` or `Unmanic` |
+
+TrueNAS is never detected: the OpsGenie protocol it speaks isn't TrueNAS's alone, so keep its API URL at `/truenas`. Gitea and Forgejo events other than Actions runs are not either, and neither are Lidarr, Readarr or Whisparr. A request with `X-GitHub-Event` (and no Gitea headers), `X-Gitlab-Event`, `X-Event-Key` (Bitbucket) or `Sentry-Hook-Resource` skips the body checks altogether.
+
+Anything the relay doesn't recognise goes to the universal route, which maps arbitrary JSON onto a notification or Live Activity and asks you to review each new payload shape. So does a recognised payload whose provider is disabled. The universal route is off by default (`providers.universal.enabled`, `PUSHWARD_UNIVERSAL_ENABLED`), and while it is off those requests get the `404` that `POST /` has always returned. Add `?source=` (lowercase letters, digits and `-`, up to 32) to name the sender, so its payloads get mappings of their own:
+
+```
+https://relay.pushward.app/?source=alertmanager
+```
+
+`channels`, `priority` and `level` pass through to whichever route handles the request.
+
+The relay reads the body for detection only when the request carries an `hlk_` key and a JSON `Content-Type`, declares no `Content-Length` of 1 MB or more, and comes from an IP that is still under its rate limit. A missing or `text/plain` `Content-Type` counts as JSON, because it is rewritten to `application/json` before this check. A chunked body declares no length, so it is read up to 1 MB and passed on undetected if it gets that far. A request that fails any of these goes to the universal route, which answers `401` for a missing key, `413` for a body over the limit and `429` over the rate limit; with the universal route off, it gets `404`. `pushward_relay_root_dispatch_total{route,via}` counts where requests to `/` went and why: `header` or `body` for a detected sender, `disabled`, `veto`, `none`, or `skipped` for one whose body was not inspected.
 
 ---
 

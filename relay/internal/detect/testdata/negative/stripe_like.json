@@ -1,0 +1,15 @@
+{
+  "source": "stripe",
+  "headers": {"User-Agent": "Stripe/1.0 (+https://stripe.com/docs/webhooks)", "Stripe-Signature": "t=1790500000,v1=0000000000000000000000000000000000000000000000000000000000000000"},
+  "payload": {
+    "id": "evt_000000000000000000000001",
+    "object": "event",
+    "api_version": "2024-06-20",
+    "created": 1790500000,
+    "type": "invoice.payment_failed",
+    "livemode": false,
+    "pending_webhooks": 1,
+    "data": {"object": {"id": "in_000000000000000000000001", "object": "invoice", "amount_due": 2000, "currency": "usd", "status": "open"}},
+    "request": {"id": null, "idempotency_key": null}
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "source": "generic",
+  "headers": {"User-Agent": "curl/8.7.1"},
+  "payload": {
+    "title": "Disk space low",
+    "message": "/var is 92% full on web-01"
+  }
+}

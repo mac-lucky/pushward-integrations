@@ -1,0 +1,14 @@
+{
+  "eventType": "Grab",
+  "instanceName": "Prowlarr",
+  "applicationUrl": "",
+  "release": {
+    "releaseTitle": "Dune.Part.Two.2024.2160p.WEB-DL.DDP5.1.Atmos-GROUP",
+    "indexer": "NZBgeek",
+    "size": 21474836480,
+    "categories": ["Movies", "Movies/UHD"]
+  },
+  "trigger": "Api",
+  "source": "Radarr",
+  "host": "radarr.local"
+}

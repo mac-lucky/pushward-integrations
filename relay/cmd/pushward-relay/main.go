@@ -21,6 +21,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/ratelimit"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/rootroute"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/telemetry"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/universalhook"
@@ -186,8 +187,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// POST / dispatches to the route of the provider that sent the payload,
+	// else to /universal. It reads which routes exist, so it comes after
+	// registerProviders, and it sits inside the content-type fix so a sender
+	// with no Content-Type still gets its body read.
+	rootroute.Document(api)
+	root := rootroute.New(mux, rootroute.Options{})
+
 	// Wrap mux with metrics middleware and optional OTel tracing.
-	handler := metrics.Middleware(humautil.NormalizeJSONContentType(mux))
+	handler := metrics.Middleware(humautil.NormalizeJSONContentType(root))
 	if cfg.Telemetry.Endpoint != "" {
 		handler = otelhttp.NewHandler(handler, "pushward-relay",
 			otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {

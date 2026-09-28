@@ -137,3 +137,57 @@ func TestFixturesUnmarshal_Sonarr(t *testing.T) {
 		})
 	}
 }
+
+func TestFixturesUnmarshal_Prowlarr(t *testing.T) {
+	files, err := os.ReadDir("../../testdata/prowlarr")
+	if err != nil {
+		t.Fatalf("reading testdata/prowlarr: %v", err)
+	}
+
+	for _, f := range files {
+		if f.IsDir() || filepath.Ext(f.Name()) != ".json" {
+			continue
+		}
+		t.Run(f.Name(), func(t *testing.T) {
+			data, err := os.ReadFile(filepath.Join("../../testdata/prowlarr", f.Name()))
+			if err != nil {
+				t.Fatalf("reading file: %v", err)
+			}
+
+			var envelope starrPayload
+			if err := json.Unmarshal(data, &envelope); err != nil {
+				t.Fatalf("unmarshal envelope: %v", err)
+			}
+
+			switch envelope.EventType {
+			case "Grab":
+				var p ProwlarrGrabPayload
+				if err := json.Unmarshal(data, &p); err != nil {
+					t.Errorf("unmarshal ProwlarrGrabPayload: %v", err)
+				}
+				if p.Release.ReleaseTitle == "" || p.Release.Indexer == "" {
+					t.Error("expected a release title and indexer")
+				}
+			case "Test":
+			case "Health":
+				var p HealthPayload
+				if err := json.Unmarshal(data, &p); err != nil {
+					t.Errorf("unmarshal HealthPayload: %v", err)
+				}
+				if p.Message == "" {
+					t.Error("expected non-empty message")
+				}
+			case "ApplicationUpdate":
+				var p ApplicationUpdatePayload
+				if err := json.Unmarshal(data, &p); err != nil {
+					t.Errorf("unmarshal ApplicationUpdatePayload: %v", err)
+				}
+				if p.PreviousVersion == "" || p.NewVersion == "" {
+					t.Error("expected both versions")
+				}
+			default:
+				t.Errorf("unknown eventType %q", envelope.EventType)
+			}
+		})
+	}
+}

@@ -1,0 +1,18 @@
+{
+  "source": "github",
+  "headers": {"User-Agent": "GitHub-Hookshot/0000000", "X-GitHub-Event": "push", "X-GitHub-Delivery": "00000000-0000-4000-8000-000000000101"},
+  "payload": {
+    "ref": "refs/heads/main",
+    "before": "1111111111111111111111111111111111111111",
+    "after": "2222222222222222222222222222222222222222",
+    "repository": {"id": 1001, "full_name": "acme/app", "html_url": "https://github.com/acme/app"},
+    "pusher": {"name": "dev", "email": "dev@example.com"},
+    "sender": {"login": "dev", "id": 2001},
+    "created": false,
+    "deleted": false,
+    "forced": false,
+    "compare": "https://github.com/acme/app/compare/111111111111...222222222222",
+    "commits": [{"id": "2222222222222222222222222222222222222222", "message": "Update README.md", "timestamp": "2026-09-27T17:59:05-07:00"}],
+    "head_commit": {"id": "2222222222222222222222222222222222222222", "message": "Update README.md"}
+  }
+}

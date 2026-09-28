@@ -75,6 +75,15 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	pwClient := h.clients.Get(userKey)
 	payload := &input.Body
 
+	// The Test button in Uptime Kuma's notification settings sends no
+	// monitor and no heartbeat.
+	if payload.Heartbeat == nil || payload.Monitor == nil {
+		if err := selftest.SendTest(ctx, pwClient, log, "uptimekuma"); err != nil {
+			return nil, humautil.UpstreamError(err)
+		}
+		return humautil.NewOK(), nil
+	}
+
 	var err error
 	switch payload.Heartbeat.Status {
 	case 0: // DOWN

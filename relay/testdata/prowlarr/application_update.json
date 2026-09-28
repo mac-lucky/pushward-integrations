@@ -1,0 +1,8 @@
+{
+  "eventType": "ApplicationUpdate",
+  "instanceName": "Prowlarr",
+  "applicationUrl": "",
+  "message": "Prowlarr updated from 1.24.3.4754 to 1.25.4.4818",
+  "previousVersion": "1.24.3.4754",
+  "newVersion": "1.25.4.4818"
+}

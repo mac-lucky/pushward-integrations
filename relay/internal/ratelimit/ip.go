@@ -88,3 +88,10 @@ func ClientIP(remoteAddr string, getHeader func(string) string) string {
 func AllowIP(ip string) bool {
 	return ipLimiters.get(ip).Allow()
 }
+
+// IPExhausted reports whether ip has no request left right now, without
+// spending one. An IP with no bucket yet has its whole burst.
+func IPExhausted(ip string) bool {
+	l, ok := ipLimiters.entries.Peek(ip)
+	return ok && l.Tokens() < 1
+}

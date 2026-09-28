@@ -43,6 +43,7 @@ var fixtureRoutes = map[string]string{
 	"komodo":          "/komodo",
 	"overseerr":       "/overseerr",
 	"paperless":       "/paperless",
+	"prowlarr":        "/prowlarr",
 	"proxmox":         "/proxmox",
 	"radarr":          "/radarr",
 	"sonarr":          "/sonarr",
@@ -51,10 +52,6 @@ var fixtureRoutes = map[string]string{
 	"unmanic":         "/unmanic",
 	"uptimekuma":      "/uptimekuma",
 }
-
-// noFixtures are registered POST routes with no testdata directory yet.
-// Prowlarr is notification-only and keeps no state.
-var noFixtures = map[string]bool{"/prowlarr": true}
 
 // stateful are the providers whose fixtures leave a relay_state row behind.
 // changedetection, unmanic and bazarr are handed no store at all.
@@ -123,7 +120,7 @@ func TestRegisterProviders_KeyMode(t *testing.T) {
 				routed[path] = true
 			}
 			for path, item := range api.OpenAPI().Paths {
-				if item.Post != nil && !routed[path] && !noFixtures[path] {
+				if item.Post != nil && !routed[path] {
 					t.Errorf("POST %s has no fixture directory in fixtureRoutes", path)
 				}
 			}

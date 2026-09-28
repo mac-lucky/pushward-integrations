@@ -1,0 +1,24 @@
+{
+  "source": "alertmanager",
+  "headers": {"User-Agent": "Alertmanager/0.27.0"},
+  "payload": {
+    "version": "4",
+    "groupKey": "{}:{alertname=\"HighLatency\"}",
+    "truncatedAlerts": 0,
+    "status": "firing",
+    "receiver": "pushward",
+    "groupLabels": {"alertname": "HighLatency"},
+    "commonLabels": {"alertname": "HighLatency", "severity": "warning", "service": "api"},
+    "commonAnnotations": {"summary": "p99 latency above 500ms"},
+    "externalURL": "http://alertmanager.example.com:9093",
+    "alerts": [{
+      "status": "firing",
+      "labels": {"alertname": "HighLatency", "severity": "warning", "service": "api"},
+      "annotations": {"summary": "p99 latency above 500ms"},
+      "startsAt": "2026-09-27T10:00:00Z",
+      "endsAt": "0001-01-01T00:00:00Z",
+      "generatorURL": "http://prometheus.example.com:9090/graph?g0.expr=latency",
+      "fingerprint": "0000000000000001"
+    }]
+  }
+}

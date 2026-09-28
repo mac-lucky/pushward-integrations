@@ -94,6 +94,18 @@ var (
 		Help:      "Artwork fetches for activity thumbhashes, by outcome.",
 	}, []string{"result"})
 
+	// RootDispatchTotal counts webhooks posted to / by where they went and
+	// why. route is a provider route, /universal, or / for one left to 404;
+	// via is header or body (detected), disabled (detected, but that
+	// provider is off), veto, none, or skipped (body not inspected: no key,
+	// not JSON, IP over its limit, 1 MiB or more, a failed read, or a client
+	// gone before detection ran). Both sets are closed.
+	RootDispatchTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "pushward_relay",
+		Name:      "root_dispatch_total",
+		Help:      "Webhooks posted to the root path, by the route they were dispatched to and why.",
+	}, []string{"route", "via"})
+
 	CircuitBreakerOpen = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: "pushward_relay",
 		Name:      "circuit_breaker_open",

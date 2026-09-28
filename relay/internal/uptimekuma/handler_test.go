@@ -311,6 +311,31 @@ func TestMonitorMaintenanceSendsTestNotification(t *testing.T) {
 	}
 }
 
+// TestNotificationSettingsTestIsSelfTest is Uptime Kuma's Test button: the
+// monitor and heartbeat are null, and the relay answers with its self-test
+// card instead of alerting on a monitor that does not exist.
+func TestNotificationSettingsTestIsSelfTest(t *testing.T) {
+	for _, body := range []string{
+		`{"heartbeat": null, "monitor": null, "msg": "Uptime Kuma Test"}`,
+		`{"msg": "Uptime Kuma Test"}`,
+		`{"heartbeat": null, "monitor": {"id": 1, "name": "My Website"}, "msg": "partial"}`,
+	} {
+		h, calls, mu := newHandler(t, testConfig())
+		if w := send(t, h, body); w.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", body, w.Code, w.Body.String())
+		}
+		recorded := testutil.GetCalls(calls, mu)
+		if len(recorded) != 2 {
+			t.Fatalf("%s: expected the 2 self-test calls, got %d", body, len(recorded))
+		}
+		var create pushward.CreateActivityRequest
+		testutil.UnmarshalBody(t, recorded[0].Body, &create)
+		if create.Slug != "relay-test-uptimekuma" {
+			t.Errorf("%s: expected slug relay-test-uptimekuma, got %s", body, create.Slug)
+		}
+	}
+}
+
 // newHandlerWithStore wires an Uptime Kuma handler against a custom store and
 // base URL, for the store-degradation and update-failure scenarios.
 func newHandlerWithStore(t *testing.T, cfg *config.UptimeKumaConfig, store state.Store, baseURL string) http.Handler {
@@ -425,15 +450,15 @@ func TestOverrideChannelsNotificationUpClearsDedup(t *testing.T) {
 }
 
 func TestSeverityLabel(t *testing.T) {
-	if got := severityLabel(&uptimekumaPayload{Monitor: monitorInfo{Type: "  dns  "}}); got != "DNS" {
+	if got := severityLabel(&uptimekumaPayload{Monitor: &monitorInfo{Type: "  dns  "}}); got != "DNS" {
 		t.Errorf("expected DNS, got %q", got)
 	}
 	// No type in the payload leaves the stock Info/Warning/Critical badge.
-	if got := severityLabel(&uptimekumaPayload{}); got != "" {
+	if got := severityLabel(&uptimekumaPayload{Monitor: &monitorInfo{}}); got != "" {
 		t.Errorf("expected an empty label for a typeless monitor, got %q", got)
 	}
 	long := strings.Repeat("a", 60)
-	if got := severityLabel(&uptimekumaPayload{Monitor: monitorInfo{Type: long}}); len([]rune(got)) != pushward.MaxSeverityLabelRunes {
+	if got := severityLabel(&uptimekumaPayload{Monitor: &monitorInfo{Type: long}}); len([]rune(got)) != pushward.MaxSeverityLabelRunes {
 		t.Errorf("expected the label truncated to %d runes, got %d", pushward.MaxSeverityLabelRunes, len([]rune(got)))
 	}
 }

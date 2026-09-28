@@ -1,0 +1,22 @@
+{
+  "source": "gitlab",
+  "headers": {"User-Agent": "GitLab/17.5.0", "X-Gitlab-Event": "Pipeline Hook", "X-Gitlab-Instance": "https://gitlab.example.com"},
+  "payload": {
+    "object_kind": "pipeline",
+    "object_attributes": {
+      "id": 501,
+      "iid": 7,
+      "ref": "main",
+      "status": "success",
+      "stages": ["build", "test", "deploy"],
+      "created_at": "2026-09-27 12:00:00 UTC",
+      "finished_at": "2026-09-27 12:04:10 UTC",
+      "duration": 250,
+      "url": "https://gitlab.example.com/acme/app/-/pipelines/501"
+    },
+    "user": {"id": 11, "name": "Dev", "username": "dev"},
+    "project": {"id": 21, "name": "app", "path_with_namespace": "acme/app", "web_url": "https://gitlab.example.com/acme/app"},
+    "commit": {"id": "3333333333333333333333333333333333333333", "message": "Fix the build", "author": {"name": "Dev", "email": "dev@example.com"}},
+    "builds": [{"id": 901, "stage": "deploy", "name": "production", "status": "success"}]
+  }
+}

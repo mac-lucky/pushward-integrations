@@ -121,3 +121,17 @@ func TestGetOrCreate_EvictsViaSampling(t *testing.T) {
 			want, inserts, maxSize, evictions)
 	}
 }
+
+func TestPeek(t *testing.T) {
+	m := New[string](100)
+	if _, ok := m.Peek("a"); ok {
+		t.Fatal("Peek found an absent key")
+	}
+	if m.Len() != 0 {
+		t.Fatal("Peek created an entry")
+	}
+	m.GetOrCreate("a", func() string { return "alpha" })
+	if v, ok := m.Peek("a"); !ok || v != "alpha" {
+		t.Fatalf("Peek = %q, %v", v, ok)
+	}
+}

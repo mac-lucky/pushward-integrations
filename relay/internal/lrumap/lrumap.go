@@ -111,6 +111,19 @@ func (m *Map[V]) GetOrCreate(key string, create func() V) V {
 	return v
 }
 
+// Peek returns the value for key without creating it or counting as an
+// access.
+func (m *Map[V]) Peek(key string) (V, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	e, ok := m.entries[key]
+	if !ok {
+		var zero V
+		return zero, false
+	}
+	return e.value, true
+}
+
 // Sweep removes entries whose lastAccess is older than maxAge.
 // Returns the number of entries removed.
 func (m *Map[V]) Sweep(maxAge time.Duration) int {

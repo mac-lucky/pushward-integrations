@@ -140,3 +140,30 @@ func TestAllowIP_IndependentBuckets(t *testing.T) {
 		t.Error("IP B: expected allowed (separate bucket)")
 	}
 }
+
+func TestIPExhausted_SpendsNothing(t *testing.T) {
+	saved := ipLimiters
+	ipLimiters = newLimiterMap(5, 20, 5_000)
+	t.Cleanup(func() { ipLimiters = saved })
+
+	if IPExhausted("10.0.0.1") {
+		t.Fatal("an unseen IP is exhausted")
+	}
+	if ipLimiters.entries.Len() != 0 {
+		t.Fatal("IPExhausted created a bucket")
+	}
+	for i := 0; i < 20; i++ {
+		if IPExhausted("10.0.0.1") {
+			t.Fatalf("exhausted after %d allowed requests", i)
+		}
+		for j := 0; j < 50; j++ {
+			IPExhausted("10.0.0.1")
+		}
+		if !AllowIP("10.0.0.1") {
+			t.Fatalf("request %d: IPExhausted spent a token", i+1)
+		}
+	}
+	if !IPExhausted("10.0.0.1") {
+		t.Error("not exhausted after the whole burst")
+	}
+}

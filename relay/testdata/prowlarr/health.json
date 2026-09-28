@@ -1,0 +1,9 @@
+{
+  "eventType": "Health",
+  "instanceName": "Prowlarr",
+  "applicationUrl": "",
+  "level": "warning",
+  "message": "Indexers unavailable due to failures: NZBgeek",
+  "type": "IndexerStatusCheck",
+  "wikiUrl": "https://wiki.servarr.com/prowlarr/system#indexers-are-unavailable-due-to-failures"
+}

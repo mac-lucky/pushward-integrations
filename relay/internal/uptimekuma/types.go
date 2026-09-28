@@ -1,9 +1,11 @@
 package uptimekuma
 
+// uptimekumaPayload is Uptime Kuma's webhook body. Monitor and Heartbeat are
+// null in the test notification sent from its notification settings.
 type uptimekumaPayload struct {
-	Monitor   monitorInfo   `json:"monitor"`
-	Heartbeat heartbeatInfo `json:"heartbeat"`
-	Msg       string        `json:"msg"`
+	Monitor   *monitorInfo   `json:"monitor"`
+	Heartbeat *heartbeatInfo `json:"heartbeat"`
+	Msg       string         `json:"msg"`
 }
 
 type monitorInfo struct {

@@ -1,0 +1,13 @@
+{
+  "source": "slack",
+  "headers": {"User-Agent": "Go-http-client/1.1"},
+  "payload": {
+    "text": "Deploy of api finished",
+    "blocks": [
+      {"type": "section", "text": {"type": "mrkdwn", "text": "*Deploy finished*\napi v2.14.0 is live"}},
+      {"type": "context", "elements": [{"type": "mrkdwn", "text": "by deploy-bot"}]}
+    ],
+    "username": "deploy-bot",
+    "icon_emoji": ":rocket:"
+  }
+}

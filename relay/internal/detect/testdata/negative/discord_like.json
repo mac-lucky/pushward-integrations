@@ -1,0 +1,15 @@
+{
+  "source": "discord",
+  "headers": {"User-Agent": "python-requests/2.32.3"},
+  "payload": {
+    "username": "Watchtower",
+    "content": "Updated 2 containers",
+    "embeds": [{
+      "title": "Watchtower updates on nas",
+      "description": "nginx: 1.27.1 -> 1.27.2\nredis: 7.4.0 -> 7.4.1",
+      "color": 3066993,
+      "timestamp": "2026-09-27T04:00:00Z",
+      "footer": {"text": "watchtower"}
+    }]
+  }
+}
