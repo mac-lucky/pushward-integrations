@@ -156,17 +156,13 @@ All 16 provider blocks default to `enabled: true`. Env toggles exist **only** fo
 
 ### Universal webhook
 
-The universal route is the only provider that starts disabled: it needs a public URL and a key to sign its review and edit links.
+The universal route is the only provider that starts disabled. See [Root route](#root-route-post-) for what it does.
 
 | Env Variable | Config Key | Description | Default |
 |---|---|---|---|
-| `PUSHWARD_UNIVERSAL_ENABLED` | `providers.universal.enabled` | Turn on the universal route and the mapping editor. | `false` |
-| `PUSHWARD_UNIVERSAL_PUBLIC_URL` | `providers.universal.public_url` | Base URL the relay is reached at, without a trailing slash, e.g. `https://relay.example.com`. Review and edit links are built on it. Up to 128 bytes. | _(required when enabled)_ |
-| `PUSHWARD_UNIVERSAL_REVIEW_KEY` | `providers.universal.review_key` | Base64 key, at least 32 bytes decoded, that signs review, edit and list links (`openssl rand -base64 32`). Changing it voids every link already sent. | _(required when enabled)_ |
-| `PUSHWARD_UNIVERSAL_REVIEW_KEY_FILE` | `providers.universal.review_key_file` | Read the key from a file instead. Set this or the key, not both. | _(empty)_ |
-| `PUSHWARD_UNIVERSAL_RANKER` | `providers.universal.ranker` | Let the built-in ranker propose mappings ahead of the heuristic. It only takes over when the weights shipped with the build passed their evaluation gate; otherwise the relay logs that at startup and keeps the heuristic. | `false` |
-
-The key is read once at startup. With several replicas, restart them all after changing it.
+| `PUSHWARD_UNIVERSAL_ENABLED` | `providers.universal.enabled` | Turn on the universal route. | `false` |
+| `PUSHWARD_UNIVERSAL_PRESETS` | `providers.universal.presets` | Map payloads from the services listed under [Presets](#presets) the way their preset says. Off, every payload the route gets is sent as a plain notification. | `true` |
+| `PUSHWARD_UNIVERSAL_RANKER` | `providers.universal.ranker` | Let the built-in ranker pick the title, body and link of a plain notification ahead of the heuristic. It only takes over when the weights shipped with the build passed their evaluation gate; otherwise the relay logs that at startup and keeps the heuristic. | `false` |
 
 ### Per-provider tuning (YAML only)
 
@@ -316,7 +312,7 @@ Any of the services below can also post to the relay's root, `https://relay.push
 
 TrueNAS is never detected: the OpsGenie protocol it speaks isn't TrueNAS's alone, so keep its API URL at `/truenas`. Gitea and Forgejo events other than Actions runs are not either, and neither are Lidarr, Readarr or Whisparr. A request with `X-GitHub-Event` (and no Gitea headers), `X-Gitlab-Event`, `X-Event-Key` (Bitbucket) or `Sentry-Hook-Resource` skips the body checks altogether.
 
-Anything the relay doesn't recognise goes to the universal route, which maps arbitrary JSON onto a notification or Live Activity and asks you to review each new payload shape. So does a recognised payload whose provider is disabled. The universal route is off by default (`providers.universal.enabled`, `PUSHWARD_UNIVERSAL_ENABLED`), and while it is off those requests get the `404` that `POST /` has always returned. Add `?source=` (lowercase letters, digits and `-`, up to 32) to name the sender, so its payloads get mappings of their own:
+Anything the relay doesn't recognise goes to the universal route, and so does a recognised payload whose provider is disabled. A payload from a service with a preset (see [Presets](#presets)) is mapped the way the preset says, which can open and end a Live Activity. Any other JSON is sent as one notification: the relay picks the fields that read most like a title, a body and a link. When the payload has no title of its own the source is the title, and when it has no body the body lists up to four of its most readable fields, with ids, times and links left out and anything that looks secret masked. Nothing about a payload is stored, and nothing asks you to confirm anything. The universal route is off by default (`providers.universal.enabled`, `PUSHWARD_UNIVERSAL_ENABLED`), and while it is off those requests get the `404` that `POST /` has always returned. Add `?source=` (lowercase letters, digits and `-`, up to 32) to name the sender: its notifications get their own thread, it titles a payload that has none, and a few presets only apply when it names their service:
 
 ```
 https://relay.pushward.app/?source=alertmanager
@@ -326,19 +322,52 @@ https://relay.pushward.app/?source=alertmanager
 
 The relay reads the body for detection only when the request carries an `hlk_` key and a JSON `Content-Type`, declares no `Content-Length` of 1 MB or more, and comes from an IP that is still under its rate limit. A missing or `text/plain` `Content-Type` counts as JSON, because it is rewritten to `application/json` before this check. A chunked body declares no length, so it is read up to 1 MB and passed on undetected if it gets that far. A request that fails any of these goes to the universal route, which answers `401` for a missing key, `413` for a body over the limit and `429` over the rate limit; with the universal route off, it gets `404`. `pushward_relay_root_dispatch_total{route,via}` counts where requests to `/` went and why: `header` or `body` for a detected sender, `disabled`, `veto`, `none`, or `skipped` for one whose body was not inspected.
 
-#### Editing a mapping
+#### Presets
 
-The review notification has an "Edit" button, and so does the raw notification a rejected shape sends. It opens a page on the relay where you choose which field becomes the title, body, link, correlation id, progress, severity and status, whether the shape arrives as a notification, an alert card or a progress card, and what each severity or status value means. "Save" confirms the mapping as shown. "Send raw instead" turns mapping off for that shape. The page takes no integration key because the link is the credential, so treat it like one. It works for 30 days.
+A preset is a fixed mapping for one documented payload of a service: which field is the title, the body and the link, which value keys one alert or run, and what each status and severity value means. The relay picks one by the fields a payload has, never by its values, so every event of a kind arrives the same way. An alert preset opens an alert card that resolves when the alert clears; a progress preset opens a card for a CI run or deploy that ends as "Done", or in red when the run failed. The presets live in `internal/universal/presets/data/`, each with a link to the vendor page it was written from.
 
-When the notification is gone, or the link has expired, ask for a new one:
+A request whose headers name a sender with no route here (the Lidarr, Readarr and Whisparr `User-Agent`, `X-GitHub-Event`, `X-Gitlab-Event`, `X-Event-Key`, `Sentry-Hook-Resource`, and Gitea and Forgejo events other than Actions runs) gets that name as its `?source=` unless it set one, so the presets that need a source apply to it too.
 
-```
-curl -X POST https://relay.pushward.app/universal/links -H "Authorization: Bearer hlk_..."
-```
+| Service | Presets | Live Activity |
+|---|---|---|
+| Amazon SNS | `aws-sns` | - |
+| Atlassian Statuspage | `statuspage-component`, `statuspage-incident` | `statuspage-component` alert, `statuspage-incident` alert |
+| Azure Monitor | `azure-monitor` | `azure-monitor` alert |
+| Better Stack | `betterstack-incident` (needs `?source=betterstack`) | - |
+| Bitbucket Cloud | `bitbucket-commit-status`, `bitbucket-pullrequest`, `bitbucket-push` | - |
+| Buildkite | `buildkite-build` | `buildkite-build` progress |
+| CircleCI | `circleci-job`, `circleci-workflow` | - |
+| Docker Hub | `dockerhub-push` | - |
+| Drone | `drone-build` | `drone-build` progress |
+| Flux | `flux-event` | - |
+| GitHub | `github-check-run`, `github-issues`, `github-pull-request`, `github-push`, `github-release`, `github-workflow-run` | `github-check-run` progress, `github-workflow-run` progress |
+| GitLab | `gitlab-deployment`, `gitlab-issue`, `gitlab-merge-request`, `gitlab-pipeline`, `gitlab-push` | `gitlab-deployment` progress, `gitlab-pipeline` progress |
+| Google Cloud Monitoring | `gcp-monitoring` | `gcp-monitoring` alert |
+| Grafana OnCall | `grafana-oncall` | `grafana-oncall` alert |
+| Graylog | `graylog` | - |
+| Harbor | `harbor-artifact`, `harbor-cloudevents` | - |
+| Honeybadger | `honeybadger-check-in`, `honeybadger-fault`, `honeybadger-uptime` | `honeybadger-check-in` alert, `honeybadger-fault` alert, `honeybadger-uptime` alert |
+| Jenkins Notification plugin | `jenkins-notification` | `jenkins-notification` progress |
+| Lidarr | `lidarr-download-failure`, `lidarr-download`, `lidarr-grab`, `lidarr-health` (needs `?source=lidarr`), `lidarr-import-failure` | `lidarr-health` alert |
+| Netdata | `netdata-alert`, `netdata-reachability` (needs `?source=netdata`) | - |
+| Netlify | `netlify-deploy` | `netlify-deploy` progress |
+| New Relic | `newrelic-classic` (needs `?source=newrelic`) | `newrelic-classic` alert |
+| Nextcloud | `nextcloud-form`, `nextcloud-mail`, `nextcloud-node-pair`, `nextcloud-node` | - |
+| Opsgenie | `opsgenie` | `opsgenie` alert |
+| PagerDuty | `pagerduty-incident` | `pagerduty-incident` alert |
+| Pingdom | `pingdom` | `pingdom` alert |
+| Prometheus Alertmanager | `alertmanager` | `alertmanager` alert |
+| Readarr | `readarr-download`, `readarr-grab`, `readarr-health` (needs `?source=readarr`) | - |
+| Rollbar | `rollbar-item` | `rollbar-item` alert |
+| Semaphore | `semaphore-pipeline` | - |
+| Sentry | `sentry-event-alert`, `sentry-issue`, `sentry-legacy-webhook`, `sentry-metric-alert` | `sentry-issue` alert, `sentry-metric-alert` alert |
+| updown.io | `updown` | - |
+| Watchtower | `watchtower` (needs `?source=watchtower`) | - |
+| Whisparr | `whisparr-download` (needs `?source=whisparr`), `whisparr-grab` (needs `?source=whisparr`), `whisparr-health` (needs `?source=whisparr`), `whisparr-v3-download`, `whisparr-v3-grab` | `whisparr-health` alert |
 
-The relay answers `202` and sends a notification with an "Open editor" button. That opens a list of every mapping for your key, each with its own edit link. The list link works for 24 hours, and the edit links on it stop working when it does. A key can ask once a minute per relay instance.
+For GitHub, subscribe to workflow runs rather than check runs: a check run opens one card per job. Jenkins's default "all" events end a build twice (COMPLETED and FINALIZED), so each build sends two end notifications; pick "Completed" for one.
 
-Next to each field the page shows a sample value from the payload that created the mapping, redacted the same way as the review notification (credentials, tokens, emails, card and phone numbers are masked). Samples are deleted 7 days after the mapping was proposed. After that you only see field names.
+Set `PUSHWARD_UNIVERSAL_PRESETS=false` to send every payload as a plain notification instead.
 
 ---
 

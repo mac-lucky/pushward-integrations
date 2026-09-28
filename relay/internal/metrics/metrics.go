@@ -127,6 +127,15 @@ var (
 		Help:      "Universal webhooks delivered, by where the mapping came from and kind.",
 	}, []string{"via", "kind"})
 
+	// UniversalPresetHitsTotal counts universal webhooks mapped by a preset,
+	// by preset id: a closed set, embedded in the binary.
+	UniversalPresetHitsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "pushward_relay",
+		Subsystem: "universal",
+		Name:      "preset_hits_total",
+		Help:      "Universal webhooks mapped by a preset, by preset.",
+	}, []string{"preset"})
+
 	// UniversalProposerFallbackTotal counts proposals the primary proposer
 	// could not make, by universal.Fallback's reason.
 	UniversalProposerFallbackTotal = promauto.NewCounterVec(prometheus.CounterOpts{

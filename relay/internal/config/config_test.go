@@ -31,6 +31,7 @@ var relayEnvVars = []string{
 	"PUSHWARD_POSTER_ALLOW_PRIVATE_HOSTS",
 	"PUSHWARD_STATE_KEY_MODE",
 	"PUSHWARD_UNIVERSAL_ENABLED",
+	"PUSHWARD_UNIVERSAL_PRESETS",
 	"PUSHWARD_UNIVERSAL_RANKER",
 }
 
@@ -147,7 +148,8 @@ func TestApplyEnvOverrides_ProviderEnabled(t *testing.T) {
 		"PUSHWARD_GITEA_ENABLED":     func(c *Config) *bool { return &c.Providers.Gitea.Enabled },
 		"PUSHWARD_UNIVERSAL_ENABLED": func(c *Config) *bool { return &c.Providers.Universal.Enabled },
 		// Not a provider switch, but the same parsing.
-		"PUSHWARD_UNIVERSAL_RANKER": func(c *Config) *bool { return &c.Providers.Universal.Ranker },
+		"PUSHWARD_UNIVERSAL_PRESETS": func(c *Config) *bool { return &c.Providers.Universal.Presets },
+		"PUSHWARD_UNIVERSAL_RANKER":  func(c *Config) *bool { return &c.Providers.Universal.Ranker },
 	}
 
 	for name, field := range providers {
@@ -616,7 +618,8 @@ func TestDefaultDismissalDelay(t *testing.T) {
 	}
 }
 
-// The universal route needs nothing but its switch.
+// The universal route needs nothing but its switch, and its presets are on
+// unless turned off.
 func TestUniversalConfig(t *testing.T) {
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
@@ -632,6 +635,9 @@ func TestUniversalConfig(t *testing.T) {
 			u := cfg.Providers.Universal
 			if u.Enabled != enabled {
 				t.Errorf("Enabled = %v, want %v", u.Enabled, enabled)
+			}
+			if !u.Presets {
+				t.Error("Presets is off by default")
 			}
 			if u.Priority != 3 || u.StaleTimeout != 4*time.Hour || u.EndDelay != 5*time.Second || u.EndDisplayTime != 4*time.Second {
 				t.Errorf("defaults changed: %+v", u.BaseProviderConfig)

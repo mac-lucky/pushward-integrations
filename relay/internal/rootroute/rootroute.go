@@ -90,7 +90,7 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		rt.mux.ServeHTTP(w, r)
 		return
 	}
-	route, via, rule := rt.route(w, r)
+	route, via, rule, source := rt.route(w, r)
 	metrics.RootDispatchTotal.WithLabelValues(route, via).Inc()
 	attrs := []attribute.KeyValue{
 		attribute.String("pushward.root.route", route),
@@ -106,6 +106,16 @@ func (rt *Router) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// wrappers outside hold the same pointer for metrics and traces.
 		u := *r.URL
 		u.Path, u.RawPath = route, ""
+		// A sender the headers name, whose webhook nothing here takes,
+		// reaches the universal route as if it had set ?source= itself;
+		// one it did set is kept. The name is appended, so the sender's own
+		// query reaches the route byte for byte.
+		if route == Universal && source != "" && !u.Query().Has("source") {
+			if u.RawQuery != "" {
+				u.RawQuery += "&"
+			}
+			u.RawQuery += "source=" + url.QueryEscape(source)
+		}
 		r.URL = &u
 	}
 	rt.mux.ServeHTTP(w, r)
@@ -123,27 +133,27 @@ func (rt *Router) fallback() string {
 // route picks where r goes. A request that fails a check made before the
 // body is read goes to the fallback unread, and the route there answers it:
 // 401 without a key, 429 over the IP limit, 413 when too large.
-func (rt *Router) route(w http.ResponseWriter, r *http.Request) (route, via, rule string) {
+func (rt *Router) route(w http.ResponseWriter, r *http.Request) (route, via, rule, source string) {
 	if !rt.readable(r) {
-		return rt.fallback(), viaSkipped, ""
+		return rt.fallback(), viaSkipped, "", ""
 	}
 	body, err := rt.read(w, r)
 	if err != nil || len(body) >= humautil.MaxWebhookBytes {
-		return rt.fallback(), viaSkipped, ""
+		return rt.fallback(), viaSkipped, "", ""
 	}
 	m, ok, err := rt.detect(r, body)
 	if err != nil {
-		return rt.fallback(), viaSkipped, ""
+		return rt.fallback(), viaSkipped, "", ""
 	}
 	switch {
 	case ok && rt.enabled[m.Route]:
-		return m.Route, m.Via, m.Rule
+		return m.Route, m.Via, m.Rule, ""
 	case ok:
-		return rt.fallback(), viaDisabled, m.Rule
+		return rt.fallback(), viaDisabled, m.Rule, ""
 	case m.Via == detect.ViaVeto:
-		return rt.fallback(), detect.ViaVeto, m.Rule
+		return rt.fallback(), detect.ViaVeto, m.Rule, m.Source
 	}
-	return rt.fallback(), viaNone, ""
+	return rt.fallback(), viaNone, "", ""
 }
 
 // readable reports whether the body is worth reading: the request carries a

@@ -247,11 +247,15 @@ type TrueNASConfig struct {
 	BaseProviderConfig `yaml:",inline"`
 }
 
-// UniversalConfig holds the universal webhook route, POST /universal, which
-// turns any JSON payload into a notification, its title, body and link picked
-// from the payload. It is off by default.
+// UniversalConfig holds the universal webhook route, POST /universal. A
+// payload a preset knows is mapped the way the preset says; any other becomes
+// a notification, its title, body and link picked from the payload. The route
+// is off by default.
 type UniversalConfig struct {
 	BaseProviderConfig `yaml:",inline"`
+	// Presets turns on the built-in mappings for the payloads of known
+	// services. Load sets it; a config made in code has it off.
+	Presets bool `yaml:"presets"`
 	// Ranker lets a trained ranker propose mappings ahead of the heuristic.
 	Ranker bool `yaml:"ranker"`
 }
@@ -443,6 +447,7 @@ func Load(path string) (*Config, error) {
 			// StaleTimeout matches gitea's: a CI run mapped as progress
 			// may go hours between two webhooks.
 			Universal: UniversalConfig{
+				Presets: true,
 				BaseProviderConfig: BaseProviderConfig{
 					Priority:       3,
 					CleanupDelay:   15 * time.Minute,
@@ -559,6 +564,9 @@ func (cfg *Config) applyEnvOverrides() error {
 		return err
 	}
 	if err := sharedconfig.EnvBool("PUSHWARD_UNIVERSAL_ENABLED", &cfg.Providers.Universal.Enabled); err != nil {
+		return err
+	}
+	if err := sharedconfig.EnvBool("PUSHWARD_UNIVERSAL_PRESETS", &cfg.Providers.Universal.Presets); err != nil {
 		return err
 	}
 	if err := sharedconfig.EnvBool("PUSHWARD_UNIVERSAL_RANKER", &cfg.Providers.Universal.Ranker); err != nil {

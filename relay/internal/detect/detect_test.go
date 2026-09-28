@@ -113,22 +113,23 @@ func TestDetect(t *testing.T) {
 // so a veto that stopped applying would show as a match.
 func TestVetoesBeatBodyRules(t *testing.T) {
 	tests := []struct {
-		name string
-		h    http.Header
-		body string
-		rule string
+		name   string
+		h      http.Header
+		body   string
+		rule   string
+		source string
 	}{
-		{"radarr ua without eventType", hdr("User-Agent", "Radarr/5.14"), `{"endpoint_name":"api","status":"TRIGGERED"}`, "starr-other"},
-		{"lidarr", hdr("User-Agent", "Lidarr/2.5.3"), `{"eventType":"Grab","app":"music","event":"deployed"}`, "starr-other"},
-		{"readarr", hdr("User-Agent", "Readarr/0.4"), `{"eventType":"Grab","event":"CONDITION_SNAPSHOT_START"}`, "starr-other"},
-		{"whisparr", hdr("User-Agent", "Whisparr/2.0"), `{"eventType":"Test","endpoint_name":"api","status":"RESOLVED"}`, "starr-other"},
-		{"gitea push", hdr("X-Gitea-Event", "push"), `{"app":"web","event":"sync-failed"}`, "gitea-other"},
-		{"forgejo issue", hdr("X-Forgejo-Event", "issues"), `{"NotificationType":"ItemAdded","ServerName":"home"}`, "gitea-other"},
-		{"github", hdr("X-GitHub-Event", "ping"), `{"endpoint_name":"api","status":"TRIGGERED"}`, "github"},
-		{"gogs", hdr("X-Gogs-Event", "push"), `{"alerts":[],"groupKey":"{}","version":"1"}`, "gogs"},
-		{"gitlab", hdr("X-Gitlab-Event", "Pipeline Hook"), `{"event":"added","doc_id":1}`, "gitlab"},
-		{"bitbucket", hdr("X-Event-Key", "repo:push"), `{"diff_url":"https://x/d","url":"https://x"}`, "bitbucket"},
-		{"sentry", hdr("Sentry-Hook-Resource", "issue"), `{"version":"1.0","title":"Unmanic - x","message":"m","type":"info"}`, "sentry"},
+		{"radarr ua without eventType", hdr("User-Agent", "Radarr/5.14"), `{"endpoint_name":"api","status":"TRIGGERED"}`, "starr-other", "radarr"},
+		{"lidarr", hdr("User-Agent", "Lidarr/2.5.3"), `{"eventType":"Grab","app":"music","event":"deployed"}`, "starr-other", "lidarr"},
+		{"readarr", hdr("User-Agent", "Readarr/0.4"), `{"eventType":"Grab","event":"CONDITION_SNAPSHOT_START"}`, "starr-other", "readarr"},
+		{"whisparr", hdr("User-Agent", "Whisparr/2.0"), `{"eventType":"Test","endpoint_name":"api","status":"RESOLVED"}`, "starr-other", "whisparr"},
+		{"gitea push", hdr("X-Gitea-Event", "push"), `{"app":"web","event":"sync-failed"}`, "gitea-other", "gitea"},
+		{"forgejo issue", hdr("X-Forgejo-Event", "issues"), `{"NotificationType":"ItemAdded","ServerName":"home"}`, "gitea-other", "forgejo"},
+		{"github", hdr("X-GitHub-Event", "ping"), `{"endpoint_name":"api","status":"TRIGGERED"}`, "github", "github"},
+		{"gogs", hdr("X-Gogs-Event", "push"), `{"alerts":[],"groupKey":"{}","version":"1"}`, "gogs", "gogs"},
+		{"gitlab", hdr("X-Gitlab-Event", "Pipeline Hook"), `{"event":"added","doc_id":1}`, "gitlab", "gitlab"},
+		{"bitbucket", hdr("X-Event-Key", "repo:push"), `{"diff_url":"https://x/d","url":"https://x"}`, "bitbucket", "bitbucket"},
+		{"sentry", hdr("Sentry-Hook-Resource", "issue"), `{"version":"1.0","title":"Unmanic - x","message":"m","type":"info"}`, "sentry", "sentry"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -136,8 +137,8 @@ func TestVetoesBeatBodyRules(t *testing.T) {
 				t.Fatal("no body rule claims the body, so the row tests nothing")
 			}
 			m, ok := Detect(tt.h, []byte(tt.body))
-			if ok || m.Via != ViaVeto || m.Rule != tt.rule {
-				t.Errorf("Detect = %+v, %v; want a %s veto", m, ok, tt.rule)
+			if ok || m.Via != ViaVeto || m.Rule != tt.rule || m.Source != tt.source {
+				t.Errorf("Detect = %+v, %v; want a %s veto naming %s", m, ok, tt.rule, tt.source)
 			}
 		})
 	}

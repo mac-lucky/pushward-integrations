@@ -108,7 +108,7 @@ func (hs *harness) deliverAs(t *testing.T, source, channels string, body []byte)
 		ctx = context.WithValue(ctx, overrides.ContextKey(), ov)
 	}
 	r := &request{key: testKey, source: source, fields: fields, shapes: shapes, truncated: truncated, log: slog.Default()}
-	_, err = hs.h.deliver(ctx, r, m, "preset")
+	_, err = hs.h.deliver(ctx, r, m, viaPreset)
 	return err
 }
 
@@ -740,5 +740,158 @@ func TestDetailLinesBudgetSweep(t *testing.T) {
 				t.Fatalf("title %d: the request has no display name, so the sweep proves nothing", n)
 			}
 		}
+	}
+}
+
+func newPresetHarness(t *testing.T) *harness {
+	t.Helper()
+	hs := newHarness(t)
+	hs.h.config.Presets = true
+	return hs
+}
+
+func presetFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("../universal/presets/testdata", name)) // #nosec G304 -- fixture under the presets package
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// An Alertmanager payload maps through its preset: a card that opens on
+// firing and ends on resolved, keyed on the group, with no source set.
+func TestPresetOpensAndEndsACard(t *testing.T) {
+	hs := newPresetHarness(t)
+	hits := counterValue(t, "pushward_relay_universal_preset_hits_total", map[string]string{"preset": "alertmanager"})
+	if w := hs.post(t, "/universal", fixture(t, "alertmanager_firing.json")); w.Code != http.StatusOK {
+		t.Fatalf("firing: %d %s", w.Code, w.Body.String())
+	}
+	calls := hs.snapshot()
+	if len(calls) != 3 || calls[0].Path != "/activities" {
+		t.Fatalf("firing calls = %+v", calls)
+	}
+	var create struct {
+		Slug string `json:"slug"`
+		Name string `json:"name"`
+	}
+	testutil.UnmarshalBody(t, calls[0].Body, &create)
+	if create.Name != "DiskAlmostFull" {
+		t.Errorf("card name = %q", create.Name)
+	}
+	if c := testutil.LastActivityUpdate(t, calls); c.Severity != "critical" || c.State != "Disk /srv on nas-01 is 93% full" {
+		t.Errorf("firing content = %+v", c)
+	}
+	if w := hs.post(t, "/universal", fixture(t, "alertmanager_resolved.json")); w.Code != http.StatusOK {
+		t.Fatalf("resolved: %d %s", w.Code, w.Body.String())
+	}
+	calls = testutil.WaitForCalls(t, hs.calls, hs.mu, 6, 5*time.Second)
+	last := calls[len(calls)-1]
+	var end pushward.UpdateRequest
+	testutil.UnmarshalBody(t, last.Body, &end)
+	if last.Path != "/activities/"+create.Slug || end.State != pushward.StateEnded {
+		t.Errorf("last call %s %s = %+v", last.Method, last.Path, end)
+	}
+	got := counterValue(t, "pushward_relay_universal_preset_hits_total", map[string]string{"preset": "alertmanager"}) - hits
+	if got != 2 {
+		t.Errorf("preset_hits_total{preset=alertmanager} grew by %v, want 2", got)
+	}
+}
+
+// A notification preset sends its own title and body, not the proposer's
+// picks.
+func TestPresetNotification(t *testing.T) {
+	hs := newPresetHarness(t)
+	hs.post(t, "/universal", presetFixture(t, "graylog_event.json"))
+	if n := only(t, hs); n.Title != "Failed SSH logins" || n.Body != "Failed SSH logins: count()=25.0" {
+		t.Errorf("title/body = %q / %q", n.Title, n.Body)
+	}
+	if n := activityCalls(hs.snapshot()); n != 0 {
+		t.Errorf("%d activity calls", n)
+	}
+}
+
+// With presets off, a payload a preset knows is sent the way an unknown one
+// is: one plain notification.
+func TestPresetsOff(t *testing.T) {
+	hs := newHarness(t)
+	hs.post(t, "/universal", fixture(t, "alertmanager_firing.json"))
+	calls := hs.snapshot()
+	if n := activityCalls(calls); n != 0 || len(notifications(t, calls)) != 1 {
+		t.Errorf("calls = %+v", calls)
+	}
+}
+
+// A payload no preset knows goes out as a plain notification with presets
+// on, counted as the proposer's.
+func TestUnknownWithPresetsOn(t *testing.T) {
+	hs := newPresetHarness(t)
+	before := counterValue(t, "pushward_relay_universal_events_total", map[string]string{"via": viaProposer, "kind": "notification"})
+	hs.post(t, "/universal?source=backup", []byte(`{"title":"Backup finished","details":"Copied 12 files to the NAS in 3 minutes"}`))
+	if n := only(t, hs); n.Title != "Backup finished" || n.Body != "Copied 12 files to the NAS in 3 minutes" {
+		t.Errorf("title/body = %q / %q", n.Title, n.Body)
+	}
+	if got := counterValue(t, "pushward_relay_universal_events_total", map[string]string{"via": viaProposer, "kind": "notification"}) - before; got != 1 {
+		t.Errorf("events_total{via=proposer} grew by %v, want 1", got)
+	}
+}
+
+// A GitHub check run keys its end on the conclusion, so a failed run ends red
+// and says so, where the run's status alone would read "completed".
+func TestPresetFailedRunEndsRed(t *testing.T) {
+	hs := newPresetHarness(t)
+	if w := hs.post(t, "/universal", presetFixture(t, "github-check-run_created.json")); w.Code != http.StatusOK {
+		t.Fatalf("created: %d %s", w.Code, w.Body.String())
+	}
+	if n := activityCalls(hs.snapshot()); n == 0 {
+		t.Fatal("the running check opened no card")
+	}
+	if w := hs.post(t, "/universal", presetFixture(t, "github-check-run_completed.json")); w.Code != http.StatusOK {
+		t.Fatalf("completed: %d %s", w.Code, w.Body.String())
+	}
+	calls := testutil.WaitForCalls(t, hs.calls, hs.mu, 5, 5*time.Second)
+	var end pushward.UpdateRequest
+	testutil.UnmarshalBody(t, calls[len(calls)-1].Body, &end)
+	if end.State != pushward.StateEnded || end.Content.AccentColor != pushward.ColorRed || end.Content.State != "Failure" {
+		t.Errorf("end = %+v", end)
+	}
+}
+
+// failure reads the end value first, then a one-word status body when the
+// end value only says the run is over; never a branch, a sentence, or a
+// body after an end value that already says the run went well.
+func TestFailure(t *testing.T) {
+	for _, c := range []struct{ raw, body, want string }{
+		{"failed", "Deploy to prod", "failed"},
+		{"killed", "", "killed"},
+		{"declined", "", "declined"},
+		{"COMPLETED", "FAILURE", "FAILURE"},
+		{"FINALIZED", "ABORTED", "ABORTED"},
+		{"COMPLETED", "SUCCESS", ""},
+		{"completed", "fix-failure", ""},
+		{"completed", "Retry the failed upload", ""},
+		{"success", "failure", ""},
+		{"", "", ""},
+	} {
+		if got := failure(universal.Event{LifecycleRaw: c.raw, Body: c.body}); got != c.want {
+			t.Errorf("failure(%q, %q) = %q, want %q", c.raw, c.body, got, c.want)
+		}
+	}
+}
+
+// A Jenkins build ends on its phase, which only says it is over; the status
+// in its body makes the failed build's card end red.
+func TestPresetJenkinsFailureEndsRed(t *testing.T) {
+	hs := newPresetHarness(t)
+	for _, name := range []string{"jenkins-notification_started.json", "jenkins-notification_completed.json"} {
+		if w := hs.post(t, "/universal", presetFixture(t, name)); w.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", name, w.Code, w.Body.String())
+		}
+	}
+	calls := testutil.WaitForCalls(t, hs.calls, hs.mu, 5, 5*time.Second)
+	var end pushward.UpdateRequest
+	testutil.UnmarshalBody(t, calls[len(calls)-1].Body, &end)
+	if end.State != pushward.StateEnded || end.Content.AccentColor != pushward.ColorRed || end.Content.State != "Failure" {
+		t.Errorf("end = %+v", end)
 	}
 }

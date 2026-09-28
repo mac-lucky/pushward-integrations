@@ -23,11 +23,14 @@ const (
 	ViaVeto = "veto"
 )
 
-// Match is the route a webhook belongs on, and the rule that said so.
+// Match is the route a webhook belongs on, and the rule that said so. Source
+// names the sender of a vetoed webhook when the headers tell: the universal
+// route then reads it as the ?source= the sender did not set.
 type Match struct {
-	Route string
-	Rule  string
-	Via   string
+	Route  string
+	Rule   string
+	Via    string
+	Source string
 }
 
 // Detect returns the route of the provider that sent a webhook with headers h
@@ -72,16 +75,16 @@ func byHeader(h http.Header, v *view) (m Match, ok, decided bool) {
 	for _, a := range starrAgents {
 		if strings.HasPrefix(ua, a.prefix) {
 			if v.isString("eventType") {
-				return Match{Route: a.route, Rule: strings.ToLower(strings.TrimSuffix(a.prefix, "/")), Via: ViaHeader}, true, true
+				return Match{Route: a.route, Rule: agentName(a.prefix), Via: ViaHeader}, true, true
 			}
 			// Radarr's other connections (Apprise, ntfy, Gotify) post their
 			// own formats with the same User-Agent.
-			return veto("starr-other")
+			return veto("starr-other", agentName(a.prefix))
 		}
 	}
 	for _, p := range otherStarr {
 		if strings.HasPrefix(ua, p) {
-			return veto("starr-other")
+			return veto("starr-other", agentName(p))
 		}
 	}
 
@@ -95,28 +98,37 @@ func byHeader(h http.Header, v *view) (m Match, ok, decided bool) {
 		}
 		// Push, issue and pull request events: the relay only follows
 		// Actions runs.
-		return veto("gitea-other")
+		if forgejo {
+			return veto("gitea-other", "forgejo")
+		}
+		return veto("gitea-other", "gitea")
 	}
 
 	// Gitea sends X-GitHub-Event and X-Gogs-Event too, so these are vetoes
 	// only once the Gitea headers are known to be absent.
 	switch {
 	case h.Get("X-GitHub-Event") != "":
-		return veto("github")
+		return veto("github", "github")
 	case h.Get("X-Gogs-Event") != "":
-		return veto("gogs")
+		return veto("gogs", "gogs")
 	case h.Get("X-Gitlab-Event") != "":
-		return veto("gitlab")
+		return veto("gitlab", "gitlab")
 	case h.Get("X-Event-Key") != "":
-		return veto("bitbucket")
+		return veto("bitbucket", "bitbucket")
 	case h.Get("Sentry-Hook-Resource") != "":
-		return veto("sentry")
+		return veto("sentry", "sentry")
 	}
 	return Match{}, false, false
 }
 
-func veto(rule string) (Match, bool, bool) {
-	return Match{Rule: rule, Via: ViaVeto}, false, true
+func veto(rule, source string) (Match, bool, bool) {
+	return Match{Rule: rule, Via: ViaVeto, Source: source}, false, true
+}
+
+// agentName is the app a User-Agent prefix names, as a source: "Lidarr/"
+// gives "lidarr".
+func agentName(prefix string) string {
+	return strings.ToLower(strings.TrimSuffix(prefix, "/"))
 }
 
 // bodyRule is a provider's signature on the top-level object. Each is written

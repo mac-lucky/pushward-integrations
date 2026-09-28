@@ -301,7 +301,7 @@ func (h *Handler) end(ctx context.Context, r *request, ev universal.Event, a act
 		return nil
 	}
 	level := pushward.LevelPassive
-	if ev.Kind == universal.KindProgress && failed(ev.LifecycleRaw) {
+	if ev.Kind == universal.KindProgress && failure(ev) != "" {
 		level = pushward.LevelActive
 	}
 	slug := ""
@@ -378,8 +378,8 @@ func (h *Handler) finalContent(r *request, ev universal.Event) (pushward.Content
 		AccentColor: pushward.ColorGreen,
 		URL:         ev.URL,
 	}
-	if failed(ev.LifecycleRaw) {
-		c.State = text.TruncateHard(text.Capitalize(ev.LifecycleRaw), maxStateRunes)
+	if o := failure(ev); o != "" {
+		c.State = text.TruncateHard(text.Capitalize(strings.ToLower(o)), maxStateRunes)
 		c.Icon = "xmark.circle.fill"
 		c.AccentColor = pushward.ColorRed
 		if ev.Progress != nil {
@@ -392,6 +392,32 @@ func (h *Handler) finalContent(r *request, ev universal.Event) (pushward.Content
 var failureWords = map[string]bool{
 	"fail": true, "failed": true, "failure": true, "error": true, "errored": true,
 	"aborted": true, "abort": true, "timeout": true, "timedout": true,
+	// Drone: a cancelled build, and one refused approval.
+	"killed": true, "declined": true,
+}
+
+// successWords are end values that already say a run went well, so the body
+// is not asked.
+var successWords = map[string]bool{
+	"success": true, "succeeded": true, "successful": true, "passed": true, "ok": true, "fixed": true,
+}
+
+// failure is the value that says a run went wrong, or "" when none does: the
+// lifecycle value that ended it, or, when that only says the run is over
+// ("COMPLETED", "FINALIZED"), a body that is one bare word, which is then the
+// run's status ("FAILURE"). A branch or a sentence is never read that way.
+func failure(ev universal.Event) string {
+	if failed(ev.LifecycleRaw) {
+		return ev.LifecycleRaw
+	}
+	if successWords[universal.NormValue(ev.LifecycleRaw)] {
+		return ""
+	}
+	b := strings.TrimSpace(ev.Body)
+	if b == "" || strings.ContainsFunc(b, func(c rune) bool { return !unicode.IsLetter(c) }) || !failed(b) {
+		return ""
+	}
+	return b
 }
 
 // failed reports whether a lifecycle value that ended a run says it went

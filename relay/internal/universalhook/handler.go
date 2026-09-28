@@ -1,8 +1,9 @@
 // Package universalhook serves POST /universal, the relay route for services
-// with no handler of their own. A payload is flattened and sent on as one
+// with no handler of their own. A payload a preset knows is mapped the way
+// the preset says, Live Activities included; any other is sent on as one
 // plain notification whose title, body and link the proposer picks from it.
-// Every event stands alone: nothing about a payload is stored, and nobody is
-// asked about one.
+// No mapping is stored and nobody is asked about one: each event is mapped on
+// its own, and only a preset's open card keeps state, until it ends.
 package universalhook
 
 import (
@@ -23,14 +24,18 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/universal"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/universal/presets"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 const provider = "universal"
 
-// viaProposer is universal_events_total's via for a payload sent as a plain
-// notification through the proposer's picks.
-const viaProposer = "proposer"
+// universal_events_total's via: a preset's mapping, or the proposer's picks
+// for the plain notification a payload no preset knows becomes.
+const (
+	viaPreset   = "preset"
+	viaProposer = "proposer"
+)
 
 // Handler serves the universal webhook.
 type Handler struct {
@@ -65,7 +70,7 @@ func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *
 	// Hidden: senders reach it as POST / once the root route dispatches here.
 	humautil.RegisterWebhook(api, "/universal", "post-universal-webhook",
 		"Receive any JSON webhook",
-		"Sends an arbitrary JSON payload on as a notification, with a title, body and link picked from the payload.",
+		"Maps a payload from a known service the way its preset says, and sends any other JSON payload on as a notification, with a title, body and link picked from the payload.",
 		[]string{"Universal"}, h.handleWebhook, humautil.Hidden)
 	return h
 }
@@ -123,11 +128,19 @@ func (h *Handler) handleWebhook(ctx context.Context, in *webhookInput) (*humauti
 }
 
 // mapping decides how r is delivered, and names where that came from for
-// universal_events_total. The payload goes out as a plain notification: the
-// proposer picks its title, body and link, and nothing else. Those picks can
+// universal_events_total. A preset maps the payloads of a service it knows,
+// Live Activities included: it picks by paths, never by values, so every
+// event of a shape maps the same way. Anything else goes out as a plain
+// notification whose title, body and link the proposer picks. Those picks can
 // change with each event's values, which is harmless for notifications that
 // stand alone, where it would scatter the updates of a card.
 func (h *Handler) mapping(ctx context.Context, r *request) (universal.Mapping, string) {
+	if h.config.Presets {
+		if p, m, ok := presets.MatchShapes(r.source, r.fields, r.shapes); ok {
+			metrics.UniversalPresetHitsTotal.WithLabelValues(p.ID).Inc()
+			return m, viaPreset
+		}
+	}
 	return h.propose(ctx, r), viaProposer
 }
 

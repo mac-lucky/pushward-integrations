@@ -229,4 +229,5 @@ providers:
 
   universal:                               # off by default; see "Universal webhook" in the README
     enabled: false
+    # presets: true                          # map known services (see "Presets" in the README)
     # ranker: false                          # the ranker also needs weights that passed their gate

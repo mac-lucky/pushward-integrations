@@ -228,6 +228,29 @@ func TestVetoGoesToUniversal(t *testing.T) {
 	}
 }
 
+// A vetoed sender the headers name reaches the universal route with that name
+// as its source, unless the sender set one; the rest of the query is kept.
+func TestVetoNamesTheSource(t *testing.T) {
+	for _, tt := range []struct {
+		name, target, query string
+		header              http.Header
+	}{
+		{"lidarr", "/", "source=lidarr", http.Header{"User-Agent": {"Lidarr/2.5.3"}}},
+		{"github", "/?channels=notification", "channels=notification&source=github", http.Header{"X-Github-Event": {"push"}}},
+		{"forgejo push", "/", "source=forgejo", http.Header{"X-Forgejo-Event": {"push"}}},
+		{"set by the sender", "/?source=music", "source=music", http.Header{"User-Agent": {"Lidarr/2.5.3"}}},
+		{"not vetoed", "/", "", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mux, s := stubMux(Universal)
+			serve(New(mux, Options{}), relaytest.NewRequest(tt.target, fixture(t, "universal/plain_notify.json"), tt.header))
+			if s.path != Universal || s.query != tt.query {
+				t.Errorf("reached %s?%s, want %s?%s", s.path, s.query, Universal, tt.query)
+			}
+		})
+	}
+}
+
 func TestQueryIsKept(t *testing.T) {
 	for _, tt := range []struct {
 		name, fixture, route string
