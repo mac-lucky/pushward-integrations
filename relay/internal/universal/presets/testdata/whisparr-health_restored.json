@@ -1,0 +1,8 @@
+{
+  "eventType": "HealthRestored",
+  "instanceName": "Whisparr",
+  "level": "warning",
+  "message": "Missing root folder: /media/whisparr",
+  "type": "RootFolderCheck",
+  "wikiUrl": "https://wiki.servarr.com/whisparr/system#missing-root-folder"
+}

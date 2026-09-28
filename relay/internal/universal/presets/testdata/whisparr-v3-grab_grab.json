@@ -1,0 +1,32 @@
+{
+  "eventType": "Grab",
+  "instanceName": "Whisparr",
+  "applicationUrl": "http://whisparr.lan:6969",
+  "movie": {
+    "id": 41,
+    "title": "Evening Light",
+    "year": 2026,
+    "releaseDate": "2026-09-20",
+    "folderPath": "/media/whisparr/Evening Light (2026)",
+    "tmdbId": 0,
+    "itemType": "Scene",
+    "tags": []
+  },
+  "remoteMovie": {
+    "tmdbId": 0,
+    "title": "Evening Light",
+    "year": 2026
+  },
+  "release": {
+    "quality": "WEBDL-1080p",
+    "qualityVersion": 1,
+    "releaseGroup": "XC",
+    "releaseTitle": "ExampleStudio.26.09.20.Evening.Light.1080p.WEB-DL",
+    "indexer": "Scene Indexer",
+    "size": 1830000000,
+    "customFormatScore": 0
+  },
+  "downloadClient": "SABnzbd",
+  "downloadClientType": "Sabnzbd",
+  "downloadId": "SABnzbd_nzo_w3k5d0"
+}

@@ -1,0 +1,19 @@
+{
+  "id": "lidarr-download",
+  "vendor": "Lidarr",
+  "version": 1,
+  "sources": ["lidarr"],
+  "require": ["eventType", "artist.name", "artist.mbId", "album.title", "isUpgrade"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "notification",
+    "p": {
+      "title": "album.title",
+      "body": "artist.name",
+      "url": "applicationUrl"
+    }
+  },
+  "doc": "https://github.com/Lidarr/Lidarr/blob/develop/src/NzbDrone.Core/Notifications/Webhook/WebhookImportPayload.cs"
+}

@@ -1,0 +1,24 @@
+{
+  "id": "whisparr-health",
+  "vendor": "Whisparr",
+  "version": 1,
+  "sources": ["whisparr"],
+  "require": ["eventType", "level", "message", "type"],
+  "forbid": [],
+  "alias_only": true,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "message",
+      "body": "type",
+      "url": "wikiUrl",
+      "correlation": "type",
+      "severity": "level",
+      "lifecycle": "eventType"
+    },
+    "sv": {"error": "critical", "warning": "warning", "notice": "info", "ok": "info"},
+    "lv": {"health": "ongoing", "healthrestored": "ended"}
+  },
+  "doc": "https://github.com/Whisparr/Whisparr/blob/v2-develop/src/NzbDrone.Core/Notifications/Webhook/WebhookBase.cs"
+}

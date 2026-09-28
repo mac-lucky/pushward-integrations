@@ -1,0 +1,17 @@
+{
+  "eventType": "ImportFailure",
+  "instanceName": "Lidarr",
+  "applicationUrl": "http://lidarr.lan:8686",
+  "artist": {
+    "id": 14,
+    "name": "The Quiet Harbour",
+    "path": "/music/The Quiet Harbour",
+    "mbId": "3f0c9a1e-5b7d-4c2a-9e61-0d8b2f4a7c15"
+  },
+  "tracks": [],
+  "trackFiles": [],
+  "isUpgrade": false,
+  "downloadClient": "qBittorrent",
+  "downloadClientType": "qBittorrent",
+  "downloadId": "8C1E0F4A2B6D9E3F7A5C1B0D2E4F6A8C9B7D5E3F"
+}

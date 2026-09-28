@@ -1,0 +1,37 @@
+{
+  "eventType": "Grab",
+  "instanceName": "Whisparr",
+  "applicationUrl": "http://whisparr.lan:6969",
+  "series": {
+    "id": 3,
+    "title": "Example Studio",
+    "titleSlug": "example-studio",
+    "path": "/media/whisparr/Example Studio",
+    "tvdbId": 0,
+    "type": "standard",
+    "year": 2019
+  },
+  "episodes": [
+    {
+      "id": 902,
+      "episodeNumber": 0,
+      "seasonNumber": 2026,
+      "title": "Evening Light",
+      "airDate": "2026-09-20",
+      "airDateUtc": "2026-09-20T00:00:00Z",
+      "seriesId": 3
+    }
+  ],
+  "release": {
+    "quality": "WEBDL-1080p",
+    "qualityVersion": 1,
+    "releaseGroup": "XC",
+    "releaseTitle": "ExampleStudio.26.09.20.Evening.Light.1080p.WEB-DL",
+    "indexer": "Scene Indexer",
+    "size": 1830000000,
+    "customFormatScore": 0
+  },
+  "downloadClient": "SABnzbd",
+  "downloadClientType": "Sabnzbd",
+  "downloadId": "SABnzbd_nzo_w2v8p1"
+}

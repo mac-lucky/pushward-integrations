@@ -1,0 +1,35 @@
+{
+  "eventType": "Download",
+  "instanceName": "Lidarr",
+  "applicationUrl": "http://lidarr.lan:8686",
+  "artist": {
+    "id": 14,
+    "name": "The Quiet Harbour",
+    "path": "/music/The Quiet Harbour",
+    "mbId": "3f0c9a1e-5b7d-4c2a-9e61-0d8b2f4a7c15"
+  },
+  "album": {
+    "id": 88,
+    "mbId": "b6e2d4f0-1a3c-4e5b-8d7f-9c0a2b4d6e81",
+    "title": "Lanterns on the Pier",
+    "releaseDate": "2024-03-08T00:00:00Z"
+  },
+  "tracks": [
+    {"id": 1201, "title": "Low Tide", "trackNumber": "1", "quality": "FLAC", "qualityVersion": 1, "releaseGroup": "HRB"}
+  ],
+  "trackFiles": [
+    {
+      "id": 530,
+      "path": "/music/The Quiet Harbour/Lanterns on the Pier (2024)/01 - Low Tide.flac",
+      "quality": "FLAC",
+      "qualityVersion": 1,
+      "releaseGroup": "HRB",
+      "size": 31200000,
+      "dateAdded": "2026-09-28T10:02:11Z"
+    }
+  ],
+  "isUpgrade": false,
+  "downloadClient": "qBittorrent",
+  "downloadClientType": "qBittorrent",
+  "downloadId": "8C1E0F4A2B6D9E3F7A5C1B0D2E4F6A8C9B7D5E3F"
+}

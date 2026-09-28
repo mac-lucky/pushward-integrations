@@ -1,0 +1,9 @@
+{
+  "eventType": "Health",
+  "instanceName": "Lidarr",
+  "applicationUrl": "http://lidarr.lan:8686",
+  "level": "error",
+  "message": "Unable to communicate with qBittorrent. Connection refused",
+  "type": "DownloadClientCheck",
+  "wikiUrl": "https://wiki.servarr.com/lidarr/system#download-clients-are-unavailable-due-to-failures"
+}

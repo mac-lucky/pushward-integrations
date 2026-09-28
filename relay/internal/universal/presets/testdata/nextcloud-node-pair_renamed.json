@@ -1,0 +1,18 @@
+{
+  "event": {
+    "class": "OCP\\Files\\Events\\Node\\NodeRenamedEvent",
+    "source": {
+      "id": 5120,
+      "path": "/jana/files/Scans/receipt-hardware-store.pdf"
+    },
+    "target": {
+      "id": 5120,
+      "path": "/jana/files/Receipts/2026-09 hardware store.pdf"
+    }
+  },
+  "user": {
+    "uid": "jana",
+    "displayName": "Jana"
+  },
+  "time": 1790590200
+}

@@ -1,0 +1,30 @@
+{
+  "eventType": "Download",
+  "instanceName": "Readarr",
+  "author": {
+    "id": 7,
+    "name": "Mara Ellison",
+    "path": "/books/Mara Ellison",
+    "goodreadsId": "4471902"
+  },
+  "book": {
+    "id": 61,
+    "goodreadsId": "58812930",
+    "title": "The Cartographer's Winter",
+    "releaseDate": "2022-10-04T00:00:00Z"
+  },
+  "bookFiles": [
+    {
+      "id": 204,
+      "path": "/books/Mara Ellison/The Cartographer's Winter (2022)/The Cartographer's Winter - Mara Ellison.epub",
+      "quality": "EPUB",
+      "qualityVersion": 1,
+      "size": 2210000,
+      "dateAdded": "2026-09-28T11:40:00Z"
+    }
+  ],
+  "isUpgrade": false,
+  "downloadClient": "SABnzbd",
+  "downloadClientType": "Sabnzbd",
+  "downloadId": "SABnzbd_nzo_r4m1t8"
+}

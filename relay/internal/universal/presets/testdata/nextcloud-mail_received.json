@@ -1,0 +1,16 @@
+{
+  "event": {
+    "class": "OCA\\Mail\\Event\\NewMessageReceivedEvent",
+    "accountId": 3,
+    "mailboxId": 18,
+    "messageId": 44120,
+    "sentAt": "1790592000",
+    "subject": "Boiler service booked for Thursday",
+    "threadRootId": "44120"
+  },
+  "user": {
+    "uid": "jana",
+    "displayName": "Jana"
+  },
+  "time": 1790592060
+}

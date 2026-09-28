@@ -1,0 +1,14 @@
+{
+  "event": {
+    "class": "OCP\\Files\\Events\\Node\\NodeCreatedEvent",
+    "node": {
+      "id": 5120,
+      "path": "/jana/files/Scans/receipt-hardware-store.pdf"
+    }
+  },
+  "user": {
+    "uid": "jana",
+    "displayName": "Jana"
+  },
+  "time": 1790590000
+}

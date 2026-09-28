@@ -1,0 +1,4 @@
+{
+  "title": "Watchtower updates on media-host",
+  "message": "Found new image for linuxserver/lidarr:latest (1a2b3c4d5e6f)\nStopping /lidarr (9f8e7d6c5b4a) with SIGTERM\nCreating /lidarr"
+}

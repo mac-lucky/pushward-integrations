@@ -1,0 +1,19 @@
+{
+  "id": "whisparr-download",
+  "vendor": "Whisparr",
+  "version": 1,
+  "sources": ["whisparr"],
+  "require": ["eventType", "series.title", "episodes[].title", "episodeFile.relativePath", "isUpgrade"],
+  "forbid": [],
+  "alias_only": true,
+  "mapping": {
+    "v": 1,
+    "k": "notification",
+    "p": {
+      "title": "episodes[].title",
+      "body": "series.title",
+      "url": "applicationUrl"
+    }
+  },
+  "doc": "https://github.com/Whisparr/Whisparr/blob/v2-develop/src/NzbDrone.Core/Notifications/Webhook/WebhookImportPayload.cs"
+}

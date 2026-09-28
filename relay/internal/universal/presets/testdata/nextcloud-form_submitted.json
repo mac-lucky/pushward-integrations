@@ -1,0 +1,32 @@
+{
+  "event": {
+    "class": "OCA\\Forms\\Events\\FormSubmittedEvent",
+    "form": {
+      "id": 12,
+      "hash": "k3Fq9sLmZx2Rt8Wb",
+      "title": "Garden plot sign-up",
+      "description": "Pick a plot for next season.",
+      "ownerId": "jana",
+      "created": 1790000000,
+      "access": 0,
+      "expires": 0,
+      "isAnonymous": false,
+      "submitMultiple": false,
+      "showExpiration": false,
+      "lastUpdated": 1790000100,
+      "submissionMessage": null,
+      "state": 0
+    },
+    "submission": {
+      "id": 301,
+      "formId": 12,
+      "userId": "piotr",
+      "timestamp": 1790591000
+    }
+  },
+  "user": {
+    "uid": "piotr",
+    "displayName": "Piotr"
+  },
+  "time": 1790591000
+}

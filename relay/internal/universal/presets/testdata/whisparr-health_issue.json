@@ -1,0 +1,9 @@
+{
+  "eventType": "Health",
+  "instanceName": "Whisparr",
+  "applicationUrl": "http://whisparr.lan:6969",
+  "level": "warning",
+  "message": "Missing root folder: /media/whisparr",
+  "type": "RootFolderCheck",
+  "wikiUrl": "https://wiki.servarr.com/whisparr/system#missing-root-folder"
+}

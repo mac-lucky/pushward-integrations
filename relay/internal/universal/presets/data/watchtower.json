@@ -1,0 +1,18 @@
+{
+  "id": "watchtower",
+  "vendor": "Watchtower",
+  "version": 1,
+  "sources": ["watchtower"],
+  "require": ["title", "message"],
+  "forbid": [],
+  "alias_only": true,
+  "mapping": {
+    "v": 1,
+    "k": "notification",
+    "p": {
+      "title": "title",
+      "body": "message"
+    }
+  },
+  "doc": "https://containrrr.dev/shoutrrr/v0.8/services/generic/"
+}

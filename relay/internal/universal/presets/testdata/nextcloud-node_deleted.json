@@ -1,0 +1,10 @@
+{
+  "event": {
+    "class": "OCP\\Files\\Events\\Node\\NodeDeletedEvent",
+    "node": {
+      "path": "/jana/files/Scans/old-invoice.pdf"
+    }
+  },
+  "user": null,
+  "time": 1790590400
+}

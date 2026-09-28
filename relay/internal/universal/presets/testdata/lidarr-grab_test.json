@@ -1,0 +1,18 @@
+{
+  "eventType": "Test",
+  "instanceName": "Lidarr",
+  "applicationUrl": "",
+  "artist": {
+    "id": 1,
+    "name": "Test Name",
+    "path": "C:\\testpath",
+    "mbId": "aaaaa-aaa-aaaa-aaaaaa",
+    "tags": ["test-tag"]
+  },
+  "albums": [
+    {
+      "id": 123,
+      "title": "Test title"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "id": "readarr-health",
+  "vendor": "Readarr",
+  "version": 1,
+  "sources": ["readarr"],
+  "require": ["eventType", "level", "message", "type"],
+  "forbid": [],
+  "alias_only": true,
+  "mapping": {
+    "v": 1,
+    "k": "notification",
+    "p": {
+      "title": "message",
+      "body": "type",
+      "url": "wikiUrl",
+      "severity": "level"
+    },
+    "sv": {"error": "critical", "warning": "warning", "notice": "info", "ok": "info"}
+  },
+  "doc": "https://github.com/Readarr/Readarr/blob/develop/src/NzbDrone.Core/Notifications/Webhook/WebhookHealthPayload.cs"
+}
