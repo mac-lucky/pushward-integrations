@@ -1,0 +1,23 @@
+{
+  "id": "5282004417",
+  "project": "billing-worker",
+  "project_name": "Billing worker",
+  "project_slug": "billing-worker",
+  "logger": null,
+  "level": "error",
+  "culprit": "reconcile(billing/reconcile)",
+  "message": "ValueError: amount must be positive",
+  "url": "https://quillmark.sentry.io/issues/5282004417/?referrer=webhooks_plugin",
+  "triggering_rules": ["Billing worker errors"],
+  "event": {
+    "event_id": "0d4e8b2a7f1c4a3e9b6d5c8f2e1a0b9c",
+    "level": "error",
+    "type": "error",
+    "platform": "python",
+    "timestamp": 1790590212.411,
+    "culprit": "reconcile(billing/reconcile)",
+    "title": "ValueError: amount must be positive",
+    "location": "billing/reconcile.py",
+    "id": "0d4e8b2a7f1c4a3e9b6d5c8f2e1a0b9c"
+  }
+}

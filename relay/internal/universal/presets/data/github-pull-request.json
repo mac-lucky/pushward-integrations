@@ -1,0 +1,19 @@
+{
+  "id": "github-pull-request",
+  "vendor": "GitHub",
+  "version": 1,
+  "sources": ["github"],
+  "require": ["action", "number", "pull_request.id", "pull_request.number", "pull_request.title", "pull_request.state", "pull_request.html_url", "pull_request.user.site_admin", "pull_request.head.sha", "pull_request.base.ref"],
+  "forbid": ["review.id", "comment.id"],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "notification",
+    "p": {
+      "title": "pull_request.title",
+      "body": "action",
+      "url": "pull_request.html_url"
+    }
+  },
+  "doc": "https://docs.github.com/en/webhooks/webhook-events-and-payloads#pull_request"
+}

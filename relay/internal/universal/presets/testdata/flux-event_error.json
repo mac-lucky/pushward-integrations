@@ -1,0 +1,18 @@
+{
+  "involvedObject": {
+    "apiVersion": "kustomize.toolkit.fluxcd.io/v1",
+    "kind": "Kustomization",
+    "name": "billing",
+    "namespace": "flux-system",
+    "uid": "3e5a7c9e-1b3d-4f5a-8c7e-9b1d3f5a7c9e"
+  },
+  "metadata": {
+    "kustomize.toolkit.fluxcd.io/revision": "main@sha1:9c1e3b5d7f9a1c3e5b7d9f1a3c5e7b9d1f3a5c7e"
+  },
+  "severity": "error",
+  "reason": "HealthCheckFailed",
+  "message": "health check failed after 5m0s: timeout waiting for: [Deployment/billing/billing-api status: 'InProgress']",
+  "reportingController": "kustomize-controller",
+  "reportingInstance": "kustomize-controller-6c8d9f7b5-q2xkt",
+  "timestamp": "2026-09-28T15:30:04Z"
+}

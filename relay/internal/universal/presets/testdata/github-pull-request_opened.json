@@ -1,0 +1,23 @@
+{
+  "action": "opened",
+  "number": 214,
+  "pull_request": {
+    "url": "https://api.github.com/repos/lunar-kite/tidepool/pulls/214",
+    "id": 2093318824,
+    "node_id": "PR_kwDOIqA7wc58xYq4",
+    "html_url": "https://github.com/lunar-kite/tidepool/pull/214",
+    "number": 214,
+    "state": "open",
+    "locked": false,
+    "title": "Add a dry-run flag to the sync command",
+    "user": {"login": "tomas-reyes", "id": 11820734, "type": "User", "site_admin": false},
+    "body": "Prints what sync would change without writing anything.",
+    "created_at": "2026-09-28T09:12:40Z",
+    "draft": false,
+    "head": {"label": "tomas-reyes:sync-dry-run", "ref": "sync-dry-run", "sha": "1c4e7a9b2d5f8e0a3c6b9d2e5f8a1b4c7d0e3f6a"},
+    "base": {"label": "lunar-kite:main", "ref": "main", "sha": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b"},
+    "merged": false
+  },
+  "repository": {"id": 581204417, "node_id": "R_kgDOIqA7wQ", "full_name": "lunar-kite/tidepool", "private": false},
+  "sender": {"login": "tomas-reyes", "id": 11820734, "type": "User", "site_admin": false}
+}

@@ -1,0 +1,24 @@
+{
+  "id": "sentry-issue",
+  "vendor": "Sentry",
+  "version": 1,
+  "sources": ["sentry"],
+  "require": ["action", "installation.uuid", "actor.type", "data.issue.id", "data.issue.shortId", "data.issue.title", "data.issue.culprit", "data.issue.level", "data.issue.status", "data.issue.project.slug"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "data.issue.title",
+      "body": "data.issue.culprit",
+      "url": "data.issue.web_url",
+      "correlation": "data.issue.id",
+      "severity": "data.issue.level",
+      "lifecycle": "data.issue.status"
+    },
+    "sv": {"fatal": "critical", "error": "warning", "warning": "warning", "info": "info", "debug": "info"},
+    "lv": {"unresolved": "ongoing", "resolved": "ended", "ignored": "ended"}
+  },
+  "doc": "https://docs.sentry.io/integrations/integration-platform/webhooks/issues/"
+}

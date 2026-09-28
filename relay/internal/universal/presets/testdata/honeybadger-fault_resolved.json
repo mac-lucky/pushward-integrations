@@ -1,0 +1,22 @@
+{
+  "event": "resolved",
+  "message": "[Parcelpost/production] Redis::TimeoutError resolved by Ada Lindqvist",
+  "fault": {
+    "project_id": 118204,
+    "klass": "Redis::TimeoutError",
+    "component": "shipments",
+    "action": "create",
+    "environment": "production",
+    "resolved": true,
+    "ignored": false,
+    "created_at": "2026-09-28T06:12:44.301122Z",
+    "comments_count": 0,
+    "message": "Connection timed out",
+    "notices_count": 37,
+    "last_notice_at": "2026-09-28T06:40:02.118930Z",
+    "tags": [],
+    "id": 4815162,
+    "assignee": null,
+    "url": "https://app.honeybadger.io/projects/118204/faults/4815162"
+  }
+}

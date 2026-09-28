@@ -1,0 +1,24 @@
+{
+  "id": "sentry-metric-alert",
+  "vendor": "Sentry",
+  "version": 1,
+  "sources": ["sentry"],
+  "require": ["action", "installation.uuid", "actor.type", "data.metric_alert.id", "data.metric_alert.identifier", "data.metric_alert.alert_rule.name", "data.description_title", "data.description_text", "data.web_url"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "data.metric_alert.alert_rule.name",
+      "body": "data.description_text",
+      "url": "data.web_url",
+      "correlation": "data.metric_alert.id",
+      "severity": "action",
+      "lifecycle": "action"
+    },
+    "sv": {"critical": "critical", "warning": "warning", "resolved": "info"},
+    "lv": {"critical": "ongoing", "warning": "ongoing", "resolved": "ended"}
+  },
+  "doc": "https://docs.sentry.io/integrations/integration-platform/webhooks/metric-alerts/"
+}

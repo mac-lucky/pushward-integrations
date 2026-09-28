@@ -1,0 +1,25 @@
+{
+  "event": "down",
+  "message": "[Parcelpost] Tracking page is down.",
+  "project": {"id": 118204, "name": "Parcelpost", "active": true},
+  "site": {
+    "id": "6b1f0c3e-8a2d-4e7f-9c51-2d8e4a6b0f13",
+    "name": "Tracking page",
+    "url": "https://track.example.com/health",
+    "frequency": 1,
+    "match_type": "success",
+    "match": null,
+    "state": "down",
+    "active": true,
+    "last_checked_at": "2026-09-28T07:01:30.000000Z",
+    "retries": 1,
+    "proxy": 0,
+    "details_url": "https://app.honeybadger.io/projects/118204/sites/6b1f0c3e-8a2d-4e7f-9c51-2d8e4a6b0f13"
+  },
+  "outage": {
+    "down_at": "2026-09-28T07:01:30.000000Z",
+    "up_at": null,
+    "status": 503,
+    "reason": "Expected 2xx status code. Got 503"
+  }
+}

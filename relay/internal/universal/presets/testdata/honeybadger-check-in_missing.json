@@ -1,0 +1,16 @@
+{
+  "event": "check_in_missing",
+  "message": "[Parcelpost] MISSING: Nightly label purge hasn't checked in for 26 hours",
+  "project": {"id": 118204, "name": "Parcelpost", "active": true},
+  "check_in": {
+    "state": "missing",
+    "schedule_type": "simple",
+    "reported_at": "2026-09-27T03:00:14.220318Z",
+    "expected_at": "2026-09-28T03:00:14.220318Z",
+    "missed_count": 1,
+    "grace_period": 3600,
+    "id": "k3Ptw9",
+    "name": "Nightly label purge",
+    "report_period": 86400
+  }
+}

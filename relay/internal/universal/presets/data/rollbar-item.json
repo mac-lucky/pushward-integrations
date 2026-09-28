@@ -1,0 +1,28 @@
+{
+  "id": "rollbar-item",
+  "vendor": "Rollbar",
+  "version": 1,
+  "sources": ["rollbar"],
+  "require": ["event_name", "data.item.id", "data.item.counter", "data.item.title", "data.item.environment", "data.item.level", "data.item.status", "data.item.project_id", "data.item.last_occurrence_id"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "data.item.title",
+      "body": "data.item.environment",
+      "url": "data.url",
+      "correlation": "data.item.id",
+      "severity": "data.item.level",
+      "lifecycle": "event_name"
+    },
+    "sv": {"50": "critical", "40": "warning", "30": "warning", "20": "info", "10": "info"},
+    "lv": {
+      "new_item": "ongoing", "occurrence": "ongoing", "exp_repeat_item": "ongoing", "item_velocity": "ongoing",
+      "reactivated_item": "ongoing", "reopened_item": "ongoing",
+      "resolved_item": "ended"
+    }
+  },
+  "doc": "https://docs.rollbar.com/docs/webhooks"
+}

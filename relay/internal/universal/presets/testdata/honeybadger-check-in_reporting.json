@@ -1,0 +1,16 @@
+{
+  "event": "check_in_reporting",
+  "message": "[Parcelpost] REPORTING: Nightly label purge is reporting again",
+  "project": {"id": 118204, "name": "Parcelpost", "active": true},
+  "check_in": {
+    "state": "reporting",
+    "schedule_type": "simple",
+    "reported_at": "2026-09-27T03:00:14.220318Z",
+    "expected_at": "2026-09-28T03:00:14.220318Z",
+    "missed_count": 1,
+    "grace_period": 3600,
+    "id": "k3Ptw9",
+    "name": "Nightly label purge",
+    "report_period": 86400
+  }
+}

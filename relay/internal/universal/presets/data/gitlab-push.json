@@ -1,0 +1,19 @@
+{
+  "id": "gitlab-push",
+  "vendor": "GitLab",
+  "version": 1,
+  "sources": ["gitlab"],
+  "require": ["object_kind", "event_name", "before", "after", "ref", "checkout_sha", "user_username", "project_id", "project.path_with_namespace", "total_commits_count"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "notification",
+    "p": {
+      "title": "project.path_with_namespace",
+      "body": "ref",
+      "url": "project.web_url"
+    }
+  },
+  "doc": "https://docs.gitlab.com/user/project/integrations/webhook_events/#push-events"
+}

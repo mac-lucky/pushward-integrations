@@ -1,0 +1,20 @@
+{
+  "id": "github-release",
+  "vendor": "GitHub",
+  "version": 1,
+  "sources": ["github"],
+  "require": ["action", "release.id", "release.tag_name", "release.html_url", "release.draft", "release.prerelease", "release.author.site_admin", "repository.full_name"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "notification",
+    "p": {
+      "title": "release.tag_name",
+      "body": "repository.full_name",
+      "url": "release.html_url",
+      "correlation": "release.id"
+    }
+  },
+  "doc": "https://docs.github.com/en/webhooks/webhook-events-and-payloads#release"
+}

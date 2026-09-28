@@ -1,0 +1,21 @@
+{
+  "type": "PUSH_ARTIFACT",
+  "occur_at": 1790604502,
+  "operator": "robot$ci-push",
+  "event_data": {
+    "resources": [
+      {
+        "digest": "sha256:5f0e1d2c3b4a59687766554433221100ffeeddccbbaa99887766554433221100",
+        "tag": "2026.09.28",
+        "resource_url": "registry.example.com/platform/ingest-gateway:2026.09.28"
+      }
+    ],
+    "repository": {
+      "date_created": 1780012210,
+      "name": "ingest-gateway",
+      "namespace": "platform",
+      "repo_full_name": "platform/ingest-gateway",
+      "repo_type": "private"
+    }
+  }
+}

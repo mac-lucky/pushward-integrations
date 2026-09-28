@@ -1,0 +1,26 @@
+{
+  "event_name": "resolved_item",
+  "data": {
+    "url": "https://rollbar.com/fernhill/checkout-web/items/318/",
+    "item": {
+      "public_item_id": null,
+      "id": 1392047710,
+      "environment": "production",
+      "title": "ReferenceError: basketTotal is not defined",
+      "last_occurrence_id": 403918271133,
+      "last_occurrence_timestamp": 1790581420,
+      "platform": 1,
+      "first_occurrence_timestamp": 1790580911,
+      "project_id": 612044,
+      "resolved_in_version": null,
+      "status": 2,
+      "hash": "2f9c1e7a4b3d8e6f0a5c2b9d1e4f7a0c3b6d9e2f",
+      "framework": 7,
+      "total_occurrences": 23,
+      "level": 40,
+      "counter": 318,
+      "first_occurrence_id": 403917004401,
+      "activating_occurrence_id": 403917004401
+    }
+  }
+}

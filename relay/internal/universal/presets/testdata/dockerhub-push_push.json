@@ -1,0 +1,25 @@
+{
+  "callback_url": "https://registry.hub.docker.com/u/fieldnote/scanner/hook/1b3d5f7a9c1e3b5d7f9a1c3e5b7d9f1a/",
+  "push_data": {
+    "pushed_at": 1790604011,
+    "pusher": "fieldnote-ci",
+    "tag": "2.8.1"
+  },
+  "repository": {
+    "comment_count": 0,
+    "date_created": 1712300400,
+    "description": "Barcode scanner service",
+    "dockerfile": "",
+    "full_description": "",
+    "is_official": false,
+    "is_private": false,
+    "is_trusted": false,
+    "name": "scanner",
+    "namespace": "fieldnote",
+    "owner": "fieldnote",
+    "repo_name": "fieldnote/scanner",
+    "repo_url": "https://hub.docker.com/r/fieldnote/scanner",
+    "star_count": 3,
+    "status": "Active"
+  }
+}

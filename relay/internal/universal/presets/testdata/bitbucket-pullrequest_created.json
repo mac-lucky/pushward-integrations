@@ -1,0 +1,37 @@
+{
+  "actor": {
+    "type": "user",
+    "display_name": "Jonas Berg",
+    "nickname": "jberg",
+    "uuid": "{5f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0}",
+    "account_id": "712020:3c9d1e0f-6a7b-4c8d-9e0f-1a2b3c4d5e6f",
+    "links": {"html": {"href": "https://bitbucket.org/%7B5f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0%7D/"}}
+  },
+  "pullrequest": {
+    "id": 37,
+    "type": "pullrequest",
+    "title": "Cache geocoder lookups for an hour",
+    "description": "Cuts the planner's external calls roughly in half.",
+    "state": "OPEN",
+    "author": {"type": "user", "display_name": "Jonas Berg", "nickname": "jberg"},
+    "source": {"branch": {"name": "geocode-cache"}, "commit": {"hash": "6a7b8c9d0e1f"}},
+    "destination": {"branch": {"name": "main"}, "commit": {"hash": "3e8f1a2b4c6d"}},
+    "merge_commit": null,
+    "comment_count": 0,
+    "task_count": 0,
+    "close_source_branch": true,
+    "created_on": "2026-09-28T08:30:44.114520+00:00",
+    "updated_on": "2026-09-28T08:30:44.198211+00:00",
+    "links": {"html": {"href": "https://bitbucket.org/northwind-labs/route-planner/pull-requests/37"}}
+  },
+  "repository": {
+    "type": "repository",
+    "full_name": "northwind-labs/route-planner",
+    "name": "route-planner",
+    "scm": "git",
+    "is_private": true,
+    "uuid": "{0a9b8c7d-6e5f-4a3b-9c2d-1e0f9a8b7c6d}",
+    "links": {"html": {"href": "https://bitbucket.org/northwind-labs/route-planner"}},
+    "owner": {"type": "team", "display_name": "Northwind Labs", "uuid": "{8e7d6c5b-4a39-4281-9706-f5e4d3c2b1a0}"}
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "id": "honeybadger-fault",
+  "vendor": "Honeybadger",
+  "version": 1,
+  "sources": ["honeybadger"],
+  "require": ["event", "message", "fault.id", "fault.project_id", "fault.klass", "fault.message", "fault.environment", "fault.resolved", "fault.ignored", "fault.notices_count"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "fault.klass",
+      "body": "fault.message",
+      "url": "fault.url",
+      "correlation": "fault.id",
+      "lifecycle": "event"
+    },
+    "lv": {
+      "occurred": "ongoing", "rate_exceeded": "ongoing", "unresolved": "ongoing", "assigned": "ongoing", "commented": "ongoing",
+      "resolved": "ended"
+    }
+  },
+  "doc": "https://docs.honeybadger.io/guides/integrations/webhook/"
+}

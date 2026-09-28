@@ -1,0 +1,44 @@
+{
+  "object_kind": "pipeline",
+  "object_attributes": {
+    "id": 1482093316,
+    "iid": 377,
+    "name": null,
+    "ref": "main",
+    "tag": false,
+    "sha": "7d6c5b4a39281706f5e4d3c2b1a0918273645546",
+    "before_sha": "e1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4",
+    "source": "push",
+    "status": "running",
+    "detailed_status": "running",
+    "stages": ["build", "test"],
+    "created_at": "2026-09-28 09:41:20 UTC",
+    "finished_at": null,
+    "duration": null,
+    "variables": [],
+    "url": "https://gitlab.example.com/harbourline/ledger-api/-/pipelines/1482093316"
+  },
+  "user": {"id": 3304, "name": "Priya Nandakumar", "username": "pnandakumar"},
+  "project": {
+    "id": 48210077,
+    "name": "ledger-api",
+    "description": "Invoices and payouts",
+    "web_url": "https://gitlab.example.com/harbourline/ledger-api",
+    "git_ssh_url": "git@gitlab.example.com:harbourline/ledger-api.git",
+    "git_http_url": "https://gitlab.example.com/harbourline/ledger-api.git",
+    "namespace": "harbourline",
+    "visibility_level": 0,
+    "path_with_namespace": "harbourline/ledger-api",
+    "default_branch": "main"
+  },
+  "commit": {
+    "id": "7d6c5b4a39281706f5e4d3c2b1a0918273645546",
+    "message": "Round payout totals to the cent\n",
+    "title": "Round payout totals to the cent",
+    "timestamp": "2026-09-28T09:41:07+00:00",
+    "url": "https://gitlab.example.com/harbourline/ledger-api/-/commit/7d6c5b4a39281706f5e4d3c2b1a0918273645546"
+  },
+  "builds": [
+    {"id": 7710294411, "stage": "test", "name": "unit", "status": "running", "allow_failure": false}
+  ]
+}

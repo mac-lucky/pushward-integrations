@@ -1,0 +1,27 @@
+{
+  "action": "in_progress",
+  "workflow_run": {
+    "id": 11839204561,
+    "name": "CI",
+    "node_id": "WFR_kwLOIqA7wc8AAAACwaXq0Q",
+    "head_branch": "main",
+    "head_sha": "9b8a7c6d5e4f3a2b1c0d9e8f7a6b5c4d3e2f1a0b",
+    "path": ".github/workflows/ci.yml",
+    "display_title": "Retry uploads on 503 from the blob store",
+    "run_number": 812,
+    "event": "push",
+    "status": "in_progress",
+    "conclusion": null,
+    "workflow_id": 70219433,
+    "check_suite_id": 30911852207,
+    "url": "https://api.github.com/repos/lunar-kite/tidepool/actions/runs/11839204561",
+    "html_url": "https://github.com/lunar-kite/tidepool/actions/runs/11839204561",
+    "pull_requests": [],
+    "created_at": "2026-09-28T10:04:20Z",
+    "run_attempt": 1,
+    "run_started_at": "2026-09-28T10:04:20Z"
+  },
+  "workflow": {"id": 70219433, "name": "CI", "path": ".github/workflows/ci.yml", "state": "active"},
+  "repository": {"id": 581204417, "node_id": "R_kgDOIqA7wQ", "full_name": "lunar-kite/tidepool", "private": false},
+  "sender": {"login": "mira-okafor", "id": 70311852, "type": "User", "site_admin": false}
+}

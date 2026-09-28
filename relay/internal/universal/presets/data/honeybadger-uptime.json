@@ -1,0 +1,22 @@
+{
+  "id": "honeybadger-uptime",
+  "vendor": "Honeybadger",
+  "version": 1,
+  "sources": ["honeybadger"],
+  "require": ["event", "message", "site.id", "site.name", "site.url", "site.state", "outage.down_at", "outage.up_at"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "site.name",
+      "body": "message",
+      "url": "site.details_url",
+      "correlation": "site.id",
+      "lifecycle": "event"
+    },
+    "lv": {"down": "ongoing", "up": "ended"}
+  },
+  "doc": "https://docs.honeybadger.io/guides/integrations/payloads/down/"
+}

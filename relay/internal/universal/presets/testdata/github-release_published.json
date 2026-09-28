@@ -1,0 +1,20 @@
+{
+  "action": "published",
+  "release": {
+    "url": "https://api.github.com/repos/lunar-kite/tidepool/releases/174209331",
+    "html_url": "https://github.com/lunar-kite/tidepool/releases/tag/v3.2.0",
+    "id": 174209331,
+    "node_id": "RE_kwDOIqA7wc4KYiYz",
+    "tag_name": "v3.2.0",
+    "target_commitish": "main",
+    "name": "v3.2.0",
+    "draft": false,
+    "prerelease": false,
+    "author": {"login": "mira-okafor", "id": 70311852, "type": "User", "site_admin": false},
+    "created_at": "2026-09-28T12:00:00Z",
+    "published_at": "2026-09-28T12:05:19Z",
+    "body": "Dry-run mode for sync, and retries on 503."
+  },
+  "repository": {"id": 581204417, "node_id": "R_kgDOIqA7wQ", "full_name": "lunar-kite/tidepool", "private": false},
+  "sender": {"login": "mira-okafor", "id": 70311852, "type": "User", "site_admin": false}
+}

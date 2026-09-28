@@ -1,0 +1,33 @@
+{
+  "action": "created",
+  "installation": {"uuid": "2c7e9a41-5b3d-4f60-8e1a-9d2b4c6f8a03"},
+  "data": {
+    "issue": {
+      "url": "https://sentry.io/api/0/organizations/quillmark/issues/5281937406/",
+      "web_url": "https://quillmark.sentry.io/issues/5281937406/",
+      "project_url": "https://quillmark.sentry.io/issues/?project=4507712",
+      "id": "5281937406",
+      "shareId": null,
+      "shortId": "EDITOR-WEB-3K",
+      "title": "TypeError: Cannot read properties of undefined (reading 'blocks')",
+      "culprit": "renderOutline(src/outline/render)",
+      "permalink": null,
+      "logger": null,
+      "level": "error",
+      "status": "unresolved",
+      "statusDetails": {},
+      "substatus": "new",
+      "isPublic": false,
+      "platform": "javascript",
+      "project": {"id": "4507712", "name": "editor-web", "slug": "editor-web", "platform": "javascript"},
+      "type": "error",
+      "numComments": 0,
+      "assignedTo": null,
+      "count": "14",
+      "userCount": 9,
+      "firstSeen": "2026-09-28T07:58:12.401000+00:00",
+      "lastSeen": "2026-09-28T08:03:47.220000+00:00"
+    }
+  },
+  "actor": {"type": "application", "id": "sentry", "name": "Sentry"}
+}

@@ -1,0 +1,20 @@
+{
+  "id": "flux-event",
+  "vendor": "Flux",
+  "version": 1,
+  "sources": ["flux", "fluxcd"],
+  "require": ["involvedObject.kind", "involvedObject.name", "involvedObject.namespace", "severity", "reason", "message", "reportingController", "timestamp"],
+  "forbid": ["type", "reportingComponent", "source.component", "count", "firstTimestamp", "lastTimestamp"],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "notification",
+    "p": {
+      "title": "involvedObject.name",
+      "body": "message",
+      "severity": "severity"
+    },
+    "sv": {"info": "info", "error": "warning"}
+  },
+  "doc": "https://fluxcd.io/flux/components/notification/providers/#generic-webhook"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "honeybadger-check-in",
+  "vendor": "Honeybadger",
+  "version": 1,
+  "sources": ["honeybadger"],
+  "require": ["event", "message", "check_in.id", "check_in.name", "check_in.state", "check_in.schedule_type", "check_in.reported_at"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "check_in.name",
+      "body": "message",
+      "correlation": "check_in.id",
+      "lifecycle": "event"
+    },
+    "lv": {"check_in_missing": "ongoing", "check_in_reporting": "ended"}
+  },
+  "doc": "https://docs.honeybadger.io/guides/integrations/webhook/"
+}

@@ -1,0 +1,42 @@
+{
+  "version": "1.0.0",
+  "organization": {"name": "saltmarsh", "id": "4a2c8e1f-7b3d-4f9a-8c6e-0d2b4f6a8c1e"},
+  "project": {"name": "tide-tables", "id": "9f7d5b3a-1e2c-4a6b-8d0f-2c4e6a8b0d1f"},
+  "repository": {"url": "https://github.com/saltmarsh/tide-tables", "slug": "saltmarsh/tide-tables"},
+  "revision": {
+    "tag": null,
+    "sender": {"login": "odile-m", "email": "odile@example.com", "avatar_url": "https://avatars.example.com/u/5501"},
+    "reference_type": "branch",
+    "reference": "refs/heads/main",
+    "pull_request": null,
+    "commit_sha": "c0ffee1234567890abcdef1234567890abcdef12",
+    "commit_message": "Use the 2026 harmonic constants",
+    "branch": {"name": "main", "commit_range": "0badc0de...c0ffee12"}
+  },
+  "workflow": {"initial_pipeline_id": "e8a6c4b2-0f1d-4e3c-9a5b-7d9f1b3d5e7a", "id": "b3d5f7a9-2c4e-4a6b-8e0f-1a3c5e7b9d2f", "created_at": "2026-09-28T12:40:02Z"},
+  "pipeline": {
+    "yaml_file_name": "semaphore.yml",
+    "working_directory": ".semaphore",
+    "stopping_at": "1970-01-01T00:00:00Z",
+    "state": "done",
+    "running_at": "2026-09-28T12:40:09Z",
+    "result_reason": "test",
+    "result": "failed",
+    "queuing_at": "2026-09-28T12:40:03Z",
+    "pending_at": "2026-09-28T12:40:03Z",
+    "name": "Build and test",
+    "id": "e8a6c4b2-0f1d-4e3c-9a5b-7d9f1b3d5e7a",
+    "error_description": "",
+    "done_at": "2026-09-28T12:44:51Z",
+    "created_at": "2026-09-28T12:40:02Z"
+  },
+  "blocks": [
+    {
+      "state": "done",
+      "result_reason": "test",
+      "result": "failed",
+      "name": "Tests",
+      "jobs": [{"status": "finished", "result": "failed", "name": "pytest", "index": 0, "id": "0e2c4a6f-8b1d-4f3e-a5c7-9e1b3d5f7a90"}]
+    }
+  ]
+}

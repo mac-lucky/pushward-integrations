@@ -1,0 +1,32 @@
+{
+  "action": "resolved",
+  "actor": {"type": "application", "id": "sentry", "name": "Sentry"},
+  "data": {
+    "description_text": "212 events in the last 10 minutes\nFilter: transaction:/checkout",
+    "description_title": "Resolved: Checkout errors",
+    "metric_alert": {
+      "alert_rule": {
+        "aggregate": "count()",
+        "dataset": "events",
+        "id": "3319",
+        "name": "Checkout errors",
+        "query": "transaction:/checkout",
+        "time_window": 10,
+        "triggers": []
+      },
+      "date_closed": "2026-09-28T09:40:00.000000Z",
+      "date_created": "2026-09-28T09:10:00.000000Z",
+      "date_detected": "2026-09-28T09:10:00.000000Z",
+      "date_started": "2026-09-28T09:10:00.000000Z",
+      "id": "88104",
+      "identifier": "412",
+      "organization_id": "1207",
+      "projects": ["storefront"],
+      "status": 2,
+      "title": "Checkout errors",
+      "type": 2
+    },
+    "web_url": "https://quillmark.sentry.io/alerts/412/"
+  },
+  "installation": {"uuid": "2c7e9a41-5b3d-4f60-8e1a-9d2b4c6f8a03"}
+}

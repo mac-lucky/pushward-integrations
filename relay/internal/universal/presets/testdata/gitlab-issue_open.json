@@ -1,0 +1,33 @@
+{
+  "object_kind": "issue",
+  "event_type": "issue",
+  "user": {"id": 3304, "name": "Priya Nandakumar", "username": "pnandakumar"},
+  "project": {
+    "id": 48210077,
+    "name": "ledger-api",
+    "description": "Invoices and payouts",
+    "web_url": "https://gitlab.example.com/harbourline/ledger-api",
+    "git_ssh_url": "git@gitlab.example.com:harbourline/ledger-api.git",
+    "git_http_url": "https://gitlab.example.com/harbourline/ledger-api.git",
+    "namespace": "harbourline",
+    "visibility_level": 0,
+    "path_with_namespace": "harbourline/ledger-api",
+    "default_branch": "main"
+  },
+  "object_attributes": {
+    "id": 162900413,
+    "iid": 91,
+    "title": "Payout export drops the last row",
+    "project_id": 48210077,
+    "author_id": 3304,
+    "created_at": "2026-09-28 10:02:55 UTC",
+    "updated_at": "2026-09-28 10:02:55 UTC",
+    "description": "The CSV export is one row short when the page is full.",
+    "state": "opened",
+    "confidential": false,
+    "url": "https://gitlab.example.com/harbourline/ledger-api/-/issues/91",
+    "action": "open"
+  },
+  "labels": [],
+  "repository": {"name": "ledger-api", "url": "git@gitlab.example.com:harbourline/ledger-api.git"}
+}

@@ -1,0 +1,24 @@
+{
+  "specversion": "1.0",
+  "id": "8d2f4b6a-0c1e-4a3b-9d5f-7e9a1c3b5d7f",
+  "requestid": "c4e6a8b0-2d4f-4b6a-8c0e-2a4c6e8b0d2f",
+  "source": "/projects/7/webhook/policies/12",
+  "type": "harbor.scan.completed",
+  "datacontenttype": "application/json",
+  "time": "2026-09-28T15:12:40Z",
+  "data": {
+    "resources": [
+      {
+        "digest": "sha256:5f0e1d2c3b4a59687766554433221100ffeeddccbbaa99887766554433221100",
+        "resource_url": "registry.example.com/platform/ingest-gateway@sha256:5f0e1d2c3b4a59687766554433221100ffeeddccbbaa99887766554433221100"
+      }
+    ],
+    "repository": {
+      "name": "ingest-gateway",
+      "namespace": "platform",
+      "repo_full_name": "platform/ingest-gateway",
+      "repo_type": "private"
+    }
+  },
+  "operator": "auto"
+}

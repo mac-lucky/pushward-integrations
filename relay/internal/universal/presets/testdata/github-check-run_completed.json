@@ -1,0 +1,22 @@
+{
+  "action": "completed",
+  "check_run": {
+    "id": 28817340129,
+    "name": "lint",
+    "node_id": "CR_kwDOIqA7wc8AAAAGtaQx4Q",
+    "head_sha": "1c4e7a9b2d5f8e0a3c6b9d2e5f8a1b4c7d0e3f6a",
+    "external_id": "",
+    "url": "https://api.github.com/repos/lunar-kite/tidepool/check-runs/28817340129",
+    "html_url": "https://github.com/lunar-kite/tidepool/runs/28817340129",
+    "status": "completed",
+    "conclusion": "failure",
+    "started_at": "2026-09-28T12:20:03Z",
+    "completed_at": "2026-09-28T12:21:40Z",
+    "output": {"title": null, "summary": null, "text": null, "annotations_count": 0},
+    "check_suite": {"id": 30911852207, "head_branch": "sync-dry-run", "head_sha": "1c4e7a9b2d5f8e0a3c6b9d2e5f8a1b4c7d0e3f6a", "status": "in_progress", "conclusion": null},
+    "app": {"id": 15368, "slug": "github-actions", "name": "GitHub Actions"},
+    "pull_requests": []
+  },
+  "repository": {"id": 581204417, "node_id": "R_kgDOIqA7wQ", "full_name": "lunar-kite/tidepool", "private": false},
+  "sender": {"login": "tomas-reyes", "id": 11820734, "type": "User", "site_admin": false}
+}

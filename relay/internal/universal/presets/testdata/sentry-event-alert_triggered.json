@@ -1,0 +1,26 @@
+{
+  "action": "triggered",
+  "actor": {"type": "application", "id": "sentry", "name": "Sentry"},
+  "data": {
+    "event": {
+      "culprit": "sync_ledger(billing/tasks)",
+      "datetime": "2026-09-28T10:22:05.118000Z",
+      "event_id": "c3f0a9e2b71d4e58a6c4d2f1e0b9a8c7",
+      "exception": {"values": [{"type": "KeyError", "value": "'currency'"}]},
+      "issue_url": "https://sentry.io/api/0/issues/5281990123/",
+      "issue_id": "5281990123",
+      "level": "error",
+      "location": "billing/tasks.py",
+      "logger": "",
+      "message": "",
+      "platform": "python",
+      "project": 4507719,
+      "title": "KeyError: 'currency'",
+      "type": "error",
+      "url": "https://sentry.io/api/0/projects/quillmark/billing-worker/events/c3f0a9e2b71d4e58a6c4d2f1e0b9a8c7/",
+      "web_url": "https://quillmark.sentry.io/issues/5281990123/events/c3f0a9e2b71d4e58a6c4d2f1e0b9a8c7/"
+    },
+    "triggered_rule": "Billing worker errors"
+  },
+  "installation": {"uuid": "2c7e9a41-5b3d-4f60-8e1a-9d2b4c6f8a03"}
+}

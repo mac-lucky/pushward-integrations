@@ -1,0 +1,26 @@
+{
+  "id": "gitlab-pipeline",
+  "vendor": "GitLab",
+  "version": 1,
+  "sources": ["gitlab"],
+  "require": ["object_kind", "object_attributes.id", "object_attributes.ref", "object_attributes.sha", "object_attributes.before_sha", "object_attributes.status", "object_attributes.stages[]", "project.path_with_namespace"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "progress",
+    "p": {
+      "title": "project.path_with_namespace",
+      "body": "object_attributes.ref",
+      "url": "object_attributes.url",
+      "correlation": "object_attributes.id",
+      "lifecycle": "object_attributes.status"
+    },
+    "lv": {
+      "created": "ongoing", "waiting_for_resource": "ongoing", "preparing": "ongoing", "pending": "ongoing",
+      "running": "ongoing", "scheduled": "ongoing", "manual": "ongoing", "canceling": "ongoing",
+      "success": "ended", "failed": "ended", "canceled": "ended", "skipped": "ended"
+    }
+  },
+  "doc": "https://docs.gitlab.com/user/project/integrations/webhook_events/#pipeline-events"
+}

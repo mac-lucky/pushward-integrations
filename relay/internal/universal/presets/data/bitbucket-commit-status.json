@@ -1,0 +1,21 @@
+{
+  "id": "bitbucket-commit-status",
+  "vendor": "Bitbucket Cloud",
+  "version": 1,
+  "sources": ["bitbucket"],
+  "require": ["commit_status.name", "commit_status.state", "commit_status.key", "commit_status.type", "commit_status.created_on", "commit_status.links.commit.href", "repository.full_name", "repository.uuid", "actor.type"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "notification",
+    "p": {
+      "title": "commit_status.name",
+      "body": "commit_status.state",
+      "url": "commit_status.url",
+      "severity": "commit_status.state"
+    },
+    "sv": {"successful": "info", "inprogress": "info", "stopped": "info", "failed": "warning"}
+  },
+  "doc": "https://support.atlassian.com/bitbucket-cloud/docs/event-payloads/"
+}

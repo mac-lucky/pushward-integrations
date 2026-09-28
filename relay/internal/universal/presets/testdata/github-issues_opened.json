@@ -1,0 +1,21 @@
+{
+  "action": "opened",
+  "issue": {
+    "url": "https://api.github.com/repos/lunar-kite/tidepool/issues/219",
+    "html_url": "https://github.com/lunar-kite/tidepool/issues/219",
+    "id": 2104472915,
+    "node_id": "I_kwDOIqA7wc59cUxT",
+    "number": 219,
+    "title": "Sync hangs when the target bucket is empty",
+    "user": {"login": "ines-varga", "id": 4471902, "type": "User", "site_admin": false},
+    "labels": [],
+    "state": "open",
+    "locked": false,
+    "assignee": null,
+    "comments": 0,
+    "created_at": "2026-09-28T11:30:02Z",
+    "body": "Running sync against a fresh bucket never returns."
+  },
+  "repository": {"id": 581204417, "node_id": "R_kgDOIqA7wQ", "full_name": "lunar-kite/tidepool", "private": false},
+  "sender": {"login": "ines-varga", "id": 4471902, "type": "User", "site_admin": false}
+}

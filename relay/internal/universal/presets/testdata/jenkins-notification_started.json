@@ -1,0 +1,17 @@
+{
+  "name": "payments-nightly",
+  "display_name": "payments-nightly",
+  "url": "job/payments-nightly/",
+  "build": {
+    "full_url": "https://jenkins.example.com/job/payments-nightly/482/",
+    "number": 482,
+    "queue_id": 91733,
+    "timestamp": 1790602200112,
+    "phase": "STARTED",
+    "url": "job/payments-nightly/482/",
+    "scm": {"url": "https://git.example.com/fintrail/payments.git", "branch": "origin/main", "commit": "3a5c7e9b1d3f5a7c9e1b3d5f7a9c1e3b5d7f9a1c"},
+    "log": "",
+    "notes": "",
+    "artifacts": {}
+  }
+}

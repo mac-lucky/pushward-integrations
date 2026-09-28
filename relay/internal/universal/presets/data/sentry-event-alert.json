@@ -1,0 +1,22 @@
+{
+  "id": "sentry-event-alert",
+  "vendor": "Sentry",
+  "version": 1,
+  "sources": ["sentry"],
+  "require": ["action", "actor.type", "data.event.event_id", "data.event.title", "data.event.culprit", "data.event.level", "data.event.platform"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "notification",
+    "p": {
+      "title": "data.event.title",
+      "body": "data.event.culprit",
+      "url": "data.event.web_url",
+      "correlation": "data.event.issue_id",
+      "severity": "data.event.level"
+    },
+    "sv": {"fatal": "critical", "error": "warning", "warning": "warning", "info": "info", "debug": "info"}
+  },
+  "doc": "https://docs.sentry.io/integrations/integration-platform/webhooks/issue-alerts/"
+}
