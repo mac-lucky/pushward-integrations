@@ -278,7 +278,7 @@ func (c *Client) doWithRetryInto(ctx context.Context, operation, method, url, co
 			var decodeErr error
 			if out != nil {
 				// Bounded like the error path below. A success body here is a
-				// single activity or widget, never a stream.
+				// single resource or one list page, never a stream.
 				respBody, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 				switch {
 				case err != nil:
@@ -316,7 +316,11 @@ func (c *Client) doWithRetryInto(ctx context.Context, operation, method, url, co
 			// goroutine for maxRetryAfter on every remaining attempt. The
 			// backend answered, so this is breakerReachable, not a fault:
 			// same classification as the 4xx branch below.
-			if problem.Code == ErrCodeQuotaExceeded {
+			// answer_wait.limit_exceeded fails fast too: the server is out of
+			// long-poll slots, and a retry would re-send the same wait and
+			// queue for the same slots. The caller can read at once without a
+			// wait instead.
+			if problem.Code == ErrCodeQuotaExceeded || problem.Code == ErrCodeAnswerWaitLimit {
 				lastErr = newHTTPError(http.StatusTooManyRequests, problem)
 				c.recordResult(ctx, operation, attempts, start, lastErr, breakerReachable)
 				return lastErr
@@ -361,11 +365,12 @@ func (c *Client) doWithRetryInto(ctx context.Context, operation, method, url, co
 // Stable programmatic error codes emitted by pushward-server on the Problem
 // body. Callers branch on HTTPError.Code instead of the human-readable Detail.
 //
-// The two 429 codes mean very different things. ErrCodeRateLimitExceeded is
+// The 429 codes mean very different things. ErrCodeRateLimitExceeded is
 // transient IP backpressure and is retried automatically. ErrCodeQuotaExceeded
 // is the free-tier monthly cap: it stays exhausted until the reset date on the
 // returned *QuotaExceededError, or until the user upgrades, so the client fails
-// fast rather than retrying.
+// fast rather than retrying. ErrCodeAnswerWaitLimit (too many concurrent
+// GetNotificationAnswer long-polls) also fails fast, as a plain *HTTPError.
 const (
 	ErrCodeActivityLimitExceeded        = "activity.limit_exceeded"
 	ErrCodeWidgetLimitExceeded          = "widget.limit_exceeded"
@@ -383,6 +388,10 @@ const (
 	ErrCodeScheduledNotificationNotFound = "scheduled_notification.not_found"
 	ErrCodeScheduledNotificationLimit    = "scheduled_notification.limit_exceeded"
 	ErrCodeScheduledNotificationInFlight = "scheduled_notification.in_flight"
+
+	ErrCodeNotificationAnswerURLUnavailable = "notification.answer_url_unavailable"
+	ErrCodeNotificationAnswerNotFound       = "notification_answer.not_found"
+	ErrCodeAnswerWaitLimit                  = "answer_wait.limit_exceeded"
 )
 
 // problem is the parsed RFC 9457 error body. It is an internal parsing
@@ -682,17 +691,89 @@ func (c *Client) PatchActivity(ctx context.Context, slug string, req PatchReques
 
 // SendNotification creates a notification record and optionally pushes an APNs alert.
 func (c *Client) SendNotification(ctx context.Context, req SendNotificationRequest) error {
-	req.FillSourceDisplayName()
-	return c.doWithRetry(ctx, "notify", http.MethodPost,
-		fmt.Sprintf("%s/notifications", c.baseURL), "", req, nil)
+	return c.sendNotification(ctx, req, nil)
 }
 
-// ScheduleNotification queues a notification for req.SendAt via
-// POST /notifications/scheduled and returns the schedule. At most 20 can be
-// pending per account; one more fails with a *HTTPError whose Code is
-// ErrCodeScheduledNotificationLimit. An account already out of notification
-// quota gets the same quota.exceeded error as SendNotification. The list, get
-// and cancel calls below only see schedules this client's key created.
+// SendNotificationResult is SendNotification that also returns the created
+// notification's id and whether its answer is recorded (see
+// NotificationAction). A decode error here comes after a 2xx: the
+// notification was sent, so do not send it again.
+func (c *Client) SendNotificationResult(ctx context.Context, req SendNotificationRequest) (*SentNotification, error) {
+	var sn SentNotification
+	if err := c.sendNotification(ctx, req, &sn); err != nil {
+		return nil, err
+	}
+	return &sn, nil
+}
+
+// sendNotification backs both send calls. SendNotification passes a nil out,
+// so its response body is still drained unread and a body it never looked at
+// cannot turn a delivered notification into an error.
+func (c *Client) sendNotification(ctx context.Context, req SendNotificationRequest, out any) error {
+	req.FillSourceDisplayName()
+	return c.doWithRetryInto(ctx, "notify", http.MethodPost,
+		fmt.Sprintf("%s/notifications", c.baseURL), "", req, nil, out)
+}
+
+// NotificationAnswerWaitMax is the longest GetNotificationAnswer wait the
+// server honors.
+const NotificationAnswerWaitMax = 25 * time.Second
+
+// GetNotificationAnswer reads the recorded answer to a notification via
+// GET /notifications/answers/{id}. notificationID is SentNotification.ID, or
+// ScheduledNotification.NotificationID for a scheduled send.
+//
+// A positive wait long-polls: the server holds the request until the answer
+// lands or the wait runs out, then returns Status AnswerStatusPending. It is
+// sent in whole seconds (the fraction is dropped) and capped at
+// NotificationAnswerWaitMax. Each attempt of a waiting call may take the
+// HTTP client's timeout plus the wait, so the default 10s timeout does not cut
+// a 25s poll short; a custom client with no timeout is left as it is.
+//
+// A notification with no url-less action has no answer and returns a
+// *HTTPError with Code ErrCodeNotificationAnswerNotFound. When the server is
+// out of long-poll slots it answers 429 ErrCodeAnswerWaitLimit, which is
+// returned at once as a *HTTPError rather than retried; call again with a zero
+// wait for a plain read.
+func (c *Client) GetNotificationAnswer(ctx context.Context, notificationID int64, wait time.Duration) (*NotificationAnswer, error) {
+	secs := int(min(max(wait, 0), NotificationAnswerWaitMax) / time.Second)
+	endpoint := fmt.Sprintf("%s/notifications/answers/%d", c.baseURL, notificationID)
+	cl := c
+	if secs > 0 {
+		endpoint += "?wait=" + strconv.Itoa(secs)
+		cl = c.withLongerTimeout(time.Duration(secs) * time.Second)
+	}
+	var a NotificationAnswer
+	if err := cl.doWithRetryInto(ctx, "notify.answer.get", http.MethodGet, endpoint, "", nil, nil, &a); err != nil {
+		return nil, err
+	}
+	return &a, nil
+}
+
+// withLongerTimeout returns a shallow copy of c whose HTTP client timeout is
+// extended by d, for a request the server is asked to hold open. Only the
+// http.Client value is copied: the transport (connection pool), breaker and
+// callbacks stay shared, and the caller's client is never mutated. A client
+// with no timeout already allows any wait and is returned unchanged.
+func (c *Client) withLongerTimeout(d time.Duration) *Client {
+	if c.httpClient.Timeout <= 0 {
+		return c
+	}
+	hc := *c.httpClient
+	hc.Timeout += d
+	cc := *c
+	cc.httpClient = &hc
+	return &cc
+}
+
+// ScheduleNotification queues a notification via POST /notifications/scheduled
+// and returns the schedule: once at req.SendAt, or repeatedly when
+// req.Recurrence is set. At most 25 can be pending per account, and a
+// repeating series holds one slot; one more fails with a *HTTPError whose
+// Code is ErrCodeScheduledNotificationLimit. An account already out of
+// notification quota gets the same quota.exceeded error as SendNotification.
+// The list, get and cancel calls below only see schedules this client's key
+// created.
 func (c *Client) ScheduleNotification(ctx context.Context, req ScheduleNotificationRequest) (*ScheduledNotification, error) {
 	req.FillSourceDisplayName()
 	var sn ScheduledNotification
@@ -703,21 +784,48 @@ func (c *Client) ScheduleNotification(ctx context.Context, req ScheduleNotificat
 	return &sn, nil
 }
 
+// ListScheduledNotifications pages in 25s, the pending cap, so the default
+// "scheduled" list is one request. A schedule can carry a 4096-rune body, 8 KB
+// of metadata and ten action webhooks, and a page of 100 large ones can
+// overrun the 1 MiB success-body read in doWithRetryInto; 25 leaves four
+// times the room. 40 pages is 1000 schedules; only a long sent/failed history
+// inside the server's 7-day retention gets near it.
+const (
+	scheduledListPageSize = 25
+	maxScheduledListPages = 40
+)
+
 // ListScheduledNotifications lists schedules via GET /notifications/scheduled,
-// soonest first. status is "scheduled" (pending, including ones being sent),
-// "sent", "failed" or "all"; empty means the server default, "scheduled".
+// following next_cursor for up to 1000 of them. status is "scheduled"
+// (pending, including ones being sent, soonest first), "sent", "failed" or
+// "all" (latest first); empty means the server default, "scheduled". Past the
+// bound the rest is silently left out.
 func (c *Client) ListScheduledNotifications(ctx context.Context, status string) ([]ScheduledNotification, error) {
-	endpoint := fmt.Sprintf("%s/notifications/scheduled?limit=100", c.baseURL)
+	base := fmt.Sprintf("%s/notifications/scheduled?limit=%d", c.baseURL, scheduledListPageSize)
 	if status != "" {
-		endpoint += "&status=" + url.QueryEscape(status)
+		base += "&status=" + url.QueryEscape(status)
 	}
-	var out struct {
-		Items []ScheduledNotification `json:"items"`
+	var items []ScheduledNotification
+	cursor := ""
+	for range maxScheduledListPages {
+		endpoint := base
+		if cursor != "" {
+			endpoint += "&cursor=" + url.QueryEscape(cursor)
+		}
+		var page struct {
+			Items      []ScheduledNotification `json:"items"`
+			NextCursor string                  `json:"next_cursor"`
+		}
+		if err := c.doWithRetryInto(ctx, "notify.schedule.list", http.MethodGet, endpoint, "", nil, nil, &page); err != nil {
+			return nil, err
+		}
+		items = append(items, page.Items...)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
 	}
-	if err := c.doWithRetryInto(ctx, "notify.schedule.list", http.MethodGet, endpoint, "", nil, nil, &out); err != nil {
-		return nil, err
-	}
-	return out.Items, nil
+	return items, nil
 }
 
 // GetScheduledNotification reads one schedule. A missing id returns a
@@ -730,9 +838,11 @@ func (c *Client) GetScheduledNotification(ctx context.Context, id int64) (*Sched
 	return &sn, nil
 }
 
-// CancelScheduledNotification cancels a pending schedule via
-// DELETE /notifications/scheduled/{id}. One already being sent returns a
-// *HTTPError with Code ErrCodeScheduledNotificationInFlight.
+// CancelScheduledNotification cancels a schedule via
+// DELETE /notifications/scheduled/{id}. For a repeating one that stops the
+// whole series; if an occurrence is being sent right now, that send still goes
+// out and the series ends after it. Only a one-shot already being sent is
+// refused, with a *HTTPError whose Code is ErrCodeScheduledNotificationInFlight.
 func (c *Client) CancelScheduledNotification(ctx context.Context, id int64) error {
 	return c.doWithRetry(ctx, "notify.schedule.cancel", http.MethodDelete, c.scheduledNotificationURL(id), "", nil, nil)
 }

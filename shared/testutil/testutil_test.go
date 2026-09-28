@@ -1,12 +1,14 @@
 package testutil_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
 
@@ -240,6 +242,31 @@ func TestUnknownRoute_Passthrough(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Errorf("got status %d, want 200", resp.StatusCode)
+	}
+}
+
+func TestSendNotification_AnswerableForURLlessSilentAction(t *testing.T) {
+	srv, _, _ := testutil.MockPushWardServer(t)
+	c := pushward.NewClient(srv.URL, "hlk_test")
+
+	for _, tc := range []struct {
+		name   string
+		action pushward.NotificationAction
+		want   bool
+	}{
+		{"url-less reply", pushward.NotificationAction{ID: "r", Title: "Reply", TextInput: true}, true},
+		{"url-less foreground", pushward.NotificationAction{ID: "o", Title: "Open", Foreground: true}, false},
+		{"own webhook", pushward.NotificationAction{ID: "w", Title: "Ack", URL: "https://hooks.example.com/ack"}, false},
+	} {
+		sn, err := c.SendNotificationResult(context.Background(), pushward.SendNotificationRequest{
+			Title: "t", Body: "b", Actions: []pushward.NotificationAction{tc.action},
+		})
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if sn.Answerable != tc.want {
+			t.Errorf("%s: answerable = %v, want %v", tc.name, sn.Answerable, tc.want)
+		}
 	}
 }
 

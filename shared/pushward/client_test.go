@@ -1977,11 +1977,287 @@ func TestListGetCancelScheduledNotifications(t *testing.T) {
 		t.Fatalf("Cancel: %v", err)
 	}
 	want := []string{
-		"GET /notifications/scheduled?limit=100&status=sent",
+		"GET /notifications/scheduled?limit=25&status=sent",
 		"GET /notifications/scheduled/3",
 		"DELETE /notifications/scheduled/3",
 	}
 	if strings.Join(requests, "\n") != strings.Join(want, "\n") {
 		t.Errorf("requests =\n%s\nwant\n%s", strings.Join(requests, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A recurrence-only schedule must leave send_at out of the body: the zero
+// time.Time would otherwise go out as "0001-01-01T00:00:00Z", which the server
+// rejects as "send_at must be in the future" instead of starting from now.
+func TestScheduleNotification_RecurrenceWithoutSendAt(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":8,"status":"scheduled","send_at":"2026-09-29T06:00:00Z","title":"Standup","body":"in 5",
+			"recurrence":{"cron":"0 8 * * 1-5","timezone":"Europe/Warsaw","count":5},"occurrence":0,
+			"created_at":"2026-09-28T12:00:00Z"}`))
+	}))
+	defer srv.Close()
+
+	sn, err := NewClient(srv.URL, "hlk_test").ScheduleNotification(context.Background(), ScheduleNotificationRequest{
+		SendNotificationRequest: SendNotificationRequest{Title: "Standup", Body: "in 5"},
+		Recurrence:              &Recurrence{Cron: "0 8 * * 1-5", Timezone: "Europe/Warsaw", Count: 5},
+	})
+	if err != nil {
+		t.Fatalf("ScheduleNotification: %v", err)
+	}
+	if _, ok := got["send_at"]; ok {
+		t.Errorf("send_at = %v, want it absent on a recurrence-only request", got["send_at"])
+	}
+	rec, ok := got["recurrence"].(map[string]any)
+	if !ok {
+		t.Fatalf("recurrence = %v, want an object", got["recurrence"])
+	}
+	if rec["cron"] != "0 8 * * 1-5" || rec["timezone"] != "Europe/Warsaw" || rec["count"] != float64(5) {
+		t.Errorf("recurrence = %v", rec)
+	}
+	if _, ok := rec["until"]; ok {
+		t.Errorf("until = %v, want it absent when unset", rec["until"])
+	}
+	if sn.Recurrence == nil || sn.Recurrence.Count != 5 || sn.Occurrence != 0 || sn.SendAt.IsZero() {
+		t.Errorf("schedule = %+v, recurrence %+v", sn, sn.Recurrence)
+	}
+}
+
+func TestGetScheduledNotification_DecodesRepeatingSeries(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":8,"status":"scheduled","send_at":"2026-10-02T06:00:00Z","title":"t","body":"b",
+			"recurrence":{"cron":"@daily","timezone":"UTC","until":"2026-10-31T00:00:00Z"},"occurrence":3,
+			"created_at":"2026-09-28T12:00:00Z","last_sent_at":"2026-10-01T06:00:02Z","notification_id":77,"delivery":"all"}`))
+	}))
+	defer srv.Close()
+
+	sn, err := NewClient(srv.URL, "hlk_test").GetScheduledNotification(context.Background(), 8)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	until := time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
+	if sn.Recurrence == nil || sn.Recurrence.Cron != "@daily" || sn.Recurrence.Until == nil || !sn.Recurrence.Until.Equal(until) {
+		t.Errorf("recurrence = %+v", sn.Recurrence)
+	}
+	if sn.Occurrence != 3 || sn.LastSentAt == nil || sn.SentAt != nil || sn.NotificationID == nil || *sn.NotificationID != 77 {
+		t.Errorf("schedule = %+v", sn)
+	}
+}
+
+func TestListScheduledNotifications_FollowsCursor(t *testing.T) {
+	var requests []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.URL.RequestURI())
+		if r.URL.Query().Get("cursor") == "" {
+			_, _ = w.Write([]byte(`{"items":[{"id":1,"status":"sent","send_at":"2026-10-01T18:00:00Z","title":"t","body":"b","created_at":"2026-09-27T12:00:00Z"}],
+				"next_cursor":"c1+/="}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"items":[{"id":2,"status":"sent","send_at":"2026-09-30T18:00:00Z","title":"t","body":"b","created_at":"2026-09-27T12:00:00Z"}]}`))
+	}))
+	defer srv.Close()
+
+	items, err := NewClient(srv.URL, "hlk_test").ListScheduledNotifications(context.Background(), "all")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(items) != 2 || items[0].ID != 1 || items[1].ID != 2 {
+		t.Fatalf("items = %+v, want ids 1, 2", items)
+	}
+	want := []string{
+		"/notifications/scheduled?limit=25&status=all",
+		"/notifications/scheduled?limit=25&status=all&cursor=c1%2B%2F%3D",
+	}
+	if strings.Join(requests, "\n") != strings.Join(want, "\n") {
+		t.Errorf("requests =\n%s\nwant\n%s", strings.Join(requests, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// A server that never stops handing out a cursor must not loop forever.
+func TestListScheduledNotifications_PageBound(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		n := calls.Add(1)
+		_, _ = fmt.Fprintf(w, `{"items":[{"id":%d,"status":"sent","send_at":"2026-10-01T18:00:00Z","title":"t","body":"b","created_at":"2026-09-27T12:00:00Z"}],"next_cursor":"more"}`, n)
+	}))
+	defer srv.Close()
+
+	items, err := NewClient(srv.URL, "hlk_test").ListScheduledNotifications(context.Background(), "")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if calls.Load() != maxScheduledListPages || len(items) != maxScheduledListPages {
+		t.Errorf("calls = %d, items = %d, want %d of each", calls.Load(), len(items), maxScheduledListPages)
+	}
+}
+
+// --- Notification answers ---
+
+func TestSendNotificationResult_DecodesAnswerable(t *testing.T) {
+	var got map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&got)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":42,"title":"Deploy?","body":"v1.2","level":"active","pushed":true,
+			"created_at":"2026-09-28T12:00:00Z","delivery":"all","answerable":true}`))
+	}))
+	defer srv.Close()
+
+	sn, err := NewClient(srv.URL, "hlk_test").SendNotificationResult(context.Background(), SendNotificationRequest{
+		Title: "Deploy?",
+		Body:  "v1.2",
+		Actions: []NotificationAction{
+			{ID: "yes", Title: "Ship it"},
+			{ID: "why", Title: "Reply", TextInput: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SendNotificationResult: %v", err)
+	}
+	if sn.ID != 42 || !sn.Answerable || !sn.Pushed || sn.Delivery != "all" {
+		t.Errorf("sent = %+v", sn)
+	}
+	actions, _ := got["actions"].([]any)
+	if len(actions) != 2 {
+		t.Fatalf("actions = %v", got["actions"])
+	}
+	reply, _ := actions[1].(map[string]any)
+	if _, ok := reply["url"]; ok || reply["text_input"] != true {
+		t.Errorf("reply action = %v, want text_input with no url so the server records it", reply)
+	}
+}
+
+// SendNotification never reads the success body, so a body that does not
+// decode cannot turn a delivered notification into an error.
+func TestSendNotification_IgnoresSuccessBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`not json`))
+	}))
+	defer srv.Close()
+
+	err := NewClient(srv.URL, "hlk_test").SendNotification(context.Background(), SendNotificationRequest{Title: "t", Body: "b"})
+	if err != nil {
+		t.Fatalf("SendNotification: %v", err)
+	}
+}
+
+func TestGetNotificationAnswer_WaitParamAndDecode(t *testing.T) {
+	var gotURI string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotURI = r.URL.RequestURI()
+		if r.URL.Query().Has("wait") {
+			_, _ = w.Write([]byte(`{"notification_id":42,"status":"answered","action_id":"why","text":"flaky test","answered_at":"2026-09-28T12:00:09Z"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"notification_id":42,"status":"pending"}`))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "hlk_test")
+
+	for _, tc := range []struct {
+		wait time.Duration
+		uri  string
+	}{
+		{0, "/notifications/answers/42"},
+		{-time.Second, "/notifications/answers/42"},
+		{900 * time.Millisecond, "/notifications/answers/42"},
+		{1500 * time.Millisecond, "/notifications/answers/42?wait=1"},
+		{90 * time.Second, "/notifications/answers/42?wait=25"},
+	} {
+		if _, err := c.GetNotificationAnswer(context.Background(), 42, tc.wait); err != nil {
+			t.Fatalf("wait %s: %v", tc.wait, err)
+		}
+		if gotURI != tc.uri {
+			t.Errorf("wait %s: request %s, want %s", tc.wait, gotURI, tc.uri)
+		}
+	}
+
+	pending, err := c.GetNotificationAnswer(context.Background(), 42, 0)
+	if err != nil || pending.Status != AnswerStatusPending || pending.ActionID != "" || pending.Text != nil || pending.AnsweredAt != nil {
+		t.Fatalf("pending = %+v, %v", pending, err)
+	}
+	answered, err := c.GetNotificationAnswer(context.Background(), 42, 5*time.Second)
+	if err != nil || answered.Status != AnswerStatusAnswered || answered.ActionID != "why" ||
+		answered.Text == nil || *answered.Text != "flaky test" || answered.AnsweredAt == nil || answered.NotificationID != 42 {
+		t.Fatalf("answered = %+v, %v", answered, err)
+	}
+}
+
+// The long-poll must outlive the client's own timeout. Scaled down so the
+// test stays fast: a 300ms client timeout and a server that holds the request
+// for 800ms of a 1s wait. Without the per-call extension every attempt would
+// time out and the call would fail after the retry schedule.
+func TestGetNotificationAnswer_WaitOutlivesClientTimeout(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("wait") == "1" {
+			time.Sleep(800 * time.Millisecond)
+		}
+		_, _ = w.Write([]byte(`{"notification_id":42,"status":"pending"}`))
+	}))
+	defer srv.Close()
+	hc := &http.Client{Timeout: 300 * time.Millisecond}
+	c := NewClient(srv.URL, "hlk_test", WithHTTPClient(hc))
+
+	a, err := c.GetNotificationAnswer(context.Background(), 42, time.Second)
+	if err != nil || a.Status != AnswerStatusPending {
+		t.Fatalf("GetNotificationAnswer = %+v, %v", a, err)
+	}
+	if hc.Timeout != 300*time.Millisecond {
+		t.Errorf("caller's client timeout = %s, want it untouched", hc.Timeout)
+	}
+}
+
+func TestWithLongerTimeout(t *testing.T) {
+	c := NewClient("http://x", "hlk_test")
+	if got := c.withLongerTimeout(NotificationAnswerWaitMax).httpClient.Timeout; got != 35*time.Second {
+		t.Errorf("extended timeout = %s, want 35s", got)
+	}
+	if c.httpClient.Timeout != 10*time.Second {
+		t.Errorf("base timeout = %s, want 10s unchanged", c.httpClient.Timeout)
+	}
+	unbounded := NewClient("http://x", "hlk_test", WithHTTPClient(&http.Client{}))
+	if unbounded.withLongerTimeout(time.Minute) != unbounded {
+		t.Error("a client with no timeout should be returned as is")
+	}
+}
+
+func TestGetNotificationAnswer_WaitLimitFailsFast(t *testing.T) {
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "2")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"status":429,"code":"answer_wait.limit_exceeded","detail":"too many concurrent waits; retry shortly","retry_after_ms":2000}`))
+	}))
+	defer srv.Close()
+
+	start := time.Now()
+	_, err := NewClient(srv.URL, "hlk_test").GetNotificationAnswer(context.Background(), 42, 20*time.Second)
+	var he *HTTPError
+	if !errors.As(err, &he) || he.StatusCode != http.StatusTooManyRequests || he.Code != ErrCodeAnswerWaitLimit || he.RetryAfterMs != 2000 {
+		t.Fatalf("err = %v, want 429 *HTTPError %s", err, ErrCodeAnswerWaitLimit)
+	}
+	if calls.Load() != 1 {
+		t.Errorf("calls = %d, want 1 (not retried)", calls.Load())
+	}
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Errorf("took %s, want no Retry-After sleep", elapsed)
+	}
+}
+
+func TestGetNotificationAnswer_NotFoundIsTyped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"status":404,"code":"notification_answer.not_found","detail":"notification has no answer"}`))
+	}))
+	defer srv.Close()
+
+	_, err := NewClient(srv.URL, "hlk_test").GetNotificationAnswer(context.Background(), 42, 0)
+	var he *HTTPError
+	if !errors.As(err, &he) || he.Code != ErrCodeNotificationAnswerNotFound {
+		t.Fatalf("err = %v, want *HTTPError %s", err, ErrCodeNotificationAnswerNotFound)
 	}
 }

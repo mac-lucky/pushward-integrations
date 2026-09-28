@@ -234,13 +234,14 @@ type testMediaControls struct {
 // action its URL is optional (an action may exist purely to surface its id to
 // the app), so it gets its own validator rather than reusing validateTapAction.
 type testNotificationAction struct {
-	ID      string            `json:"id"`
-	Title   string            `json:"title"`
-	URL     string            `json:"url,omitempty"`
-	Method  string            `json:"method,omitempty"`
-	Headers map[string]string `json:"headers,omitempty"`
-	Body    string            `json:"body,omitempty"`
-	Icon    string            `json:"icon,omitempty"`
+	ID         string            `json:"id"`
+	Title      string            `json:"title"`
+	URL        string            `json:"url,omitempty"`
+	Foreground bool              `json:"foreground,omitempty"`
+	Method     string            `json:"method,omitempty"`
+	Headers    map[string]string `json:"headers,omitempty"`
+	Body       string            `json:"body,omitempty"`
+	Icon       string            `json:"icon,omitempty"`
 }
 
 // MockPushWardServer starts an httptest server that records all requests and
@@ -439,9 +440,16 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 		}
 
 		pushed := req.Push == nil || *req.Push
+		resp := map[string]any{"id": 1, "pushed": pushed}
+		// As on the server: a url-less silent action has its answer recorded.
+		for _, a := range req.Actions {
+			if a.URL == "" && !a.Foreground {
+				resp["answerable"] = true
+			}
+		}
 
 		w.WriteHeader(notifyStatus)
-		_ = json.NewEncoder(w).Encode(map[string]any{"id": 1, "pushed": pushed})
+		_ = json.NewEncoder(w).Encode(resp)
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

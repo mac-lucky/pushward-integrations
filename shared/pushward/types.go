@@ -880,7 +880,15 @@ func MediaImage(url string) *MediaAttachment {
 // TextInput turns the button into a reply-with-text action: tapping it shows an
 // inline text field, and the typed text replaces {{input}} in Body (or is sent
 // as {"text": ...} when Body has no placeholder). It requires a silent
-// (Foreground=false) http(s) action; the server rejects it otherwise.
+// (Foreground=false) action; the server rejects a foreground one. With an
+// http(s) URL the reply goes to that URL.
+//
+// Leave URL empty on a silent action (with or without TextInput) and the server
+// records the tap itself: it mints a signed answer URL into the button before
+// sending, marks the notification Answerable in the create response, and the
+// tapped action id plus any typed text are read back with
+// Client.GetNotificationAnswer. A url-less TextInput action fails with
+// ErrCodeNotificationAnswerURLUnavailable on a server that cannot mint one.
 type NotificationAction struct {
 	ID                     string            `json:"id"`
 	Title                  string            `json:"title"`
@@ -925,13 +933,62 @@ type SendNotificationRequest struct {
 	Push *bool `json:"push,omitempty"`
 }
 
+// SentNotification is the part of the POST /notifications response a producer
+// acts on. ID is what GetNotificationAnswer takes; Answerable is true when at
+// least one action was sent without a URL, so the server records the answer.
+// Delivery ("none", "partial" or "all") and Reason are the create-time APNs
+// fan-out outcome, as on ScheduledNotification.
+type SentNotification struct {
+	ID         int64     `json:"id"`
+	Answerable bool      `json:"answerable,omitempty"`
+	Pushed     bool      `json:"pushed"`
+	Delivery   string    `json:"delivery,omitempty"`
+	Reason     string    `json:"reason,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// Notification answer statuses.
+const (
+	AnswerStatusPending  = "pending"
+	AnswerStatusAnswered = "answered"
+)
+
+// NotificationAnswer is the server-recorded answer to a notification, as
+// returned by GET /notifications/answers/{id}. While Status is
+// AnswerStatusPending the other fields are empty; once answered, ActionID
+// names the tapped action, Text holds the reply of a TextInput action and
+// AnsweredAt is set. The first tap wins; later taps do not change it.
+type NotificationAnswer struct {
+	NotificationID int64      `json:"notification_id"`
+	Status         string     `json:"status"`
+	ActionID       string     `json:"action_id,omitempty"`
+	Text           *string    `json:"text,omitempty"`
+	AnsweredAt     *time.Time `json:"answered_at,omitempty"`
+}
+
+// Recurrence repeats a scheduled notification on a cron rule. Cron is a
+// standard 5-field expression (minute hour day-of-month month day-of-week) or
+// @hourly/@daily/@weekly/@monthly/@yearly, evaluated as wall-clock time in
+// Timezone (IANA name, required). Sends must be at least 15 minutes apart.
+// Until (inclusive) or Count (1-1000 sends) ends the series; set at most one,
+// or neither for a series that runs until canceled.
+type Recurrence struct {
+	Cron     string     `json:"cron"`
+	Timezone string     `json:"timezone"`
+	Until    *time.Time `json:"until,omitempty"`
+	Count    int        `json:"count,omitempty"`
+}
+
 // ScheduleNotificationRequest is the body for POST /notifications/scheduled:
 // a notification plus when to send it. SendAt must be in the future and at
-// most 30 days ahead. The send counts against the notification quota when it
-// happens, not when it is scheduled.
+// most 30 days ahead. It may be left zero when Recurrence is set: the first
+// send is then the first cron match from now, or from SendAt when given, and
+// that first send must still fall within 30 days. Each send counts against
+// the notification quota when it happens, not when it is scheduled.
 type ScheduleNotificationRequest struct {
 	SendNotificationRequest
-	SendAt time.Time `json:"send_at"`
+	SendAt     time.Time   `json:"send_at,omitzero"`
+	Recurrence *Recurrence `json:"recurrence,omitempty"`
 }
 
 // Scheduled notification statuses. Canceling deletes the schedule, so there
@@ -945,15 +1002,23 @@ const (
 
 // ScheduledNotification is a notification queued for SendAt, as returned by
 // the /notifications/scheduled endpoints. The embedded request echoes the
-// content and SendAt; NotificationID, SentAt and Delivery are set once it is sent, and
-// FailureReason ("quota_exceeded", "key_revoked" or "internal_error") when it
-// failed.
+// content, SendAt and Recurrence; NotificationID, SentAt and Delivery are set
+// once it is sent, and FailureReason ("quota_exceeded", "key_revoked" or
+// "internal_error") when it failed.
+//
+// A repeating schedule keeps one ID for the whole series. After each send it
+// goes back to ScheduledStatusScheduled with SendAt moved to the next
+// occurrence; Occurrence counts the sends so far (skipped ones excluded),
+// LastSentAt is the latest, and NotificationID, Delivery and FailureReason
+// describe that latest send. SentAt is set only when the series is finished.
 type ScheduledNotification struct {
 	ID     int64  `json:"id"`
 	Status string `json:"status"`
 	ScheduleNotificationRequest
+	Occurrence     int        `json:"occurrence,omitempty"`
 	CreatedAt      time.Time  `json:"created_at"`
 	SentAt         *time.Time `json:"sent_at,omitempty"`
+	LastSentAt     *time.Time `json:"last_sent_at,omitempty"`
 	NotificationID *int64     `json:"notification_id,omitempty"`
 	Delivery       string     `json:"delivery,omitempty"`
 	Reason         string     `json:"reason,omitempty"`
