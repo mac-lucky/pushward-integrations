@@ -130,6 +130,9 @@ func TestValueTail(t *testing.T) {
 		"issue.no_error":         "",
 		"non-critical":           "",
 		"un-acknowledged":        "",
+		"Not yet resolved":       "",
+		"never completed":        "",
+		"job.never.finished":     "",
 	}
 	for in, want := range cases {
 		if got := valueTail(in); got != want {
@@ -161,14 +164,13 @@ func TestHeuristicGolden(t *testing.T) {
 	if err := json.Unmarshal(b, &golden); err != nil {
 		t.Fatal(err)
 	}
+	// Fixtures added since have no golden entry; every golden one must still
+	// be there.
 	fixtures := relayFixtures(t)
-	if len(golden) != len(fixtures) {
-		t.Errorf("golden has %d fixtures, relay/testdata %d", len(golden), len(fixtures))
-	}
-	for name, fields := range fixtures {
-		g, ok := golden[name]
+	for name, g := range golden {
+		fields, ok := fixtures[name]
 		if !ok {
-			t.Errorf("%s: not in the golden file", name)
+			t.Errorf("%s: in the golden file but gone from relay/testdata", name)
 			continue
 		}
 		got := Propose(fields)

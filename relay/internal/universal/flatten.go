@@ -125,8 +125,16 @@ func (f *flattener) object(path string, depth int) error {
 			return err
 		}
 		key, _ := tok.(string)
-		norm := NormalizeKey(key)
 		skip := depth > MaxDepth
+		// A key this long can never fit a path; it is not worth normalizing.
+		if len(key) > MaxPathBytes {
+			f.truncated = f.truncated || !skip
+			if err := f.skip(); err != nil {
+				return err
+			}
+			continue
+		}
+		norm := NormalizeKey(key)
 		if norm == "*" {
 			skip = skip || walkedStar
 			walkedStar = true
@@ -234,19 +242,19 @@ func capRunes(s string, n int) string {
 }
 
 var (
-	uuidKey  = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
-	numKey   = regexp.MustCompile(`^-?[0-9]+(\.[0-9]+)?$`)
-	hexKey   = regexp.MustCompile(`^[0-9a-fA-F]{8,}$`)
-	dateKey  = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9:.]+(Z|[+-][0-9]{2}:?[0-9]{2})?)?$`)
-	phoneKey = regexp.MustCompile(`^\+[0-9](?:[ ().-]{0,2}[0-9]){7,}$`)
-	digit    = regexp.MustCompile(`[0-9]`)
+	uuidKey = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+	numKey  = regexp.MustCompile(`^-?[0-9]+(\.[0-9]+)?$`)
+	hexKey  = regexp.MustCompile(`^[0-9a-fA-F]{8,}$`)
+	dateKey = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}([T ][0-9:.]+(Z|[+-][0-9]{2}:?[0-9]{2})?)?$`)
+	digit   = regexp.MustCompile(`[0-9]`)
 )
 
 // NormalizeKey returns "*" for keys that are generated identifiers or
 // personal data rather than schema: uuids, pure numbers, dates, hex strings of
 // 8 or more characters that contain a digit (so a plain word like "deadbeef"
-// survives), email addresses, phone numbers, JWTs and API keys, and keys
-// holding a generated token ("custom.cf_<random>", see randomKey).
+// survives), keys holding an email address or a phone number, JWTs and API
+// keys, and keys with a generated token in them ("custom.cf_<random>", see
+// randomKey).
 func NormalizeKey(key string) string {
 	if !utf8.ValidString(key) {
 		return "*"
@@ -256,7 +264,9 @@ func NormalizeKey(key string) string {
 		return "*"
 	case hexKey.MatchString(key) && digit.MatchString(key):
 		return "*"
-	case emailValue.MatchString(key), phoneKey.MatchString(key), credentialWord.MatchString(key), randomKey(key):
+	case emailIn.MatchString(key), phoneIn.MatchString(key), usPhoneIn.MatchString(key):
+		return "*"
+	case credentialWord.MatchString(key), randomKey(key):
 		return "*"
 	}
 	return key
@@ -266,7 +276,7 @@ func NormalizeKey(key string) string {
 // underscores included, is a generated token of its own: a header name like
 // "X-Amz-Content-SHA256" is words, however random it looks as a whole.
 func randomKey(key string) bool {
-	return len(key) >= 20 && anyRun(key, pieceByte, randomToken)
+	return len(key) >= 16 && anyRun(key, pieceByte, func(p string) bool { return randomToken(p) || keyToken(p) })
 }
 
 func pieceByte(c byte) bool {

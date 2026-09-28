@@ -1,6 +1,10 @@
 package universal
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/mac-lucky/pushward-integrations/shared/text"
+)
 
 func TestApply(t *testing.T) {
 	m := Mapping{
@@ -23,7 +27,7 @@ func TestApply(t *testing.T) {
 	ev := Apply(m, fields, "grafana")
 	want := Event{
 		Kind: KindAlert, Title: "Disk almost full", Body: "Disk /var on web-1 is 95% full",
-		URL: "https://grafana.example.com/d/abc", CorrelationValue: "a1b2c3",
+		URL: "https://grafana.example.com/d/abc", CorrelationKey: text.HashHex("a1b2c3", 16),
 		Severity: SeverityCritical, SevFrom: FromTable,
 		Lifecycle: LifecycleEnded, LifecycleRaw: "Closed Out", LcFrom: FromTable,
 	}
@@ -124,8 +128,8 @@ func TestApplyDefaults(t *testing.T) {
 	}
 }
 
-// A value that only its looks make secret still correlates, hashed, but is
-// never shown; a field whose key names a credential is used for nothing.
+// A value that only its looks make secret still correlates, but only as a
+// hash; a field whose key names a credential is used for nothing.
 func TestApplySecrets(t *testing.T) {
 	m := Mapping{
 		V: MappingVersion, Kind: KindAlert,
@@ -133,11 +137,11 @@ func TestApplySecrets(t *testing.T) {
 	}
 	fields, _ := flatten(t, `{"trace": "`+testRandom+`", "api_token": "hunter22"}`)
 	ev := Apply(m, fields, "ci")
-	if ev.CorrelationValue != testRandom || ev.Title != "ci" || ev.Body != "Event from ci" {
+	if ev.CorrelationKey != text.HashHex(testRandom, 16) || ev.Title != "ci" || ev.Body != "Event from ci" {
 		t.Errorf("Apply = %+v, want the token as correlation only", ev)
 	}
 	m.Paths[RoleCorrelation] = "api_token"
-	if ev := Apply(m, fields, "ci"); ev.CorrelationValue != "" {
-		t.Errorf("correlation = %q from a secret key", ev.CorrelationValue)
+	if ev := Apply(m, fields, "ci"); ev.CorrelationKey != "" {
+		t.Errorf("correlation key = %q from a secret key", ev.CorrelationKey)
 	}
 }

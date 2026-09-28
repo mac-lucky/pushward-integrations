@@ -33,33 +33,44 @@ const (
 	maskedEmail = "[email]"
 )
 
-// credentials are the formats a credential is known by: PushWard's own keys,
-// GitHub, GitLab, Slack, OpenAI-style, Stripe keys and webhook secrets,
-// Mailgun, Twilio API keys, AWS access key ids and JWTs.
-const credentials = `hl[ka]_[A-Za-z0-9_-]{4,}|gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|` +
-	`glpat-[A-Za-z0-9_-]{20,}|xox[a-z]-[A-Za-z0-9-]{10,}|sk-[A-Za-z0-9_-]{20,}|` +
-	`[rs]k_(?:live|test)_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9+/=]{20,}|key-[0-9a-z]{32}|SK[0-9a-fA-F]{32}|` +
-	`(?:AKIA|ASIA)[0-9A-Z]{16}|eyJ[A-Za-z0-9_-]{10,}={0,2}(?:\.[A-Za-z0-9_=-]*){0,2}`
+// Known credential formats. The prefixed ones are distinctive enough to be
+// found inside a word ("x_sk_live_..."); the bounded ones need a word boundary
+// in front. Between them: PushWard's own keys, GitHub, GitLab, Slack,
+// OpenAI-style, Stripe, Mailgun, Twilio, AWS, Google, SendGrid, npm, Linear,
+// Shopify and JWTs.
+const (
+	prefixedCredentials = `github_pat_[A-Za-z0-9_]{20,}|gl(?:pat|rt|dt|ptt|cbt|soat)-[\w-]{20,}|xox[a-z]-[A-Za-z0-9-]{10,}|` +
+		`[rs]k_(?:live|test)_[A-Za-z0-9]{10,}|whsec_[A-Za-z0-9+/=]{20,}|lin_api_[A-Za-z0-9]{40}|shp(?:at|ss|ca|pa)_[0-9a-f]{32}`
+	boundedCredentials = `hl[ka]_[A-Za-z0-9_-]{4,}|gh[pousr]_[A-Za-z0-9]{20,}|sk-[A-Za-z0-9_-]{20,}|key-[0-9a-z]{32}|` +
+		`SK[0-9a-fA-F]{32}|(?:AKIA|ASIA)[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|SG\.[\w-]{22}\.[\w-]{43}|npm_[A-Za-z0-9]{36}|` +
+		`eyJ[A-Za-z0-9_-]{10,}={0,2}(?:\.[A-Za-z0-9_=-]*){0,2}`
+)
 
 var (
 	// credentialWord matches a key that starts with a credential;
 	// credentialIn finds them inside text ("token=ghp_...").
-	credentialWord = regexp.MustCompile(`^(?:` + credentials + `)`)
-	credentialIn   = regexp.MustCompile(`\b(?:` + credentials + `)`)
-	emailValue     = regexp.MustCompile(`^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$`)
-	emailIn        = regexp.MustCompile(`[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
+	credentialWord = regexp.MustCompile(`^(?:` + boundedCredentials + `|` + prefixedCredentials + `)`)
+	credentialIn   = regexp.MustCompile(`\b(?:` + boundedCredentials + `)|(?:` + prefixedCredentials + `)`)
+	emailValue     = regexp.MustCompile(`^[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.\p{L}{2,}$`)
+	emailIn        = regexp.MustCompile(`[\p{L}\p{N}._%+-]+@[\p{L}\p{N}.-]+\.\p{L}{2,}`)
 	privateKeyPEM  = regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`)
 	smallInt       = regexp.MustCompile(`^[0-9]{1,2}$`)
+	versionWord    = regexp.MustCompile(`^v[0-9]+$`)
 
 	// What Display masks inside text. The ones with a group mask only the
-	// group: the credential after "Bearer" or "password=".
-	urlIn      = regexp.MustCompile(`(?i)https?://\S+`)
+	// group: the credential after "Bearer" or "password=", the userinfo of
+	// "postgres://user:pass@db".
+	urlIn      = regexp.MustCompile("(?i)https?://[^\\s\"'<>\\\\{}|^`]+")
 	authScheme = regexp.MustCompile(`(?i)\b(?:basic|bearer|token)\s+(\S{8,})`)
-	keyValue   = regexp.MustCompile(`(?i)\b[\w.-]*?(?:password|passwd|pwd|secret|token|api[_-]?key)["']?\s*[=:]\s*("[^"]*"|'[^']*'|[^\s"',;&]+)`)
+	keyValue   = regexp.MustCompile(`(?i)\b(?:[\w.-]*[_.-])?(?:password|passwd|pwd|pass|pin|otp|passphrase|secret|token|api[_-]?key|credentials?|private[_-]?key|sig)` +
+		`\\?["']?\s*(?:=>|[=:])\s*(\\?"[^"]*"|'[^']*'|\\?["']?[^\s"'\\]+)`)
+	userinfoIn = regexp.MustCompile(`(?i)\b[a-z][a-z0-9+.-]*://([^/?#\s@]*)@`)
 	hexIn      = regexp.MustCompile(`[0-9A-Fa-f]{32,}`)
 	cardIn     = regexp.MustCompile(`\b[0-9](?:[ -]?[0-9]){12,18}\b`)
-	ibanIn     = regexp.MustCompile(`\b[A-Z]{2}[0-9]{2}(?: ?[A-Z0-9]){11,30}\b`)
+	ibanIn     = regexp.MustCompile(`(?i)\b[a-z]{2}[0-9]{2}(?: ?[a-z0-9]){11,30}\b`)
 	phoneIn    = regexp.MustCompile(`\+[0-9](?:[ ().-]{0,2}[0-9]){7,}`)
+	usPhoneIn  = regexp.MustCompile(`(?:\([0-9]{3}\) ?|\b[0-9]{3}[-.])[0-9]{3}[-.][0-9]{4}\b`)
+	ssnIn      = regexp.MustCompile(`\b[0-9]{3}-[0-9]{2}-[0-9]{4}\b`)
 )
 
 // Words that name a credential when they end a key. Keys written as one
@@ -67,12 +78,27 @@ var (
 var (
 	secretWords = map[string]bool{
 		"token": true, "secret": true, "password": true, "passwd": true, "pwd": true,
-		"pass": true, "passcode": true, "pin": true, "otp": true,
-		"apikey": true, "auth": true, "authorization": true, "signature": true,
-		"cookie": true, "session": true, "private": true, "credential": true,
-		"privatekey": true, "secretkey": true, "accesskey": true, "passphrase": true,
+		"pass": true, "passcode": true, "pin": true, "otp": true, "pat": true,
+		"apikey": true, "auth": true, "authorization": true, "signature": true, "sig": true,
+		"cookie": true, "session": true, "private": true, "credential": true, "cred": true, "creds": true,
+		"privatekey": true, "privkey": true, "secretkey": true, "accesskey": true, "passphrase": true,
+		"jwt": true, "bearer": true, "dsn": true, "mnemonic": true, "seed": true, "hmac": true,
 	}
 	secretSuffixes = []string{"token", "secret", "password", "passwd", "apikey", "signature", "cookie", "credential"}
+	// Two-word names, checked before trailing words are dropped
+	// ("connectionString" ends in "string").
+	secretPhrases = map[string]bool{
+		"database_url": true, "connection_string": true, "mongo_uri": true,
+		"backup_code": true, "recovery_code": true,
+	}
+	// Trailing words that describe a secret's form or role, not what it is:
+	// token_value, password_confirm, api_key_b64.
+	secretTrailers = map[string]bool{
+		"value": true, "values": true, "val": true, "string": true, "str": true,
+		"b64": true, "base64": true, "pem": true, "encoded": true, "json": true,
+		"hex": true, "raw": true, "plain": true, "header": true, "confirm": true,
+		"confirmation": true, "repeat": true, "new": true, "old": true,
+	}
 	// "api_key", "privateKey", "secret-key", "AccessKey", "hmac_key".
 	keyQualifiers = map[string]bool{
 		"api": true, "private": true, "secret": true, "access": true, "signing": true,
@@ -82,6 +108,9 @@ var (
 	// Leaf keys that take their meaning from the parent: token.value,
 	// secrets[].value, apiKey.key.
 	genericKeys = map[string]bool{"value": true, "values": true, "val": true, "key": true, "data": true}
+	// Parents whose every child is secret: cookies.session_id,
+	// credentials.username.
+	secretParents = map[string]bool{"cookie": true, "secret": true, "credential": true}
 )
 
 // ClassOf classifies one field. A key that names a credential makes the field
@@ -110,12 +139,14 @@ func ClassOf(path string, f Field) ValueClass {
 	if strings.Contains(v, "PRIVATE KEY-----") && privateKeyPEM.MatchString(v) {
 		return ClassSecret
 	}
+	words := countWords(v)
 	// A pre-signed or tokened link is still a link; Display drops its query
-	// and masks what is secret in its path.
-	if lv := strings.ToLower(v); strings.HasPrefix(lv, "http://") || strings.HasPrefix(lv, "https://") {
+	// and masks what is secret in its path. A link with text after it is
+	// text.
+	if lv := strings.ToLower(v); words == 1 && (strings.HasPrefix(lv, "http://") || strings.HasPrefix(lv, "https://")) {
 		return ClassURL
 	}
-	if countWords(v) <= 2 {
+	if words <= 2 {
 		if credentialIn.MatchString(v) {
 			return ClassSecret
 		}
@@ -141,9 +172,10 @@ func ClassOf(path string, f Field) ValueClass {
 	return ClassText
 }
 
-// secretPath reports whether a field's key, or the parent of a generic leaf
-// key, names a credential. A secret that only its value gives away is not
-// one: such a field may still be a correlation id, which is hashed and never
+// secretPath reports whether a field's key names a credential, or its
+// parent does for a generic leaf key, or an ancestor is a cookie, secret or
+// credential object. A secret that only its value gives away is not one:
+// such a field may still be a correlation id, which is hashed and never
 // shown.
 func secretPath(path string) bool {
 	segs := segments(path)
@@ -154,31 +186,57 @@ func secretPath(path string) bool {
 	if secretKey(leaf) {
 		return true
 	}
-	return len(segs) > 1 && genericKeys[strings.ToLower(leaf)] && secretKey(segs[len(segs)-2])
+	for _, p := range segs[:len(segs)-1] {
+		if secretParents[strings.TrimSuffix(lastToken(p), "s")] {
+			return true
+		}
+	}
+	if len(segs) > 1 && genericKeys[strings.ToLower(leaf)] {
+		parent := segs[len(segs)-2]
+		// api.key, hmac.key
+		return secretKey(parent) || strings.EqualFold(leaf, "key") && keyQualifiers[lastToken(parent)]
+	}
+	return false
 }
 
-// endsInID reports whether a key's last word says it holds an identifier:
-// id, uid, uuid, ref, a bare key, or a word ending in id ("userid").
+func lastToken(key string) string {
+	toks := tokens(key)
+	if len(toks) == 0 {
+		return ""
+	}
+	return strings.TrimRight(toks[len(toks)-1], "0123456789")
+}
+
+// idWord reports whether one key word says it holds an identifier: uid,
+// uuid, ref, a word ending in id ("userid").
+func idWord(t string) bool {
+	switch t {
+	case "ids", "fingerprint", "ref", "reference":
+		return true
+	}
+	return strings.HasSuffix(t, "id")
+}
+
+// endsInID reports whether a key's last word says it holds an identifier;
+// a bare "key" counts ("pipelineKey").
 func endsInID(key string) bool {
 	toks := tokens(key)
 	if len(toks) == 0 {
 		return false
 	}
-	switch last := toks[len(toks)-1]; last {
-	case "ids", "fingerprint", "ref", "reference", "key":
-		return true
-	default:
-		return strings.HasSuffix(last, "id")
-	}
+	last := toks[len(toks)-1]
+	return last == "key" || idWord(last)
 }
 
 // digestName reports whether a key names an identifier or a digest, whose
-// long hex Display may show.
+// long hex Display may show. A bare "key" does not: long hex under it is as
+// likely a key as an id.
 func digestName(key string) bool {
-	if endsInID(key) {
+	toks := tokens(key)
+	if len(toks) > 0 && idWord(toks[len(toks)-1]) {
 		return true
 	}
-	for _, t := range tokens(key) {
+	for _, t := range toks {
 		switch strings.TrimRight(t, "0123456789") {
 		case "id", "sha", "hash", "digest", "commit", "revision", "checksum":
 			return true
@@ -188,13 +246,22 @@ func digestName(key string) bool {
 }
 
 // secretKey reports whether a key names a credential. The credential word
-// has to be the key's last one ("access_token", "X-Api-Key",
-// "X-Hub-Signature-256"), so a key that only describes one ("token_id",
-// "session_name", "authorizationStatus") is judged by its value instead.
+// has to be the key's last one once version numbers and words about its form
+// are dropped ("access_token", "X-Api-Key", "X-Hub-Signature-256",
+// "password_confirm", "api_key_b64"), so a key that only describes one
+// ("token_id", "session_name", "authorizationStatus") is judged by its value
+// instead.
 func secretKey(key string) bool {
 	toks := tokens(key)
-	for len(toks) > 0 && strings.TrimRight(toks[len(toks)-1], "0123456789") == "" {
-		toks = toks[:len(toks)-1]
+	for n := len(toks); n > 0; n = len(toks) {
+		last := toks[n-1]
+		if n > 1 && secretPhrases[toks[n-2]+"_"+strings.TrimSuffix(last, "s")] {
+			return true
+		}
+		if strings.TrimRight(last, "0123456789") != "" && !versionWord.MatchString(last) && !secretTrailers[last] {
+			break
+		}
+		toks = toks[:n-1]
 	}
 	if len(toks) == 0 {
 		return false
@@ -219,9 +286,9 @@ func secretKey(key string) bool {
 // more characters from the base64 alphabet, at least two of them digits,
 // letters that are mostly consonants, and at least 3.5 bits of entropy per
 // character. Entropy alone is not enough: most keys and enum values of that
-// length ("is_auto_renew_enabled_on_trial_end") clear 3.5 bits too, and
-// the vowel test is what tells them from a token. Uuids and plain hex are
-// left to the id rules.
+// length ("is_auto_renew_enabled_on_trial_end") clear 3.5 bits too, and the
+// vowel test is what tells them from a token. Uuids and plain hex are left to
+// the id rules.
 func randomToken(s string) bool {
 	if len(s) < 20 || uuidValue.MatchString(s) || hexValue.MatchString(s) {
 		return false
@@ -235,8 +302,7 @@ func randomToken(s string) bool {
 			digits++
 		case 'a' <= c && c <= 'z', 'A' <= c && c <= 'Z':
 			letters++
-			switch c | 0x20 {
-			case 'a', 'e', 'i', 'o', 'u':
+			if isVowel(c) {
 				vowels++
 			}
 		case tokenByte(c):
@@ -257,6 +323,65 @@ func randomToken(s string) bool {
 		}
 	}
 	return bits >= 3.5
+}
+
+func isVowel(c byte) bool {
+	switch c | 0x20 {
+	case 'a', 'e', 'i', 'o', 'u':
+		return true
+	}
+	return false
+}
+
+// mix describes the characters of a run of token bytes.
+type mix struct {
+	digit, upper, lower bool
+	vowels, letters     int
+}
+
+func mixOf(s string) (mix, bool) {
+	var m mix
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case '0' <= c && c <= '9':
+			m.digit = true
+		case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z':
+			m.upper = m.upper || c <= 'Z'
+			m.lower = m.lower || c >= 'a'
+			m.letters++
+			if isVowel(c) {
+				m.vowels++
+			}
+		case !tokenByte(c):
+			return m, false
+		}
+	}
+	return m, true
+}
+
+// urlToken reports whether a run inside a URL host or path looks generated:
+// 16 or more token bytes with upper and lower case letters and either a
+// digit or few vowels. Slack and IFTTT hook keys are this; a readable path
+// ("MyProjectReport") keeps its vowels.
+func urlToken(s string) bool {
+	if len(s) < 16 {
+		return false
+	}
+	m, ok := mixOf(s)
+	return ok && m.upper && m.lower && (m.digit || 10*m.vowels < 3*m.letters)
+}
+
+// keyToken is urlToken for a key piece, stricter because a key that reads as
+// a token collapses to "*" with its siblings: digits, both cases, and fewer
+// than a quarter vowels. "tbl..." and "rec..." ids pass; camelCase names with
+// a number ("addressLine2Street") keep their vowels and do not.
+func keyToken(s string) bool {
+	if len(s) < 16 {
+		return false
+	}
+	m, ok := mixOf(s)
+	return ok && m.digit && m.upper && m.lower && 4*m.vowels < m.letters
 }
 
 // anyRun reports whether fn holds for a maximal run of the bytes in accepts.
@@ -282,8 +407,9 @@ func anyRun(s string, in func(byte) bool, fn func(string) bool) bool {
 // and path, with userinfo, query, fragment and path parameters dropped and
 // the secret parts of its host and path shown as "...". Everything else is
 // cut to maxRunes with what looks secret inside it masked: credentials,
-// generated tokens, long hex (unless the key names an id or a digest), emails,
-// card numbers, IBANs and phone numbers; URLs inside it are shown as above.
+// key=value secrets, generated tokens, long hex (unless the key names an id
+// or a digest), userinfo in any URL, emails, card numbers, IBANs, phone and
+// social security numbers; http(s) URLs inside it are shown as above.
 //
 // Values arrive already cut to MaxValueRunes by Flatten, so a credential cut
 // in half by that cap can slip past the patterns.
@@ -299,7 +425,7 @@ func Display(path string, f Field, maxRunes int) string {
 	case ClassBool:
 		return v
 	case ClassURL:
-		return text.Truncate(displayURL(v), maxRunes)
+		return text.Truncate(lastPass(displayURL(v)), maxRunes)
 	}
 	return text.Truncate(mask(v, digestName(lastKey(path))), maxRunes)
 }
@@ -311,7 +437,7 @@ func displayURL(v string) string {
 	}
 	labels := strings.Split(u.Host, ".")
 	for i, l := range labels {
-		if secretPart(l) {
+		if hiddenPart(l) {
 			labels[i] = "..."
 		}
 	}
@@ -322,9 +448,7 @@ func displayURL(v string) string {
 			s = s[:j]
 		}
 		raw, err := url.PathUnescape(s)
-		// Long hex and uuids in a path are capability ids: an hc-ping check,
-		// a Home Assistant webhook.
-		if err != nil || secretPart(raw) || len(raw) >= 16 && (uuidValue.MatchString(raw) || hexValue.MatchString(raw)) {
+		if err != nil || hiddenPart(raw) {
 			s = "..."
 		}
 		segs[i] = s
@@ -332,43 +456,96 @@ func displayURL(v string) string {
 	return u.Scheme + "://" + strings.Join(labels, ".") + strings.Join(segs, "/")
 }
 
+// hiddenPart reports whether a host label or path segment is shown as
+// "...": it holds something secret, a long hex or uuid capability id (an
+// hc-ping check, a Home Assistant webhook), or anything text masking would
+// touch (/token=abc, /wh_<hex>, a card number).
+func hiddenPart(s string) bool {
+	return secretPart(s) || longID(s) || maskOnce(s, textDetectors, true, true) != s
+}
+
+// longID reports a uuid or a hex string of 16 or more characters.
+func longID(s string) bool {
+	return len(s) >= 16 && (uuidValue.MatchString(s) || hexValue.MatchString(s))
+}
+
 // secretPart reports whether a host label or path segment holds a
 // credential, an email address, or a generated token in any of its runs
 // ("bot123456789:AAH...").
 func secretPart(s string) bool {
-	return credentialIn.MatchString(s) || emailIn.MatchString(s) || anyRun(s, tokenByte, randomToken)
+	return credentialIn.MatchString(s) || emailIn.MatchString(s) ||
+		anyRun(s, tokenByte, func(r string) bool { return randomToken(r) || urlToken(r) })
+}
+
+// A detector finds stretches of text to mask: its first group when it has
+// one, else the whole match. keep, when set, says how much of a candidate to
+// mask, 0 for none: a checksum that fails, a value already masked.
+type detector struct {
+	re    *regexp.Regexp
+	email bool
+	keep  func(string) int
+}
+
+var (
+	cardDetector  = detector{re: cardIn, keep: luhn}
+	valueDetector = detector{re: keyValue, keep: unmasked}
+	textDetectors = []detector{
+		{re: credentialIn},
+		{re: emailIn, email: true},
+		{re: authScheme},
+		valueDetector,
+		{re: userinfoIn},
+		cardDetector,
+		{re: ibanIn, keep: ibanPrefix},
+		{re: phoneIn},
+		{re: usPhoneIn},
+		{re: ssnIn},
+	}
+	// lastDetectors run once more over the whole output, displayed URLs
+	// included: joining the pieces back can put a boundary in front of
+	// something that did not read as a secret inside its piece.
+	lastDetectors = []detector{{re: credentialIn}, valueDetector, {re: userinfoIn}, cardDetector}
+)
+
+// unmasked skips a key=value value that is already a placeholder, perhaps
+// with the punctuation that followed the quoted value ("[redacted]," in
+// JSON), so a second pass does not eat that punctuation.
+func unmasked(v string) int {
+	if rest, ok := strings.CutPrefix(v, redacted); ok && strings.Trim(rest, ",;&)]}") == "" {
+		return 0
+	}
+	return len(v)
 }
 
 // mask masks what looks secret inside free text, keeping everything around
-// it. URLs are shown as displayURL shows them. Joining the pieces back can
-// put a credential's start right after a placeholder, so a last pass masks
-// anything that still reads as one.
+// it. key=value secrets go first, since the value may itself be a URL; then
+// http(s) URLs are shown as displayURL shows them and the text between them
+// is masked; then a last pass over the whole.
 func mask(v string, keepHex bool) string {
+	v = fixpoint(v, func(s string) string { return maskOnce(s, []detector{valueDetector}, false, false) })
 	var b strings.Builder
 	last := 0
 	for _, m := range urlIn.FindAllStringIndex(v, -1) {
-		b.WriteString(maskText(v[last:m[0]], keepHex))
+		b.WriteString(fixpoint(v[last:m[0]], func(s string) string { return maskOnce(s, textDetectors, !keepHex, true) }))
 		b.WriteString(displayURL(v[m[0]:m[1]]))
 		last = m[1]
 	}
-	b.WriteString(maskText(v[last:], keepHex))
-	out := b.String()
-	for range 8 {
-		m := credentialIn.ReplaceAllLiteralString(out, redacted)
-		if m == out {
-			break
-		}
-		out = m
-	}
-	return out
+	b.WriteString(fixpoint(v[last:], func(s string) string { return maskOnce(s, textDetectors, !keepHex, true) }))
+	return lastPass(b.String())
 }
 
-// maskText masks text without URLs. A placeholder can put a word boundary
-// where there was none ("AKIA...eyJ..."), so it goes again until nothing is
-// left to mask.
-func maskText(v string, keepHex bool) string {
+// lastPass masks what reads as a credential, a key=value secret, userinfo or
+// a card number in text already masked or displayed: a path segment can
+// itself look like "x://user:pass@".
+func lastPass(v string) string {
+	return fixpoint(v, func(s string) string { return maskOnce(s, lastDetectors, false, false) })
+}
+
+// fixpoint applies f until nothing changes: a placeholder can put a word
+// boundary where there was none ("AKIA...eyJ..."), so masking goes again.
+func fixpoint(v string, f func(string) string) string {
 	for range 8 {
-		m := maskOnce(v, keepHex)
+		m := f(v)
 		if m == v {
 			break
 		}
@@ -383,29 +560,31 @@ type span struct {
 	email      bool
 }
 
-func maskOnce(v string, keepHex bool) string {
+// maskOnce masks what the detectors find, plus long hex and generated
+// tokens when asked.
+func maskOnce(v string, ds []detector, hex, runs bool) string {
 	var spans []span
-	add := func(re *regexp.Regexp, email bool, valid func(string) bool) {
-		for _, m := range re.FindAllStringSubmatchIndex(v, -1) {
+	add := func(d detector) {
+		for _, m := range d.re.FindAllStringSubmatchIndex(v, -1) {
 			if len(m) >= 4 && m[2] >= 0 {
 				m = m[2:4]
 			}
-			if valid == nil || valid(v[m[0]:m[1]]) {
-				spans = append(spans, span{m[0], m[1], email})
+			n := m[1] - m[0]
+			if d.keep != nil {
+				n = d.keep(v[m[0]:m[1]])
+			}
+			if n > 0 {
+				spans = append(spans, span{m[0], m[0] + n, d.email})
 			}
 		}
 	}
-	add(credentialIn, false, nil)
-	add(emailIn, true, nil)
-	add(authScheme, false, nil)
-	add(keyValue, false, nil)
-	add(cardIn, false, luhn)
-	add(ibanIn, false, ibanValid)
-	add(phoneIn, false, nil)
-	if !keepHex {
-		add(hexIn, false, nil)
+	for _, d := range ds {
+		add(d)
 	}
-	for i := 0; i < len(v); {
+	if hex {
+		add(detector{re: hexIn})
+	}
+	for i := 0; runs && i < len(v); {
 		if !tokenByte(v[i]) {
 			i++
 			continue
@@ -444,9 +623,16 @@ func maskOnce(v string, keepHex bool) string {
 	return b.String()
 }
 
-// luhn reports whether 13 to 19 digits, spaces and dashes aside, pass the
-// card number checksum.
-func luhn(s string) bool {
+// luhn keeps a card number whose 13 to 19 digits, spaces and dashes aside,
+// pass the card number checksum.
+func luhn(s string) int {
+	if luhnValid(s) {
+		return len(s)
+	}
+	return 0
+}
+
+func luhnValid(s string) bool {
 	sum, n, double := 0, 0, false
 	for i := len(s) - 1; i >= 0; i-- {
 		c := s[i]
@@ -464,9 +650,22 @@ func luhn(s string) bool {
 	return n >= 13 && n <= 19 && sum%10 == 0
 }
 
-// ibanValid checks an IBAN's mod-97 checksum.
+// ibanPrefix keeps the longest IBAN at the start of a candidate: the
+// pattern also takes a lower-case word that follows ("... 0130 00 soon"), so
+// it is cut back at spaces until the checksum holds.
+func ibanPrefix(s string) int {
+	for end := len(s); end > 0; end = strings.LastIndexByte(s[:end], ' ') {
+		if ibanValid(s[:end]) {
+			return end
+		}
+	}
+	return 0
+}
+
+// ibanValid checks an IBAN's mod-97 checksum, in either case and with or
+// without spaces.
 func ibanValid(s string) bool {
-	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ToUpper(strings.ReplaceAll(s, " ", ""))
 	if len(s) < 15 || len(s) > 34 {
 		return false
 	}

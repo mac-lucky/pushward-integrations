@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -56,7 +57,8 @@ func TestFallback(t *testing.T) {
 		{"error", stubProposer{err: errors.New("boom")}, time.Second, "error", heuristic},
 		{"deadline error", stubProposer{err: context.DeadlineExceeded}, time.Second, "timeout", heuristic},
 		{"panic", &panicProposer{}, time.Second, "panic", heuristic},
-		{"panic, no timeout", &panicProposer{}, 0, "panic", heuristic},
+		{"panic, default timeout", &panicProposer{}, 0, "panic", heuristic},
+		{"slow, default timeout", stubProposer{res: good, sleep: 800 * time.Millisecond}, 0, "timeout", heuristic},
 		{"slow", stubProposer{res: good, sleep: 500 * time.Millisecond}, 20 * time.Millisecond, "timeout", heuristic},
 		{"secret title", stubProposer{res: Result{Proposal: Proposal{Title: "api_token", Kind: KindNotification}}}, time.Second, "invalid", heuristic},
 		{"missing path", stubProposer{res: Result{Proposal: Proposal{Title: "subject", Kind: KindNotification}}}, time.Second, "invalid", heuristic},
@@ -80,27 +82,53 @@ func TestFallback(t *testing.T) {
 		if !reflect.DeepEqual(reasons, want) {
 			t.Errorf("%s: OnFallback got %v, want %v", c.name, reasons, want)
 		}
-		if c.reason == "timeout" && time.Since(start) > 300*time.Millisecond {
+		if c.reason == "timeout" && time.Since(start) > DefaultTimeout+300*time.Millisecond {
 			t.Errorf("%s: waited %v for a primary past its timeout", c.name, time.Since(start))
 		}
 	}
 }
 
+type countingProposer struct{ calls *atomic.Int32 }
+
+func (c countingProposer) Propose(context.Context, Input) (Result, error) {
+	c.calls.Add(1)
+	return Result{}, nil
+}
+
+// A canceled caller does not start the Primary at all.
 func TestFallbackCanceled(t *testing.T) {
 	fields, _ := flatten(t, `{"title": "x"}`)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	var reason string
+	var calls atomic.Int32
 	f := &Fallback{
-		Primary:    stubProposer{sleep: 200 * time.Millisecond},
+		Primary:    countingProposer{&calls},
 		Timeout:    time.Second,
 		OnFallback: func(r string) { reason = r },
 	}
 	if _, err := f.Propose(ctx, Input{Fields: fields}); err != nil {
 		t.Fatal(err)
 	}
-	if reason != "canceled" {
-		t.Errorf("reason = %q, want canceled", reason)
+	if reason != "canceled" || calls.Load() != 0 {
+		t.Errorf("reason = %q after %d Primary calls, want canceled before any", reason, calls.Load())
+	}
+}
+
+func TestFallbackSecondaryPanic(t *testing.T) {
+	fields, _ := flatten(t, `{"title": "Backup done"}`)
+	var reasons []string
+	f := &Fallback{
+		Primary:    stubProposer{err: errors.New("boom")},
+		Secondary:  &panicProposer{},
+		OnFallback: func(r string) { reasons = append(reasons, r) },
+	}
+	res, err := f.Propose(context.Background(), Input{Fields: fields})
+	if err != nil || res.By != "heuristic/1" || !reflect.DeepEqual(res.Proposal, Propose(fields)) {
+		t.Errorf("Propose = %+v, %v; want the heuristic's result", res, err)
+	}
+	if want := []string{"error", "secondary_panic"}; !reflect.DeepEqual(reasons, want) {
+		t.Errorf("reasons = %v, want %v", reasons, want)
 	}
 }
 

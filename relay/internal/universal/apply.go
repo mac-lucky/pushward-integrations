@@ -18,11 +18,13 @@ const (
 
 // Event is one payload read through a mapping, ready to deliver.
 type Event struct {
-	Kind             Kind
-	Title            string
-	Body             string
-	URL              string
-	CorrelationValue string
+	Kind  Kind
+	Title string
+	Body  string
+	URL   string
+	// CorrelationKey is a hash of the correlation value; the value itself
+	// never leaves Apply.
+	CorrelationKey string
 	// Progress is a fraction in [0, 1], nil when the payload has none.
 	Progress *float64
 	Severity string
@@ -60,12 +62,12 @@ func Apply(m Mapping, fields []Field, source string) Event {
 	}
 
 	ev := Event{
-		Kind:             m.Kind,
-		Title:            get(RoleTitle),
-		Body:             get(RoleBody),
-		URL:              text.SanitizeURL(get(RoleURL)),
-		CorrelationValue: get(RoleCorrelation),
-		LifecycleRaw:     get(RoleLifecycle),
+		Kind:           m.Kind,
+		Title:          get(RoleTitle),
+		Body:           get(RoleBody),
+		URL:            text.SanitizeURL(get(RoleURL)),
+		CorrelationKey: correlationKey(get(RoleCorrelation)),
+		LifecycleRaw:   get(RoleLifecycle),
 	}
 	switch ev.Kind {
 	case KindNotification, KindAlert, KindProgress:
@@ -114,6 +116,13 @@ func Apply(m Mapping, fields []Field, source string) Event {
 		ev.Title = "Webhook"
 	}
 	return ev
+}
+
+func correlationKey(v string) string {
+	if v == "" {
+		return ""
+	}
+	return text.HashHex(v, 16)
 }
 
 // lookup resolves a sample through a value table, by its normalized form and

@@ -154,6 +154,9 @@ func TestNormalizeKey(t *testing.T) {
 		"payload[order][customer][id]":       "payload[order][customer][id]",
 		"X-Amz-Content-SHA256":               "X-Amz-Content-SHA256",
 		"+48":                                "+48",
+		"tblQx7Rk2Vb9Nm4Zc":                  "*",
+		"user:anna@example.com":              "*",
+		"(415) 555-1234":                     "*",
 	}
 	for in, want := range cases {
 		if got := NormalizeKey(in); got != want {
@@ -195,5 +198,14 @@ func TestFlattenPathBytesCap(t *testing.T) {
 		if len(f.Path) > MaxPathBytes {
 			t.Errorf("path of %d bytes", len(f.Path))
 		}
+	}
+}
+
+// A key too long for any path is skipped before it is looked at.
+func TestFlattenHugeKey(t *testing.T) {
+	huge := strings.Repeat("k", 1<<20)
+	fields, truncated := flatten(t, `{"`+huge+`": {"a": 1}, "ok": 2}`)
+	if !truncated || strings.Join(paths(fields), ",") != "ok" {
+		t.Errorf("paths = %v truncated = %v, want the huge key skipped", paths(fields), truncated)
 	}
 }

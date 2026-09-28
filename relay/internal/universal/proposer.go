@@ -68,13 +68,19 @@ func (Heuristic) Propose(_ context.Context, in Input) (Result, error) {
 // included, so a Primary that hangs cannot pile up goroutines.
 const maxPrimaries = 4
 
+// DefaultTimeout is how long Fallback waits for Primary when Timeout is not
+// set.
+const DefaultTimeout = 250 * time.Millisecond
+
 // Fallback runs Primary and falls back to Secondary when it fails, panics,
-// runs past Timeout, is canceled, proposes a mapping that does not validate
-// against the payload, or already has maxPrimaries calls in flight.
-// OnFallback, when set, is told why: "error", "panic", "timeout", "canceled",
-// "invalid" or "busy". A nil Primary, typed or not, goes straight to
-// Secondary; a nil Secondary is the Heuristic. A Fallback is used by pointer
-// and not copied after first use.
+// runs past Timeout (DefaultTimeout when zero), is canceled, proposes a
+// mapping that does not validate against the payload, or already has
+// maxPrimaries calls in flight. OnFallback, when set, is told why: "error",
+// "panic", "timeout", "canceled", "invalid" or "busy", and
+// "secondary_panic" when Secondary panics too and the Heuristic answers
+// instead. A nil Primary, typed or not, goes straight to Secondary; a nil
+// Secondary is the Heuristic. A Fallback is used by pointer and not copied
+// after first use.
 type Fallback struct {
 	Primary, Secondary Proposer
 	Timeout            time.Duration
@@ -86,21 +92,28 @@ type Fallback struct {
 
 func (f *Fallback) Propose(ctx context.Context, in Input) (Result, error) {
 	in.Shapes()
-	second := f.Secondary
-	if isNil(second) {
-		second = Heuristic{}
+	if !isNil(f.Primary) {
+		res, reason := f.primary(ctx, in)
+		if reason == "" {
+			return res, nil
+		}
+		f.fellBack(reason)
 	}
-	if isNil(f.Primary) {
-		return second.Propose(ctx, in)
+	if isNil(f.Secondary) {
+		return Heuristic{}.Propose(ctx, in)
 	}
-	res, reason := f.primary(ctx, in)
-	if reason == "" {
-		return res, nil
+	o := call(ctx, f.Secondary, in)
+	if o.panicked {
+		f.fellBack("secondary_panic")
+		return Heuristic{}.Propose(ctx, in)
 	}
+	return o.res, o.err
+}
+
+func (f *Fallback) fellBack(reason string) {
 	if f.OnFallback != nil {
 		f.OnFallback(reason)
 	}
-	return second.Propose(ctx, in)
 }
 
 type outcome struct {
@@ -113,39 +126,40 @@ type outcome struct {
 // Primary that ignores its context is abandoned at the deadline; its
 // goroutine keeps its slot until it returns, and its result is dropped.
 func (f *Fallback) primary(ctx context.Context, in Input) (Result, string) {
+	if reason := ctxReason(ctx.Err()); reason != "" {
+		return Result{}, reason
+	}
+	f.once.Do(func() { f.slots = make(chan struct{}, maxPrimaries) })
+	select {
+	case f.slots <- struct{}{}:
+	default:
+		return Result{}, "busy"
+	}
+	timeout := f.Timeout
+	if timeout <= 0 {
+		timeout = DefaultTimeout
+	}
+	pctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	done := make(chan outcome, 1)
+	go func() {
+		defer func() { <-f.slots }()
+		done <- call(pctx, f.Primary, in)
+	}()
 	var o outcome
-	if f.Timeout <= 0 {
-		o = call(ctx, f.Primary, in)
-	} else {
-		f.once.Do(func() { f.slots = make(chan struct{}, maxPrimaries) })
-		select {
-		case f.slots <- struct{}{}:
-		default:
-			return Result{}, "busy"
+	select {
+	case o = <-done:
+	case <-pctx.Done():
+		if reason := ctxReason(ctx.Err()); reason != "" {
+			return Result{}, reason
 		}
-		pctx, cancel := context.WithTimeout(ctx, f.Timeout)
-		defer cancel()
-		done := make(chan outcome, 1)
-		go func() {
-			defer func() { <-f.slots }()
-			done <- call(pctx, f.Primary, in)
-		}()
-		select {
-		case o = <-done:
-		case <-pctx.Done():
-			if errors.Is(ctx.Err(), context.Canceled) {
-				return Result{}, "canceled"
-			}
-			return Result{}, "timeout"
-		}
+		return Result{}, "timeout"
 	}
 	switch {
 	case o.panicked:
 		return Result{}, "panic"
-	case errors.Is(o.err, context.Canceled):
-		return Result{}, "canceled"
-	case errors.Is(o.err, context.DeadlineExceeded):
-		return Result{}, "timeout"
+	case ctxReason(o.err) != "":
+		return Result{}, ctxReason(o.err)
 	case o.err != nil:
 		return Result{}, "error"
 	}
@@ -154,6 +168,18 @@ func (f *Fallback) primary(ctx context.Context, in Input) (Result, string) {
 		return Result{}, "invalid"
 	}
 	return o.res, ""
+}
+
+// ctxReason names a context error: "canceled" or "timeout", or "" for any
+// other error.
+func ctxReason(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "timeout"
+	}
+	return ""
 }
 
 // call runs one proposer, turning a panic into an outcome.

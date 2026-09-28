@@ -627,9 +627,9 @@ const tailSeparators = "._:/- "
 
 // valueTail returns a value's last word in normValue form ("alert.resolved",
 // "sync-failed", "CONDITION_SNAPSHOT_END", "Sync failed"), or "" when it has
-// one word only or the word before the last negates it ("Not Resolved",
-// "not-ready", "No Error", "non_critical"): a negated state must not end a
-// card.
+// one word only or one of the two words before it negates it ("Not
+// Resolved", "not-ready", "No Error", "not yet resolved", "never completed"):
+// a negated state must not end a card.
 func valueTail(v string) string {
 	v = strings.ToLower(strings.TrimSpace(v))
 	i := strings.LastIndexAny(v, tailSeparators)
@@ -637,9 +637,16 @@ func valueTail(v string) string {
 		return ""
 	}
 	head := v[:i]
-	switch head[strings.LastIndexAny(head, tailSeparators)+1:] {
-	case "not", "no", "non", "un":
-		return ""
+	for range 2 {
+		j := strings.LastIndexAny(head, tailSeparators)
+		switch head[j+1:] {
+		case "not", "no", "non", "un", "never", "yet":
+			return ""
+		}
+		if j < 0 {
+			break
+		}
+		head = head[:j]
 	}
 	return normValue(v[i+1:])
 }
