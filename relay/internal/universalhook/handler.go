@@ -35,7 +35,9 @@ import (
 const provider = "universal"
 
 // Paths that carry a capability token. Their URLs must stay out of traces
-// and logs, since the token is the whole credential.
+// and logs, since the token is the whole credential. A deployment that ships
+// access logs has to redact these prefixes too; a new prefix here needs the
+// same change there.
 const (
 	ReviewPath = "/universal/review/"
 	EditPath   = "/universal/edit/"

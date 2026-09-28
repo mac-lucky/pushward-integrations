@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"net"
+	"net/netip"
 	"strings"
 )
 
@@ -86,12 +87,29 @@ func ClientIP(remoteAddr string, getHeader func(string) string) string {
 // AllowIP checks whether a request from the given IP is allowed under IP rate
 // limiting. Returns true if allowed.
 func AllowIP(ip string) bool {
-	return ipLimiters.get(ip).Allow()
+	return ipLimiters.get(bucketKey(ip)).Allow()
 }
 
 // IPExhausted reports whether ip has no request left right now, without
 // spending one. An IP with no bucket yet has its whole burst.
 func IPExhausted(ip string) bool {
-	l, ok := ipLimiters.entries.Peek(ip)
+	l, ok := ipLimiters.entries.Peek(bucketKey(ip))
 	return ok && l.Tokens() < 1
+}
+
+// bucketKey is the rate-limit bucket for ip. An IPv6 client usually holds a
+// whole /64 and can rotate through it at will, so all of it shares one
+// bucket; addresses are canonicalised so one client cannot split its bucket
+// by spelling. Anything unparsable keys on itself.
+func bucketKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.Unmap().WithZone("")
+	if addr.Is6() {
+		p, _ := addr.Prefix(64)
+		return p.String()
+	}
+	return addr.String()
 }

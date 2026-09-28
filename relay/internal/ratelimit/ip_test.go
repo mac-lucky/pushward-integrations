@@ -167,3 +167,19 @@ func TestIPExhausted_SpendsNothing(t *testing.T) {
 		t.Error("not exhausted after the whole burst")
 	}
 }
+
+func TestBucketKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"203.0.113.7":            "203.0.113.7",
+		"::ffff:203.0.113.7":     "203.0.113.7",
+		"2001:db8:1:2:3:4:5:6":   "2001:db8:1:2::/64",
+		"2001:db8:1:2::ffff":     "2001:db8:1:2::/64",
+		"2001:0DB8:0001:0002::1": "2001:db8:1:2::/64",
+		"fe80::1%eth0":           "fe80::/64",
+		"not-an-ip":              "not-an-ip",
+	} {
+		if got := bucketKey(in); got != want {
+			t.Errorf("bucketKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
