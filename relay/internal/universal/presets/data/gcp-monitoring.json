@@ -1,0 +1,24 @@
+{
+  "id": "gcp-monitoring",
+  "vendor": "Google Cloud Monitoring",
+  "version": 1,
+  "sources": ["gcp-monitoring", "google-cloud-monitoring", "stackdriver"],
+  "require": ["version", "incident.incident_id", "incident.scoping_project_id", "incident.url", "incident.state", "incident.started_at", "incident.policy_name", "incident.summary"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "incident.policy_name",
+      "body": "incident.summary",
+      "url": "incident.url",
+      "correlation": "incident.incident_id",
+      "severity": "incident.severity",
+      "lifecycle": "incident.state"
+    },
+    "sv": {"critical": "critical", "error": "critical", "warning": "warning", "no_severity": "info"},
+    "lv": {"open": "ongoing", "closed": "ended"}
+  },
+  "doc": "https://docs.cloud.google.com/monitoring/support/notification-options"
+}

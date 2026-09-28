@@ -1,0 +1,22 @@
+{
+  "id": "grafana-oncall",
+  "vendor": "Grafana OnCall",
+  "version": 1,
+  "sources": ["grafana-oncall", "oncall"],
+  "require": ["event.type", "alert_group_id", "alert_group.id", "alert_group.state", "alert_group.title", "alert_group.permalinks.web", "integration.type", "integration.name"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "alert_group.title",
+      "body": "integration.name",
+      "url": "alert_group.permalinks.web",
+      "correlation": "alert_group.id",
+      "lifecycle": "alert_group.state"
+    },
+    "lv": {"firing": "ongoing", "acknowledged": "ongoing", "silenced": "ongoing", "resolved": "ended"}
+  },
+  "doc": "https://grafana.com/docs/oncall/latest/configure/integrations/outgoing-webhooks/"
+}

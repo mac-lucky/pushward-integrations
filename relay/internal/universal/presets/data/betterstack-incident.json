@@ -1,0 +1,18 @@
+{
+  "id": "betterstack-incident",
+  "vendor": "Better Stack",
+  "version": 1,
+  "sources": ["betterstack", "better-stack", "betteruptime", "better-uptime"],
+  "require": ["data.id", "data.type", "data.attributes.name", "data.attributes.cause", "data.attributes.started_at", "data.attributes.resolved_at"],
+  "forbid": [],
+  "alias_only": true,
+  "mapping": {
+    "v": 1,
+    "k": "notification",
+    "p": {
+      "title": "data.attributes.name",
+      "body": "data.attributes.cause"
+    }
+  },
+  "doc": "https://betterstack.com/docs/uptime/api/create-outgoing-webhook-integration/"
+}

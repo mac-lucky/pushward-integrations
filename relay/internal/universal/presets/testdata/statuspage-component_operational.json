@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "unsubscribe": "https://status.example.org/?unsubscribe=q2w8e4r6t1y3",
+    "documentation": "https://doers.statuspage.io/customer-notifications/webhooks/"
+  },
+  "page": {"id": "p7t2x9c4v1b8", "status_indicator": "none", "status_description": "All Systems Operational"},
+  "component_update": {
+    "id": "f2g6h9j3k7l1",
+    "component_id": "h3n8c5v2x7q1",
+    "old_status": "major_outage",
+    "new_status": "operational",
+    "created_at": "2026-09-28T10:01:45.000Z"
+  },
+  "component": {"id": "h3n8c5v2x7q1", "name": "Payments API", "status": "operational", "created_at": "2025-02-11T12:00:00.000Z"}
+}

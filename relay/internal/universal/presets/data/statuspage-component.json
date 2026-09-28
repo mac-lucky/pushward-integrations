@@ -1,0 +1,28 @@
+{
+  "id": "statuspage-component",
+  "vendor": "Atlassian Statuspage",
+  "version": 1,
+  "sources": ["statuspage"],
+  "require": ["meta.unsubscribe", "meta.documentation", "page.id", "page.status_indicator", "component_update.new_status", "component_update.old_status", "component.id", "component.name"],
+  "forbid": ["incident.id"],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "component.name",
+      "correlation": "component.id",
+      "severity": "component_update.new_status",
+      "lifecycle": "component_update.new_status"
+    },
+    "sv": {
+      "major_outage": "critical", "partial_outage": "warning", "degraded_performance": "warning",
+      "under_maintenance": "info", "operational": "info"
+    },
+    "lv": {
+      "major_outage": "ongoing", "partial_outage": "ongoing", "degraded_performance": "ongoing",
+      "under_maintenance": "ongoing", "operational": "ended"
+    }
+  },
+  "doc": "https://support.atlassian.com/statuspage/docs/enable-webhook-notifications/"
+}

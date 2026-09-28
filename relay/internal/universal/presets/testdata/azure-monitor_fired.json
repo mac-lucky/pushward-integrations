@@ -1,0 +1,22 @@
+{
+  "schemaId": "azureMonitorCommonAlertSchema",
+  "data": {
+    "essentials": {
+      "alertId": "/subscriptions/0c5e1a7b-2d4f-4e8a-9b3c-6f1d2e8a7c40/providers/Microsoft.AlertsManagement/alerts/7d2b9e41-6c3a-4f5e-8b17-a9c0d4e2f615",
+      "alertRule": "web-vm-cpu-high",
+      "severity": "Sev1",
+      "signalType": "Metric",
+      "monitorCondition": "Fired",
+      "monitoringService": "Platform",
+      "alertTargetIDs": ["/subscriptions/0c5e1a7b-2d4f-4e8a-9b3c-6f1d2e8a7c40/resourcegroups/shop/providers/microsoft.compute/virtualmachines/web-1"],
+      "configurationItems": ["web-1"],
+      "originAlertId": "0c5e1a7b_shop_microsoft.insights_metricAlerts_web-vm-cpu-high",
+      "firedDateTime": "2026-09-28T10:45:00.000Z",
+      "description": "CPU above 85% on the web VMs",
+      "essentialsVersion": "1.0",
+      "alertContextVersion": "1.0"
+    },
+    "alertContext": {"properties": null, "conditionType": "SingleResourceMultipleMetricCriteria"},
+    "customProperties": null
+  }
+}

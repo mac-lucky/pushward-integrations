@@ -1,0 +1,29 @@
+{
+  "id": "opsgenie",
+  "vendor": "Opsgenie",
+  "version": 1,
+  "sources": ["opsgenie"],
+  "require": ["action", "alert.alertId", "alert.tinyId", "alert.message", "alert.createdAt", "source.type"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "alert.message",
+      "body": "alert.description",
+      "correlation": "alert.alertId",
+      "severity": "alert.priority",
+      "lifecycle": "action"
+    },
+    "sv": {"p1": "critical", "p2": "critical", "p3": "warning", "p4": "info", "p5": "info"},
+    "lv": {
+      "create": "ongoing", "acknowledge": "ongoing", "unacknowledge": "ongoing", "escalate": "ongoing",
+      "addnote": "ongoing", "addtags": "ongoing", "removetags": "ongoing", "addteam": "ongoing",
+      "addrecipient": "ongoing", "assignownership": "ongoing", "takeownership": "ongoing",
+      "updatepriority": "ongoing", "updatemessage": "ongoing", "updatedescription": "ongoing",
+      "close": "ended", "delete": "ended"
+    }
+  },
+  "doc": "https://support.atlassian.com/opsgenie/docs/opsgenie-edge-connector-alert-action-data/"
+}

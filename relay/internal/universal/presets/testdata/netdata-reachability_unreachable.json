@@ -1,0 +1,7 @@
+{
+  "message": "db-3 is unreachable",
+  "url": "https://app.netdata.cloud/spaces/home-lab/rooms/all-nodes/nodes/db-3",
+  "host": "db-3",
+  "severity": "critical",
+  "status": {"reachable": false, "text": "unreachable"}
+}

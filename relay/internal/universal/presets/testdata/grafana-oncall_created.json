@@ -1,0 +1,24 @@
+{
+  "event": {"type": "alert group created", "time": "2026-09-28T10:04:12.511Z"},
+  "user": null,
+  "alert_group": {
+    "id": "IX7KQ2PLM5N8A",
+    "integration_id": "CZ4TR8WQ1BD6E",
+    "route_id": "RQ9M2XK7HV3LP",
+    "alerts_count": 1,
+    "state": "firing",
+    "created_at": "2026-09-28T10:04:11.902Z",
+    "resolved_at": null,
+    "acknowledged_at": null,
+    "title": "Checkout p95 latency above 2s",
+    "permalinks": {"slack": null, "telegram": null, "web": "https://oncall.example.net/a/grafana-oncall-app/alert-groups/IX7KQ2PLM5N8A"},
+    "labels": {}
+  },
+  "alert_group_id": "IX7KQ2PLM5N8A",
+  "alert_payload": {"labels": {"alertname": "CheckoutLatency"}, "annotations": {}, "status": "firing"},
+  "integration": {"id": "CZ4TR8WQ1BD6E", "type": "grafana_alerting", "name": "Shop alerts", "team": null, "labels": {}},
+  "notified_users": [],
+  "users_to_be_notified": [],
+  "responses": {},
+  "webhook": {"id": "WH3Q8NZ2K5T7R", "name": "pushward", "labels": {}}
+}

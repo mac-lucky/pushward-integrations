@@ -1,0 +1,23 @@
+{
+  "id": "azure-monitor",
+  "vendor": "Azure Monitor",
+  "version": 1,
+  "sources": ["azure-monitor", "azure"],
+  "require": ["schemaId", "data.essentials.alertId", "data.essentials.alertRule", "data.essentials.severity", "data.essentials.signalType", "data.essentials.monitorCondition", "data.essentials.monitoringService", "data.essentials.firedDateTime"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "data.essentials.alertRule",
+      "body": "data.essentials.description",
+      "correlation": "data.essentials.alertId",
+      "severity": "data.essentials.severity",
+      "lifecycle": "data.essentials.monitorCondition"
+    },
+    "sv": {"sev0": "critical", "sev1": "critical", "sev2": "warning", "sev3": "info", "sev4": "info"},
+    "lv": {"fired": "ongoing", "resolved": "ended"}
+  },
+  "doc": "https://learn.microsoft.com/en-us/azure/azure-monitor/alerts/alerts-common-schema"
+}

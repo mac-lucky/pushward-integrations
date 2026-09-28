@@ -1,0 +1,27 @@
+{
+  "id": "statuspage-incident",
+  "vendor": "Atlassian Statuspage",
+  "version": 1,
+  "sources": ["statuspage"],
+  "require": ["meta.unsubscribe", "meta.documentation", "page.id", "page.status_indicator", "incident.id", "incident.name", "incident.status", "incident.impact"],
+  "forbid": ["component_update.new_status"],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "incident.name",
+      "body": "incident.incident_updates[].body",
+      "url": "incident.shortlink",
+      "correlation": "incident.id",
+      "severity": "incident.impact",
+      "lifecycle": "incident.status"
+    },
+    "sv": {"critical": "critical", "major": "critical", "minor": "warning", "none": "info", "maintenance": "info"},
+    "lv": {
+      "investigating": "ongoing", "identified": "ongoing", "monitoring": "ongoing", "resolved": "ended",
+      "scheduled": "ongoing", "in_progress": "ongoing", "verifying": "ongoing", "completed": "ended"
+    }
+  },
+  "doc": "https://support.atlassian.com/statuspage/docs/enable-webhook-notifications/"
+}

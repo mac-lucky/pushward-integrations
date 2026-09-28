@@ -1,0 +1,17 @@
+{
+  "message": "Disk space usage on db-3 is critical",
+  "alert": "disk_space_usage",
+  "info": "Disk / space utilization",
+  "chart": "disk_space._",
+  "context": "disk.space",
+  "space": "Home lab",
+  "Rooms": {"All nodes": "https://app.netdata.cloud/spaces/home-lab/rooms/all-nodes"},
+  "family": "/",
+  "class": "Utilization",
+  "severity": "critical",
+  "date": "2026-09-28T10:02:11Z",
+  "duration": "4 minutes",
+  "additional_active_critical_alerts": 0,
+  "additional_active_warning_alerts": 1,
+  "alert_url": "https://app.netdata.cloud/spaces/home-lab/rooms/all-nodes/alerts/disk_space_usage"
+}

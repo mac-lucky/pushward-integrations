@@ -1,0 +1,21 @@
+{
+  "id": "updown",
+  "vendor": "updown.io",
+  "version": 1,
+  "sources": ["updown"],
+  "require": ["[].event", "[].time", "[].description", "[].check.token", "[].check.url", "[].downtime.id", "[].downtime.started_at"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "[].description",
+      "url": "[].downtime.details_url",
+      "correlation": "[].downtime.id",
+      "lifecycle": "[].event"
+    },
+    "lv": {"check.down": "ongoing", "check.up": "ended"}
+  },
+  "doc": "https://updown.io/api"
+}

@@ -1,0 +1,21 @@
+{
+  "id": "netdata-reachability",
+  "vendor": "Netdata",
+  "version": 1,
+  "sources": ["netdata"],
+  "require": ["message", "url", "host", "severity", "status.reachable", "status.text"],
+  "forbid": ["alert", "chart", "context"],
+  "alias_only": true,
+  "mapping": {
+    "v": 1,
+    "k": "notification",
+    "p": {
+      "title": "host",
+      "body": "message",
+      "url": "url",
+      "severity": "severity"
+    },
+    "sv": {"critical": "critical", "info": "info"}
+  },
+  "doc": "https://learn.netdata.cloud/docs/alerts-&-notifications/notifications/centralized-cloud-notifications/webhook"
+}

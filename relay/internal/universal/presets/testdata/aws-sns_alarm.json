@@ -1,0 +1,12 @@
+{
+  "Type": "Notification",
+  "MessageId": "8a41c2e7-5d3b-4f9a-b1e6-0c7d2f9a3e58",
+  "TopicArn": "arn:aws:sns:eu-west-1:111122223333:ops-alarms",
+  "Subject": "ALARM: \"api-5xx-rate\" in EU (Ireland)",
+  "Message": "{\"AlarmName\":\"api-5xx-rate\",\"NewStateValue\":\"ALARM\",\"NewStateReason\":\"Threshold Crossed: 1 datapoint [42.0] was greater than the threshold (10.0).\"}",
+  "Timestamp": "2026-09-28T10:40:12.118Z",
+  "SignatureVersion": "1",
+  "Signature": "EXAMPLEsignature",
+  "SigningCertURL": "https://sns.eu-west-1.amazonaws.com/SimpleNotificationService-example.pem",
+  "UnsubscribeURL": "https://sns.eu-west-1.amazonaws.com/?Action=Unsubscribe&SubscriptionArn=arn:aws:sns:eu-west-1:111122223333:ops-alarms:example"
+}

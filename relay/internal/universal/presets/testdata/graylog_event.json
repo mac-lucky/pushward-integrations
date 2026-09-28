@@ -1,0 +1,28 @@
+{
+  "event_definition_id": "6512f0c2a1b2c3d4e5f60718",
+  "event_definition_type": "aggregation-v1",
+  "event_definition_title": "Failed SSH logins",
+  "event_definition_description": "More than 20 failed SSH logins in 5 minutes",
+  "job_definition_id": "6512f0c2a1b2c3d4e5f60719",
+  "job_trigger_id": "6515a9e0b7c8d9e0f1a2b3c4",
+  "event": {
+    "id": "01J8ZQ4M7K2V9X3N5P6R8T1W4Y",
+    "event_definition_type": "aggregation-v1",
+    "event_definition_id": "6512f0c2a1b2c3d4e5f60718",
+    "origin_context": null,
+    "timestamp": "2026-09-28T11:10:00.000Z",
+    "timestamp_processing": "2026-09-28T11:10:02.410Z",
+    "timerange_start": "2026-09-28T11:05:00.000Z",
+    "timerange_end": "2026-09-28T11:10:00.000Z",
+    "streams": ["000000000000000000000001"],
+    "source_streams": [],
+    "message": "Failed SSH logins: count()=25.0",
+    "source": "graylog-1",
+    "key_tuple": [],
+    "key": "",
+    "priority": 3,
+    "alert": true,
+    "fields": {}
+  },
+  "backlog": []
+}

@@ -1,0 +1,24 @@
+{
+  "id": "newrelic-classic",
+  "vendor": "New Relic",
+  "version": 1,
+  "sources": ["newrelic", "new-relic"],
+  "require": ["account_id", "condition_name", "current_state", "details", "event_type", "incident_url", "issue_id", "policy_name", "severity", "timestamp"],
+  "forbid": [],
+  "alias_only": true,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "condition_name",
+      "body": "details",
+      "url": "incident_url",
+      "correlation": "issue_id",
+      "severity": "severity",
+      "lifecycle": "current_state"
+    },
+    "sv": {"critical": "critical", "warning": "warning", "medium": "warning", "low": "info", "info": "info"},
+    "lv": {"open": "ongoing", "acknowledged": "ongoing", "closed": "ended"}
+  },
+  "doc": "https://docs.newrelic.com/docs/alerts/get-notified/migration-to-workflows/"
+}

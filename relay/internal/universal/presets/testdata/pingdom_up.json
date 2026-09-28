@@ -1,0 +1,24 @@
+{
+  "check_id": 7310552,
+  "check_name": "Shop homepage",
+  "check_type": "HTTP",
+  "check_params": {
+    "basic_auth": false,
+    "encryption": true,
+    "full_url": "https://shop.example.org/",
+    "hostname": "shop.example.org",
+    "ipv6": false,
+    "port": 443,
+    "url": "/"
+  },
+  "tags": ["shop"],
+  "previous_state": "DOWN",
+  "current_state": "UP",
+  "importance_level": "HIGH",
+  "state_changed_timestamp": 1790587600,
+  "state_changed_utc_time": "2026-09-28T09:26:40",
+  "long_description": "OK",
+  "description": "OK",
+  "first_probe": {"ip": "192.0.2.10", "ipv6": "", "location": "Frankfurt, Germany"},
+  "second_probe": {}
+}

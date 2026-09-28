@@ -1,0 +1,24 @@
+{
+  "id": "pingdom",
+  "vendor": "Pingdom",
+  "version": 1,
+  "sources": ["pingdom"],
+  "require": ["check_id", "check_name", "check_type", "previous_state", "current_state", "state_changed_timestamp", "state_changed_utc_time", "description"],
+  "forbid": [],
+  "alias_only": false,
+  "mapping": {
+    "v": 1,
+    "k": "alert",
+    "p": {
+      "title": "check_name",
+      "body": "description",
+      "url": "check_params.full_url",
+      "correlation": "check_id",
+      "severity": "importance_level",
+      "lifecycle": "current_state"
+    },
+    "sv": {"high": "critical", "low": "warning"},
+    "lv": {"down": "ongoing", "failing": "ongoing", "up": "ended", "success": "ended"}
+  },
+  "doc": "https://www.pingdom.com/resources/webhooks/"
+}

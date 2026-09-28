@@ -1,0 +1,28 @@
+[
+  {
+    "event": "check.down",
+    "time": "2026-09-28T09:14:05Z",
+    "description": "DOWN: https://shop.example.org/ since 09:14:05 (UTC), reason: 502 Bad Gateway",
+    "check": {
+      "token": "k4tz",
+      "url": "https://shop.example.org/",
+      "alias": "Shop",
+      "down": true,
+      "down_since": "2026-09-28T09:14:05Z",
+      "error": "502 Bad Gateway",
+      "period": 60,
+      "apdex_t": 0.5,
+      "enabled": true,
+      "published": false
+    },
+    "downtime": {
+      "id": "6512ab34cd56ef7890ab12cd",
+      "details_url": "https://updown.io/downtimes/6512ab34cd56ef7890ab12cd",
+      "error": "502 Bad Gateway",
+      "started_at": "2026-09-28T09:14:05Z",
+      "ended_at": null,
+      "duration": null,
+      "partial": false
+    }
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "action": "Create",
+  "alert": {
+    "alertId": "3f1c2a9e-7b4d-4e21-9c55-0a8d6e2b7f13",
+    "tinyId": "57",
+    "alias": "db-3-disk",
+    "message": "db-3 disk almost full",
+    "description": "Data volume on db-3 is at 91% and growing",
+    "priority": "P2",
+    "entity": "db-3",
+    "source": "prometheus",
+    "tags": ["storage"],
+    "createdAt": 1790583120000,
+    "updatedAt": 1790583120000000000
+  },
+  "source": {"name": "api", "type": "API"},
+  "integrationName": "PushWard",
+  "integrationType": "Webhook"
+}

@@ -1,0 +1,18 @@
+{
+  "data": {
+    "id": "418823",
+    "type": "incident",
+    "attributes": {
+      "name": "Shop homepage",
+      "url": "https://shop.example.org/",
+      "http_method": "get",
+      "cause": "Status 503",
+      "started_at": "2026-09-28T09:14:05.310Z",
+      "acknowledged_at": null,
+      "resolved_at": null,
+      "response_content": "Service Unavailable",
+      "response_url": null,
+      "screenshot_url": null
+    }
+  }
+}
