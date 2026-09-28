@@ -61,6 +61,12 @@ func Apply(m Mapping, fields []Field, source string) Event {
 		return strings.TrimSpace(f.Value)
 	}
 
+	// A correlation id Flatten cut is keyed on the whole of it: groups whose
+	// long keys share a prefix must not share a card.
+	corr := get(RoleCorrelation)
+	if f := byPath[m.Paths[RoleCorrelation]]; corr != "" && f != nil && f.Cut {
+		corr = f.Sum
+	}
 	link := get(RoleURL)
 	// A link Flatten had to cut opens the wrong page, or none.
 	if f := byPath[m.Paths[RoleURL]]; f != nil && f.Cut {
@@ -71,7 +77,7 @@ func Apply(m Mapping, fields []Field, source string) Event {
 		Title:          get(RoleTitle),
 		Body:           get(RoleBody),
 		URL:            text.SanitizeURL(link),
-		CorrelationKey: correlationKey(get(RoleCorrelation)),
+		CorrelationKey: correlationKey(corr),
 		LifecycleRaw:   get(RoleLifecycle),
 	}
 	switch ev.Kind {

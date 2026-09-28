@@ -20,5 +20,5 @@
     "sv": {"high": "critical", "low": "warning"},
     "lv": {"triggered": "ongoing", "acknowledged": "ongoing", "resolved": "ended"}
   },
-  "doc": "https://developer.pagerduty.com/docs/webhooks/v3-overview/"
+  "doc": "https://support.pagerduty.com/main/docs/webhooks"
 }

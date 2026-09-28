@@ -173,12 +173,11 @@ func (f *file) check() error {
 				fail("the %s path %q must be required", r, p)
 			}
 		}
-		states := map[string]bool{}
-		for _, s := range m.LifecycleValues {
-			states[s] = true
-		}
-		if !states[universal.LifecycleOngoing] || !states[universal.LifecycleEnded] {
-			fail("a %s preset's lifecycle values need both %s and %s", m.Kind, universal.LifecycleOngoing, universal.LifecycleEnded)
+		// Only an end is needed: a null value, such as a run's conclusion
+		// before it finishes, is ongoing, and one the table lacks is read the
+		// way the heuristic's vocabulary reads it.
+		if !slices.Contains(slices.Collect(maps.Values(m.LifecycleValues)), universal.LifecycleEnded) {
+			fail("a %s preset's lifecycle values need an %s one", m.Kind, universal.LifecycleEnded)
 		}
 	}
 	return errors.Join(errs...)
@@ -187,28 +186,59 @@ func (f *file) check() error {
 // Match finds the preset for a payload. A candidate has every required path
 // and no forbidden one, and an alias-only preset is a candidate only when
 // source is one of its names. Candidates are tried by source match, then by
-// the number of required paths, then by id; the first whose mapping, with
-// the roles this payload lacks dropped, validates against the payload's
-// shape wins. The mapping is returned as written, value tables included.
+// the number of required paths, then by id, and the first with a title path
+// in this payload wins. Only paths decide: a value never turns a preset
+// away, or one event of an alert could match where the next did not and
+// leave its card open. The mapping comes back as written, value tables
+// included, less the roles this payload lacks and the optional ones whose
+// value does not fit them (a link as a body, words as a progress).
 func Match(source string, fields []universal.Field) (Preset, universal.Mapping, bool) {
+	return MatchShapes(source, fields, universal.ShapesOf(fields))
+}
+
+// MatchShapes is Match for a caller that has the payload's shapes already;
+// shapes must be ShapesOf(fields).
+func MatchShapes(source string, fields []universal.Field, shapes []universal.ShapeField) (Preset, universal.Mapping, bool) {
 	have := make(map[string]bool, len(fields))
 	for _, f := range fields {
 		have[f.Path] = true
 	}
-	var shape universal.Shape
 	for _, p := range candidates(source, have) {
 		m := p.trim(have)
 		if m.Paths[universal.RoleTitle] == "" {
 			continue
 		}
-		if shape.Fields == nil {
-			shape = universal.NewShape(universal.ShapesOf(fields), false)
-		}
-		if m.Validate(shape) == nil {
-			return *p, m, true
-		}
+		dropUnfit(&m, shapes)
+		return *p, m, true
 	}
 	return Preset{}, universal.Mapping{}, false
+}
+
+// optional are the roles a payload's value may take away from a preset: the
+// event reads the same without them. Title, correlation and lifecycle stay,
+// whatever they hold, so every event of one alert keys and ends one card.
+var optional = []universal.Role{universal.RoleBody, universal.RoleURL, universal.RoleSeverity, universal.RoleProgress}
+
+// dropUnfit drops the optional roles whose field in this payload is not
+// Mappable to them.
+func dropUnfit(m *universal.Mapping, shapes []universal.ShapeField) {
+	for _, r := range optional {
+		path := m.Paths[r]
+		if path == "" {
+			continue
+		}
+		i := slices.IndexFunc(shapes, func(s universal.ShapeField) bool { return s.Path == path })
+		if i >= 0 && universal.Mappable(r, &shapes[i]) {
+			continue
+		}
+		delete(m.Paths, r)
+		switch r {
+		case universal.RoleSeverity:
+			m.SeverityValues = nil
+		case universal.RoleProgress:
+			m.ProgressScale = ""
+		}
+	}
 }
 
 func candidates(source string, have map[string]bool) []*Preset {

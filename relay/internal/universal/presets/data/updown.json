@@ -8,7 +8,7 @@
   "alias_only": false,
   "mapping": {
     "v": 1,
-    "k": "alert",
+    "k": "notification",
     "p": {
       "title": "[].description",
       "url": "[].downtime.details_url",

@@ -10,14 +10,14 @@
     "v": 1,
     "k": "progress",
     "p": {
-      "title": "environment",
-      "body": "project.path_with_namespace",
+      "title": "project.path_with_namespace",
+      "body": "environment",
       "url": "deployable_url",
       "correlation": "deployment_id",
       "lifecycle": "status"
     },
     "lv": {
-      "blocked": "ongoing", "approved": "ongoing", "rejected": "ongoing", "running": "ongoing",
+      "blocked": "ongoing", "running": "ongoing",
       "success": "ended", "failed": "ended", "canceled": "ended"
     }
   },

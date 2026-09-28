@@ -2,6 +2,8 @@ package presets
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -378,9 +380,120 @@ func TestMatchDropsAbsentRoles(t *testing.T) {
 	if all[0].mapping.LifecycleValues["shut"] != universal.LifecycleEnded {
 		t.Error("the returned table aliases the preset's")
 	}
-	// A title that is not mappable (a link) fails validation: no match.
+	// Values never turn a preset away: a title, correlation or lifecycle
+	// that looks like a link or an id still matches, so the next event of a
+	// card finds the same mapping.
 	fields[0] = universal.Field{Path: "name", Value: "https://example.com/x", Type: universal.TypeString}
-	if _, _, ok := Match("", fields); ok {
-		t.Error("matched with a link as the title")
+	if _, _, ok := Match("", fields); !ok {
+		t.Error("a link as the title turned the preset away")
+	}
+}
+
+// An optional role whose value does not fit it is dropped, with its table,
+// and the preset still matches; the roles that key a card stay.
+func TestMatchDropsUnfitOptionalRoles(t *testing.T) {
+	saved := all
+	t.Cleanup(func() { all = saved })
+	all = []Preset{{
+		ID: "p", Vendor: "P", Version: 1, Kind: universal.KindAlert, require: []string{"name", "id", "state"},
+		mapping: universal.Mapping{
+			V: universal.MappingVersion, Kind: universal.KindAlert,
+			Paths: map[universal.Role]string{
+				universal.RoleTitle: "name", universal.RoleBody: "text", universal.RoleURL: "link",
+				universal.RoleCorrelation: "id", universal.RoleSeverity: "level", universal.RoleLifecycle: "state",
+			},
+			SeverityValues:  map[string]string{"high": universal.SeverityCritical},
+			LifecycleValues: map[string]string{"open": universal.LifecycleOngoing, "shut": universal.LifecycleEnded},
+		},
+	}}
+	fields := []universal.Field{
+		{Path: "name", Value: "1989", Type: universal.TypeString},
+		{Path: "id", Value: "8d3f5a1e-27c4-4b9e-a0f6-5c2d9e7b1a43", Type: universal.TypeString},
+		{Path: "state", Value: "shut", Type: universal.TypeString},
+		{Path: "text", Value: "https://example.com/runbook", Type: universal.TypeString},
+		{Path: "link", Value: "lidarr.lan:8686", Type: universal.TypeString},
+		{Path: "level", Value: "high", Type: universal.TypeString},
+	}
+	_, m, ok := Match("", fields)
+	if !ok {
+		t.Fatal("no match")
+	}
+	for _, r := range []universal.Role{universal.RoleBody, universal.RoleURL} {
+		if p, has := m.Paths[r]; has {
+			t.Errorf("%s kept on %q", r, p)
+		}
+	}
+	for _, r := range []universal.Role{universal.RoleTitle, universal.RoleCorrelation, universal.RoleLifecycle, universal.RoleSeverity} {
+		if m.Paths[r] == "" {
+			t.Errorf("%s dropped", r)
+		}
+	}
+	if m.SeverityValues["high"] != universal.SeverityCritical {
+		t.Errorf("severity table lost: %+v", m.SeverityValues)
+	}
+}
+
+// A payload past the 16 KiB a stored shape keeps still matches with every
+// role: matching reads the whole payload, not a shape cut to size.
+func TestBigPayloadKeepsItsRoles(t *testing.T) {
+	var doc map[string]any
+	if err := json.Unmarshal(mustRead(t, filepath.Join("testdata", "alertmanager_firing.json")), &doc); err != nil {
+		t.Fatal(err)
+	}
+	labels := doc["alerts"].([]any)[0].(map[string]any)["labels"].(map[string]any)
+	for i := range 200 {
+		labels[fmt.Sprintf("label_%03d", i)] = strings.Repeat("v", 120)
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, _, err := universal.Flatten(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, m, ok := Match("", fields)
+	if !ok || p.ID != "alertmanager" {
+		t.Fatalf("Match = %q, %v", p.ID, ok)
+	}
+	for _, r := range []universal.Role{universal.RoleBody, universal.RoleURL, universal.RoleCorrelation, universal.RoleSeverity, universal.RoleLifecycle} {
+		if m.Paths[r] == "" {
+			t.Errorf("%s dropped from a %d byte payload", r, len(b))
+		}
+	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path) // #nosec G304 -- test payloads under a directory the test names
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+// Azure activity-log alerts (Service Health, Resource Health, Activity Log)
+// never resolve and carry a new alertId each time, so the alert-card preset
+// must not take them; they go out as notifications.
+func TestAzureActivityLogIsNotAnAlertCard(t *testing.T) {
+	var doc map[string]any
+	if err := json.Unmarshal(mustRead(t, filepath.Join("testdata", "azure-monitor_fired.json")), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["data"].(map[string]any)["alertContext"] = map[string]any{
+		"operationName": "Microsoft.ServiceHealth/incident/action",
+		"eventSource":   "ServiceHealth",
+		"status":        "Active",
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, _, err := universal.Flatten(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _, ok := Match("", fields); ok && p.ID == "azure-monitor" {
+		t.Error("an activity-log alert matches the azure-monitor alert preset")
 	}
 }

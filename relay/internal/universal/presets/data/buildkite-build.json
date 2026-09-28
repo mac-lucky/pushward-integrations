@@ -17,8 +17,8 @@
       "lifecycle": "build.state"
     },
     "lv": {
-      "creating": "ongoing", "scheduled": "ongoing", "running": "ongoing", "failing": "ongoing", "waiting": "ongoing", "canceling": "ongoing",
-      "passed": "ended", "failed": "ended", "blocked": "ended", "canceled": "ended", "skipped": "ended", "not_run": "ended", "waiting_failed": "ended"
+      "creating": "ongoing", "scheduled": "ongoing", "running": "ongoing", "failing": "ongoing", "blocked": "ongoing", "canceling": "ongoing",
+      "passed": "ended", "failed": "ended", "canceled": "ended", "skipped": "ended", "not_run": "ended"
     }
   },
   "doc": "https://buildkite.com/docs/apis/webhooks/build-events"

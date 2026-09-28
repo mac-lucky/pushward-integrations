@@ -11,7 +11,7 @@
     "k": "notification",
     "p": {
       "title": "release.tag_name",
-      "body": "repository.full_name",
+      "body": "action",
       "url": "release.html_url",
       "correlation": "release.id"
     }

@@ -161,3 +161,25 @@ func TestApplyCutURL(t *testing.T) {
 		t.Errorf("a cut link was delivered: %.40s...", ev.URL)
 	}
 }
+
+// Two correlation values that Flatten cuts to the same prefix still key two
+// cards: the cut value is keyed on the hash of the whole.
+func TestLongCorrelationKeepsItsTail(t *testing.T) {
+	m := Mapping{V: MappingVersion, Kind: KindAlert, Paths: map[Role]string{RoleTitle: "name", RoleCorrelation: "groupKey"}}
+	key := func(tail string) string {
+		t.Helper()
+		body := `{"name":"Disk full","groupKey":"` + strings.Repeat("k", MaxValueRunes) + tail + `"}`
+		fields, _, err := Flatten(strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return Apply(m, fields, "").CorrelationKey
+	}
+	a, b := key("{instance=a}"), key("{instance=b}")
+	if a == "" || a == b {
+		t.Errorf("keys %q and %q", a, b)
+	}
+	if a != key("{instance=a}") {
+		t.Error("the key is not stable")
+	}
+}

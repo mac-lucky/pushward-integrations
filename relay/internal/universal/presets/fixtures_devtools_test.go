@@ -27,23 +27,23 @@ func init() {
 			url: "https://github.com/lunar-kite/tidepool/issues/219",
 		},
 		"github-release_published.json": {
-			preset: "github-release", title: "v3.2.0", body: "lunar-kite/tidepool",
+			preset: "github-release", title: "v3.2.0", body: "published",
 			url: "https://github.com/lunar-kite/tidepool/releases/tag/v3.2.0", corr: "174209331",
 		},
 		"github-check-run_created.json": {
-			preset: "github-check-run", title: "lint", body: "in_progress",
-			url: "https://github.com/lunar-kite/tidepool/runs/28817340129", corr: "28817340129", life: ongoing,
+			preset: "github-check-run", title: "lint", body: "sync-dry-run",
+			url: "https://github.com/lunar-kite/tidepool/runs/28817340129", corr: "28817340129", life: ongoing, lifeTable: true,
 		},
 		"github-check-run_completed.json": {
-			preset: "github-check-run", title: "lint", body: "failure",
+			preset: "github-check-run", title: "lint", body: "sync-dry-run",
 			url: "https://github.com/lunar-kite/tidepool/runs/28817340129", corr: "28817340129", life: ended,
 		},
 		"github-workflow-run_in_progress.json": {
-			preset: "github-workflow-run", title: "CI", body: "in_progress",
-			url: "https://github.com/lunar-kite/tidepool/actions/runs/11839204561", corr: "11839204561", life: ongoing,
+			preset: "github-workflow-run", title: "lunar-kite/tidepool", body: "CI",
+			url: "https://github.com/lunar-kite/tidepool/actions/runs/11839204561", corr: "11839204561", life: ongoing, lifeTable: true,
 		},
 		"github-workflow-run_completed.json": {
-			preset: "github-workflow-run", title: "CI", body: "success",
+			preset: "github-workflow-run", title: "lunar-kite/tidepool", body: "CI",
 			url: "https://github.com/lunar-kite/tidepool/actions/runs/11839204561", corr: "11839204561", life: ended,
 		},
 
@@ -71,12 +71,12 @@ func init() {
 			corr: "1482093316", life: ended,
 		},
 		"gitlab-deployment_running.json": {
-			preset: "gitlab-deployment", title: "production", body: "harbourline/ledger-api",
+			preset: "gitlab-deployment", title: "harbourline/ledger-api", body: "production",
 			url:  "https://gitlab.example.com/harbourline/ledger-api/-/jobs/7710301250",
 			corr: "612004583", life: ongoing,
 		},
 		"gitlab-deployment_success.json": {
-			preset: "gitlab-deployment", title: "production", body: "harbourline/ledger-api",
+			preset: "gitlab-deployment", title: "harbourline/ledger-api", body: "production",
 			url:  "https://gitlab.example.com/harbourline/ledger-api/-/jobs/7710301250",
 			corr: "612004583", life: ended,
 		},

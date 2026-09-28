@@ -4,7 +4,7 @@
   "version": 1,
   "sources": ["azure-monitor", "azure"],
   "require": ["schemaId", "data.essentials.alertId", "data.essentials.alertRule", "data.essentials.severity", "data.essentials.signalType", "data.essentials.monitorCondition", "data.essentials.monitoringService", "data.essentials.firedDateTime"],
-  "forbid": [],
+  "forbid": ["data.alertContext.operationName"],
   "alias_only": false,
   "mapping": {
     "v": 1,

@@ -191,3 +191,25 @@ func TestOODAgreement(t *testing.T) {
 	}
 	t.Logf("%d of %d OOD payloads taken by a preset", taken, len(files))
 }
+
+// TestZulipGiteaIsNotGitHub posts the Zulip project's real Gitea and Gogs
+// deliveries, which share GitHub's layout, with no source: none may match a
+// preset. The relay's own Gitea fixtures are trimmed too far to show that.
+func TestZulipGiteaIsNotGitHub(t *testing.T) {
+	root := filepath.Join(classifierDir(t, "corpus", "raw", "zulip"), "zerver", "webhooks")
+	n := 0
+	for _, vendor := range []string{"gitea", "gogs"} {
+		files, _ := filepath.Glob(filepath.Join(root, vendor, "fixtures", "*.json"))
+		for _, file := range files {
+			raw, err := os.ReadFile(file) // #nosec G304 -- fixtures under the classifier checkout
+			if err != nil {
+				t.Fatal(err)
+			}
+			n++
+			if p, _, ok := Match("", flattenJSON(t, raw)); ok {
+				t.Errorf("zulip %s/%s matches %s", vendor, filepath.Base(file), p.ID)
+			}
+		}
+	}
+	t.Logf("%d gitea and gogs fixtures, none matched", n)
+}

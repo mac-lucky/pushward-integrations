@@ -3,7 +3,7 @@
   "vendor": "GitHub",
   "version": 1,
   "sources": ["github"],
-  "require": ["action", "number", "pull_request.id", "pull_request.number", "pull_request.title", "pull_request.state", "pull_request.html_url", "pull_request.user.site_admin", "pull_request.head.sha", "pull_request.base.ref"],
+  "require": ["action", "number", "pull_request.id", "pull_request.number", "pull_request.title", "pull_request.state", "pull_request.html_url", "pull_request.user.site_admin", "pull_request.node_id"],
   "forbid": ["review.id", "comment.id"],
   "alias_only": false,
   "mapping": {

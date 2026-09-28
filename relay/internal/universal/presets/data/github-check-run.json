@@ -11,14 +11,14 @@
     "k": "progress",
     "p": {
       "title": "check_run.name",
-      "body": "check_run.conclusion",
+      "body": "check_run.check_suite.head_branch",
       "url": "check_run.html_url",
       "correlation": "check_run.id",
-      "lifecycle": "check_run.status"
+      "lifecycle": "check_run.conclusion"
     },
     "lv": {
-      "requested": "ongoing", "pending": "ongoing", "waiting": "ongoing", "queued": "ongoing", "in_progress": "ongoing",
-      "completed": "ended"
+      "success": "ended", "failure": "ended", "neutral": "ended", "cancelled": "ended", "skipped": "ended",
+      "timed_out": "ended", "action_required": "ended", "stale": "ended", "startup_failure": "ended"
     }
   },
   "doc": "https://docs.github.com/en/webhooks/webhook-events-and-payloads#check_run"

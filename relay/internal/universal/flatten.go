@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // Flatten caps. The relay pod runs with a 64 Mi limit, so a hostile or merely
@@ -44,12 +46,14 @@ const (
 
 // Field is one leaf of a flattened payload: its normalized path, a sample
 // value capped at MaxValueRunes (MaxURLRunes for a link), and its JSON type.
-// Cut is set when the cap shortened the value.
+// Cut is set when the cap shortened the value, and Sum then hashes the whole
+// of it, so two long values that share their first runes still differ.
 type Field struct {
 	Path  string    `json:"path"`
 	Value string    `json:"value"`
 	Type  ValueType `json:"type"`
 	Cut   bool      `json:"cut,omitempty"`
+	Sum   string    `json:"sum,omitempty"`
 }
 
 var errNotContainer = errors.New("universal: payload is not a JSON object or array")
@@ -235,7 +239,11 @@ func (f *flattener) add(path, value string, typ ValueType) error {
 		n = MaxURLRunes
 	}
 	v := capRunes(value, n)
-	f.fields = append(f.fields, Field{Path: path, Value: v, Type: typ, Cut: len(v) < len(value)})
+	field := Field{Path: path, Value: v, Type: typ}
+	if len(v) < len(value) {
+		field.Cut, field.Sum = true, text.HashHex(value, 16)
+	}
+	f.fields = append(f.fields, field)
 	return nil
 }
 
