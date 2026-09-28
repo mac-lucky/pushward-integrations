@@ -116,6 +116,23 @@ func TestTokenTamperText(t *testing.T) {
 	}
 }
 
+// The base64 decoder skips \r and \n; a token with them in it is another
+// spelling of the same bytes, and must not verify.
+func TestTokenOneSpelling(t *testing.T) {
+	tok := mustMint(t, testClaims(ScopeEdit))
+	for _, ins := range []string{"\n", "\r", "\r\n", " ", "=", "+", "/", "."} {
+		for _, i := range []int{0, 1, len(tok) / 2, len(tok)} {
+			bad := tok[:i] + ins + tok[i:]
+			if _, err := Parse(tokenKey, bad, tokenNow, ScopeEdit); !errors.Is(err, ErrNotFound) {
+				t.Errorf("%q at %d: err = %v, want ErrNotFound", ins, i, err)
+			}
+		}
+	}
+	if _, err := b64.DecodeString(tok[:5] + "\n" + tok[5:]); err != nil {
+		t.Errorf("the decoder no longer skips newlines (%v); the check may be moot", err)
+	}
+}
+
 func TestTokenWrongKey(t *testing.T) {
 	tok := mustMint(t, testClaims(ScopeAccept))
 	other := bytes.Repeat([]byte{0x5b}, 32)

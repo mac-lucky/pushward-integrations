@@ -1,0 +1,10 @@
+{{template "head" .}}<h1>Webhook mappings</h1>
+{{if not .Groups}}<p class="muted">No mappings yet. One appears here when the relay gets a webhook shape it has not seen before.</p>
+{{end}}{{range .Groups}}<h2>{{.Label}} <span class="muted">{{len .Rows}}</span></h2>
+<ul class="rows">
+{{range .Rows}}<li><a href="{{.Href}}"><span class="src">{{.Source}}</span> <span class="muted">{{.Kind}}</span>
+<span class="path">{{.Title}}</span>
+<small>{{.Used}}</small></a></li>
+{{end}}</ul>
+{{end}}<p class="muted">The edit links on this page stop working when the link to it does, 24 hours after it was sent.</p>
+{{template "foot"}}

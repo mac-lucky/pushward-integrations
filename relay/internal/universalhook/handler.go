@@ -18,12 +18,14 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+	"golang.org/x/time/rate"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/lrumap"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/universal"
@@ -57,10 +59,13 @@ type Handler struct {
 	ender    *lifecycle.Ender
 	key      []byte
 	now      func() time.Time
+	// links rate-limits POST /universal/links per tenant.
+	links *lrumap.Map[*rate.Limiter]
 }
 
-// RegisterRoutes registers POST /universal and the review route, and returns
-// the Handler. store must be wrapped in state.KeyHashing with KeyModeStrict.
+// RegisterRoutes registers POST /universal, the review route and POST
+// /universal/links, and returns the Handler; RegisterEditor serves the pages
+// the links open. store must be wrapped in state.KeyHashing with KeyModeStrict.
 // A nil proposer is the heuristic.
 func RegisterRoutes(api huma.API, store state.Store, mappings state.MappingStore, clients *client.Pool, cfg *config.UniversalConfig, proposer universal.Proposer) (*Handler, error) {
 	key, err := cfg.ReviewKeyBytes()
@@ -80,8 +85,9 @@ func RegisterRoutes(api huma.API, store state.Store, mappings state.MappingStore
 			EndDelay:       cfg.EndDelay,
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
-		key: key,
-		now: time.Now,
+		key:   key,
+		now:   time.Now,
+		links: newLinkLimiters(),
 	}
 	// Hidden: senders reach it as POST / once the root route dispatches here.
 	humautil.RegisterWebhook(api, "/universal", "post-universal-webhook",
@@ -90,6 +96,7 @@ func RegisterRoutes(api huma.API, store state.Store, mappings state.MappingStore
 		[]string{"Universal"}, h.handleWebhook, humautil.Hidden)
 	humautil.RegisterPublic(api, ReviewPath+"{token}", "post-universal-review",
 		"Accept or reject a proposed universal mapping", h.handleReview)
+	registerLinks(api, h)
 	return h, nil
 }
 

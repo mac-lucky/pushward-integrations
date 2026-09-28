@@ -26,10 +26,13 @@ const (
 )
 
 // Token lifetimes. A review token (accept or reject) expires with the pending
-// row it decides, state.PendingTTL after the proposal.
+// row it decides, state.PendingTTL after the proposal. An edit link on a
+// notification lasts EditTokenTTL; one on the list page ListEditTokenTTL from
+// when the list was opened, and never past the list link's own expiry.
 const (
-	EditTokenTTL = 30 * 24 * time.Hour
-	ListTokenTTL = 24 * time.Hour
+	EditTokenTTL     = 30 * 24 * time.Hour
+	ListTokenTTL     = 24 * time.Hour
+	ListEditTokenTTL = 24 * time.Hour
 )
 
 // Errors Parse returns. Every token that is not one the relay minted for this
@@ -128,12 +131,25 @@ func mac(key []byte, domain string, body []byte) []byte {
 	return h.Sum(nil)[:macLen]
 }
 
+// tokenChars reports whether s is all base64url. The decoder skips \r and
+// \n, so without this check one token would have many spellings.
+func tokenChars(s string) bool {
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		case 'A' <= c && c <= 'Z', 'a' <= c && c <= 'z', '0' <= c && c <= '9', c == '-', c == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
 // Parse verifies tok and returns its claims, if its scope is one of allowed.
 // The mac is checked before anything the token says is believed, the expiry
 // included; an authentic token past its expiry returns its claims with
 // ErrExpired.
 func Parse(key []byte, tok string, now time.Time, allowed ...Scope) (Claims, error) {
-	if len(tok) > maxTokenLen {
+	if len(tok) > maxTokenLen || !tokenChars(tok) {
 		return Claims{}, ErrNotFound
 	}
 	b, err := b64.DecodeString(tok)

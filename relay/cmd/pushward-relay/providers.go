@@ -33,11 +33,13 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/poster"
 )
 
-// registered is what main needs back from the providers for shutdown: the
-// enders to flush and the ArgoCD handler whose grace timers stop first.
+// registered is what main needs back from the providers: the enders to flush
+// and the ArgoCD handler whose grace timers stop first, for shutdown, and the
+// universal handler, whose editor pages main serves on the mux.
 type registered struct {
-	enders []*lifecycle.Ender
-	argocd *argocd.Handler
+	enders    []*lifecycle.Ender
+	argocd    *argocd.Handler
+	universal *universalhook.Handler
 }
 
 // registerProviders registers every enabled provider on api. store is wrapped
@@ -173,6 +175,7 @@ func registerProviders(ctx context.Context, api huma.API, store state.Store, map
 			return r, err
 		}
 		collectEnder(uh)
+		r.universal = uh
 		slog.Info("enabled provider", "provider", "universal")
 	}
 

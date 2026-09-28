@@ -105,18 +105,54 @@ func TestMemoryMappings_Edit(t *testing.T) {
 	ctx := context.Background()
 	k := memKey(1)
 	_, _ = s.InsertPending(ctx, memRow(k, c.t), MaxPending)
+	r, _ := s.Get(ctx, k)
+	v0 := r.Version()
 	m := json.RawMessage(`{"v":1,"k":"alert"}`)
-	if res, _ := s.Edit(ctx, k, m, MappingConfirmed, 0, MaxConfirmed); res.Outcome != EditOK || res.Rev != 1 {
+	if res, _ := s.Edit(ctx, k, m, MappingConfirmed, v0, MaxConfirmed); res.Outcome != EditOK || res.Rev != 1 {
 		t.Errorf("edit = %+v", res)
 	}
-	if res, _ := s.Edit(ctx, k, json.RawMessage(`{"k":"alert","v":1}`), MappingConfirmed, 0, MaxConfirmed); res.Outcome != EditIdempotent {
+	if res, _ := s.Edit(ctx, k, json.RawMessage(`{"k":"alert","v":1}`), MappingConfirmed, v0, MaxConfirmed); res.Outcome != EditIdempotent {
 		t.Errorf("resubmit = %+v", res)
 	}
-	if res, _ := s.Edit(ctx, k, json.RawMessage(`{"v":1}`), MappingConfirmed, 0, MaxConfirmed); res.Outcome != EditStale {
+	if res, _ := s.Edit(ctx, k, json.RawMessage(`{"v":1}`), MappingConfirmed, v0, MaxConfirmed); res.Outcome != EditStale {
 		t.Errorf("stale = %+v", res)
 	}
 	if r, _ := s.Get(ctx, k); r.Proposer != "user-edit" || r.Status != MappingConfirmed {
 		t.Errorf("row = %+v", r)
+	}
+}
+
+// A row swept and proposed again starts over at rev 0; a form from the first
+// one must not save over the second, even with the same content.
+func TestMemoryMappings_EditOtherIncarnation(t *testing.T) {
+	s, c := newMemMappings()
+	ctx := context.Background()
+	k := memKey(1)
+	_, _ = s.InsertPending(ctx, memRow(k, c.t), MaxPending)
+	r, _ := s.Get(ctx, k)
+	old := r.Version()
+
+	c.advance(PendingTTL + 1500*time.Nanosecond)
+	if res, _ := s.Sweep(ctx); res.Pending != 1 {
+		t.Fatalf("sweep = %+v", res)
+	}
+	_, _ = s.InsertPending(ctx, memRow(k, c.t), MaxPending)
+	r, _ = s.Get(ctx, k)
+	if r.Rev != old.Rev {
+		t.Fatalf("second incarnation at rev %d, want %d", r.Rev, old.Rev)
+	}
+	if res, _ := s.Edit(ctx, k, r.Mapping, MappingConfirmed, old, MaxConfirmed); res.Outcome != EditStale {
+		t.Errorf("form from the first incarnation = %+v", res)
+	}
+	// The form carries microseconds; the nanoseconds below them do not count.
+	cur := r.Version()
+	cur.CreatedAt = time.UnixMicro(cur.CreatedAt.UnixMicro())
+	if res, _ := s.Edit(ctx, k, r.Mapping, MappingConfirmed, cur, MaxConfirmed); res.Outcome != EditOK {
+		t.Errorf("form from the current incarnation = %+v", res)
+	}
+	// Now the stored content and status match the old form too.
+	if res, _ := s.Edit(ctx, k, r.Mapping, MappingConfirmed, old, MaxConfirmed); res.Outcome != EditStale {
+		t.Errorf("form from the first incarnation after a save = %+v", res)
 	}
 }
 

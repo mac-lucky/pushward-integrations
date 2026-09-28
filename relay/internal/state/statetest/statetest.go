@@ -77,7 +77,7 @@ func (FailingMappingStore) Decide(context.Context, state.MappingKey, state.Mappi
 	return state.DecideResult{}, ErrFailing
 }
 
-func (FailingMappingStore) Edit(context.Context, state.MappingKey, json.RawMessage, state.MappingStatus, int, int) (state.EditResult, error) {
+func (FailingMappingStore) Edit(context.Context, state.MappingKey, json.RawMessage, state.MappingStatus, state.RowVersion, int) (state.EditResult, error) {
 	return state.EditResult{}, ErrFailing
 }
 

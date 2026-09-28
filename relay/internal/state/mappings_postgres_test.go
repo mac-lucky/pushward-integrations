@@ -319,26 +319,31 @@ func TestMappings_ConfirmedEviction(t *testing.T) {
 }
 
 func TestMappings_Edit(t *testing.T) {
-	ms, _ := setupMappings(t)
+	ms, pool := setupMappings(t)
 	ctx := context.Background()
 	k := mappingKey("hlk_edit", 1)
 	mustInsert(t, ms, k)
 	edited := json.RawMessage(`{"v":1,"k":"alert","p":{"title":"title"}}`)
 	other := json.RawMessage(`{"v":1,"k":"progress","p":{"title":"title"}}`)
+	row, _ := ms.Get(ctx, k)
+	v0 := row.Version()
+	// A form keeps created_at to the microsecond; what is below it is noise.
+	v0.CreatedAt = v0.CreatedAt.Add(999 * time.Nanosecond)
 
-	res, err := ms.Edit(ctx, k, edited, state.MappingConfirmed, 0, state.MaxConfirmed)
+	res, err := ms.Edit(ctx, k, edited, state.MappingConfirmed, v0, state.MaxConfirmed)
 	if err != nil || res.Outcome != state.EditOK || res.Rev != 1 {
 		t.Fatalf("Edit = %+v, %v", res, err)
 	}
 	// The same form saved twice.
-	if res, _ := ms.Edit(ctx, k, json.RawMessage(`{"k": "alert", "v": 1, "p": {"title": "title"}}`), state.MappingConfirmed, 0, state.MaxConfirmed); res.Outcome != state.EditIdempotent || res.Rev != 1 {
+	if res, _ := ms.Edit(ctx, k, json.RawMessage(`{"k": "alert", "v": 1, "p": {"title": "title"}}`), state.MappingConfirmed, v0, state.MaxConfirmed); res.Outcome != state.EditIdempotent || res.Rev != 1 {
 		t.Errorf("resubmit = %+v", res)
 	}
 	// Another form made from revision 0.
-	if res, _ := ms.Edit(ctx, k, other, state.MappingConfirmed, 0, state.MaxConfirmed); res.Outcome != state.EditStale || res.Rev != 1 {
+	if res, _ := ms.Edit(ctx, k, other, state.MappingConfirmed, v0, state.MaxConfirmed); res.Outcome != state.EditStale || res.Rev != 1 {
 		t.Errorf("stale form = %+v", res)
 	}
-	if res, _ := ms.Edit(ctx, k, other, state.MappingRejected, 1, state.MaxRejected); res.Outcome != state.EditOK || res.Rev != 2 {
+	v1 := state.RowVersion{Rev: 1, CreatedAt: v0.CreatedAt}
+	if res, _ := ms.Edit(ctx, k, other, state.MappingRejected, v1, state.MaxRejected); res.Outcome != state.EditOK || res.Rev != 2 {
 		t.Errorf("edit at the current rev = %+v", res)
 	}
 	r, _ := ms.Get(ctx, k)
@@ -346,8 +351,27 @@ func TestMappings_Edit(t *testing.T) {
 		t.Errorf("edited row = %+v", r)
 	}
 	sameJSON(t, r.Mapping, other)
-	if res, _ := ms.Edit(ctx, mappingKey("hlk_edit", 2), edited, state.MappingConfirmed, 0, state.MaxConfirmed); res.Outcome != state.EditNotFound {
+	if res, _ := ms.Edit(ctx, mappingKey("hlk_edit", 2), edited, state.MappingConfirmed, v0, state.MaxConfirmed); res.Outcome != state.EditNotFound {
 		t.Errorf("Edit on no row = %+v", res)
+	}
+
+	// Deleted (swept, evicted) and proposed again, the row starts over at
+	// rev 0. A form from the first one is stale, even with the stored
+	// content.
+	exec(t, pool, `DELETE FROM universal_mappings WHERE key_hash = $1`, k.KeyHash[:])
+	mustInsert(t, ms, k)
+	again, _ := ms.Get(ctx, k)
+	if again.Rev != 0 || again.CreatedAt.Equal(row.CreatedAt) {
+		t.Fatalf("second incarnation rev %d created %v, first created %v", again.Rev, again.CreatedAt, row.CreatedAt)
+	}
+	if res, _ := ms.Edit(ctx, k, again.Mapping, state.MappingConfirmed, row.Version(), state.MaxConfirmed); res.Outcome != state.EditStale {
+		t.Errorf("form from the first incarnation = %+v", res)
+	}
+	if res, _ := ms.Edit(ctx, k, again.Mapping, state.MappingConfirmed, again.Version(), state.MaxConfirmed); res.Outcome != state.EditOK {
+		t.Errorf("form from the second incarnation = %+v", res)
+	}
+	if res, _ := ms.Edit(ctx, k, again.Mapping, state.MappingConfirmed, row.Version(), state.MaxConfirmed); res.Outcome != state.EditStale {
+		t.Errorf("form from the first incarnation after a save = %+v", res)
 	}
 }
 

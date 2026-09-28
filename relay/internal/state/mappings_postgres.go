@@ -351,23 +351,25 @@ func (s *PostgresMappingStore) Decide(ctx context.Context, k MappingKey, status 
 	return res, nil
 }
 
-func (s *PostgresMappingStore) Edit(ctx context.Context, k MappingKey, mapping json.RawMessage, status MappingStatus, rev, maxDecided int) (EditResult, error) {
+func (s *PostgresMappingStore) Edit(ctx context.Context, k MappingKey, mapping json.RawMessage, status MappingStatus, at RowVersion, maxDecided int) (EditResult, error) {
 	if err := checkDecided(status); err != nil {
 		return EditResult{}, err
 	}
+	// created_at holds microseconds; the form's time is cut to match.
+	created := time.UnixMicro(at.CreatedAt.UnixMicro())
 	var res EditResult
 	err := s.inKeyTx(ctx, k.KeyHash, func(tx pgx.Tx) error {
-		args := append(keyArgs(k), mapping, string(status))
+		args := append(keyArgs(k), mapping, string(status), created)
 		err := tx.QueryRow(ctx, `
 			UPDATE universal_mappings
 			SET mapping = $4, status = $5, proposer = 'user-edit', decided_at = now(), last_used_at = now(),
 				expires_at = NULL, rev = rev + 1
-			WHERE `+byKey+` AND rev = $6 AND `+liveRow+`
-			RETURNING rev`, append(args, rev)...).Scan(&res.Rev)
+			WHERE `+byKey+` AND created_at = $6 AND rev = $7 AND `+liveRow+`
+			RETURNING rev`, append(args, at.Rev)...).Scan(&res.Rev)
 		if errors.Is(err, pgx.ErrNoRows) {
 			var same bool
 			err := tx.QueryRow(ctx, `
-				SELECT rev, mapping = $4::jsonb AND status = $5
+				SELECT rev, created_at = $6 AND mapping = $4::jsonb AND status = $5
 				FROM universal_mappings WHERE `+byKey+` AND `+liveRow, args...).Scan(&res.Rev, &same)
 			switch {
 			case errors.Is(err, pgx.ErrNoRows):

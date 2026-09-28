@@ -76,9 +76,10 @@ type MappingRow struct {
 	// Proposer names what made the mapping: "heuristic/1", a ranker, or
 	// "user-edit".
 	Proposer string
-	// Rev counts proposals, decisions and edits over the life of the key; it
-	// never restarts, even when a proposal replaces an expired or unreadable
-	// row, so a stale editor form cannot overwrite a newer one.
+	// Rev counts proposals, decisions and edits over the life of the row; it
+	// never restarts while the row exists, even when a proposal replaces an
+	// expired or unreadable one, so a stale editor form cannot overwrite a
+	// newer one. A deleted row's successor starts again at 0; see RowVersion.
 	Rev             int
 	ReviewClaimedAt *time.Time
 	ReviewSentAt    *time.Time
@@ -87,6 +88,25 @@ type MappingRow struct {
 	LastUsedAt      time.Time
 	// ExpiresAt is set exactly while the row is pending.
 	ExpiresAt *time.Time
+}
+
+// RowVersion names one state of a row, as an editor form carries it. Rev
+// alone is not enough: a row that is deleted (swept, evicted) and proposed
+// again starts over at rev 0, so CreatedAt tells the incarnations apart.
+// CreatedAt counts to the microsecond, the precision Postgres keeps.
+type RowVersion struct {
+	Rev       int
+	CreatedAt time.Time
+}
+
+// Version returns the row's current version.
+func (r *MappingRow) Version() RowVersion {
+	return RowVersion{Rev: r.Rev, CreatedAt: r.CreatedAt}
+}
+
+// sameIncarnation compares created_at to the microsecond.
+func sameIncarnation(a, b time.Time) bool {
+	return a.UnixMicro() == b.UnixMicro()
 }
 
 // DecideOutcome is what Decide made of a review tap.
@@ -118,7 +138,8 @@ const (
 	// EditIdempotent is a stale form whose content is already stored, a
 	// resubmitted save.
 	EditIdempotent EditOutcome = "idempotent"
-	// EditStale is a form made from an older revision than the stored one.
+	// EditStale is a form made from an older revision than the stored one,
+	// or from an earlier incarnation of the row.
 	EditStale    EditOutcome = "stale"
 	EditNotFound EditOutcome = "notfound"
 )
@@ -180,9 +201,11 @@ type MappingStore interface {
 	// the same shape, which expired at another time, finds nothing.
 	Decide(ctx context.Context, k MappingKey, status MappingStatus, expires time.Time, maxDecided int) (DecideResult, error)
 
-	// Edit stores a user's mapping with status confirmed or rejected, when rev
-	// is still the stored revision, then evicts as Decide does.
-	Edit(ctx context.Context, k MappingKey, mapping json.RawMessage, status MappingStatus, rev, maxDecided int) (EditResult, error)
+	// Edit stores a user's mapping with status confirmed or rejected, when the
+	// stored row is still at version at, then evicts as Decide does. A form
+	// from another incarnation of the row is stale even when its content
+	// matches.
+	Edit(ctx context.Context, k MappingKey, mapping json.RawMessage, status MappingStatus, at RowVersion, maxDecided int) (EditResult, error)
 
 	// List returns a tenant's live rows, pending first, then by last use. It
 	// leaves out Shape, Samples and Candidates; Get a row for those. The caps

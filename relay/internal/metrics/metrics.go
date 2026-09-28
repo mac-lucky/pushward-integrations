@@ -183,6 +183,16 @@ var (
 		Help:      "Universal mapping rows and samples removed by the sweep, by what.",
 	}, []string{"what"})
 
+	// UniversalEditorRequestsTotal counts mapping editor requests. op is
+	// view, save, raw or list; result is ok, invalid, stale, notfound,
+	// expired, forbidden, ratelimited or error.
+	UniversalEditorRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "pushward_relay",
+		Subsystem: "universal",
+		Name:      "editor_requests_total",
+		Help:      "Universal mapping editor requests, by operation and outcome.",
+	}, []string{"op", "result"})
+
 	// UniversalMappings is the number of live mappings across all tenants, by
 	// status, as of the last sweep.
 	UniversalMappings = promauto.NewGaugeVec(prometheus.GaugeOpts{

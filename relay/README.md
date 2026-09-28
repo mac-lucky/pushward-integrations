@@ -312,6 +312,20 @@ https://relay.pushward.app/?source=alertmanager
 
 The relay reads the body for detection only when the request carries an `hlk_` key and a JSON `Content-Type`, declares no `Content-Length` of 1 MB or more, and comes from an IP that is still under its rate limit. A missing or `text/plain` `Content-Type` counts as JSON, because it is rewritten to `application/json` before this check. A chunked body declares no length, so it is read up to 1 MB and passed on undetected if it gets that far. A request that fails any of these goes to the universal route, which answers `401` for a missing key, `413` for a body over the limit and `429` over the rate limit; with the universal route off, it gets `404`. `pushward_relay_root_dispatch_total{route,via}` counts where requests to `/` went and why: `header` or `body` for a detected sender, `disabled`, `veto`, `none`, or `skipped` for one whose body was not inspected.
 
+#### Editing a mapping
+
+The review notification has an "Edit" button, and so does the raw notification a rejected shape sends. It opens a page on the relay where you choose which field becomes the title, body, link, correlation id, progress, severity and status, whether the shape arrives as a notification, an alert card or a progress card, and what each severity or status value means. "Save" confirms the mapping as shown. "Send raw instead" turns mapping off for that shape. The page takes no integration key because the link is the credential, so treat it like one. It works for 30 days.
+
+When the notification is gone, or the link has expired, ask for a new one:
+
+```
+curl -X POST https://relay.pushward.app/universal/links -H "Authorization: Bearer hlk_..."
+```
+
+The relay answers `202` and sends a notification with an "Open editor" button. That opens a list of every mapping for your key, each with its own edit link. The list link works for 24 hours, and the edit links on it stop working when it does. A key can ask once a minute per relay instance.
+
+Next to each field the page shows a sample value from the payload that created the mapping, redacted the same way as the review notification (credentials, tokens, emails, card and phone numbers are masked). Samples are deleted 7 days after the mapping was proposed. After that you only see field names.
+
 ---
 
 ### Grafana

@@ -25,6 +25,13 @@ func NewMemoryMappingStore() *MemoryMappingStore {
 	return &MemoryMappingStore{rows: make(map[MappingKey]*MappingRow), now: time.Now}
 }
 
+// SetClock replaces the store's clock, for tests that pin time.
+func (s *MemoryMappingStore) SetClock(now func() time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.now = now
+}
+
 func (s *MemoryMappingStore) live(r *MappingRow, now time.Time) bool {
 	return r.Status != MappingPending || r.ExpiresAt != nil && r.ExpiresAt.After(now)
 }
@@ -156,7 +163,7 @@ func (s *MemoryMappingStore) Decide(_ context.Context, k MappingKey, status Mapp
 	return DecideResult{Outcome: DecideOK, Evicted: s.evict(k.KeyHash, status, maxDecided)}, nil
 }
 
-func (s *MemoryMappingStore) Edit(_ context.Context, k MappingKey, mapping json.RawMessage, status MappingStatus, rev, maxDecided int) (EditResult, error) {
+func (s *MemoryMappingStore) Edit(_ context.Context, k MappingKey, mapping json.RawMessage, status MappingStatus, at RowVersion, maxDecided int) (EditResult, error) {
 	if err := checkDecided(status); err != nil {
 		return EditResult{}, err
 	}
@@ -167,9 +174,10 @@ func (s *MemoryMappingStore) Edit(_ context.Context, k MappingKey, mapping json.
 	if !ok || !s.live(r, now) {
 		return EditResult{Outcome: EditNotFound}, nil
 	}
-	if r.Rev != rev {
+	same := sameIncarnation(r.CreatedAt, at.CreatedAt)
+	if r.Rev != at.Rev || !same {
 		out := EditStale
-		if r.Status == status && jsonEqual(r.Mapping, mapping) {
+		if same && r.Status == status && jsonEqual(r.Mapping, mapping) {
 			out = EditIdempotent
 		}
 		return EditResult{Outcome: out, Rev: r.Rev}, nil

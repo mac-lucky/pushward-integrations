@@ -187,6 +187,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The mapping editor is plain HTML on the mux, outside huma: no
+	// integration key, and HTML error pages.
+	if providers.universal != nil {
+		universalhook.RegisterEditor(mux, providers.universal)
+	}
+
 	// POST / dispatches to the route of the provider that sent the payload,
 	// else to /universal. It reads which routes exist, so it comes after
 	// registerProviders, and it sits inside the content-type fix so a sender
@@ -204,11 +210,7 @@ func main() {
 				}
 				return r.Method
 			}),
-			// Review and edit links carry their credential in the path, so
-			// they stay out of traces altogether.
-			otelhttp.WithFilter(func(r *http.Request) bool {
-				return r.URL.Path != "/health" && r.URL.Path != "/ready" && !universalhook.IsCapabilityPath(r.URL.Path)
-			}),
+			otelhttp.WithFilter(traced),
 		)
 	}
 
@@ -221,6 +223,11 @@ func main() {
 		}
 		if n := ratelimit.SweepStale(5 * time.Minute); n > 0 {
 			slog.Debug("rate limiter sweep", "removed", n)
+		}
+		if providers.universal != nil {
+			if n := providers.universal.SweepLinkLimiters(); n > 0 {
+				slog.Debug("links limiter sweep", "removed", n)
+			}
 		}
 	})
 	defer stateCleanup.Stop()
@@ -296,4 +303,11 @@ func main() {
 	}
 
 	slog.Info("shutdown complete")
+}
+
+// traced reports whether a request gets a trace. Probes are noise, and the
+// review, edit and list links carry their credential in the path, so they
+// stay out of traces altogether.
+func traced(r *http.Request) bool {
+	return r.URL.Path != "/health" && r.URL.Path != "/ready" && !universalhook.IsCapabilityPath(r.URL.Path)
 }

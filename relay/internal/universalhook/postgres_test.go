@@ -17,10 +17,9 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
 
-// TestPostgresEndToEnd runs a shape through proposal, review and a decision
-// on the real tables: the review link has to match the expiry Postgres hands
-// back, and neither table may end up holding the integration key.
-func TestPostgresEndToEnd(t *testing.T) {
+// startPostgres returns a pool on a fresh Postgres container.
+func startPostgres(t *testing.T) *pgxpool.Pool {
+	t.Helper()
 	ctx := context.Background()
 	ctr, err := postgres.Run(ctx, "postgres:16-alpine",
 		postgres.WithDatabase("relay_test"),
@@ -41,6 +40,68 @@ func TestPostgresEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
+	return pool
+}
+
+// TestPostgresEditor saves an editor form against the real table: the
+// created_at the form carries has to match the stored one to the microsecond,
+// and a form from a deleted and re-proposed row must not.
+func TestPostgresEditor(t *testing.T) {
+	ctx := context.Background()
+	pool := startPostgres(t)
+	store, err := state.NewPostgresStore(ctx, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mappings, err := state.NewMappingStore(ctx, pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifecycle.SetRetryDelay(10 * time.Millisecond)
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	hs := newHarnessAt(t, srv.URL, calls, mu, store, mappings)
+	e := RegisterEditor(hs.mux.(*http.ServeMux), hs.h)
+	e.allowIP = func(string) bool { return true }
+	e.allowKey = func(string, string) bool { return true }
+	eh := &editorHarness{harness: hs, e: e}
+
+	path := eh.newRow(t, "backups", "plain_notify.json")
+	f := eh.open(t, path)
+	old := f.with("op", "save")
+	form := f.with("op", "save", "p.title", f.optionFor(t, "p.title", "host"))
+	for i := range 2 {
+		if w := eh.submit(t, path, form); w.Code != http.StatusSeeOther {
+			t.Fatalf("save %d: %d %s", i, w.Code, w.Body.String())
+		}
+	}
+	var status, proposer, title string
+	var rev int
+	err = pool.QueryRow(ctx, `SELECT status, proposer, rev, mapping->'p'->>'title' FROM universal_mappings`).Scan(&status, &proposer, &rev, &title)
+	if err != nil || status != "confirmed" || proposer != "user-edit" || rev != 1 || title != "host" {
+		t.Fatalf("row: %s %s rev %d title %q (%v)", status, proposer, rev, title, err)
+	}
+	if w := eh.submit(t, path, old); w.Code != http.StatusConflict {
+		t.Errorf("stale form: %d", w.Code)
+	}
+
+	if _, err := pool.Exec(ctx, `DELETE FROM universal_mappings`); err != nil {
+		t.Fatal(err)
+	}
+	eh.newRow(t, "backups", "plain_notify.json")
+	if w := eh.submit(t, path, old); w.Code != http.StatusConflict {
+		t.Errorf("form from the deleted row: %d", w.Code)
+	}
+	if w := eh.submit(t, path, eh.open(t, path).with("op", "raw")); w.Code != http.StatusSeeOther {
+		t.Errorf("raw on the new row: %d", w.Code)
+	}
+}
+
+// TestPostgresEndToEnd runs a shape through proposal, review and a decision
+// on the real tables: the review link has to match the expiry Postgres hands
+// back, and neither table may end up holding the integration key.
+func TestPostgresEndToEnd(t *testing.T) {
+	ctx := context.Background()
+	pool := startPostgres(t)
 	store, err := state.NewPostgresStore(ctx, pool)
 	if err != nil {
 		t.Fatal(err)

@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex, nofollow">
+<meta name="color-scheme" content="light dark">
+<title>Webhook mapping</title>
+<style>:root {
+  color-scheme: light dark;
+  --bg: #f2f2f7;
+  --card: #ffffff;
+  --fg: #1c1c1e;
+  --muted: #6c6c70;
+  --line: #d1d1d6;
+  --accent: #0a60c8;
+  --ok: #1e7a34;
+  --warn: #8a5800;
+  --err: #c4231c;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #000000;
+    --card: #1c1c1e;
+    --fg: #f2f2f7;
+    --muted: #a1a1a6;
+    --line: #3a3a3c;
+    --accent: #4c9dff;
+    --ok: #4cd964;
+    --warn: #ffcc00;
+    --err: #ff6961;
+  }
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 17px/1.4 -apple-system, BlinkMacSystemFont, system-ui, "Segoe UI", Roboto, sans-serif;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+main { max-width: 42rem; margin: 0 auto; padding: 16px; }
+h1 { font-size: 28px; margin: 8px 0 4px; }
+h2 { font-size: 20px; margin: 24px 0 8px; }
+p { margin: 8px 0; }
+a { color: var(--accent); }
+code, .path { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 15px; overflow-wrap: anywhere; }
+small { display: block; color: var(--muted); font-size: 15px; }
+.muted { color: var(--muted); }
+.meta { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; color: var(--muted); }
+.badge { padding: 2px 10px; border: 1px solid currentColor; border-radius: 999px; font-size: 15px; font-weight: 600; }
+.pending { color: var(--warn); }
+.confirmed { color: var(--ok); }
+.rejected { color: var(--muted); }
+.banner { margin: 12px 0; padding: 12px 14px; border-left: 4px solid var(--ok); border-radius: 12px; background: var(--card); }
+.banner.err { border-left-color: var(--err); }
+.banner ul { margin: 4px 0 0; padding-left: 20px; }
+fieldset, details { margin: 16px 0; padding: 12px 14px; border: 0; border-radius: 12px; background: var(--card); }
+legend { float: left; width: 100%; padding: 0; font-weight: 600; }
+legend + * { clear: both; }
+label { display: block; margin: 14px 0 4px; font-weight: 600; }
+label:first-child { margin-top: 0; }
+select, input[type=text], button {
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+  font-size: 17px;
+}
+button { border: 0; background: var(--accent); color: #ffffff; font-weight: 600; }
+button.secondary { border: 1px solid var(--line); background: transparent; color: var(--err); }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+th { font-size: 15px; color: var(--muted); font-weight: 600; }
+td select, td input[type=text] { min-width: 7rem; }
+summary { min-height: 32px; font-weight: 600; cursor: pointer; }
+.actions { display: grid; gap: 10px; margin: 16px 0 24px; }
+form:has(#p-progress option[value=""]:checked) .scale,
+form:has(#p-severity option[value=""]:checked) .sv,
+form:has(#p-lifecycle option[value=""]:checked) .lv { display: none; }
+ul.rows { margin: 0; padding: 0; list-style: none; }
+ul.rows li { margin: 8px 0; border-radius: 12px; background: var(--card); }
+ul.rows a { display: block; padding: 12px 14px; color: inherit; text-decoration: none; }
+ul.rows .src { font-weight: 600; }
+</style>
+</head>
+<body>
+<main>
+<h1>Webhook mapping</h1>
+<p class="meta"><span class="path">alertmanager</span> <span class="badge pending">Waiting for review</span></p>
+<p class="muted">Webhooks of this shape already use this mapping. Save to confirm it, changed or not.</p>
+<form method="post" action="AWVq4ePA3P7wq4LI7NH599VmOJ7CkiO_B4xHcgFruwcQ9Txs6AAHXjCb01YGnc7axEPb3DFtmNtUAk7TAt5I3Y_agWSQVQxhbGVydG1hbmFnZXJ-nmy7TV9HmMsHvRB8KZ6P">
+<input type="hidden" name="rev" value="0">
+<input type="hidden" name="created" value="1790596800000000">
+<fieldset>
+<label for="kind">Send as</label>
+<select id="kind" name="kind">
+<option value="notification">Notification</option>
+<option value="alert" selected>Alert card</option>
+<option value="progress">Progress card</option>
+</select>
+<label for="p-title">Title</label>
+<select id="p-title" name="p.title">
+<option value="">None</option>
+<optgroup label="Suggested">
+<option value="13" selected>groupLabels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="14">commonLabels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="18">commonAnnotations.summary = &#34;Disk /srv on nas-01 is 93% full&#34;</option>
+<option value="3">alerts[].labels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="7">alerts[].annotations.summary = &#34;Disk /srv on nas-01 is 93% full&#34;</option>
+</optgroup>
+<optgroup label="Other fields">
+<option value="0">receiver = &#34;pushward&#34;</option>
+<option value="1">status = &#34;firing&#34;</option>
+<option value="2">alerts[].status = &#34;firing&#34;</option>
+<option value="4">alerts[].labels.instance = &#34;nas-01:9100&#34;</option>
+<option value="5">alerts[].labels.mountpoint = &#34;/srv&#34;</option>
+<option value="6">alerts[].labels.severity = &#34;critical&#34;</option>
+<option value="8">alerts[].annotations.description = &#34;Only 41 GiB left on /srv, filling at ...&#34;</option>
+<option value="15">commonLabels.instance = &#34;nas-01:9100&#34;</option>
+<option value="16">commonLabels.mountpoint = &#34;/srv&#34;</option>
+<option value="17">commonLabels.severity = &#34;critical&#34;</option>
+<option value="21">groupKey = &#34;{}:{alertname=&#34;DiskAlmostFull&#34;}&#34;</option>
+</optgroup>
+</select>
+<label for="p-body">Body</label>
+<select id="p-body" name="p.body">
+<option value="">None</option>
+<optgroup label="Suggested">
+<option value="8" selected>alerts[].annotations.description = &#34;Only 41 GiB left on /srv, filling at ...&#34;</option>
+<option value="18">commonAnnotations.summary = &#34;Disk /srv on nas-01 is 93% full&#34;</option>
+<option value="7">alerts[].annotations.summary = &#34;Disk /srv on nas-01 is 93% full&#34;</option>
+<option value="16">commonLabels.mountpoint = &#34;/srv&#34;</option>
+<option value="5">alerts[].labels.mountpoint = &#34;/srv&#34;</option>
+</optgroup>
+<optgroup label="Other fields">
+<option value="0">receiver = &#34;pushward&#34;</option>
+<option value="1">status = &#34;firing&#34;</option>
+<option value="2">alerts[].status = &#34;firing&#34;</option>
+<option value="3">alerts[].labels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="4">alerts[].labels.instance = &#34;nas-01:9100&#34;</option>
+<option value="6">alerts[].labels.severity = &#34;critical&#34;</option>
+<option value="13">groupLabels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="14">commonLabels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="15">commonLabels.instance = &#34;nas-01:9100&#34;</option>
+<option value="17">commonLabels.severity = &#34;critical&#34;</option>
+<option value="21">groupKey = &#34;{}:{alertname=&#34;DiskAlmostFull&#34;}&#34;</option>
+</optgroup>
+</select>
+<label for="p-url">Link</label>
+<select id="p-url" name="p.url">
+<option value="">None</option>
+<optgroup label="Suggested">
+<option value="19" selected>externalURL = &#34;https://alertmanager.example.com&#34;</option>
+<option value="11">alerts[].generatorURL = &#34;https://prometheus.example.com/graph&#34;</option>
+</optgroup>
+</select>
+<label for="p-correlation">Matched on</label>
+<small>Events with the same value update one card.</small>
+<select id="p-correlation" name="p.correlation">
+<option value="">None</option>
+<optgroup label="Suggested">
+<option value="12" selected>alerts[].fingerprint = &#34;4f1c2d9e8a7b6c5d&#34;</option>
+<option value="21">groupKey = &#34;{}:{alertname=&#34;DiskAlmostFull&#34;}&#34;</option>
+<option value="0">receiver = &#34;pushward&#34;</option>
+<option value="1">status = &#34;firing&#34;</option>
+<option value="22">truncatedAlerts = &#34;0&#34;</option>
+</optgroup>
+<optgroup label="Other fields">
+<option value="2">alerts[].status = &#34;firing&#34;</option>
+<option value="3">alerts[].labels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="4">alerts[].labels.instance = &#34;nas-01:9100&#34;</option>
+<option value="5">alerts[].labels.mountpoint = &#34;/srv&#34;</option>
+<option value="6">alerts[].labels.severity = &#34;critical&#34;</option>
+<option value="7">alerts[].annotations.summary = &#34;Disk /srv on nas-01 is 93% full&#34;</option>
+<option value="8">alerts[].annotations.description = &#34;Only 41 GiB left on /srv, filling at ...&#34;</option>
+<option value="13">groupLabels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="14">commonLabels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="15">commonLabels.instance = &#34;nas-01:9100&#34;</option>
+<option value="16">commonLabels.mountpoint = &#34;/srv&#34;</option>
+<option value="17">commonLabels.severity = &#34;critical&#34;</option>
+<option value="18">commonAnnotations.summary = &#34;Disk /srv on nas-01 is 93% full&#34;</option>
+<option value="20">version = &#34;4&#34;</option>
+</optgroup>
+</select>
+<label for="p-progress">Progress</label>
+<select id="p-progress" name="p.progress">
+<option value="" selected>None</option>
+<optgroup label="Suggested">
+<option value="22">truncatedAlerts = &#34;0&#34;</option>
+</optgroup>
+</select>
+<div class="scale">
+<label for="ps">Progress reads as</label>
+<select id="ps" name="ps">
+<option value="ratio">A ratio, 0 to 1</option>
+<option value="percent">A percentage, 0 to 100</option>
+</select>
+</div>
+<label for="p-severity">Severity</label>
+<small>Sets the card&#39;s color and how loudly it notifies.</small>
+<select id="p-severity" name="p.severity">
+<option value="">None</option>
+<optgroup label="Suggested">
+<option value="17" selected>commonLabels.severity = &#34;critical&#34;</option>
+<option value="6">alerts[].labels.severity = &#34;critical&#34;</option>
+<option value="22">truncatedAlerts = &#34;0&#34;</option>
+<option value="0">receiver = &#34;pushward&#34;</option>
+<option value="1">status = &#34;firing&#34;</option>
+</optgroup>
+<optgroup label="Other fields">
+<option value="2">alerts[].status = &#34;firing&#34;</option>
+<option value="3">alerts[].labels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="4">alerts[].labels.instance = &#34;nas-01:9100&#34;</option>
+<option value="5">alerts[].labels.mountpoint = &#34;/srv&#34;</option>
+<option value="7">alerts[].annotations.summary = &#34;Disk /srv on nas-01 is 93% full&#34;</option>
+<option value="8">alerts[].annotations.description = &#34;Only 41 GiB left on /srv, filling at ...&#34;</option>
+<option value="13">groupLabels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="14">commonLabels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="15">commonLabels.instance = &#34;nas-01:9100&#34;</option>
+<option value="16">commonLabels.mountpoint = &#34;/srv&#34;</option>
+<option value="18">commonAnnotations.summary = &#34;Disk /srv on nas-01 is 93% full&#34;</option>
+<option value="20">version = &#34;4&#34;</option>
+<option value="21">groupKey = &#34;{}:{alertname=&#34;DiskAlmostFull&#34;}&#34;</option>
+</optgroup>
+</select>
+<label for="p-lifecycle">Status</label>
+<small>Tells an ongoing event from one that ended it.</small>
+<select id="p-lifecycle" name="p.lifecycle">
+<option value="">None</option>
+<optgroup label="Suggested">
+<option value="1" selected>status = &#34;firing&#34;</option>
+<option value="2">alerts[].status = &#34;firing&#34;</option>
+<option value="0">receiver = &#34;pushward&#34;</option>
+<option value="13">groupLabels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="14">commonLabels.alertname = &#34;DiskAlmostFull&#34;</option>
+</optgroup>
+<optgroup label="Other fields">
+<option value="3">alerts[].labels.alertname = &#34;DiskAlmostFull&#34;</option>
+<option value="4">alerts[].labels.instance = &#34;nas-01:9100&#34;</option>
+<option value="5">alerts[].labels.mountpoint = &#34;/srv&#34;</option>
+<option value="6">alerts[].labels.severity = &#34;critical&#34;</option>
+<option value="7">alerts[].annotations.summary = &#34;Disk /srv on nas-01 is 93% full&#34;</option>
+<option value="8">alerts[].annotations.description = &#34;Only 41 GiB left on /srv, filling at ...&#34;</option>
+<option value="15">commonLabels.instance = &#34;nas-01:9100&#34;</option>
+<option value="16">commonLabels.mountpoint = &#34;/srv&#34;</option>
+<option value="17">commonLabels.severity = &#34;critical&#34;</option>
+<option value="18">commonAnnotations.summary = &#34;Disk /srv on nas-01 is 93% full&#34;</option>
+<option value="21">groupKey = &#34;{}:{alertname=&#34;DiskAlmostFull&#34;}&#34;</option>
+</optgroup>
+</select>
+</fieldset>
+<fieldset class="sv">
+<legend>Severity values</legend>
+<small>What each value of the severity field means. Values not listed are read as the relay would guess them.</small>
+<table>
+<thead><tr><th scope="col">Value</th><th scope="col">Means</th></tr></thead>
+<tbody>
+<tr><td><code>critical</code><input type="hidden" name="sv.k" value="critical"></td>
+<td><select name="sv.v" aria-label="Means">
+<option value="">default</option>
+<option value="critical" selected>critical</option>
+<option value="warning">warning</option>
+<option value="info">info</option>
+</select></td></tr>
+<tr><td><input type="text" name="sv.n" value="" maxlength="64" autocapitalize="off" autocomplete="off" spellcheck="false" aria-label="New value"></td>
+<td><select name="sv.v" aria-label="Means">
+<option value="" selected>default</option>
+<option value="critical">critical</option>
+<option value="warning">warning</option>
+<option value="info">info</option>
+</select></td></tr>
+<tr><td><input type="text" name="sv.n" value="" maxlength="64" autocapitalize="off" autocomplete="off" spellcheck="false" aria-label="New value"></td>
+<td><select name="sv.v" aria-label="Means">
+<option value="" selected>default</option>
+<option value="critical">critical</option>
+<option value="warning">warning</option>
+<option value="info">info</option>
+</select></td></tr>
+<tr><td><input type="text" name="sv.n" value="" maxlength="64" autocapitalize="off" autocomplete="off" spellcheck="false" aria-label="New value"></td>
+<td><select name="sv.v" aria-label="Means">
+<option value="" selected>default</option>
+<option value="critical">critical</option>
+<option value="warning">warning</option>
+<option value="info">info</option>
+</select></td></tr>
+</tbody>
+</table>
+</fieldset>
+<fieldset class="lv">
+<legend>Status values</legend>
+<small>Which values of the status field end a card. Values not listed are read as the relay would guess them.</small>
+<table>
+<thead><tr><th scope="col">Value</th><th scope="col">Means</th></tr></thead>
+<tbody>
+<tr><td><code>firing</code><input type="hidden" name="lv.k" value="firing"></td>
+<td><select name="lv.v" aria-label="Means">
+<option value="">default</option>
+<option value="ongoing" selected>ongoing</option>
+<option value="ended">ended</option>
+</select></td></tr>
+<tr><td><input type="text" name="lv.n" value="" maxlength="64" autocapitalize="off" autocomplete="off" spellcheck="false" aria-label="New value"></td>
+<td><select name="lv.v" aria-label="Means">
+<option value="" selected>default</option>
+<option value="ongoing">ongoing</option>
+<option value="ended">ended</option>
+</select></td></tr>
+<tr><td><input type="text" name="lv.n" value="" maxlength="64" autocapitalize="off" autocomplete="off" spellcheck="false" aria-label="New value"></td>
+<td><select name="lv.v" aria-label="Means">
+<option value="" selected>default</option>
+<option value="ongoing">ongoing</option>
+<option value="ended">ended</option>
+</select></td></tr>
+<tr><td><input type="text" name="lv.n" value="" maxlength="64" autocapitalize="off" autocomplete="off" spellcheck="false" aria-label="New value"></td>
+<td><select name="lv.v" aria-label="Means">
+<option value="" selected>default</option>
+<option value="ongoing">ongoing</option>
+<option value="ended">ended</option>
+</select></td></tr>
+</tbody>
+</table>
+</fieldset>
+<details>
+<summary>Fields in this event (23)</summary>
+<small>Samples are redacted, and deleted 7 days after the mapping was proposed.</small>
+<table>
+<thead><tr><th scope="col">Field</th><th scope="col">Type</th><th scope="col">Sample</th></tr></thead>
+<tbody>
+<tr><td class="path">receiver</td><td>enum</td><td>pushward</td></tr>
+<tr><td class="path">status</td><td>enum</td><td>firing</td></tr>
+<tr><td class="path">alerts[].status</td><td>enum</td><td>firing</td></tr>
+<tr><td class="path">alerts[].labels.alertname</td><td>enum</td><td>DiskAlmostFull</td></tr>
+<tr><td class="path">alerts[].labels.instance</td><td>enum</td><td>nas-01:9100</td></tr>
+<tr><td class="path">alerts[].labels.mountpoint</td><td>text</td><td>/srv</td></tr>
+<tr><td class="path">alerts[].labels.severity</td><td>enum</td><td>critical</td></tr>
+<tr><td class="path">alerts[].annotations.summary</td><td>text</td><td>Disk /srv on nas-01 is 93% full</td></tr>
+<tr><td class="path">alerts[].annotations.description</td><td>text</td><td>Only 41 GiB left on /srv, filling at about 6 GiB a day.</td></tr>
+<tr><td class="path">alerts[].startsAt</td><td>time</td><td>2026-09-27T21:04:10.512Z</td></tr>
+<tr><td class="path">alerts[].endsAt</td><td>time</td><td>0001-01-01T00:00:00Z</td></tr>
+<tr><td class="path">alerts[].generatorURL</td><td>url</td><td>https://prometheus.example.com/graph</td></tr>
+<tr><td class="path">alerts[].fingerprint</td><td>id</td><td>4f1c2d9e8a7b6c5d</td></tr>
+<tr><td class="path">groupLabels.alertname</td><td>enum</td><td>DiskAlmostFull</td></tr>
+<tr><td class="path">commonLabels.alertname</td><td>enum</td><td>DiskAlmostFull</td></tr>
+<tr><td class="path">commonLabels.instance</td><td>enum</td><td>nas-01:9100</td></tr>
+<tr><td class="path">commonLabels.mountpoint</td><td>text</td><td>/srv</td></tr>
+<tr><td class="path">commonLabels.severity</td><td>enum</td><td>critical</td></tr>
+<tr><td class="path">commonAnnotations.summary</td><td>text</td><td>Disk /srv on nas-01 is 93% full</td></tr>
+<tr><td class="path">externalURL</td><td>url</td><td>https://alertmanager.example.com</td></tr>
+<tr><td class="path">version</td><td>number</td><td>4</td></tr>
+<tr><td class="path">groupKey</td><td>text</td><td>{}:{alertname=&#34;DiskAlmostFull&#34;}</td></tr>
+<tr><td class="path">truncatedAlerts</td><td>number</td><td>0</td></tr>
+</tbody>
+</table>
+</details>
+<div class="actions">
+<button type="submit" name="op" value="save">Save</button>
+<button type="submit" name="op" value="raw" class="secondary">Send raw instead</button>
+</div>
+</form>
+</main>
+</body>
+</html>
+
+
+

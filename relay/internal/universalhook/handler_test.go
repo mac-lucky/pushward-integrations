@@ -810,6 +810,29 @@ func TestReviewLinks(t *testing.T) {
 	}
 }
 
+// A review token with \r or \n in it is another spelling of the same bytes
+// to the base64 decoder, and must not decide anything.
+func TestReviewLinkOneSpelling(t *testing.T) {
+	hs := newHarness(t, state.NewMemoryMappingStore())
+	hs.post(t, "/universal", fixture(t, "plain_notify.json"))
+	accept := action(t, reviews(t, hs.snapshot())[0], "accept")
+	prefix := publicURL + ReviewPath
+	tok := strings.TrimPrefix(accept.URL, prefix)
+	for _, ins := range []string{"%0A", "%0D", "%0D%0A"} {
+		bad := accept
+		bad.URL = prefix + tok[:7] + ins + tok[7:]
+		if w := hs.tap(t, bad); w.Code != http.StatusNotFound {
+			t.Errorf("token with %s: %d", ins, w.Code)
+		}
+	}
+	if row := mappingRow(t, hs, ""); row.Status != state.MappingPending {
+		t.Fatalf("a respelled token decided the row: %s", row.Status)
+	}
+	if w := hs.tap(t, accept); w.Code != http.StatusOK {
+		t.Errorf("the token itself: %d", w.Code)
+	}
+}
+
 func TestUpstreamRefusalSurfacesUnchanged(t *testing.T) {
 	testutil.AssertUpstreamRefusalSurfaces(t, func(t *testing.T, status int) *httptest.ResponseRecorder {
 		srv, calls, mu := testutil.MockPushWardServerRejecting(t, status, status)
