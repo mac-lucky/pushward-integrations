@@ -20,6 +20,12 @@ func KeyHash(key string) string {
 	return fmt.Sprintf("%x", h[:4])
 }
 
+// KeyDigest returns the full SHA-256 of an API key, the form a key takes
+// wherever it is persisted, so reading the database never yields a usable key.
+func KeyDigest(key string) [32]byte {
+	return sha256.Sum256([]byte(key))
+}
+
 // MapKeyPrefix returns a short hex hash of an API key for use as an
 // in-memory map key prefix. Uses 8 bytes (16 hex chars) of SHA-256
 // for collision resistance across many tenants.

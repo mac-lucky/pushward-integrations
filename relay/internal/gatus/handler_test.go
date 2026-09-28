@@ -1,7 +1,6 @@
 package gatus
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -356,12 +355,8 @@ func TestTriggered_UpdateFailureRollsBackDedup(t *testing.T) {
 	}
 
 	// Rollback: no gatus dedup row should remain.
-	entries, err := store.ListByProvider(context.Background(), "gatus")
-	if err != nil {
-		t.Fatalf("ListByProvider: %v", err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("expected dedup row rolled back, got %d entries", len(entries))
+	if rows := store.Rows(); len(rows) != 0 {
+		t.Fatalf("expected dedup row rolled back, got %d rows", len(rows))
 	}
 	if n := testutil.CountPath(testutil.GetCalls(calls, mu), "/notifications"); n != 0 {
 		t.Fatalf("expected 0 notifications after failed update, got %d", n)

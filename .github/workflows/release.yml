@@ -175,7 +175,8 @@ jobs:
       dockerfile_path: "./relay/Dockerfile"
       go_module_path: "./relay"
       enable_go_tests: true
-      go_test_args: "-race -count=1 -v"
+      # Also runs the testcontainers Postgres suite in state/.
+      go_test_args: "-race -count=1 -v -tags integration"
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./relay ./shared"

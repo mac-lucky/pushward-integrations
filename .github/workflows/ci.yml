@@ -118,7 +118,8 @@ jobs:
       dockerfile_path: "./${{ matrix.bridge }}/Dockerfile"
       go_module_path: "./${{ matrix.bridge }}"
       enable_go_tests: true
-      go_test_args: "-race -count=1 -v"
+      # The relay leg also runs the testcontainers Postgres suite in state/.
+      go_test_args: ${{ matrix.bridge == 'relay' && '-race -count=1 -v -tags integration' || '-race -count=1 -v' }}
       # the lint job below runs govet and staticcheck
       code_analysis_tools: '["govulncheck", "gosec"]'
       enable_container_tests: false

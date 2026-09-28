@@ -14,6 +14,7 @@ import (
 type Config struct {
 	Server            sharedconfig.ServerConfig `yaml:"server"`
 	Database          DatabaseConfig            `yaml:"database"`
+	State             StateConfig               `yaml:"state"`
 	Telemetry         TelemetryConfig           `yaml:"telemetry"`
 	CircuitBreaker    CircuitBreakerConfig      `yaml:"circuit_breaker"`
 	Poster            PosterConfig              `yaml:"poster"`
@@ -62,6 +63,22 @@ type DatabaseConfig struct {
 	DSN          string `yaml:"dsn"`
 	PasswordFile string `yaml:"password_file"`
 }
+
+// StateConfig controls how the state store keys its rows.
+type StateConfig struct {
+	// KeyMode is the form of the tenant key written to relay_state: "hashed"
+	// stores its SHA-256, "compat" the raw hlk_ key as 0.14 and earlier did.
+	// Each mode still reads rows the other one wrote. The default is compat for
+	// one release: a rolling update runs the new pods next to 0.14 ones, which
+	// read raw keys only.
+	KeyMode string `yaml:"key_mode"`
+}
+
+// Key modes accepted in state.key_mode.
+const (
+	KeyModeCompat = "compat"
+	KeyModeHashed = "hashed"
+)
 
 // ProvidersConfig holds per-provider settings.
 type ProvidersConfig struct {
@@ -248,6 +265,7 @@ func Load(path string) (*Config, error) {
 		// sample_rate: 0 in YAML can mean "sample nothing" while an unset value
 		// keeps the 1.0 default.
 		Telemetry: TelemetryConfig{SampleRate: 1.0},
+		State:     StateConfig{KeyMode: KeyModeCompat},
 		Providers: ProvidersConfig{
 			Grafana: GrafanaConfig{
 				BaseProviderConfig: BaseProviderConfig{
@@ -448,6 +466,10 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 
+	if err := cfg.validateState(); err != nil {
+		return nil, err
+	}
+
 	if cfg.CircuitBreaker.Threshold < 1 {
 		return nil, fmt.Errorf("circuit_breaker.threshold must be >= 1, got %d", cfg.CircuitBreaker.Threshold)
 	}
@@ -483,6 +505,9 @@ func (cfg *Config) applyEnvOverrides() error {
 	}
 	if v := os.Getenv("PUSHWARD_TRUSTED_PROXY_CIDRS"); v != "" {
 		cfg.TrustedProxyCIDRs = sharedconfig.SplitList(v)
+	}
+	if v := os.Getenv("PUSHWARD_STATE_KEY_MODE"); v != "" {
+		cfg.State.KeyMode = v
 	}
 
 	// Poster overrides. Only the two operational switches get env names; the
@@ -617,6 +642,14 @@ func (cfg *Config) validatePoster() error {
 		return fmt.Errorf("poster.inline_wait (%s) must not exceed poster.fetch_timeout (%s): the extra wait can never be rewarded", p.InlineWait, p.FetchTimeout)
 	}
 	return nil
+}
+
+func (cfg *Config) validateState() error {
+	switch cfg.State.KeyMode {
+	case KeyModeCompat, KeyModeHashed:
+		return nil
+	}
+	return fmt.Errorf("state.key_mode: must be compat or hashed, got %q", cfg.State.KeyMode)
 }
 
 func (cfg *Config) validateModes() error {

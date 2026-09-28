@@ -34,6 +34,14 @@ func jsonEq(t *testing.T, got, want json.RawMessage) {
 
 func setupPostgres(t *testing.T) *state.PostgresStore {
 	t.Helper()
+	store, _ := setupPostgresPool(t)
+	return store
+}
+
+// setupPostgresPool is setupPostgres for tests that also query relay_state
+// directly.
+func setupPostgresPool(t *testing.T) (*state.PostgresStore, *pgxpool.Pool) {
+	t.Helper()
 	ctx := context.Background()
 
 	ctr, err := postgres.Run(ctx,
@@ -64,7 +72,7 @@ func setupPostgres(t *testing.T) *state.PostgresStore {
 		t.Fatal("new postgres store:", err)
 	}
 
-	return store
+	return store, pool
 }
 
 func TestPostgres_SetAndGet(t *testing.T) {

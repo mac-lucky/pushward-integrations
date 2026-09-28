@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -106,29 +107,40 @@ func (s *MemoryStore) Exists(_ context.Context, provider, userKey, key, subKey s
 	return ok && !e.expired(), nil
 }
 
-func (s *MemoryStore) ListByProvider(_ context.Context, provider string) ([]Entry, error) {
+// Row is one stored entry as Rows reports it.
+type Row struct {
+	Provider string
+	UserKey  string
+	Key      string
+	SubKey   string
+	Value    json.RawMessage
+}
+
+// Rows returns every stored entry, expired ones included, sorted by provider,
+// userKey, key and subKey. It is for tests that assert on what was written
+// rather than on what a handler can read back.
+func (s *MemoryStore) Rows() []Row {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	prefix := provider + "\x00"
-	var entries []Entry
-	for k, e := range s.entries {
-		if !strings.HasPrefix(k, prefix) || e.expired() {
-			continue
-		}
-		// Parse composite key: provider\x00userKey\x00key\x00subKey
-		parts := strings.SplitN(k[len(prefix):], "\x00", 3)
-		if len(parts) < 3 {
-			continue
-		}
-		entries = append(entries, Entry{
-			UserKey: parts[0],
-			Key:     parts[1],
-			SubKey:  parts[2],
-			Value:   e.value,
+	keys := make([]string, 0, len(s.entries))
+	for k := range s.entries {
+		keys = append(keys, k)
+	}
+	slices.Sort(keys)
+
+	rows := make([]Row, 0, len(keys))
+	for _, k := range keys {
+		parts := strings.SplitN(k, "\x00", 4)
+		rows = append(rows, Row{
+			Provider: parts[0],
+			UserKey:  parts[1],
+			Key:      parts[2],
+			SubKey:   parts[3],
+			Value:    s.entries[k].value,
 		})
 	}
-	return entries, nil
+	return rows
 }
 
 func (s *MemoryStore) Cleanup(_ context.Context) (int64, error) {

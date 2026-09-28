@@ -41,8 +41,4 @@ func (FailingStore) Exists(context.Context, string, string, string, string) (boo
 	return false, ErrFailing
 }
 
-func (FailingStore) ListByProvider(context.Context, string) ([]state.Entry, error) {
-	return nil, ErrFailing
-}
-
 func (FailingStore) Cleanup(context.Context) (int64, error) { return 0, ErrFailing }

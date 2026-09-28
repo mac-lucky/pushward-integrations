@@ -28,6 +28,7 @@ var relayEnvVars = []string{
 	"PUSHWARD_SYNC_GRACE_PERIOD",
 	"PUSHWARD_POSTER_ENABLED",
 	"PUSHWARD_POSTER_ALLOW_PRIVATE_HOSTS",
+	"PUSHWARD_STATE_KEY_MODE",
 }
 
 // clearRelayEnv makes a test independent of the shell it runs in. Call it before
@@ -436,6 +437,45 @@ func TestValidatePoster(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestStateKeyMode(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     string
+		want    string
+		wantErr bool
+	}{
+		// compat until no 0.14 pod can be running next to this release.
+		{name: "unset defaults to compat", env: "", want: KeyModeCompat},
+		{name: "compat", env: "compat", want: KeyModeCompat},
+		{name: "hashed once 0.14 is gone", env: "hashed", want: KeyModeHashed},
+		// strict is the universal provider's own mode, never a deployment's:
+		// it stops reading rows a compat replica wrote.
+		{name: "strict is not a deployment setting", env: "strict", wantErr: true},
+		{name: "case matters", env: "Hashed", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			clearRelayEnv(t)
+			t.Setenv("PUSHWARD_DATABASE_DSN", "postgres://relay@localhost/relay")
+			t.Setenv("PUSHWARD_STATE_KEY_MODE", tt.env)
+			cfg, err := Load("")
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Load() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if err == nil && cfg.State.KeyMode != tt.want {
+				t.Errorf("state.key_mode = %q, want %q", cfg.State.KeyMode, tt.want)
+			}
+		})
+	}
+
+	t.Run("an empty YAML value is rejected", func(t *testing.T) {
+		cfg := validConfig()
+		if err := cfg.validateState(); err == nil {
+			t.Error("validateState accepted an empty key_mode")
+		}
+	})
 }
 
 // An absent `enabled` key leaves posters on; only an explicit false turns them

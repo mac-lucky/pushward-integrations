@@ -111,8 +111,23 @@ Settings come from a YAML config file (`-config` flag, default `config.yml`) **o
 | `PUSHWARD_SERVER_METRICS_ADDRESS` | `server.metrics_address` | Listen address for the internal-only Prometheus metrics server (`GET /metrics`). Must differ from `server.address` or config load fails. Set empty to disable. | `:9090` |
 | `PUSHWARD_DATABASE_PASSWORD_FILE` | `database.password_file` | Path to a file holding the DB password; overrides the password in the DSN and is watched via fsnotify for live rotation (pool resets on change). | _(empty)_ |
 | `PUSHWARD_TRUSTED_PROXY_CIDRS` | `trusted_proxy_cidrs` | CIDRs of trusted reverse proxies. Only when `RemoteAddr` falls in one of these are `CF-Connecting-IP` / `X-Real-IP` / `X-Forwarded-For` honored for per-IP rate limiting. Comma-separated as env; a YAML list in the file. | _(empty)_ |
+| `PUSHWARD_STATE_KEY_MODE` | `state.key_mode` | How the tenant key is stored in `relay_state`: `compat` (the raw `hlk_` key, as 0.14 and earlier did) or `hashed` (its SHA-256). Switch to `hashed` once no 0.14 pod is left, see [State keys](#state-keys). | `compat` |
 | _(none)_ | `circuit_breaker.threshold` | Consecutive outbound-API failures before the breaker opens. Must be `>= 1`. | `5` |
 | _(none)_ | `circuit_breaker.cooldown` | How long the breaker stays open before allowing a probe. Must be `>= 1s`. | `30s` |
+
+### State keys
+
+Up to 0.14 the relay stored the raw `hlk_` key in the `user_key` column of `relay_state`, so anyone who could read the table could send as any tenant. The `hashed` mode stores the key's SHA-256 instead. Either mode still reads rows the other one wrote and deletes the leftover copy when it rewrites a row, so pods in different modes can share the table:
+
+1. Deploy this release as it comes. It defaults to `compat` and keeps writing raw keys, so 0.14 pods still running next to it during the rolling update find every row.
+2. Once no 0.14 pod is left, set `PUSHWARD_STATE_KEY_MODE=hashed`, or wait for a release that makes `hashed` the default. Raw rows stay readable until they expire.
+3. A later release stops reading raw rows at all. It must come at least 24 h after step 2: with the default `stale_timeout` values every row has a TTL of 24 h or less (check yours if you raised one).
+
+To roll back from step 2, go back to `compat` on this release, never straight to 0.14: a 0.14 pod reads raw keys only, so every row written in `hashed` mode is invisible to it until it expires.
+
+Until step 3 the store makes about twice the queries it used to: every write deletes the other copy first, and a read that misses tries the other key too.
+
+`SELECT count(*) FROM relay_state WHERE starts_with(user_key, 'hlk_')` shows how many raw rows are left.
 
 ### Telemetry (OpenTelemetry, optional)
 
@@ -288,7 +303,7 @@ Receives ArgoCD sync webhooks via argocd-notifications. Maps sync progress to a 
 
 **Events:** `sync-running` -> Step 1/3 Syncing, `sync-succeeded` -> Step 2/3 Rolling out, `deployed` -> Step 3/3 Deployed, `sync-failed` -> Sync Failed, `health-degraded` -> Degraded (transient warning during rollout).
 
-**Grace period:** `sync_grace_period` (default `10s`) defers activity creation for fast syncs that complete before the window expires, suppressing no-op notifications.
+**Grace period:** `sync_grace_period` (default `10s`) defers activity creation for fast syncs that complete before the window expires, suppressing no-op notifications. The timer lives in the pod that got `sync-running`. If that pod goes away, the replica that gets the next event creates the activity right away when the window ended more than 5 s ago, and otherwise keeps a timer of its own.
 
 **Setup:** Configure `argocd-notifications-cm` with a webhook service pointing to `POST /argocd`, Go-templated bodies per event, and trigger expressions. Store the `hlk_` key in `argocd-notifications-secret` and reference it as `$KEY_NAME` in the `Authorization: Bearer` header. Use `oncePer: app.status.operationState.startedAt` so every sync fires all events. See the [ArgoCD webhook docs](https://argo-cd.readthedocs.io/en/stable/operator-manual/notifications/services/webhook/). The webhook body needs only: `{"app":"...","event":"...","revision":"...","repo_url":"..."}`. Set `providers.argocd.url` to build deep links.
 
@@ -815,7 +830,7 @@ Emulates the OpsGenie alert service that TrueNAS ships with. TrueNAS opens an al
 
 ## Development
 
-Commands match CI (`go-cicd-reusable.yml`, which builds with `go_module_path: ./relay`, `go_test_args: -race -count=1 -v`).
+Commands match CI (`go-cicd-reusable.yml`, which builds with `go_module_path: ./relay`, `go_test_args: -race -count=1 -v -tags integration`).
 
 ```bash
 # Build (workspace root)
@@ -838,7 +853,7 @@ docker build -f relay/Dockerfile -t pushward-relay .
 docker build -f relay/Dockerfile --build-arg GO_VERSION=1.26.5 -t pushward-relay .
 ```
 
-> DB state tests (`relay/internal/state/...`) use testcontainers-go and require a running Docker daemon.
+> The Postgres state tests (`relay/internal/state/...`) sit behind the `integration` build tag, use testcontainers-go and need a running Docker daemon: `go test -tags integration ./relay/internal/state/... -race -count=1`.
 
 ## CI/CD & Releases
 

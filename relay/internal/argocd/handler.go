@@ -40,7 +40,17 @@ type trackedAppState struct {
 	RepoURL  string `json:"repo_url"`
 	Step     int    `json:"step"`
 	Pending  bool   `json:"pending"`
+	// PendingSince is when the grace timer for a pending app was armed, in unix
+	// milliseconds. The timer lives in one replica's memory; any other replica
+	// uses this to tell a grace period that is still running from one whose
+	// timer died with its pod. Zero on rows written before the field existed.
+	PendingSince int64 `json:"pending_since,omitempty"`
 }
+
+// defaultOverdueSlack is how far past SyncGracePeriod a replica waits before it
+// acts on a pending app whose timer another replica holds, so it never races a
+// holder that is about to fire.
+const defaultOverdueSlack = 5 * time.Second
 
 // graceEntry holds a grace timer along with the original userKey and appName
 // so cleanup code can retrieve them without parsing the hashed map key.
@@ -117,6 +127,8 @@ type Handler struct {
 	mu          sync.Mutex             // protects graceTimers map only
 	appLocks    *appLocks              // refcounted per-app mutexes
 	graceTimers map[string]*graceEntry // hash(userKey)+":"+appName -> grace entry
+
+	overdueSlack time.Duration // defaultOverdueSlack; shortened by tests
 }
 
 // lockApp returns an unlock function for per-app serialization. The returned
@@ -141,8 +153,9 @@ func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *
 			EndDelay:       cfg.EndDelay,
 			EndDisplayTime: cfg.EndDisplayTime,
 		}),
-		appLocks:    newAppLocks(),
-		graceTimers: make(map[string]*graceEntry),
+		appLocks:     newAppLocks(),
+		graceTimers:  make(map[string]*graceEntry),
+		overdueSlack: defaultOverdueSlack,
 	}
 	humautil.RegisterWebhook(api, "/argocd", "post-argocd-webhook",
 		"Receive ArgoCD sync webhook",
@@ -210,15 +223,12 @@ func (h *Handler) StartCleanup(ctx context.Context) { // #nosec G118 -- intentio
 	}()
 }
 
-// recoverConcurrency caps how many pending ArgoCD apps are recovered at once at
-// startup, so a restart coinciding with many in-flight syncs cannot fan out an
-// unbounded burst of goroutines and PushWard API calls.
-const recoverConcurrency = 16
-
 // StopAll stops and clears all pending grace timers. Call it on shutdown so a
 // grace timer can't fire graceExpired (which creates activities on a background
 // context) after the process has begun exiting. Persisted Pending=true state is
-// left intact so RecoverPending re-fires those apps on the next startup.
+// left intact: the next webhook for the app, on whichever replica receives it,
+// promotes it once overdue or leaves a timer of that replica's own behind (see
+// armBackstop).
 func (h *Handler) StopAll() {
 	h.mu.Lock()
 	for tk, ge := range h.graceTimers {
@@ -226,55 +236,6 @@ func (h *Handler) StopAll() {
 		delete(h.graceTimers, tk)
 	}
 	h.mu.Unlock()
-}
-
-// RecoverPending scans the state store for ArgoCD entries that are still
-// pending (grace timer was lost on pod restart) and fires graceExpired for each,
-// with bounded concurrency, in the background so startup is not blocked.
-func (h *Handler) RecoverPending(ctx context.Context) {
-	entries, err := h.store.ListByProvider(ctx, "argocd")
-	if err != nil {
-		slog.Error("failed to list argocd state entries for recovery", "error", err)
-		return
-	}
-	type recoverItem struct{ userKey, key string }
-	var pending []recoverItem
-	for _, entry := range entries {
-		if entry.SubKey != "" {
-			continue // skip tombstones
-		}
-		var app trackedAppState
-		if err := json.Unmarshal(entry.Value, &app); err != nil {
-			slog.Warn("failed to unmarshal argocd state entry, skipping", "key", entry.Key, "error", err)
-			continue
-		}
-		if !app.Pending {
-			continue
-		}
-		pending = append(pending, recoverItem{entry.UserKey, entry.Key})
-	}
-	if len(pending) == 0 {
-		return
-	}
-
-	go func() { // #nosec G118 -- startup recovery, bounded concurrency, honors ctx
-		var wg sync.WaitGroup
-		sem := make(chan struct{}, recoverConcurrency)
-		for _, item := range pending {
-			if ctx.Err() != nil {
-				break // shutting down
-			}
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(userKey, key string) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				h.graceExpired(userKey, key)
-			}(item.userKey, item.key)
-		}
-		wg.Wait()
-		slog.Info("recovered pending argocd apps", "count", len(pending))
-	}()
 }
 
 func timerKey(userKey, appName string) string {
@@ -319,6 +280,78 @@ func (h *Handler) setTombstone(ctx context.Context, log *slog.Logger, userKey, a
 func (h *Handler) hasTombstone(ctx context.Context, userKey, appName string) bool {
 	exists, _ := h.store.Exists(ctx, "argocd", userKey, appName, "tombstone")
 	return exists
+}
+
+// overdue reports whether a pending app has outlived its grace period by more
+// than overdueSlack, meaning the timer that should have created its activity
+// is gone (the replica holding it restarted). A row with no PendingSince is
+// never overdue: it may be a no-op sync an older pod is still timing, and
+// armBackstop covers it instead.
+func (h *Handler) overdue(app *trackedAppState) bool {
+	if !app.Pending || app.PendingSince == 0 {
+		return false
+	}
+	return time.Since(time.UnixMilli(app.PendingSince)) > h.config.SyncGracePeriod+h.overdueSlack
+}
+
+// armBackstop arms a grace timer on this replica for a pending app it holds no
+// timer for. The replica that armed the original may be gone (SIGTERM, crash),
+// and with no timer anywhere the app would stay hidden until its next event.
+// The backstop fires overdueSlack after the original would have, so a live
+// holder always goes first and the backstop then finds the app resolved. A row
+// with no PendingSince gets the full grace period from now. Caller holds the
+// app lock.
+func (h *Handler) armBackstop(log *slog.Logger, userKey, appName string, app *trackedAppState) {
+	if !app.Pending {
+		return
+	}
+	delay := h.config.SyncGracePeriod
+	if app.PendingSince != 0 {
+		deadline := time.UnixMilli(app.PendingSince).Add(h.config.SyncGracePeriod + h.overdueSlack)
+		delay = max(0, time.Until(deadline))
+	}
+	tk := timerKey(userKey, appName)
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, ok := h.graceTimers[tk]; ok {
+		return
+	}
+	h.graceTimers[tk] = &graceEntry{
+		timer:   time.AfterFunc(delay, func() { h.graceExpired(userKey, appName) }),
+		userKey: userKey,
+		appName: appName,
+	}
+	log.Info("armed grace backstop", "app", appName, "delay", delay)
+}
+
+// materialize ends a pending app's grace period: it clears Pending and creates
+// the activity the grace period was holding back. The caller holds the app lock
+// and sends the content for the app's step afterwards. On a create failure the
+// state is dropped, as on every other create path.
+func (h *Handler) materialize(ctx context.Context, log *slog.Logger, userKey, appName string, app *trackedAppState, reason string) error {
+	tk := timerKey(userKey, appName)
+	h.mu.Lock()
+	if ge, ok := h.graceTimers[tk]; ok {
+		ge.timer.Stop()
+		delete(h.graceTimers, tk)
+	}
+	h.mu.Unlock()
+	app.Pending = false
+	app.PendingSince = 0
+	if err := h.saveApp(ctx, userKey, appName, app); err != nil {
+		log.Error("failed to save app state", "app", appName, "error", err)
+	}
+
+	pw := h.clients.Get(userKey)
+	endedTTL := int(h.config.CleanupDelay.Seconds())
+	staleTTL := int(h.config.StaleTimeout.Seconds())
+	if err := pw.CreateActivity(ctx, app.Slug, appName, overrides.FromContext(ctx).PriorityOr(h.config.Priority), endedTTL, staleTTL); err != nil {
+		log.Error("failed to create activity", "slug", app.Slug, "error", err)
+		h.deleteApp(ctx, log, userKey, appName)
+		return err
+	}
+	log.Info("created activity ("+reason+")", "slug", app.Slug, "app", appName, "step", app.Step)
+	return nil
 }
 
 // contentURLs returns the url and secondary_url fields for a given app and payload.
@@ -401,6 +434,14 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 	}
 	needsCreate := !exists || (p.Revision != "" && app.Revision != p.Revision)
 
+	// A new revision supersedes an overdue pending sync and starts its own grace
+	// period below; the same revision still running is shown now.
+	if exists && !needsCreate && h.overdue(app) {
+		if err := h.materialize(ctx, log, userKey, p.App, app, "overdue sync-running"); err != nil {
+			return err
+		}
+	}
+
 	h.ender.StopTimer(userKey, p.App)
 
 	if needsCreate {
@@ -432,6 +473,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 	gracePeriod := h.config.SyncGracePeriod
 	if gracePeriod > 0 && (needsCreate || app.Pending) {
 		app.Pending = true
+		app.PendingSince = time.Now().UnixMilli()
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
 			log.Error("failed to save app state", "app", p.App, "error", err)
 		}
@@ -504,12 +546,22 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 		return nil
 	}
 
-	// Tracked and still in grace period - just advance step, don't touch PushWard
+	if exists && h.overdue(app) {
+		if err := h.materialize(ctx, log, userKey, p.App, app, "overdue sync-succeeded"); err != nil {
+			return err
+		}
+	}
+
+	// Tracked and still in grace period - just advance step, don't touch PushWard.
+	// The grace timer may live on a replica that is gone, so this one arms a
+	// backstop. sync-running re-arms its own timer, and every other event ends
+	// the grace period, so this is the only path that needs one.
 	if exists && app.Pending {
 		app.Step = 2
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
 			log.Error("failed to save app state", "app", p.App, "error", err)
 		}
+		h.armBackstop(log, userKey, p.App, app)
 		log.Info("sync succeeded (grace period)", "slug", slug, "app", p.App)
 		return nil
 	}
@@ -525,11 +577,12 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 
 		// Start grace period at step 2, so a quick deployed event can skip ahead
 		app = &trackedAppState{
-			Slug:     slug,
-			Revision: p.Revision,
-			RepoURL:  p.RepoURL,
-			Step:     2,
-			Pending:  true,
+			Slug:         slug,
+			Revision:     p.Revision,
+			RepoURL:      p.RepoURL,
+			Step:         2,
+			Pending:      true,
+			PendingSince: time.Now().UnixMilli(),
 		}
 		if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
 			log.Error("failed to save app state", "app", p.App, "error", err)
@@ -614,6 +667,14 @@ func (h *Handler) handleDeployed(ctx context.Context, userKey string, log *slog.
 	if err != nil {
 		log.Error("failed to load app state", "app", p.App, "error", err)
 		return nil
+	}
+
+	// Past its grace period the sync was not a no-op: it gets its activity, and
+	// the tracked path below ends it.
+	if exists && h.overdue(app) {
+		if err := h.materialize(ctx, log, userKey, p.App, app, "overdue deployed"); err != nil {
+			return err
+		}
 	}
 
 	// Completed during grace period - no-op sync, skip entirely
@@ -743,6 +804,7 @@ func (h *Handler) errorPreamble(ctx context.Context, userKey string, log *slog.L
 			}
 			h.mu.Unlock()
 			app.Pending = false
+			app.PendingSince = 0
 			if err := h.saveApp(ctx, userKey, p.App, app); err != nil {
 				log.Error("failed to save app state", "app", p.App, "error", err)
 			}
@@ -900,17 +962,13 @@ func (h *Handler) graceExpired(userKey, appName string) {
 	if err != nil {
 		log.Error("failed to load app state, re-arming grace retry", "app", appName, "error", err)
 		// The timer already fired; without re-arming, a transient DB error here
-		// would strand the pending app (no activity until the stale TTL). Re-arm
-		// unconditionally: RecoverPending (post-restart) calls graceExpired with
-		// no graceTimers entry, so a "re-arm only if present" guard would skip the
-		// recovery path - the exact case this retry is meant to cover.
+		// would leave the app pending until another webhook promotes it. Re-arm
+		// only while the entry is still ours: a webhook that resolved the app,
+		// or StopAll on shutdown, removed it.
 		h.mu.Lock()
-		ge, ok := h.graceTimers[tk]
-		if !ok {
-			ge = &graceEntry{userKey: userKey, appName: appName}
-			h.graceTimers[tk] = ge
+		if ge, ok := h.graceTimers[tk]; ok {
+			ge.timer = time.AfterFunc(5*time.Second, func() { h.graceExpired(userKey, appName) })
 		}
-		ge.timer = time.AfterFunc(5*time.Second, func() { h.graceExpired(userKey, appName) })
 		h.mu.Unlock()
 		return
 	}
@@ -921,27 +979,15 @@ func (h *Handler) graceExpired(userKey, appName string) {
 		h.mu.Unlock()
 		return
 	}
-	app.Pending = false
-	if err := h.saveApp(ctx, userKey, appName, app); err != nil {
-		log.Error("failed to save app state", "app", appName, "error", err)
+	if err := h.materialize(ctx, log, userKey, appName, app, "grace expired"); err != nil {
+		return
 	}
-	h.mu.Lock()
-	delete(h.graceTimers, tk)
-	h.mu.Unlock()
 	slug := app.Slug
 	step := app.Step
 	revision := app.Revision
 	repoURL := app.RepoURL
 
 	pw := h.clients.Get(userKey)
-	endedTTL := int(h.config.CleanupDelay.Seconds())
-	staleTTL := int(h.config.StaleTimeout.Seconds())
-	if err := pw.CreateActivity(ctx, slug, appName, h.config.Priority, endedTTL, staleTTL); err != nil {
-		log.Error("failed to create activity", "slug", slug, "error", err)
-		h.deleteApp(ctx, log, userKey, appName)
-		return
-	}
-	log.Info("created activity (grace expired)", "slug", slug, "app", appName, "step", step)
 
 	var stateText string
 	switch step {

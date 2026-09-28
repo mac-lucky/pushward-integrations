@@ -2,6 +2,8 @@ package auth
 
 import (
 	"encoding/base64"
+	"encoding/hex"
+	"strings"
 	"testing"
 )
 
@@ -53,5 +55,18 @@ func TestExtractKey(t *testing.T) {
 				t.Errorf("ExtractKey(%q) = %q, want %q", tt.header, got, tt.want)
 			}
 		})
+	}
+}
+
+// The short hashes are prefixes of the digest, so log and map correlation
+// still lines up with what the state store persists.
+func TestKeyDigest(t *testing.T) {
+	d := KeyDigest("hlk_x")
+	got := hex.EncodeToString(d[:])
+	if want := "49eb6901026039ed2364e7596baf384161b9182b21795240fc014dc1b5665737"; got != want {
+		t.Fatalf("KeyDigest(hlk_x) = %s, want %s", got, want)
+	}
+	if !strings.HasPrefix(got, KeyHash("hlk_x")) || !strings.HasPrefix(got, MapKeyPrefix("hlk_x")) {
+		t.Errorf("KeyHash/MapKeyPrefix are not prefixes of KeyDigest %s", got)
 	}
 }

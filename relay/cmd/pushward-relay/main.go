@@ -16,30 +16,13 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/danielgtaylor/huma/v2/adapters/humago"
 
-	"github.com/mac-lucky/pushward-integrations/relay/internal/argocd"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/backrest"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/bazarr"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/changedetection"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/gatus"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/gitea"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/grafana"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/jellyfin"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/komodo"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/overseerr"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/paperless"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/proxmox"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/ratelimit"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/starr"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/telemetry"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/truenas"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/unmanic"
-	"github.com/mac-lucky/pushward-integrations/relay/internal/uptimekuma"
 	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/poster"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -182,113 +165,9 @@ func main() {
 		slog.Info("poster images disabled")
 	}
 
-	// Provider handlers
-	var enders []*lifecycle.Ender
-
-	// collectEnder appends the handler's Ender if it implements lifecycle.EnderProvider.
-	collectEnder := func(handler any) {
-		if ep, ok := handler.(lifecycle.EnderProvider); ok {
-			enders = append(enders, ep.Ender())
-		}
-	}
-
-	if cfg.Providers.Grafana.Enabled {
-		grafana.RegisterRoutes(api, store, clients, &cfg.Providers.Grafana)
-		slog.Info("enabled provider", "provider", "grafana")
-	}
-
-	var argocdHandler *argocd.Handler
-	if cfg.Providers.ArgoCD.Enabled {
-		ah := argocd.RegisterRoutes(api, store, clients, &cfg.Providers.ArgoCD)
-		argocdHandler = ah
-		collectEnder(ah)
-		ah.StartCleanup(ctx)
-		ah.RecoverPending(ctx)
-		slog.Info("enabled provider", "provider", "argocd")
-	}
-
-	if cfg.Providers.Starr.Enabled {
-		sh := starr.RegisterRoutes(api, store, clients, &cfg.Providers.Starr, posters)
-		collectEnder(sh)
-		slog.Info("enabled provider", "provider", "starr")
-	}
-
-	if cfg.Providers.Jellyfin.Enabled {
-		jh := jellyfin.RegisterRoutes(api, store, clients, &cfg.Providers.Jellyfin, posters)
-		collectEnder(jh)
-		jh.StartCleanup(ctx)
-		slog.Info("enabled provider", "provider", "jellyfin")
-	}
-
-	if cfg.Providers.Paperless.Enabled {
-		ph := paperless.RegisterRoutes(api, store, clients, &cfg.Providers.Paperless)
-		collectEnder(ph)
-		slog.Info("enabled provider", "provider", "paperless")
-	}
-
-	if cfg.Providers.Changedetection.Enabled {
-		changedetection.RegisterRoutes(api, clients, &cfg.Providers.Changedetection)
-		slog.Info("enabled provider", "provider", "changedetection")
-	}
-
-	if cfg.Providers.Unmanic.Enabled {
-		uh := unmanic.RegisterRoutes(api, clients, &cfg.Providers.Unmanic)
-		collectEnder(uh)
-		slog.Info("enabled provider", "provider", "unmanic")
-	}
-
-	if cfg.Providers.Bazarr.Enabled {
-		bazarr.RegisterRoutes(api, clients, &cfg.Providers.Bazarr)
-		slog.Info("enabled provider", "provider", "bazarr")
-	}
-
-	if cfg.Providers.Proxmox.Enabled {
-		pxh := proxmox.RegisterRoutes(api, store, clients, &cfg.Providers.Proxmox)
-		collectEnder(pxh)
-		slog.Info("enabled provider", "provider", "proxmox")
-	}
-
-	if cfg.Providers.Overseerr.Enabled {
-		oh := overseerr.RegisterRoutes(api, store, clients, &cfg.Providers.Overseerr, posters)
-		collectEnder(oh)
-		slog.Info("enabled provider", "provider", "overseerr")
-	}
-
-	if cfg.Providers.UptimeKuma.Enabled {
-		ukh := uptimekuma.RegisterRoutes(api, store, clients, &cfg.Providers.UptimeKuma)
-		collectEnder(ukh)
-		slog.Info("enabled provider", "provider", "uptimekuma")
-	}
-
-	if cfg.Providers.Gatus.Enabled {
-		gah := gatus.RegisterRoutes(api, store, clients, &cfg.Providers.Gatus)
-		collectEnder(gah)
-		slog.Info("enabled provider", "provider", "gatus")
-	}
-
-	if cfg.Providers.Backrest.Enabled {
-		bh := backrest.RegisterRoutes(api, store, clients, &cfg.Providers.Backrest)
-		collectEnder(bh)
-		slog.Info("enabled provider", "provider", "backrest")
-	}
-
-	if cfg.Providers.Gitea.Enabled {
-		gih := gitea.RegisterRoutes(api, store, clients, &cfg.Providers.Gitea)
-		collectEnder(gih)
-		slog.Info("enabled provider", "provider", "gitea")
-	}
-
-	if cfg.Providers.Komodo.Enabled {
-		kh := komodo.RegisterRoutes(api, store, clients, &cfg.Providers.Komodo)
-		collectEnder(kh)
-		slog.Info("enabled provider", "provider", "komodo")
-	}
-
-	if cfg.Providers.TrueNAS.Enabled {
-		tnh := truenas.RegisterRoutes(api, store, clients, &cfg.Providers.TrueNAS)
-		collectEnder(tnh)
-		slog.Info("enabled provider", "provider", "truenas")
-	}
+	// Provider handlers. The store they get is wrapped for key hashing;
+	// the state cleanup below uses the raw one.
+	providers := registerProviders(ctx, api, store, clients, cfg, posters)
 
 	// Wrap mux with metrics middleware and optional OTel tracing.
 	handler := metrics.Middleware(humautil.NormalizeJSONContentType(mux))
@@ -368,15 +247,15 @@ func main() {
 	}
 
 	// Stop ArgoCD grace timers so none fire graceExpired mid-shutdown.
-	if argocdHandler != nil {
-		argocdHandler.StopAll()
+	if providers.argocd != nil {
+		providers.argocd.StopAll()
 	}
 
 	// Flush all pending ender timers (send ENDED immediately), then wait for in-flight callbacks.
-	for _, e := range enders {
+	for _, e := range providers.enders {
 		e.FlushAll()
 	}
-	for _, e := range enders {
+	for _, e := range providers.enders {
 		e.Wait()
 	}
 
