@@ -71,7 +71,7 @@ The relay registers 20 provider routes across 16 provider modules (`starr` serve
 | Forgejo | `POST /forgejo` | Forgejo Actions run result (generic) - for live per-job progress use the [forgejo](./forgejo/) poller bridge instead |
 | Komodo | `POST /komodo` | Resolvable conditions (server + swarm health) as Live Activities, other alerts as push notifications (HTTP Basic auth via URL userinfo) |
 | TrueNAS | `POST /truenas/v2/alerts`, `DELETE /truenas/v2/alerts/{id}` | OpsGenie-compatible alert open/clear (GenieKey auth) |
-| Universal | `POST /`, `POST /universal` | Off by default. `POST /` hands a payload it recognises to that provider's route; anything else is mapped by one of 67 presets (Alertmanager, PagerDuty, GitHub, GitLab, Sentry and more) or sent as one plain notification |
+| Universal | `POST /` | Off by default. The relay root hands a payload it recognises to that provider's route; anything else is mapped by one of 67 presets (Alertmanager, PagerDuty, GitHub, GitLab, Sentry and more) or sent as one plain notification |
 
 Auth styles differ by what each service's webhook UI allows: most providers accept `Authorization: Bearer hlk_...`; Radarr, Sonarr, Prowlarr, Bazarr, and Komodo use HTTP Basic Auth with the `hlk_` key as the **password** (username ignored); TrueNAS uses the OpsGenie `GenieKey` scheme. See the [relay README](./relay/) for per-provider setup snippets.
 
