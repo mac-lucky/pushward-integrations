@@ -39,8 +39,8 @@ const (
 
 // Handler serves the universal webhook.
 type Handler struct {
-	// store keeps which Live Activities are open. It must hash tenant keys
-	// (state.KeyModeStrict): nothing here ever existed under a raw key.
+	// store keeps which Live Activities are open, under hashed tenant keys
+	// (state.KeyHashing).
 	store    state.Store
 	clients  *client.Pool
 	config   *config.UniversalConfig
@@ -50,8 +50,7 @@ type Handler struct {
 }
 
 // RegisterRoutes registers POST /universal and returns the Handler. store must
-// be wrapped in state.KeyHashing with KeyModeStrict. A nil proposer is the
-// heuristic.
+// be wrapped in state.KeyHashing. A nil proposer is the heuristic.
 func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.UniversalConfig, proposer universal.Proposer) *Handler {
 	if proposer == nil {
 		proposer = universal.Heuristic{}

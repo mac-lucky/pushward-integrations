@@ -42,13 +42,9 @@ type registered struct {
 
 // registerProviders registers every enabled provider on api. store is wrapped
 // in KeyHashing once, here, so no provider can write a raw hlk_ key to
-// relay_state; the periodic Cleanup keeps using the store main holds. The
-// universal route gets its own strict wrapper: its rows never existed under a
-// raw key, so it has no twin to read or clean up.
+// relay_state; the periodic Cleanup keeps using the store main holds.
 func registerProviders(ctx context.Context, api huma.API, store state.Store, clients *client.Pool, cfg *config.Config, posters poster.Source) registered {
-	raw := store
-	store = state.KeyHashing(store, state.KeyMode(cfg.State.KeyMode))
-	slog.Info("state key mode", "mode", cfg.State.KeyMode)
+	store = state.KeyHashing(store)
 
 	var r registered
 
@@ -168,7 +164,7 @@ func registerProviders(ctx context.Context, api huma.API, store state.Store, cli
 		if cfg.Providers.Universal.Ranker {
 			proposer.Primary = universalRanker()
 		}
-		uh := universalhook.RegisterRoutes(api, state.KeyHashing(raw, state.KeyModeStrict), clients, &cfg.Providers.Universal, proposer)
+		uh := universalhook.RegisterRoutes(api, store, clients, &cfg.Providers.Universal, proposer)
 		collectEnder(uh)
 		slog.Info("enabled provider", "provider", "universal")
 	}

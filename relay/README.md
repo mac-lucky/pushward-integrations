@@ -112,23 +112,24 @@ Settings come from a YAML config file (`-config` flag, default `config.yml`) **o
 | `PUSHWARD_SERVER_METRICS_ADDRESS` | `server.metrics_address` | Listen address for the internal-only Prometheus metrics server (`GET /metrics`). Must differ from `server.address` or config load fails. Set empty to disable. | `:9090` |
 | `PUSHWARD_DATABASE_PASSWORD_FILE` | `database.password_file` | Path to a file holding the DB password; overrides the password in the DSN and is watched via fsnotify for live rotation (pool resets on change). | _(empty)_ |
 | `PUSHWARD_TRUSTED_PROXY_CIDRS` | `trusted_proxy_cidrs` | CIDRs of trusted reverse proxies. Only when `RemoteAddr` falls in one of these are `CF-Connecting-IP` / `X-Real-IP` / `X-Forwarded-For` honored for per-IP rate limiting. Comma-separated as env; a YAML list in the file. | _(empty)_ |
-| `PUSHWARD_STATE_KEY_MODE` | `state.key_mode` | How the tenant key is stored in `relay_state`: `compat` (the raw `hlk_` key, as 0.14 and earlier did) or `hashed` (its SHA-256). Switch to `hashed` once no 0.14 pod is left, see [State keys](#state-keys). | `compat` |
 | _(none)_ | `circuit_breaker.threshold` | Consecutive outbound-API failures before the breaker opens. Must be `>= 1`. | `5` |
 | _(none)_ | `circuit_breaker.cooldown` | How long the breaker stays open before allowing a probe. Must be `>= 1s`. | `30s` |
 
 ### State keys
 
-Up to 0.14 the relay stored the raw `hlk_` key in the `user_key` column of `relay_state`, so anyone who could read the table could send as any tenant. The `hashed` mode stores the key's SHA-256 instead. Either mode still reads rows the other one wrote and deletes the leftover copy when it rewrites a row, so pods in different modes can share the table:
+Up to 0.14 the relay stored the raw `hlk_` key in the `user_key` column of `relay_state`, so anyone who could read the table could send as any tenant. 0.15 added a mode that stores the key's SHA-256 instead, and since 0.16 that is the only form written or read. A row still keyed by a raw `hlk_` key is never read or deleted; the periodic cleanup drops it once it expires.
 
-1. Deploy this release as it comes. It defaults to `compat` and keeps writing raw keys, so 0.14 pods still running next to it during the rolling update find every row.
-2. Once no 0.14 pod is left, set `PUSHWARD_STATE_KEY_MODE=hashed`, or wait for a release that makes `hashed` the default. Raw rows stay readable until they expire.
-3. A later release stops reading raw rows at all. It must come at least 24 h after step 2: with the default `stale_timeout` values every row has a TTL of 24 h or less (check yours if you raised one).
+So the way from 0.14 or earlier to 0.16 goes through a 0.15.x release. On 0.15.x already, start at step 2, or at step 3 if it runs `hashed`:
 
-To roll back from step 2, go back to `compat` on this release, never straight to 0.14: a 0.14 pod reads raw keys only, so every row written in `hashed` mode is invisible to it until it expires.
+1. Deploy 0.15.x. It defaults to `compat` and keeps writing raw keys, so 0.14 pods still running next to it during the rolling update find every row.
+2. Once no 0.14 pod is left, set `PUSHWARD_STATE_KEY_MODE=hashed` on 0.15.x.
+3. Deploy 0.16 at least 24 h after step 2. With the default `stale_timeout` values no row lives longer than that (check yours if you raised one). It is also safe as soon as `SELECT count(*) FROM relay_state WHERE starts_with(user_key, 'hlk_')` returns 0, which can happen sooner.
 
-Until step 3 the store makes about twice the queries it used to: every write deletes the other copy first, and a read that misses tries the other key too.
+Skip the wait and 0.16 starts without whatever the raw rows held: a card or alert group that was in flight at the upgrade is handled as if the relay had never seen it.
 
-`SELECT count(*) FROM relay_state WHERE starts_with(user_key, 'hlk_')` shows how many raw rows are left.
+Rolling back from 0.16 to 0.15.x needs `PUSHWARD_STATE_KEY_MODE=hashed` on the 0.15.x pods. Without it they fall back to `compat` and write raw keys again, which 0.16 will not read when you roll forward. Never roll back to 0.14: it reads raw keys only, so every row 0.16 wrote is invisible to it.
+
+0.16 no longer reads `state.key_mode` or `PUSHWARD_STATE_KEY_MODE`. A leftover value in the config file or the environment is ignored, and you can drop it whenever.
 
 ### Telemetry (OpenTelemetry, optional)
 

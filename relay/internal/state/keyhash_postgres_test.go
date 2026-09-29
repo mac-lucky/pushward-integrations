@@ -27,28 +27,28 @@ func countRows(t *testing.T, pool *pgxpool.Pool) (total, raw int) {
 }
 
 // writeTenants writes a single row and a two-row group for each tenant.
-func writeTenants(t *testing.T, s state.Store, tenants []string) {
+func writeTenants(t *testing.T, s state.Store, tenants []string, ttl time.Duration) {
 	t.Helper()
 	ctx := context.Background()
 	for _, k := range tenants {
-		if err := s.Set(ctx, "argocd", k, "app", "", json.RawMessage(`{"step":1}`), time.Hour); err != nil {
+		if err := s.Set(ctx, "argocd", k, "app", "", json.RawMessage(`{"step":1}`), ttl); err != nil {
 			t.Fatal(err)
 		}
 		for _, sub := range []string{"run", "job:1"} {
-			if err := s.Set(ctx, "gitea", k, "slug", sub, json.RawMessage(`{"sub":"`+sub+`"}`), time.Hour); err != nil {
+			if err := s.Set(ctx, "gitea", k, "slug", sub, json.RawMessage(`{"sub":"`+sub+`"}`), ttl); err != nil {
 				t.Fatal(err)
 			}
 		}
 	}
 }
 
-func TestPostgres_HashedModeStoresNoRawKeys(t *testing.T) {
+func TestPostgres_KeyHashingStoresNoRawKeys(t *testing.T) {
 	pg, pool := setupPostgresPool(t)
 	ctx := context.Background()
-	s := state.KeyHashing(pg, state.KeyModeHashed)
+	s := state.KeyHashing(pg)
 	tenants := []string{"hlk_one", "hlk_two"}
 
-	writeTenants(t, s, tenants)
+	writeTenants(t, s, tenants, time.Hour)
 	if err := s.Delete(ctx, "argocd", "hlk_two", "app", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -75,61 +75,52 @@ func TestPostgres_HashedModeStoresNoRawKeys(t *testing.T) {
 	}
 }
 
-// The rollout's second step: rows a compat replica wrote under the raw key stay
-// readable to a hashed replica, and each hashed write moves a row over.
-func TestPostgres_CompatToHashedTransition(t *testing.T) {
+// Rows 0.14 wrote under the raw key are not read or deleted through
+// KeyHashing; only their TTL removes them.
+func TestPostgres_KeyHashingIgnoresRawRows(t *testing.T) {
 	pg, pool := setupPostgresPool(t)
 	ctx := context.Background()
-	compat := state.KeyHashing(pg, state.KeyModeCompat)
-	hashed := state.KeyHashing(pg, state.KeyModeHashed)
+	s := state.KeyHashing(pg)
 	tenants := []string{"hlk_one", "hlk_two"}
 
-	writeTenants(t, compat, tenants)
-	if total, raw := countRows(t, pool); raw != total || total != 6 {
-		t.Fatalf("compat should write 6 raw rows, got %d raw of %d", raw, total)
-	}
+	writeTenants(t, pg, tenants, time.Second)
 
 	for _, k := range tenants {
-		got, err := hashed.Get(ctx, "argocd", k, "app", "")
-		if err != nil {
+		got, err := s.Get(ctx, "argocd", k, "app", "")
+		if err != nil || got != nil {
+			t.Fatalf("Get(%s) = %s, %v, want nothing", k, got, err)
+		}
+		ok, err := s.Exists(ctx, "argocd", k, "app", "")
+		if err != nil || ok {
+			t.Fatalf("Exists(%s) = %v, %v, want false", k, ok, err)
+		}
+		group, err := s.GetGroup(ctx, "gitea", k, "slug")
+		if err != nil || len(group) != 0 {
+			t.Fatalf("GetGroup(%s) = %v, %v, want empty", k, group, err)
+		}
+		if err := s.Delete(ctx, "argocd", k, "app", ""); err != nil {
 			t.Fatal(err)
 		}
-		jsonEq(t, got, json.RawMessage(`{"step":1}`))
-		ok, err := hashed.Exists(ctx, "argocd", k, "app", "")
-		if err != nil || !ok {
-			t.Fatalf("hashed Exists(%s) = %v, %v", k, ok, err)
-		}
-		group, err := hashed.GetGroup(ctx, "gitea", k, "slug")
-		if err != nil {
+		if err := s.DeleteGroup(ctx, "gitea", k, "slug"); err != nil {
 			t.Fatal(err)
 		}
-		if len(group) != 2 {
-			t.Fatalf("hashed GetGroup(%s) = %d rows, want 2", k, len(group))
-		}
+	}
+	if total, raw := countRows(t, pool); raw != 6 || total != 6 {
+		t.Fatalf("after deleting through KeyHashing: %d raw of %d rows, want 6 of 6", raw, total)
 	}
 
-	// Half a group moved over: GetGroup still returns it whole, with the
-	// hashed write winning.
-	if err := hashed.Set(ctx, "gitea", "hlk_one", "slug", "run", json.RawMessage(`{"v":2}`), time.Hour); err != nil {
-		t.Fatal(err)
+	// Writing the same rows again adds hashed ones next to the raw ones.
+	writeTenants(t, s, tenants, time.Hour)
+	if total, raw := countRows(t, pool); raw != 6 || total != 12 {
+		t.Fatalf("after the hashed write: %d raw of %d rows, want 6 of 12", raw, total)
 	}
-	group, err := hashed.GetGroup(ctx, "gitea", "hlk_one", "slug")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(group) != 2 {
-		t.Fatalf("mixed group has %d rows, want 2", len(group))
-	}
-	jsonEq(t, group["run"], json.RawMessage(`{"v":2}`))
 
-	// Rewriting everything through the hashed store leaves no raw row.
-	writeTenants(t, hashed, tenants)
-	if total, raw := countRows(t, pool); raw != 0 || total != 6 {
-		t.Fatalf("after the hashed rewrite: %d raw of %d rows, want 0 of 6", raw, total)
-	}
-	got, err := compat.Get(ctx, "argocd", "hlk_two", "app", "")
+	time.Sleep(1500 * time.Millisecond)
+	n, err := s.Cleanup(ctx)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("cleanup:", err)
 	}
-	jsonEq(t, got, json.RawMessage(`{"step":1}`))
+	if total, raw := countRows(t, pool); n != 6 || raw != 0 || total != 6 {
+		t.Fatalf("cleanup removed %d rows, leaving %d raw of %d, want 6 removed and 0 of 6 left", n, raw, total)
+	}
 }

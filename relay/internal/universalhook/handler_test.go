@@ -63,13 +63,13 @@ func newHarness(t *testing.T) *harness {
 }
 
 // newHarnessAt registers the route against a PushWard server at url, with
-// the relay_state store under the strict key hashing main applies. A nil
-// proposer is the heuristic.
+// the relay_state store under the key hashing main applies. A nil proposer is
+// the heuristic.
 func newHarnessAt(t *testing.T, url string, calls *[]testutil.APICall, mu *sync.Mutex, proposer universal.Proposer) *harness {
 	t.Helper()
 	mux, api := humautil.NewTestAPI()
 	store := state.NewMemoryStore()
-	h := RegisterRoutes(api, state.KeyHashing(store, state.KeyModeStrict), client.NewPool(url, nil), testConfig(), proposer)
+	h := RegisterRoutes(api, state.KeyHashing(store), client.NewPool(url, nil), testConfig(), proposer)
 	t.Cleanup(func() {
 		h.ender.StopAll()
 		h.ender.Wait()

@@ -157,9 +157,9 @@ func Universal(dir, source string) Route {
 }
 
 // registerUniversal registers the universal route the way main does, with a
-// store that hashes keys strictly.
+// store that hashes keys.
 func registerUniversal(_ *testing.T, api huma.API, store state.Store, pool *client.Pool) any {
-	return universalhook.RegisterRoutes(api, state.KeyHashing(store, state.KeyModeStrict), pool, UniversalConfig(), nil)
+	return universalhook.RegisterRoutes(api, state.KeyHashing(store), pool, UniversalConfig(), nil)
 }
 
 // primes names the fixture that has to reach a handler before the one keyed

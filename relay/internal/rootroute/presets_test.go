@@ -26,7 +26,7 @@ func TestLidarrHealthReachesItsPreset(t *testing.T) {
 	mux := m.(*http.ServeMux)
 	cfg := relaytest.UniversalConfig()
 	cfg.Enabled, cfg.Presets = true, true
-	h := universalhook.RegisterRoutes(api, state.KeyHashing(state.NewMemoryStore(), state.KeyModeStrict), client.NewPool(srv.URL, nil), cfg, nil)
+	h := universalhook.RegisterRoutes(api, state.KeyHashing(state.NewMemoryStore()), client.NewPool(srv.URL, nil), cfg, nil)
 	t.Cleanup(func() {
 		h.Ender().StopAll()
 		h.Ender().Wait()
