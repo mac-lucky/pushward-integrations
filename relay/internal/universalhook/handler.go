@@ -95,12 +95,16 @@ type request struct {
 	shapes    []universal.ShapeField
 	truncated bool
 	log       *slog.Logger
+	// sendLog is log without "source": the client pool adds the
+	// notification's own source, which is the same value.
+	sendLog *slog.Logger
 }
 
 func (h *Handler) handleWebhook(ctx context.Context, in *webhookInput) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, provider)
 	key := auth.KeyFromContext(ctx)
-	log := slog.With("tenant", auth.KeyHash(key), "source", in.Source)
+	sendLog := slog.With("tenant", auth.KeyHash(key))
+	log := sendLog.With("source", in.Source)
 
 	fields, truncated, err := universal.Flatten(bytes.NewReader(in.RawBody))
 	if err != nil {
@@ -118,6 +122,7 @@ func (h *Handler) handleWebhook(ctx context.Context, in *webhookInput) (*humauti
 		shapes:    universal.ShapesOf(fields),
 		truncated: truncated,
 		log:       log,
+		sendLog:   sendLog,
 	}
 	m, via := h.mapping(ctx, r)
 	resp, err := h.deliver(ctx, r, m, via)

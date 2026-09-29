@@ -107,7 +107,7 @@ func (hs *harness) deliverAs(t *testing.T, source, channels string, body []byte)
 		}
 		ctx = context.WithValue(ctx, overrides.ContextKey(), ov)
 	}
-	r := &request{key: testKey, source: source, fields: fields, shapes: shapes, truncated: truncated, log: slog.Default()}
+	r := &request{key: testKey, source: source, fields: fields, shapes: shapes, truncated: truncated, log: slog.Default(), sendLog: slog.Default()}
 	_, err = hs.h.deliver(ctx, r, m, viaPreset)
 	return err
 }
@@ -214,6 +214,35 @@ func TestPlainNotification(t *testing.T) {
 	hs.post(t, "/universal?source=backups", fixture(t, "plain_notify.json"))
 	if n := len(notifications(t, hs.snapshot())); n != 2 {
 		t.Errorf("%d notifications after a second event, want 2", n)
+	}
+}
+
+// The "notification sent" line names the source once: the client pool adds
+// it, so the handler's logger must not carry it too.
+func TestNotificationLogNamesSourceOnce(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	hs := newHarness(t)
+	if w := hs.post(t, "/universal?source=backups", fixture(t, "plain_notify.json")); w.Code != http.StatusOK {
+		t.Fatalf("got %d %s", w.Code, w.Body.String())
+	}
+	var line string
+	for _, l := range strings.Split(buf.String(), "\n") {
+		if strings.Contains(l, `"msg":"notification sent"`) {
+			line = l
+		}
+	}
+	if line == "" {
+		t.Fatalf("no notification sent line in %q", buf.String())
+	}
+	if n := strings.Count(line, `"source":`); n != 1 {
+		t.Errorf("source appears %d times in %s", n, line)
+	}
+	if !strings.Contains(line, `"source":"backups"`) || !strings.Contains(line, `"tenant":`) {
+		t.Errorf("line lacks source or tenant: %s", line)
 	}
 }
 

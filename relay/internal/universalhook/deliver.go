@@ -86,13 +86,13 @@ func (h *Handler) deliverNotification(ctx context.Context, r *request, m univers
 			req.Body = fallbackBody(r.source)
 		}
 	}
-	return h.clients.SendNotification(ctx, r.key, r.log, req)
+	return h.clients.SendNotification(ctx, r.key, r.sendLog, req)
 }
 
 // notify sends ev as a notification. slug links it to a card that exists;
 // prefix, when set, leads the body ("Resolved").
 func (h *Handler) notify(ctx context.Context, r *request, ev universal.Event, slug, level, prefix string) error {
-	return h.clients.SendNotification(ctx, r.key, r.log, h.notification(ctx, r, ev, slug, level, prefix))
+	return h.clients.SendNotification(ctx, r.key, r.sendLog, h.notification(ctx, r, ev, slug, level, prefix))
 }
 
 func (h *Handler) notification(ctx context.Context, r *request, ev universal.Event, slug, level, prefix string) pushward.SendNotificationRequest {
