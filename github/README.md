@@ -9,6 +9,8 @@ Polls the GitHub Actions API for in-progress workflow runs and pushes their live
 
 `pushward-github` is a standalone, outbound-only poller: it reads the GitHub REST API and writes to the PushWard activities API. It runs no HTTP server of its own and serves a single PushWard account (one `hlk_` key per instance).
 
+If you would rather not run a poller, [pushward-action](https://github.com/mac-lucky/pushward-action) does the same from inside a workflow: a step starts the card, a final `if: always()` step ends it, and it can also send notifications and wait for an approval. Pick one per repository, since both at once give every run two cards.
+
 > **New to PushWard?** Learn more at **[pushward.app](https://pushward.app)** and get the iOS app on the **[App Store](https://apps.apple.com/app/id6759689999)**.
 
 ## How it works
