@@ -40,12 +40,13 @@ A service POSTs its native webhook to a per-provider route (e.g. `POST /grafana`
 
 - **Multi-tenant by design** - tenants are identified by their `hlk_` integration key, extracted from every request by shared auth middleware. No per-service key configuration; one relay serves many users.
 - **20 webhook routes** across **16 configurable provider blocks** (the `starr` block serves Radarr, Sonarr, and Prowlarr; the `gitea` block serves Gitea and Forgejo). See [Providers](#providers).
+- **Universal webhook** - `POST /` routes a payload it recognises to its provider, and anything else to the universal route: 67 presets map documented payloads (Alertmanager, PagerDuty, GitHub, GitLab, Sentry and more) to alert or progress cards, and any other JSON becomes one plain notification. Off by default. See [Root route](#root-route-post-).
 - **Two-phase end lifecycle** - completion events send a final `ONGOING` update (so the result shows on the Dynamic Island), then `ENDED` after a short display delay. Used by ArgoCD, Radarr, Sonarr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest, Gitea, Forgejo, Komodo, and TrueNAS. Grafana, Prowlarr, Bazarr, and Changedetection are fire-and-forget.
 - **Push notifications** - one-shot APNs alerts for events that don't fit a Live Activity (Grafana alerts, Bazarr subtitle downloads, Prowlarr grabs).
 - **Cross-provider notification threads** - Radarr/Sonarr/Overseerr/Jellyfin notifications about the same movie (TMDB id) or show (TVDB id) collapse into one iOS notification thread.
 - **PostgreSQL state store** - persistent alert grouping, sync tracking, and download dedup with a background TTL sweep every 30s.
 - **Per-tenant client pool** - LRU pool of PushWard API clients keyed by `hlk_` hash (up to 1,000 concurrent tenants), wrapped in a shared circuit breaker.
-- **Dual-layer rate limiting** - per-IP (5 req/s, burst 20) and per-key (1 req/s, burst 10) token buckets.
+- **Dual-layer rate limiting** - per-IP (5 req/s, burst 20; an IPv6 client's whole /64 shares one bucket) and per-key (1 req/s, burst 10) token buckets.
 - **Live credential rotation** - optional DB `password_file` watched via fsnotify; the connection pool resets automatically when the file changes.
 - **Built-in observability** - auto-generated OpenAPI 3.1 spec (`/openapi.json`) + interactive docs (`/docs`), Prometheus `/metrics` on a separate internal listener, and optional OpenTelemetry OTLP/gRPC tracing.
 - **Graceful shutdown** - flushes pending two-phase ENDED timers and waits for in-flight callbacks on SIGINT/SIGTERM.

@@ -37,13 +37,13 @@ Each bridge has its own README with full configuration and per-event behavior.
 | [github](./github/) | GitHub Actions workflow-run CI/CD progress (poller) | - (outbound only) | `ghcr.io/mac-lucky/pushward-github` |
 | [grafana](./grafana/) | Grafana alert timelines with Prometheus/VictoriaMetrics history + PromQL-polled iOS widgets | 8090 | `ghcr.io/mac-lucky/pushward-grafana` |
 | [sabnzbd](./sabnzbd/) | SABnzbd download + post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
-| [relay](./relay/) | Multi-tenant webhook gateway (20 routes / 16 provider modules) | 8090 (+ 9090 metrics) | `ghcr.io/mac-lucky/pushward-relay` |
+| [relay](./relay/) | Multi-tenant webhook gateway: 20 provider routes, plus a universal route for any other JSON webhook | 8090 (+ 9090 metrics) | `ghcr.io/mac-lucky/pushward-relay` |
 
 Images are published to **GitHub Container Registry only** (`ghcr.io/mac-lucky/pushward-<bridge>`). A Docker Hub name is configured in CI but `push_to_dockerhub` is `false`, so no Docker Hub images are pushed.
 
 ### Relay providers
 
-The relay registers 20 webhook routes across 16 provider modules (`starr` serves Radarr, Sonarr, and Prowlarr; `gitea` serves Gitea and Forgejo). Every route returns `200 {"status":"ok"}` and is wrapped by the middleware chain (per-IP rate limit -> `hlk_` auth -> per-key rate limit). Most providers create Live Activities; the exceptions are noted.
+The relay registers 20 provider routes across 16 provider modules (`starr` serves Radarr, Sonarr, and Prowlarr; `gitea` serves Gitea and Forgejo), plus the universal route below. Every route returns `200 {"status":"ok"}` and is wrapped by the middleware chain (per-IP rate limit -> `hlk_` auth -> per-key rate limit). Most providers create Live Activities; the exceptions are noted.
 
 > The relay's `/forgejo` route and the standalone [forgejo](./forgejo/) bridge cover the same service by different
 > routes: the relay takes Forgejo's terminal `action_run_*` hooks, the bridge polls the API for live per-job
@@ -71,6 +71,7 @@ The relay registers 20 webhook routes across 16 provider modules (`starr` serves
 | Forgejo | `POST /forgejo` | Forgejo Actions run result (generic) - for live per-job progress use the [forgejo](./forgejo/) poller bridge instead |
 | Komodo | `POST /komodo` | Resolvable conditions (server + swarm health) as Live Activities, other alerts as push notifications (HTTP Basic auth via URL userinfo) |
 | TrueNAS | `POST /truenas/v2/alerts`, `DELETE /truenas/v2/alerts/{id}` | OpsGenie-compatible alert open/clear (GenieKey auth) |
+| Universal | `POST /`, `POST /universal` | Off by default. `POST /` hands a payload it recognises to that provider's route; anything else is mapped by one of 67 presets (Alertmanager, PagerDuty, GitHub, GitLab, Sentry and more) or sent as one plain notification |
 
 Auth styles differ by what each service's webhook UI allows: most providers accept `Authorization: Bearer hlk_...`; Radarr, Sonarr, Prowlarr, Bazarr, and Komodo use HTTP Basic Auth with the `hlk_` key as the **password** (username ignored); TrueNAS uses the OpsGenie `GenieKey` scheme. See the [relay README](./relay/) for per-provider setup snippets.
 
@@ -195,7 +196,7 @@ pushward-integrations/
   github/          # GitHub Actions poller - standalone bridge
   grafana/         # Grafana alert timelines + widgets - standalone bridge
   sabnzbd/         # SABnzbd webhook + download tracker - standalone bridge
-  relay/           # Multi-tenant webhook gateway (PostgreSQL) - 16 provider modules, 20 routes
+  relay/           # Multi-tenant webhook gateway (PostgreSQL) - 16 provider modules, 20 routes, universal route
   .github/workflows/   # Per-bridge CI/CD + shared lint + release orchestrator
 ```
 
