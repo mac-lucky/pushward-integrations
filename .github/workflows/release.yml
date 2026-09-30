@@ -18,6 +18,10 @@ concurrency:
 # Grants sit on the bridge jobs, the only ones that publish; parse needs none.
 permissions: {}
 
+# Tags are cut from main, where ci.yml's golangci-lint already ran govet,
+# staticcheck and gosec on the same commit, so the bridge jobs below only
+# rerun govulncheck, whose database moves between the merge and the tag.
+
 jobs:
   parse:
     name: Parse tag
@@ -56,6 +60,7 @@ jobs:
       go_module_path: "./backrest"
       enable_go_tests: true
       go_test_args: "-race -count=1 -v"
+      code_analysis_tools: '["govulncheck"]'
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./backrest ./shared"
@@ -80,6 +85,7 @@ jobs:
       go_module_path: "./bambulab"
       enable_go_tests: true
       go_test_args: "-race -count=1 -v"
+      code_analysis_tools: '["govulncheck"]'
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./bambulab ./shared"
@@ -104,6 +110,7 @@ jobs:
       go_module_path: "./forgejo"
       enable_go_tests: true
       go_test_args: "-race -count=1 -v"
+      code_analysis_tools: '["govulncheck"]'
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./forgejo ./shared"
@@ -128,6 +135,7 @@ jobs:
       go_module_path: "./github"
       enable_go_tests: true
       go_test_args: "-race -count=1 -v"
+      code_analysis_tools: '["govulncheck"]'
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./github ./shared"
@@ -152,6 +160,7 @@ jobs:
       go_module_path: "./grafana"
       enable_go_tests: true
       go_test_args: "-race -count=1 -v"
+      code_analysis_tools: '["govulncheck"]'
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./grafana ./shared"
@@ -177,6 +186,7 @@ jobs:
       enable_go_tests: true
       # Also runs the testcontainers Postgres suite in state/.
       go_test_args: "-race -count=1 -v -tags integration"
+      code_analysis_tools: '["govulncheck"]'
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./relay ./shared"
@@ -201,6 +211,7 @@ jobs:
       go_module_path: "./sabnzbd"
       enable_go_tests: true
       go_test_args: "-race -count=1 -v"
+      code_analysis_tools: '["govulncheck"]'
       enable_container_tests: false
       enable_kubernetes_tests: false
       release_notes_path_filter: "./sabnzbd ./shared"
