@@ -120,8 +120,8 @@ jobs:
       enable_go_tests: true
       # The relay leg also runs the testcontainers Postgres suite in state/.
       go_test_args: ${{ matrix.bridge == 'relay' && '-race -count=1 -v -tags integration' || '-race -count=1 -v' }}
-      # the lint job below runs govet and staticcheck
-      code_analysis_tools: '["govulncheck", "gosec"]'
+      # the lint job below runs govet, staticcheck and gosec
+      code_analysis_tools: '["govulncheck"]'
       enable_container_tests: false
       enable_kubernetes_tests: false
 
