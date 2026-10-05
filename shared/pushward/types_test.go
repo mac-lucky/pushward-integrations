@@ -293,3 +293,32 @@ func sortedKeys(m map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// TestTarget_OmittedWhenNil: an unset target must stay off the wire on every
+// body that carries one; a null would clear an activity's stored target.
+func TestTarget_OmittedWhenNil(t *testing.T) {
+	for name, body := range map[string]any{
+		"create":   CreateActivityRequest{Slug: "s", Name: "n"},
+		"update":   UpdateRequest{State: "ONGOING"},
+		"patch":    PatchRequest{State: "ONGOING"},
+		"notify":   SendNotificationRequest{Title: "t", Body: "b"},
+		"schedule": ScheduleNotificationRequest{SendNotificationRequest: SendNotificationRequest{Title: "t", Body: "b"}},
+	} {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), `"target"`) {
+			t.Errorf("%s: %s, want no target", name, raw)
+		}
+	}
+	raw, err := json.Marshal(ScheduleNotificationRequest{SendNotificationRequest: SendNotificationRequest{
+		Title: "t", Body: "b", Target: &OrgTargetRequest{Members: []string{"u-1"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"target":{"members":["u-1"]}`) {
+		t.Errorf("schedule with target: %s", raw)
+	}
+}

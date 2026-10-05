@@ -2331,3 +2331,58 @@ func TestGetScheduledNotification_DecodesCanceled(t *testing.T) {
 		t.Errorf("schedule = %+v", sn)
 	}
 }
+
+func TestCreateActivity_TargetOnTheWire(t *testing.T) {
+	var raws []map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&raw)
+		raws = append(raws, raw)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "hlk_test")
+	opt := WithTarget(OrgTargetRequest{Groups: []string{"oncall"}, Tags: []string{"wall"}})
+	if err := c.CreateActivity(context.Background(), "deploy", "Deploy", 1, 300, 120, opt); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	if err := c.CreateActivity(context.Background(), "deploy", "Deploy", 1, 300, 120); err != nil {
+		t.Fatalf("expected nil, got %v", err)
+	}
+	target, ok := raws[0]["target"].(map[string]any)
+	if !ok {
+		t.Fatalf("target = %v, want an object", raws[0]["target"])
+	}
+	if g, _ := target["groups"].([]any); len(g) != 1 || g[0] != "oncall" {
+		t.Errorf("groups = %v, want [oncall]", target["groups"])
+	}
+	if tags, _ := target["tags"].([]any); len(tags) != 1 || tags[0] != "wall" {
+		t.Errorf("tags = %v, want [wall]", target["tags"])
+	}
+	if _, ok := target["members"]; ok {
+		t.Errorf("members sent while unset: %v", target)
+	}
+	if _, ok := raws[1]["target"]; ok {
+		t.Errorf("target sent without the option: %v", raws[1])
+	}
+}
+
+// One option value is applied to every request a long-lived caller builds: a
+// change to the caller's slices, or to one request's target, must reach no
+// other request.
+func TestWithTarget_Copies(t *testing.T) {
+	groups := []string{"oncall"}
+	opt := WithTarget(OrgTargetRequest{Groups: groups})
+	groups[0] = "changed"
+	var a, b CreateActivityRequest
+	opt(&a)
+	a.Target.Groups[0] = "mutated"
+	opt(&b)
+	if b.Target.Groups[0] != "oncall" {
+		t.Errorf("second request groups = %v, want [oncall]", b.Target.Groups)
+	}
+	if a.Target == b.Target {
+		t.Error("two requests share one target")
+	}
+}

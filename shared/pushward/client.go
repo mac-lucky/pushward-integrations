@@ -11,6 +11,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -395,6 +396,14 @@ const (
 	ErrCodeNotificationAnswerURLUnavailable = "notification.answer_url_unavailable"
 	ErrCodeNotificationAnswerNotFound       = "notification_answer.not_found"
 	ErrCodeAnswerWaitLimit                  = "answer_wait.limit_exceeded"
+
+	// Organization targets (OrgTargetRequest). target_unknown is the one a
+	// configured bridge sees after a group or tag was renamed or deleted, or
+	// a targeted member left the organization.
+	ErrCodeOrgTargetUnavailable       = "org.target_unavailable"
+	ErrCodeOrgTargetInvalid           = "org.target_invalid"
+	ErrCodeOrgTargetUnknown           = "org.target_unknown"
+	ErrCodeIntegrationKeyTargetDenied = "integration_key.target_denied"
 )
 
 // problem is the parsed RFC 9457 error body. It is an internal parsing
@@ -588,6 +597,26 @@ func WithDismissalTTL(seconds int) CreateOption {
 	// request a long-lived caller sends, and a shared address would let any
 	// later mutation reach back into requests already built.
 	return func(r *CreateActivityRequest) { r.DismissalTTL = IntPtr(v) }
+}
+
+// WithTarget sets target: who an organization's activity reaches (see
+// OrgTargetRequest). The lists are copied when the option is made, so later
+// changes to the caller's slices do not reach it, and again per request, so
+// one request's target cannot reach into another's.
+func WithTarget(t OrgTargetRequest) CreateOption {
+	t = t.clone()
+	return func(r *CreateActivityRequest) {
+		c := t.clone()
+		r.Target = &c
+	}
+}
+
+func (t OrgTargetRequest) clone() OrgTargetRequest {
+	return OrgTargetRequest{
+		Groups:  slices.Clone(t.Groups),
+		Tags:    slices.Clone(t.Tags),
+		Members: slices.Clone(t.Members),
+	}
 }
 
 // DismissalTTLOptions adapts an optional configured duration to the option

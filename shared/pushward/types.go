@@ -457,6 +457,25 @@ type Content struct {
 	Answer   *ApprovalAnswer  `json:"answer,omitempty"`
 }
 
+// OrgTargetRequest narrows who an organization key's activity or notification
+// reaches: the members listed by user id, the members of the groups, and the
+// devices with the tags, always within the organization's routing rules.
+// Groups and tags are names (up to 20 each, up to 100 members). Only
+// organization keys may send it (server v1.30.0): a personal account gets 422
+// org.target_unavailable, groups, tags or members the organization does not
+// have 422 org.target_unknown, and a key limited to some groups and tags 403
+// integration_key.target_denied for a target outside them. An empty target is
+// refused (422 org.target_invalid), not read as everyone.
+//
+// A nil Target is the default: on a new activity or a send, everyone the rules
+// allow (for a limited key, its own groups and tags); on a re-POST or PATCH,
+// the stored target.
+type OrgTargetRequest struct {
+	Groups  []string `json:"groups,omitempty"`
+	Tags    []string `json:"tags,omitempty"`
+	Members []string `json:"members,omitempty"`
+}
+
 // CreateActivityRequest is the body for POST /activities.
 type CreateActivityRequest struct {
 	Slug     string `json:"slug"`
@@ -470,6 +489,9 @@ type CreateActivityRequest struct {
 	// pointer, unlike the TTLs above, because 0 is meaningful and must not be
 	// collapsed by omitempty.
 	DismissalTTL *int `json:"dismissal_ttl,omitempty"`
+	// Target is who an organization's activity reaches (see OrgTargetRequest).
+	// A re-POST without it keeps the stored target.
+	Target *OrgTargetRequest `json:"target,omitempty"`
 }
 
 // UpdateRequest is the body for the full-content PATCH /activities/{slug}
@@ -488,6 +510,9 @@ type UpdateRequest struct {
 	EndedTTL     *int          `json:"ended_ttl,omitempty"`
 	StaleTTL     *int          `json:"stale_ttl,omitempty"`
 	DismissalTTL *int          `json:"dismissal_ttl,omitempty"`
+	// Target replaces an organization activity's target; nil keeps it. The
+	// server's null (back to everyone) is unreachable here, as for the TTLs.
+	Target *OrgTargetRequest `json:"target,omitempty"`
 }
 
 // ContentPatch is the typed body for partial content updates. Unset pointer
@@ -626,6 +651,10 @@ type PatchRequest struct {
 	EndedTTL     *int `json:"ended_ttl,omitempty"`
 	StaleTTL     *int `json:"stale_ttl,omitempty"`
 	DismissalTTL *int `json:"dismissal_ttl,omitempty"`
+
+	// Target replaces an organization activity's target; nil keeps it, and
+	// the null that clears it is unreachable, as for the TTLs.
+	Target *OrgTargetRequest `json:"target,omitempty"`
 }
 
 // WidgetTemplate names a renderer on the iOS widget extension.
@@ -931,6 +960,11 @@ type SendNotificationRequest struct {
 	// without alerting any device. It is a pointer so that an unset field
 	// cannot silently mean "inbox only".
 	Push *bool `json:"push,omitempty"`
+	// Target narrows which organization members get it (see
+	// OrgTargetRequest). A scheduled send resolves the names when scheduled,
+	// so a later rename does not change who gets it, and echoes the names on
+	// ScheduledNotification.
+	Target *OrgTargetRequest `json:"target,omitempty"`
 }
 
 // SentNotification is the part of the POST /notifications response a producer
