@@ -1038,8 +1038,9 @@ const (
 // ScheduledNotification is a notification queued for SendAt, as returned by
 // the /notifications/scheduled endpoints. The embedded request echoes the
 // content, SendAt and Recurrence; NotificationID, SentAt and Delivery are set
-// once it is sent, FailureReason ("quota_exceeded", "key_revoked" or
-// "internal_error") when it failed, and CanceledAt when it was canceled.
+// once it is sent, FailureReason ("quota_exceeded", "key_revoked",
+// "target_deleted" or "internal_error") when it failed, and CanceledAt when it
+// was canceled.
 //
 // A repeating schedule keeps one ID for the whole series. After each send it
 // goes back to ScheduledStatusScheduled with SendAt moved to the next
