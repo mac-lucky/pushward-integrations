@@ -371,7 +371,8 @@ func (c *Client) doWithRetryInto(ctx context.Context, operation, method, url, co
 // is the free-tier monthly cap: it stays exhausted until the reset date on the
 // returned *QuotaExceededError, or until the user upgrades, so the client fails
 // fast rather than retrying. ErrCodeAnswerWaitLimit (too many concurrent
-// GetNotificationAnswer long-polls) also fails fast, as a plain *HTTPError.
+// GetNotificationAnswer or GetNotificationReceipt long-polls) also fails
+// fast, as a plain *HTTPError.
 const (
 	ErrCodeActivityLimitExceeded        = "activity.limit_exceeded"
 	ErrCodeWidgetLimitExceeded          = "widget.limit_exceeded"
