@@ -1,0 +1,26 @@
+{
+  "format": "pushward-callback-v1",
+  "description": "secret = HMAC-SHA256(key = SHA-256(integration key, UTF-8) raw 32 bytes, msg = \"pushward/callback/v1\"); whsec = \"whsec_\" + standard base64(secret); webhook-signature = \"v1,\" + standard base64(HMAC-SHA256(secret, webhook_id + \".\" + webhook_timestamp + \".\" + raw body)). Standard Webhooks compatible.",
+  "cases": [
+    {
+      "integration_key": "hlk_0123456789abcdef0123456789abcdef",
+      "key_hash_hex": "2f4cfafba1113530a01b3fe46a8632a875e8ce4f37c53b5e8d0593010200af65",
+      "secret_hex": "235a77623f3751aaa40d46e32f58ee31c09e45a328d960316934bf86945961f0",
+      "whsec": "whsec_I1p3Yj83UaqkDUbjL1juMcCeRaMo2WAxaTS/hpRZYfA=",
+      "webhook_id": "pwr_4242",
+      "webhook_timestamp": "1791000000",
+      "body": "{\"type\":\"notification.acknowledged\",\"timestamp\":\"2026-10-03T07:20:00Z\",\"data\":{\"notification_id\":4242,\"status\":\"acknowledged\"}}",
+      "webhook_signature": "v1,CwJwXrTUKcrmpfmtGoMQBsuERPgCrJ80Zl4WqfXTJSc="
+    },
+    {
+      "integration_key": "hlk_ZYXWVUTSRQPONMLKJIHGFEDCBA987654",
+      "key_hash_hex": "f215457a391a8f6caafd9abccba4e4e1cc816482e54571d07c315fa786657da8",
+      "secret_hex": "3c25cbc12c7333d96342a7f82bf4220b088e3de12fd9bad9a5142b42b2506ac1",
+      "whsec": "whsec_PCXLwSxzM9ljQqf4K/QiCwiOPeEv2brZpRQrQrJQasE=",
+      "webhook_id": "pwr_77",
+      "webhook_timestamp": "1791003600",
+      "body": "{\"type\":\"notification.expired\",\"timestamp\":\"2026-10-03T08:20:00Z\",\"data\":{\"notification_id\":77,\"status\":\"expired\"}}",
+      "webhook_signature": "v1,KY2HcNz9cy9kTYrTtmYkdAvjwhupmaCuzWkep5JP5a8="
+    }
+  ]
+}
