@@ -142,6 +142,8 @@ server.ListenAndServe(ctx, cfg.Server.Address, mux) // graceful shutdown on ctx 
 | `UpdateActivity(ctx, slug, UpdateRequest)` | `PATCH /activities/{slug}` | Full-content body: seed the session or send the final `ended` frame |
 | `PatchActivity(ctx, slug, PatchRequest)` | `PATCH /activities/{slug}` | RFC 7396 merge-patch for mid-session ticks (uses `ContentPatch`) |
 | `SendNotification(ctx, SendNotificationRequest)` | `POST /notifications` | Auto-fills `source_display_name` from `source` |
+| `GetNotificationReceipt(ctx, id, wait)` | `GET /notifications/receipts/{id}` | Receipt of a send with `Acknowledge`; `wait` long-polls while it is active |
+| `CancelNotificationReceipt(ctx, id)` / `CancelNotificationReceiptsByTag(ctx, tag)` | `POST /notifications/receipts/{id}/cancel`, `POST /notifications/receipts/cancel` | Stop the repeats; a key reaches only what it sent |
 | `CreateWidget(ctx, CreateWidgetRequest)` | `POST /widgets` | Upsert on (user, slug); `409` = `widget.limit_exceeded` |
 | `UpdateWidget(ctx, slug, UpdateWidgetRequest)` | `PATCH /widgets/{slug}` | Sends `Content-Type: application/merge-patch+json` (RFC 7396) |
 | `DeleteWidget(ctx, slug)` | `DELETE /widgets/{slug}` | - |
@@ -166,6 +168,20 @@ client.PatchActivity(ctx, "build-42", pushward.PatchRequest{
 ```
 
 > Activity state constants are **lowercase**: `StateOngoing = "ongoing"`, `StateEnded = "ended"`.
+
+**Acknowledged notifications:** set `Acknowledge: &pushward.NotificationAcknowledge{}` (zero fields
+take the server defaults: a repeat every 60s for up to an hour) and the push comes back until
+someone taps an action without a URL; `SendNotificationResult` then returns `Receipt`. `Tags`
+group sends for `CancelNotificationReceiptsByTag`. With `CallbackURL` the server POSTs a
+`CallbackEvent` once it is acknowledged or expires, signed with a secret derived from the
+sending key; in the receiving handler, `pushward.VerifyCallback(r, apiKey)` checks the Standard
+Webhooks headers (5 minute tolerance) and returns the event. `CallbackSecret(apiKey)` gives the
+`whsec_` form for other webhook libraries. At most 25 alerts repeat at once per account
+(`ErrCodeNotificationReceiptLimit`).
+
+**Encrypted notifications:** `Encrypted` takes a `pw1` envelope sealed with the user's key, with
+`Title`, `Subtitle`, `Body` and `URL` left empty. The client does not seal anything itself, and
+the bridges send readable text.
 
 **Models & constants:** `Content` (superset for full updates) vs `ContentPatch` (all-pointer, every field keeps `json:",omitempty"` per RFC 7396); template constants `TemplateGeneric` / `Alert` / `Steps` / `Countdown` / `Gauge` / `Timeline` / `Board` / `Log` / `Media` / `Approval`; the `board` template carries `[]BoardTile` (1-4 tiles), `log` carries `[]LogLine` (1-20 lines, newest-first), `media` carries the player fields below, `approval` carries `[]ApprovalOption` (2-4 options) plus the answer fields below; approval style constants `ApprovalStylePrimary` / `Secondary` / `Destructive` and answer constants `ApprovalAnswerNone` / `ByUser` / `ByExpired`; trend constants `TrendUp` / `TrendDown` / `TrendFlat` (board tiles); log-level constants `LogInfo` / `LogWarn` / `LogError`; `TapAction` routing on every template/widget via `tap_action` / `url_action` / `secondary_url_action` (richer than the legacy `url` / `secondary_url` strings - adds method/headers/body for silent webhooks); notification levels `LevelActive` / `LevelPassive`; widget templates `WidgetTemplateValue` / `Progress` / `Status` / `Gauge` / `StatList` / `Trend` / `Countdown` / `Battery` / `Schedule` / `Flow`; severities `SeverityCritical` / `Warning` / `Info`; accent colors `ColorRed` / `Orange` / `Green` / `Blue` (matching iOS system colors). Helpers: `BoolPtr` / `IntPtr` / `Int64Ptr` / `Float64Ptr` / `StringPtr`, `SeverityColor` / `SeverityIcon`, `DisplayNameFor` / `(SendNotificationRequest).FillSourceDisplayName`, `MediaImage(url)`.
 
