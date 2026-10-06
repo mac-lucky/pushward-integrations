@@ -1,6 +1,7 @@
 package testutil_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -8,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
 )
 
@@ -831,6 +833,46 @@ func TestMockNotificationPushDefault(t *testing.T) {
 				t.Errorf("got pushed=%v, want %v", got.Pushed, tt.wantPushed)
 			}
 		})
+	}
+}
+
+// Encrypted sends carry no readable text, and acknowledge has the server's
+// preconditions: an alerting push, and it is what tags and callback_url need.
+func TestMockNotificationEncryptedAndAcknowledge(t *testing.T) {
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{name: "encrypted alone", body: `{"title":"","body":"","encrypted":"pw1.767c0806.AAAA"}`, wantStatus: 201},
+		{name: "encrypted with a title", body: `{"title":"readable","body":"","encrypted":"pw1.767c0806.AAAA"}`, wantStatus: 400},
+		{name: "encrypted with a url", body: `{"encrypted":"pw1.767c0806.AAAA","url":"https://x.example"}`, wantStatus: 400},
+		{name: "not an envelope", body: `{"encrypted":"sealed"}`, wantStatus: 400},
+		{name: "acknowledge defaults", body: `{"title":"t","body":"b","acknowledge":{},"tags":["nas-1"],"callback_url":"https://hooks.example.com/x"}`, wantStatus: 201},
+		{name: "acknowledge passive", body: `{"title":"t","body":"b","level":"passive","acknowledge":{}}`, wantStatus: 400},
+		{name: "acknowledge without push", body: `{"title":"t","body":"b","push":false,"acknowledge":{}}`, wantStatus: 400},
+		{name: "tags without acknowledge", body: `{"title":"t","body":"b","tags":["nas-1"]}`, wantStatus: 400},
+		{name: "callback without acknowledge", body: `{"title":"t","body":"b","callback_url":"https://hooks.example.com/x"}`, wantStatus: 400},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			if got := postNotification(t, srv.URL, tt.body); got != tt.wantStatus {
+				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+
+	// The client reads the receipt of an acknowledged send.
+	srv, _, _ := testutil.MockPushWardServer(t)
+	sn, err := pushward.NewClient(srv.URL, "hlk_test").SendNotificationResult(context.Background(), pushward.SendNotificationRequest{
+		Title: "t", Body: "b", Acknowledge: &pushward.NotificationAcknowledge{}, Tags: []string{"nas-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sn.Answerable || sn.Receipt == nil || sn.Receipt.Status != pushward.ReceiptStatusActive || len(sn.Receipt.Tags) != 1 {
+		t.Errorf("sent = %+v, receipt %+v", sn, sn.Receipt)
 	}
 }
 

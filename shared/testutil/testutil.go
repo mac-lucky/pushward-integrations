@@ -402,21 +402,51 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 
 		var req struct {
 			Title        string                   `json:"title"`
+			Subtitle     string                   `json:"subtitle,omitempty"`
 			Body         string                   `json:"body"`
+			URL          string                   `json:"url,omitempty"`
+			Level        string                   `json:"level,omitempty"`
 			ActivitySlug string                   `json:"activity_slug,omitempty"`
 			Actions      []testNotificationAction `json:"actions,omitempty"`
 			Push         *bool                    `json:"push,omitempty"`
+			Encrypted    string                   `json:"encrypted,omitempty"`
+			Acknowledge  json.RawMessage          `json:"acknowledge,omitempty"`
+			Tags         []string                 `json:"tags,omitempty"`
+			CallbackURL  string                   `json:"callback_url,omitempty"`
 		}
 		if err := json.Unmarshal(body, &req); err != nil {
 			respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
 			return
 		}
-		if req.Title == "" {
-			respondError(w, http.StatusBadRequest, "title is required")
+		// An encrypted send carries its text inside the envelope, so title
+		// and body are required only without one. The mock checks the prefix,
+		// not the full envelope form.
+		if req.Encrypted != "" {
+			if req.Title != "" || req.Subtitle != "" || req.Body != "" || req.URL != "" {
+				respondError(w, http.StatusBadRequest, "title, subtitle, body and url go inside encrypted")
+				return
+			}
+			if !strings.HasPrefix(req.Encrypted, "pw1.") {
+				respondError(w, http.StatusBadRequest, "encrypted: not a pw1 envelope")
+				return
+			}
+		} else {
+			if req.Title == "" {
+				respondError(w, http.StatusBadRequest, "title is required")
+				return
+			}
+			if req.Body == "" {
+				respondError(w, http.StatusBadRequest, "body is required")
+				return
+			}
+		}
+		acknowledged := len(req.Acknowledge) > 0 && string(req.Acknowledge) != "null"
+		if acknowledged && ((req.Push != nil && !*req.Push) || req.Level == "passive") {
+			respondError(w, http.StatusBadRequest, "acknowledge needs a push that alerts: not with push false or level passive")
 			return
 		}
-		if req.Body == "" {
-			respondError(w, http.StatusBadRequest, "body is required")
+		if !acknowledged && (len(req.Tags) > 0 || req.CallbackURL != "") {
+			respondError(w, http.StatusBadRequest, "tags and callback_url require acknowledge")
 			return
 		}
 		if req.ActivitySlug != "" && !slugPattern.MatchString(req.ActivitySlug) {
@@ -445,6 +475,17 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 		for _, a := range req.Actions {
 			if a.URL == "" && !a.Foreground {
 				resp["answerable"] = true
+			}
+		}
+		// An acknowledged send is always answerable (the server adds a
+		// pw_ack button when no action records an answer) and returns its
+		// receipt.
+		if acknowledged {
+			now := time.Now().UTC()
+			resp["answerable"] = true
+			resp["receipt"] = map[string]any{
+				"notification_id": 1, "status": "active", "repeat_seconds": 60, "repeats_sent": 0,
+				"expires_at": now.Add(time.Hour), "created_at": now, "tags": req.Tags,
 			}
 		}
 
