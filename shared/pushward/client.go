@@ -397,6 +397,20 @@ const (
 	ErrCodeNotificationAnswerNotFound       = "notification_answer.not_found"
 	ErrCodeAnswerWaitLimit                  = "answer_wait.limit_exceeded"
 
+	// End-to-end encryption (SendNotificationRequest.Encrypted). An
+	// organization key cannot send encrypted; an encrypted push whose
+	// payload, with actions and media, would pass 4 KB is refused as too
+	// large (send it with Push false, or shorten it).
+	ErrCodeNotificationEncryptionUnavailable = "notification.encryption_unavailable"
+	ErrCodeNotificationEncryptedTooLarge     = "notification.encrypted_too_large"
+
+	// Acknowledged notifications (SendNotificationRequest.Acknowledge).
+	// limit_exceeded is a 409 past 25 active receipts per account, an
+	// organization's sends counting against the organization.
+	ErrCodeNotificationReceiptNotFound = "notification_receipt.not_found"
+	ErrCodeNotificationReceiptLimit    = "notification_receipt.limit_exceeded"
+	ErrCodeNotificationReceiptDisabled = "notification_receipt.disabled"
+
 	// Organization targets (OrgTargetRequest). target_unknown is the one a
 	// configured bridge sees after a group or tag was renamed or deleted, or
 	// a targeted member left the organization.
@@ -780,6 +794,67 @@ func (c *Client) GetNotificationAnswer(ctx context.Context, notificationID int64
 		return nil, err
 	}
 	return &a, nil
+}
+
+// GetNotificationReceipt reads the receipt of a notification sent with
+// Acknowledge via GET /notifications/receipts/{id}. notificationID is
+// SentNotification.ID, or ScheduledNotification.NotificationID for a
+// scheduled send.
+//
+// A positive wait long-polls while the receipt is ReceiptStatusActive: the
+// server answers as soon as it is acknowledged, expires or is canceled, or
+// with it still active when the wait runs out. The wait is handled as in
+// GetNotificationAnswer (whole seconds, capped at NotificationAnswerWaitMax,
+// a 429 ErrCodeAnswerWaitLimit returned at once).
+//
+// An integration key reads only receipts of notifications it sent; any other
+// id, or one sent without Acknowledge, returns a *HTTPError with Code
+// ErrCodeNotificationReceiptNotFound.
+func (c *Client) GetNotificationReceipt(ctx context.Context, notificationID int64, wait time.Duration) (*NotificationReceipt, error) {
+	secs := int(min(max(wait, 0), NotificationAnswerWaitMax) / time.Second)
+	endpoint := c.notificationReceiptURL(notificationID)
+	cl := c
+	if secs > 0 {
+		endpoint += "?wait=" + strconv.Itoa(secs)
+		cl = c.withLongerTimeout(time.Duration(secs) * time.Second)
+	}
+	var r NotificationReceipt
+	if err := cl.doWithRetryInto(ctx, "notify.receipt.get", http.MethodGet, endpoint, "", nil, nil, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// CancelNotificationReceipt stops an acknowledged notification from
+// repeating via POST /notifications/receipts/{id}/cancel and returns the
+// receipt, ReceiptStatusCanceled with ReceiptCancelAPI. Its callback is not
+// sent. A receipt that already finished comes back unchanged, so a retry is
+// harmless. Same scope as GetNotificationReceipt.
+func (c *Client) CancelNotificationReceipt(ctx context.Context, notificationID int64) (*NotificationReceipt, error) {
+	var r NotificationReceipt
+	if err := c.doWithRetryInto(ctx, "notify.receipt.cancel", http.MethodPost, c.notificationReceiptURL(notificationID)+"/cancel", "", nil, nil, &r); err != nil {
+		return nil, err
+	}
+	return &r, nil
+}
+
+// CancelNotificationReceiptsByTag stops every active acknowledged
+// notification sent with tag via POST /notifications/receipts/cancel and
+// returns how many it stopped. An integration key reaches only what it sent
+// itself. Their callbacks are not sent.
+func (c *Client) CancelNotificationReceiptsByTag(ctx context.Context, tag string) (int, error) {
+	var out struct {
+		Canceled int `json:"canceled"`
+	}
+	if err := c.doWithRetryInto(ctx, "notify.receipt.cancel_tag", http.MethodPost,
+		fmt.Sprintf("%s/notifications/receipts/cancel", c.baseURL), "", map[string]string{"tag": tag}, nil, &out); err != nil {
+		return 0, err
+	}
+	return out.Canceled, nil
+}
+
+func (c *Client) notificationReceiptURL(id int64) string {
+	return fmt.Sprintf("%s/notifications/receipts/%d", c.baseURL, id)
 }
 
 // withLongerTimeout returns a shallow copy of c whose HTTP client timeout is

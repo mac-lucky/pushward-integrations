@@ -965,20 +965,122 @@ type SendNotificationRequest struct {
 	// so a later rename does not change who gets it, and echoes the names on
 	// ScheduledNotification.
 	Target *OrgTargetRequest `json:"target,omitempty"`
+	// Encrypted is a pw1 envelope that seals Title, Subtitle, Body and URL
+	// end to end with the user's encryption key; leave those four empty when
+	// it is set. The server stores and pushes placeholder text instead, and
+	// only the user's devices holding the key read the real text. Everything
+	// else stays readable to the server. This client does not seal: the
+	// caller brings the envelope. Organization keys get 422
+	// ErrCodeNotificationEncryptionUnavailable.
+	Encrypted string `json:"encrypted,omitempty"`
+	// Acknowledge repeats the push until someone taps an action without a
+	// URL, or until it expires; SentNotification.Receipt then tracks it.
+	// Not with Push false or level passive.
+	Acknowledge *NotificationAcknowledge `json:"acknowledge,omitempty"`
+	// Tags label an acknowledged notification so
+	// CancelNotificationReceiptsByTag can stop a group of them: up to 10,
+	// each 1-64 printable ASCII characters without spaces. Requires
+	// Acknowledge.
+	Tags []string `json:"tags,omitempty"`
+	// CallbackURL gets one signed POST when the acknowledged notification is
+	// acknowledged or expires (check it with VerifyCallback). https with a
+	// public host, at most 2048 characters; requires Acknowledge and an
+	// integration key.
+	CallbackURL string `json:"callback_url,omitempty"`
 }
+
+// NotificationAcknowledge makes a notification repeat until acknowledged.
+// Zero fields take the server defaults, so &NotificationAcknowledge{} is all
+// defaults: RepeatSeconds 60 (30-3600, at most 50 repeats, none counted
+// against the quota), ExpireSeconds 3600 (60-10800), and ActionTitle
+// "Acknowledge" (1-64 characters), the label of the pw_ack button the server
+// adds when no action without a URL is present. Any recorded answer
+// acknowledges it.
+type NotificationAcknowledge struct {
+	RepeatSeconds int    `json:"repeat_seconds,omitempty"`
+	ExpireSeconds int    `json:"expire_seconds,omitempty"`
+	ActionTitle   string `json:"action_title,omitempty"`
+}
+
+// AckActionID is the id of the button the server adds to an acknowledged
+// notification, as NotificationReceipt.ActionID reports it. A caller's own
+// action cannot use it.
+const AckActionID = "pw_ack"
 
 // SentNotification is the part of the POST /notifications response a producer
 // acts on. ID is what GetNotificationAnswer takes; Answerable is true when at
 // least one action was sent without a URL, so the server records the answer.
 // Delivery ("none", "partial" or "all") and Reason are the create-time APNs
 // fan-out outcome, as on ScheduledNotification.
+//
+// Receipt is set when the request had Acknowledge: the notification repeats
+// until acknowledged, and GetNotificationReceipt follows it from there.
 type SentNotification struct {
-	ID         int64     `json:"id"`
-	Answerable bool      `json:"answerable,omitempty"`
-	Pushed     bool      `json:"pushed"`
-	Delivery   string    `json:"delivery,omitempty"`
-	Reason     string    `json:"reason,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	ID         int64                `json:"id"`
+	Answerable bool                 `json:"answerable,omitempty"`
+	Pushed     bool                 `json:"pushed"`
+	Delivery   string               `json:"delivery,omitempty"`
+	Reason     string               `json:"reason,omitempty"`
+	CreatedAt  time.Time            `json:"created_at"`
+	Receipt    *NotificationReceipt `json:"receipt,omitempty"`
+}
+
+// Notification receipt statuses. Only ReceiptStatusActive changes later.
+const (
+	ReceiptStatusActive       = "active"
+	ReceiptStatusAcknowledged = "acknowledged"
+	ReceiptStatusExpired      = "expired"
+	ReceiptStatusCanceled     = "canceled"
+)
+
+// Why a receipt was canceled (NotificationReceipt.CancelReason).
+const (
+	ReceiptCancelAPI         = "api"          // CancelNotificationReceipt
+	ReceiptCancelTag         = "tag"          // CancelNotificationReceiptsByTag
+	ReceiptCancelSuperseded  = "superseded"   // a newer acknowledged send from the same key with the same collapse_id
+	ReceiptCancelKeyRevoked  = "key_revoked"  // the sending key was revoked, expired or lost notifications access
+	ReceiptCancelOrgDisabled = "org_disabled" // organizations were switched off
+)
+
+// Callback delivery statuses (NotificationReceiptCallback.Status).
+const (
+	CallbackStatusPending   = "pending"
+	CallbackStatusDelivered = "delivered"
+	CallbackStatusFailed    = "failed"
+)
+
+// NotificationReceipt tracks a notification sent with Acknowledge, as
+// returned in SentNotification.Receipt, by the receipt endpoints and as the
+// Data of a callback. AcknowledgedBy is the user id of whoever acknowledged
+// it (the account, or an organization member when the app reported one);
+// AcknowledgedByDevice names their device, on personal sends only. Finished
+// receipts are kept 7 days.
+type NotificationReceipt struct {
+	NotificationID       int64                        `json:"notification_id"`
+	Status               string                       `json:"status"`
+	RepeatSeconds        int                          `json:"repeat_seconds"`
+	ExpiresAt            time.Time                    `json:"expires_at"`
+	RepeatsSent          int                          `json:"repeats_sent"`
+	LastDeliveredAt      *time.Time                   `json:"last_delivered_at,omitempty"`
+	AcknowledgedAt       *time.Time                   `json:"acknowledged_at,omitempty"`
+	AcknowledgedBy       string                       `json:"acknowledged_by,omitempty"`
+	AcknowledgedByDevice string                       `json:"acknowledged_by_device,omitempty"`
+	ActionID             string                       `json:"action_id,omitempty"`
+	CanceledAt           *time.Time                   `json:"canceled_at,omitempty"`
+	CancelReason         string                       `json:"cancel_reason,omitempty"`
+	Tags                 []string                     `json:"tags,omitempty"`
+	Callback             *NotificationReceiptCallback `json:"callback,omitempty"`
+	CreatedAt            time.Time                    `json:"created_at"`
+}
+
+// NotificationReceiptCallback is the delivery state of a receipt's
+// callback_url event. LastStatusCode is the HTTP status of the latest attempt
+// that got a response.
+type NotificationReceiptCallback struct {
+	Status         string     `json:"status"`
+	Attempts       int        `json:"attempts"`
+	DeliveredAt    *time.Time `json:"delivered_at,omitempty"`
+	LastStatusCode int        `json:"last_status_code,omitempty"`
 }
 
 // Notification answer statuses.
@@ -1038,9 +1140,11 @@ const (
 // ScheduledNotification is a notification queued for SendAt, as returned by
 // the /notifications/scheduled endpoints. The embedded request echoes the
 // content, SendAt and Recurrence; NotificationID, SentAt and Delivery are set
-// once it is sent, FailureReason ("quota_exceeded", "key_revoked",
-// "target_deleted" or "internal_error") when it failed, and CanceledAt when it
-// was canceled.
+// once it is sent, FailureReason ("quota_exceeded", "receipt_limit",
+// "key_revoked", "target_deleted" or "internal_error") when it failed, and
+// CanceledAt when it was canceled. receipt_limit means it asked for
+// Acknowledge while 25 acknowledged notifications were already active; like
+// quota_exceeded, a repeating schedule skips that send.
 //
 // A repeating schedule keeps one ID for the whole series. After each send it
 // goes back to ScheduledStatusScheduled with SendAt moved to the next
