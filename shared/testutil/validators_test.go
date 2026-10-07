@@ -853,6 +853,10 @@ func TestMockNotificationEncryptedAndAcknowledge(t *testing.T) {
 		{name: "acknowledge without push", body: `{"title":"t","body":"b","push":false,"acknowledge":{}}`, wantStatus: 400},
 		{name: "tags without acknowledge", body: `{"title":"t","body":"b","tags":["nas-1"]}`, wantStatus: 400},
 		{name: "callback without acknowledge", body: `{"title":"t","body":"b","callback_url":"https://hooks.example.com/x"}`, wantStatus: 400},
+		{name: "http callback", body: `{"title":"t","body":"b","acknowledge":{},"callback_url":"http://hooks.example.com/x"}`, wantStatus: 400},
+		{name: "callback with userinfo", body: `{"title":"t","body":"b","acknowledge":{},"callback_url":"https://user@hooks.example.com/x"}`, wantStatus: 400},
+		{name: "missing title", body: `{"body":"b"}`, wantStatus: 422},
+		{name: "missing body", body: `{"title":"t"}`, wantStatus: 422},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

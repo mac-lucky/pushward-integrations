@@ -431,12 +431,14 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 				return
 			}
 		} else {
+			// 422 like the server, which checks these after the schema since
+			// an encrypted send leaves them out.
 			if req.Title == "" {
-				respondError(w, http.StatusBadRequest, "title is required")
+				respondError(w, http.StatusUnprocessableEntity, "title is required unless encrypted is set")
 				return
 			}
 			if req.Body == "" {
-				respondError(w, http.StatusBadRequest, "body is required")
+				respondError(w, http.StatusUnprocessableEntity, "body is required unless encrypted is set")
 				return
 			}
 		}
@@ -448,6 +450,14 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 		if !acknowledged && (len(req.Tags) > 0 || req.CallbackURL != "") {
 			respondError(w, http.StatusBadRequest, "tags and callback_url require acknowledge")
 			return
+		}
+		// The server also refuses private and cluster hosts; the mock checks
+		// only the scheme and host.
+		if req.CallbackURL != "" {
+			if u, err := url.Parse(req.CallbackURL); err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+				respondError(w, http.StatusBadRequest, "callback_url must be an https URL with a host")
+				return
+			}
 		}
 		if req.ActivitySlug != "" && !slugPattern.MatchString(req.ActivitySlug) {
 			respondError(w, http.StatusBadRequest, "invalid activity_slug: "+req.ActivitySlug)
