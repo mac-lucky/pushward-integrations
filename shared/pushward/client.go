@@ -842,7 +842,9 @@ func (c *Client) CancelNotificationReceipt(ctx context.Context, notificationID i
 // CancelNotificationReceiptsByTag stops every active acknowledged
 // notification sent with tag via POST /notifications/receipts/cancel and
 // returns how many it stopped. An integration key reaches only what it sent
-// itself. Their callbacks are not sent.
+// itself. Their callbacks are not sent. The call is retried like any other,
+// so when the first attempt canceled them but its response was lost, the
+// retry reports 0: the count is not proof that nothing was repeating.
 func (c *Client) CancelNotificationReceiptsByTag(ctx context.Context, tag string) (int, error) {
 	var out struct {
 		Canceled int `json:"canceled"`

@@ -177,7 +177,10 @@ group sends for `CancelNotificationReceiptsByTag`. With `CallbackURL` the server
 sending key; in the receiving handler, `pushward.VerifyCallback(r, apiKey)` checks the Standard
 Webhooks headers (5 minute tolerance) and returns the event. `CallbackSecret(apiKey)` gives the
 `whsec_` form for other webhook libraries. At most 25 alerts repeat at once per account
-(`ErrCodeNotificationReceiptLimit`).
+(`ErrCodeNotificationReceiptLimit`). The client retries a send after a network error or a 5xx,
+which can deliver it twice, so set `CollapseID` too: a newer acknowledged send from the same key
+with the same collapse id replaces the older one's repeats. For the same reason a retried
+`CancelNotificationReceiptsByTag` can report 0 after the first attempt did the work.
 
 **Encrypted notifications:** `Encrypted` takes a `pw1` envelope sealed with the user's key, with
 `Title`, `Subtitle`, `Body` and `URL` left empty. The client does not seal anything itself, and
