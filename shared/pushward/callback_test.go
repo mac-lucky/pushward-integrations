@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -149,6 +150,36 @@ func TestVerifyCallbackRefuses(t *testing.T) {
 		})
 	}
 }
+
+// An empty or non-integration key would make a guessable HMAC key, so it is
+// refused before the body is read.
+func TestVerifyCallbackNeedsAnIntegrationKey(t *testing.T) {
+	v := loadCallbackVectors(t)[0]
+	for _, key := range []string{"", "hlk_", "hla_0123456789abcdef0123456789abcdef", "0123456789abcdef", "HLK_0123456789abcdef0123456789abcdef"} {
+		body := &readCounter{r: strings.NewReader(v.Body)}
+		r := vectorRequest(v)
+		r.Body = body
+		if ev, err := verifyCallback(r, key, vectorTime(t, v)); err == nil || !strings.Contains(err.Error(), "hlk_ integration key") {
+			t.Errorf("key %q: %+v, %v", key, ev, err)
+		}
+		if body.n != 0 {
+			t.Errorf("key %q: read %d body bytes before refusing", key, body.n)
+		}
+	}
+}
+
+type readCounter struct {
+	r io.Reader
+	n int
+}
+
+func (c *readCounter) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += n
+	return n, err
+}
+
+func (c *readCounter) Close() error { return nil }
 
 // Standard Webhooks senders list several signatures while a secret rotates;
 // one match is enough.

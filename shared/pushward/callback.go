@@ -61,7 +61,8 @@ func CallbackSecret(integrationKey string) string {
 }
 
 // VerifyCallback reads the body of a callback request and checks it was
-// signed for integrationKey, the key that sent the notification: the
+// signed for integrationKey, the hlk_ key that sent the notification (an
+// empty or other value is refused before the body is read): the
 // Standard Webhooks headers webhook-id, webhook-timestamp (within
 // CallbackTolerance of now) and webhook-signature ("v1,<base64>" entries,
 // any one matching). It returns the decoded event, or ErrCallbackSignature
@@ -71,6 +72,11 @@ func VerifyCallback(r *http.Request, integrationKey string) (*CallbackEvent, err
 }
 
 func verifyCallback(r *http.Request, integrationKey string, now time.Time) (*CallbackEvent, error) {
+	// Only integration keys can ask for callbacks. Refusing anything else
+	// first keeps a missing config value from becoming a known HMAC key.
+	if !strings.HasPrefix(integrationKey, "hlk_") || len(integrationKey) == len("hlk_") {
+		return nil, errors.New("pushward: VerifyCallback needs the hlk_ integration key that sent the notification")
+	}
 	id := r.Header.Get("webhook-id")
 	ts := r.Header.Get("webhook-timestamp")
 	sigs := r.Header.Get("webhook-signature")
