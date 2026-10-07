@@ -1001,8 +1001,8 @@ type SendNotificationRequest struct {
 // defaults: RepeatSeconds 60 (30-3600, at most 50 repeats, none counted
 // against the quota), ExpireSeconds 3600 (60-10800), and ActionTitle
 // "Acknowledge" (1-64 characters), the label of the pw_ack button the server
-// adds when no action without a URL is present. Any recorded answer
-// acknowledges it.
+// adds when no action without a URL (and not opening the app) is present.
+// Any recorded answer acknowledges it.
 type NotificationAcknowledge struct {
 	RepeatSeconds int    `json:"repeat_seconds,omitempty"`
 	ExpireSeconds int    `json:"expire_seconds,omitempty"`
@@ -1016,7 +1016,8 @@ const AckActionID = "pw_ack"
 
 // SentNotification is the part of the POST /notifications response a producer
 // acts on. ID is what GetNotificationAnswer takes; Answerable is true when at
-// least one action was sent without a URL, so the server records the answer.
+// least one action was sent without a URL and without Foreground, so the
+// server records the answer.
 // Delivery ("none", "partial" or "all") and Reason are the create-time APNs
 // fan-out outcome, as on ScheduledNotification.
 //

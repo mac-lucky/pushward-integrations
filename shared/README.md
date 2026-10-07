@@ -171,7 +171,8 @@ client.PatchActivity(ctx, "build-42", pushward.PatchRequest{
 
 **Acknowledged notifications:** set `Acknowledge: &pushward.NotificationAcknowledge{}` (zero fields
 take the server defaults: a repeat every 60s for up to an hour) and the push comes back until
-someone taps an action without a URL; `SendNotificationResult` then returns `Receipt`. `Tags`
+someone taps an action without a URL that does not open the app; `SendNotificationResult`
+then returns `Receipt`. `Tags`
 group sends for `CancelNotificationReceiptsByTag`. With `CallbackURL` the server POSTs a
 `CallbackEvent` once it is acknowledged or expires, signed with a secret derived from the
 sending key; in the receiving handler, `pushward.VerifyCallback(r, apiKey)` checks the Standard
