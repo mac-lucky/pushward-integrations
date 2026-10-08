@@ -69,6 +69,20 @@ func TestParseInvalid(t *testing.T) {
 		"priority=",
 		"level=bogus",
 		"level=",
+		"ack=",
+		"ack=yes",
+		"ack=1&ack_repeat=29",
+		"ack=1&ack_repeat=3601",
+		"ack=1&ack_repeat=abc",
+		"ack=1&ack_expire=59",
+		"ack=1&ack_expire=10801",
+		"ack=1&ack_expire=",
+		// The durations alone, or next to ack=0, would repeat nothing.
+		"ack_repeat=60",
+		"ack_expire=600",
+		"ack=0&ack_repeat=60",
+		// A passive notification does not alert, so it cannot repeat.
+		"ack=1&level=passive",
 	} {
 		t.Run(q, func(t *testing.T) {
 			if _, err := Parse(mustQuery(t, q)); err == nil {
@@ -151,5 +165,82 @@ func TestFromContextRoundTrip(t *testing.T) {
 	}
 	if got.PriorityOr(0) != 9 {
 		t.Error("round-tripped priority lost")
+	}
+}
+
+func TestParseAck(t *testing.T) {
+	tests := []struct {
+		query          string
+		repeat, expire int // 0, 0 = no ack
+	}{
+		{"", 0, 0},
+		{"ack=0", 0, 0},
+		{"ack=false", 0, 0},
+		{"ack=1", DefaultAckRepeat, DefaultAckExpire},
+		{"ack=true", DefaultAckRepeat, DefaultAckExpire},
+		{"ack=1&ack_repeat=30", 30, DefaultAckExpire},
+		{"ack=1&ack_expire=10800", DefaultAckRepeat, 10800},
+		{"ack=1&ack_repeat=3600&ack_expire=60", 3600, 60},
+		{"ack=1&level=critical", DefaultAckRepeat, DefaultAckExpire},
+		{"ack=1&channels=activity", DefaultAckRepeat, DefaultAckExpire},
+	}
+	for _, tt := range tests {
+		t.Run(tt.query, func(t *testing.T) {
+			o, err := Parse(mustQuery(t, tt.query))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			a := o.Ack()
+			if tt.repeat == 0 {
+				if a != nil {
+					t.Fatalf("Ack() = %+v, want nil", *a)
+				}
+				return
+			}
+			if a == nil || a.RepeatSeconds != tt.repeat || a.ExpireSeconds != tt.expire {
+				t.Fatalf("Ack() = %+v, want repeat %d expire %d", a, tt.repeat, tt.expire)
+			}
+		})
+	}
+}
+
+func TestNilReceiverHasNoAck(t *testing.T) {
+	var o *Overrides
+	if o.Ack() != nil {
+		t.Error("nil Overrides should carry no ack")
+	}
+}
+
+func TestWithAck(t *testing.T) {
+	// Without any overrides on the context: ack at its defaults, the rest
+	// untouched.
+	o := FromContext(WithAck(context.Background()))
+	if a := o.Ack(); a == nil || a.RepeatSeconds != DefaultAckRepeat || a.ExpireSeconds != DefaultAckExpire {
+		t.Fatalf("Ack() = %+v, want the defaults", a)
+	}
+	if !o.AllowsActivity() || !o.AllowsNotification() {
+		t.Error("WithAck changed the channels")
+	}
+
+	// The query's other overrides survive, and so does an ack it set itself.
+	parsed, err := Parse(mustQuery(t, "channels=notification&level=critical&ack=1&ack_repeat=45"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.WithValue(context.Background(), contextKey{}, parsed)
+	o = FromContext(WithAck(ctx))
+	if o.AllowsActivity() || o.LevelOr("active") != "critical" {
+		t.Error("WithAck dropped the query's channels or level")
+	}
+	if a := o.Ack(); a == nil || a.RepeatSeconds != 45 {
+		t.Errorf("Ack() = %+v, want the query's repeat 45", a)
+	}
+
+	// The overrides on the original context are not modified.
+	plain := &Overrides{}
+	ctx = context.WithValue(context.Background(), contextKey{}, plain)
+	_ = WithAck(ctx)
+	if plain.Ack() != nil {
+		t.Error("WithAck modified the overrides it was given")
 	}
 }

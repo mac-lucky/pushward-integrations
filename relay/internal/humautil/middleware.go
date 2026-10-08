@@ -30,7 +30,7 @@ func AuthMiddleware(api huma.API) func(huma.Context, func(huma.Context)) {
 }
 
 // OverridesMiddleware returns a Huma middleware that parses the per-request
-// query-parameter overrides (channels / priority / level) and stores them on
+// query-parameter overrides (channels / priority / level / ack) and stores them on
 // the context for handlers to consult. Invalid values return 400 before the
 // handler runs; absent params leave the request at default behavior. It applies
 // to every provider route, including DELETE routes.

@@ -1,9 +1,10 @@
 // Package overrides parses and carries the per-request query-parameter overrides
 // that let a webhook URL change a provider's delivery behavior for a single
-// request. Three params are supported: channels (which delivery surfaces may be
-// used), priority (the CreateActivity priority), and level (the notification
-// interruption level). An explicit param always wins over provider-computed
-// values and static config; absent params leave today's behavior unchanged.
+// request: channels (which delivery surfaces may be used), priority (the
+// CreateActivity priority), level (the notification interruption level), and
+// ack with ack_repeat and ack_expire (alerts repeat until acknowledged). An
+// explicit param always wins over provider-computed values and static config;
+// absent params leave today's behavior unchanged.
 package overrides
 
 import (
@@ -31,6 +32,33 @@ type Overrides struct {
 	Priority *int
 	// Level overrides the notification interruption level when non-empty.
 	Level string
+	// ack is set when the request asked for acknowledged alerts (ack=1).
+	ack *Ack
+}
+
+// Ack is the acknowledge override: an alert notification repeats every
+// RepeatSeconds until someone acknowledges it or ExpireSeconds pass.
+type Ack struct {
+	RepeatSeconds int
+	ExpireSeconds int
+}
+
+// Acknowledge defaults and the server's bounds for them.
+const (
+	DefaultAckRepeat = 300
+	DefaultAckExpire = 3600
+
+	minAckRepeat, maxAckRepeat = 30, 3600
+	minAckExpire, maxAckExpire = 60, 10800
+)
+
+// Ack returns the acknowledge override, or nil when the request did not ask
+// for one.
+func (o *Overrides) Ack() *Ack {
+	if o == nil {
+		return nil
+	}
+	return o.ack
 }
 
 // AllowsActivity reports whether Live Activity calls (create/update/end) are
@@ -79,9 +107,9 @@ var validLevels = map[string]bool{
 	"critical":       true,
 }
 
-// Parse reads and validates the channels / priority / level query params. A
-// missing param leaves its field at the zero value. Any invalid value returns
-// an error suitable for a 400 response.
+// Parse reads and validates the channels / priority / level / ack query
+// params. A missing param leaves its field at the zero value. Any invalid
+// value returns an error suitable for a 400 response.
 func Parse(q url.Values) (*Overrides, error) {
 	o := &Overrides{}
 
@@ -123,7 +151,63 @@ func Parse(q url.Values) (*Overrides, error) {
 		o.Level = l
 	}
 
+	if err := parseAck(q, o); err != nil {
+		return nil, err
+	}
 	return o, nil
+}
+
+// parseAck reads ack, ack_repeat and ack_expire into o. The durations mean
+// nothing without ack, and a passive notification does not alert, so it has
+// nothing to repeat. Both are refused rather than ignored: a typo in the URL
+// is then a 400, not an alert that quietly never repeats.
+func parseAck(q url.Values, o *Overrides) error {
+	on := false
+	if q.Has("ack") {
+		raw := strings.TrimSpace(q.Get("ack"))
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return fmt.Errorf("invalid ack %q: must be 1 or 0", raw)
+		}
+		on = b
+	}
+	if !on {
+		for _, k := range []string{"ack_repeat", "ack_expire"} {
+			if q.Has(k) {
+				return fmt.Errorf("%s needs ack=1", k)
+			}
+		}
+		return nil
+	}
+	if o.Level == "passive" {
+		return fmt.Errorf("ack=1 cannot be combined with level=passive: a passive notification does not alert, so it cannot repeat")
+	}
+	repeat, err := seconds(q, "ack_repeat", DefaultAckRepeat, minAckRepeat, maxAckRepeat)
+	if err != nil {
+		return err
+	}
+	expire, err := seconds(q, "ack_expire", DefaultAckExpire, minAckExpire, maxAckExpire)
+	if err != nil {
+		return err
+	}
+	o.ack = &Ack{RepeatSeconds: repeat, ExpireSeconds: expire}
+	return nil
+}
+
+// seconds reads the integer param k, def when it is absent.
+func seconds(q url.Values, k string, def, lo, hi int) (int, error) {
+	if !q.Has(k) {
+		return def, nil
+	}
+	raw := strings.TrimSpace(q.Get(k))
+	n, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q: must be an integer %d-%d", k, raw, lo, hi)
+	}
+	if n < lo || n > hi {
+		return 0, fmt.Errorf("invalid %s %d: must be %d-%d", k, n, lo, hi)
+	}
+	return n, nil
 }
 
 type contextKey struct{}
@@ -140,4 +224,15 @@ func FromContext(ctx context.Context) *Overrides {
 		return o
 	}
 	return &Overrides{}
+}
+
+// WithAck returns ctx with the request's overrides plus acknowledge at its
+// defaults, unless the query already asked for it. It is for a route that
+// opts in by its path, for a sender that cannot add a query string.
+func WithAck(ctx context.Context) context.Context {
+	o := *FromContext(ctx)
+	if o.ack == nil {
+		o.ack = &Ack{RepeatSeconds: DefaultAckRepeat, ExpireSeconds: DefaultAckExpire}
+	}
+	return context.WithValue(ctx, contextKey{}, &o)
 }
