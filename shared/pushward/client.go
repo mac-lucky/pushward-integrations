@@ -394,6 +394,16 @@ const (
 	// Treat it as "retry shortly": the send finishes within seconds.
 	ErrCodeScheduledNotificationInFlight = "scheduled_notification.in_flight"
 
+	// ErrCodeNotificationInvalid is the 400 for a send the handler refuses:
+	// a bad url, media, action or metadata, a malformed envelope or text sent
+	// next to one, and the acknowledge rules (push false, level passive, the
+	// reserved pw_ack id, no room for its button, a tag off the pattern,
+	// tags or callback_url without acknowledge, a callback_url it will not
+	// call). What the schema bounds
+	// (repeat_seconds, expire_seconds, action_title, more than 10 tags or
+	// actions) is a 422 with no code.
+	ErrCodeNotificationInvalid = "notification.invalid"
+
 	ErrCodeNotificationAnswerURLUnavailable = "notification.answer_url_unavailable"
 	ErrCodeNotificationAnswerNotFound       = "notification_answer.not_found"
 	ErrCodeAnswerWaitLimit                  = "answer_wait.limit_exceeded"
