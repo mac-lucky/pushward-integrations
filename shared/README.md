@@ -4,7 +4,7 @@
 
 # PushWard Integrations - Shared Library
 
-Common Go building blocks every PushWard integration bridge reuses so each bridge only writes its provider-specific webhook/poll logic. It ships a hand-written [pushward-server](https://pushward.app) REST client (activities, notifications, widgets) with retry + circuit breaker, YAML+env config loading, health/ready HTTP scaffolding, a generic widget poller, fail-closed header auth, small concurrency primitives, string/slug/byte helpers, and a contract-validating mock server for tests.
+Common Go building blocks every PushWard integration bridge reuses so each bridge only writes its provider-specific webhook/poll logic. It ships a hand-written [pushward-server](https://pushward.app) REST client (activities, notifications, widgets) with retry + circuit breaker, YAML+env config loading, health/ready HTTP scaffolding, a generic widget poller, fail-closed header auth, small concurrency primitives, string/slug/byte helpers, end-to-end encryption of notification text, and a contract-validating mock server for tests.
 
 This is a **library only** - no `main` package, no Dockerfile, no runnable binary. The bridges that import it (`github`, `sabnzbd`, `bambulab`, `grafana`, `relay`) are the things you build and run; see the [root README](../README.md) for those.
 
@@ -26,6 +26,7 @@ The client speaks the public pushward-server REST surface (`/activities`, `/noti
 | Package | Import suffix | What it provides |
 |---|---|---|
 | `pushward` | `.../shared/pushward` | Hand-written pushward-server REST client (activities, notifications, widgets), retry, circuit breaker, content/widget models, template/level/severity/color constants, pointer helpers, typed `HTTPError` |
+| `e2e` | `.../shared/e2e` | End-to-end encryption of notification text: `ParseKey`, `SealRequest` (and `Seal` / `SealFit` / `Fit` underneath) into the `pw1` envelope, `Open` for tests |
 | `config` | `.../shared/config` | `LoadYAML` (tolerates a missing file), `PushWardConfig` (with `DefaultPushWardConfig` for the two-phase-end defaults) / `ServerConfig` / `RenderConfig` with `PUSHWARD_*` env overrides + `Validate`, `PollingConfig` (the two-tier poll cadence: `ApplyActiveDefault` derives the active tier from the idle one, `Validate` checks both), `TimelineConfig`, the `EnvBool` / `EnvDuration` / `EnvInt` / `EnvInt64` / `EnvFloat64` override helpers |
 | `server` | `.../shared/server` | `NewMux` (`/health` + `/ready` with readiness checks) and `ListenAndServe` with graceful shutdown |
 | `ci` | `.../shared/ci` | The CI steps ladder: job to step-group folding (matrix legs and reusable-workflow prefixes), step colors, prior-run duration weights, live-progress anchors |
@@ -183,9 +184,11 @@ which can deliver it twice, so set `CollapseID` too: a newer acknowledged send f
 with the same collapse id replaces the older one's repeats. For the same reason a retried
 `CancelNotificationReceiptsByTag` can report 0 after the first attempt did the work.
 
-**Encrypted notifications:** `Encrypted` takes a `pw1` envelope sealed with the user's key, with
-`Title`, `Subtitle`, `Body` and `URL` left empty. The client does not seal anything itself, and
-the bridges send readable text.
+**Encrypted notifications:** the client sends what it is given. To encrypt, seal the request
+first with [`e2e.SealRequest`](#end-to-end-encryption-e2e), which moves `Title`, `Subtitle`, `Body`
+and `URL` into a `pw1` envelope in `Encrypted` and clears them. Level, collapse and thread ids,
+source, icon, media, metadata, actions, acknowledge and tags stay readable: the server needs them
+to deliver the push. The bridges and the relay send readable text and never hold a user's key.
 
 **Models & constants:** `Content` (superset for full updates) vs `ContentPatch` (all-pointer, every field keeps `json:",omitempty"` per RFC 7396); template constants `TemplateGeneric` / `Alert` / `Steps` / `Countdown` / `Gauge` / `Timeline` / `Board` / `Log` / `Media` / `Approval`; the `board` template carries `[]BoardTile` (1-4 tiles), `log` carries `[]LogLine` (1-20 lines, newest-first), `media` carries the player fields below, `approval` carries `[]ApprovalOption` (2-4 options) plus the answer fields below; approval style constants `ApprovalStylePrimary` / `Secondary` / `Destructive` and answer constants `ApprovalAnswerNone` / `ByUser` / `ByExpired`; trend constants `TrendUp` / `TrendDown` / `TrendFlat` (board tiles); log-level constants `LogInfo` / `LogWarn` / `LogError`; `TapAction` routing on every template/widget via `tap_action` / `url_action` / `secondary_url_action` (richer than the legacy `url` / `secondary_url` strings - adds method/headers/body for silent webhooks); notification levels `LevelActive` / `LevelPassive`; widget templates `WidgetTemplateValue` / `Progress` / `Status` / `Gauge` / `StatList` / `Trend` / `Countdown` / `Battery` / `Schedule` / `Flow`; severities `SeverityCritical` / `Warning` / `Info`; accent colors `ColorRed` / `Orange` / `Green` / `Blue` (matching iOS system colors). Helpers: `BoolPtr` / `IntPtr` / `Int64Ptr` / `Float64Ptr` / `StringPtr`, `SeverityColor` / `SeverityIcon`, `DisplayNameFor` / `(SendNotificationRequest).FillSourceDisplayName`, `MediaImage(url)`.
 
@@ -208,6 +211,28 @@ Fetches are bounded on every axis a webhook payload could otherwise choose: at m
 `Apply(ctx, src, &content, url, shape)` sets all three fields at once, writing the shape only when a URL or hash survived. A `Disabled` source writes none of them: off has to mean the card carries no image fields, since `image_url` alone would still publish the media server's hostname. `ApplyFetchURL` is the variant for a provider whose fetch URL differs from what the device should render (Jellyfin asks for a small transcoded JPEG).
 
 The encoder is a vendored, encode-only port of [ThumbHash](https://github.com/evanw/thumbhash) (MIT), decoding through the standard library only - `image/jpeg`, `image/png`, `image/gif`. **WebP and AVIF do not decode and yield no hash**, deliberately: no new module dependency is worth a placeholder, and a new `require` in `shared/go.mod` ripples `go.sum` churn into all seven modules.
+
+### End-to-end encryption (`e2e`)
+
+The user creates the key in the PushWard app and copies it out as 64 hex characters. `ParseKey` reads it (whitespace and case do not matter; an `hlk_` or `hla_` key there is `ErrIntegrationKey`) and keeps only what it derives, so parse once at startup and hold on to the `*e2e.Key`:
+
+```go
+key, err := e2e.ParseKey(cfg.E2EKey)
+if err != nil {
+    return err // never contains the key
+}
+req := pushward.SendNotificationRequest{Title: "Disk full", Body: "/var is at 97% on db01"}
+if err := e2e.SealRequest(key, &req); err != nil {
+    return err // req is left as it was
+}
+err = client.SendNotification(ctx, req)
+```
+
+`key.KID()` is the 8-character Key ID the app shows next to the key; put it on a settings page so the user can check both sides hold the same one. fmt and slog print a key as `e2e key <kid>`, never the key.
+
+An envelope is at most 3072 characters, about 2266 bytes of JSON. `SealRequest` shortens instead of refusing: title and subtitle are cut to 256 code points and the body to 4096 (the apps show no more), then the body loses characters from its end and, only once it is down to one, the title. Length is measured in JSON bytes, so CJK text keeps about a third as many characters as ASCII, and escaped characters count at their escaped size. It returns `ErrTooLong` only when the subtitle and url alone overfill the envelope; `Seal` is the strict form that refuses anything over. The url has to pass the server's rule (`javascript:`, `data:`, `file:` and `vbscript:` are refused), because the server cannot check it once sealed.
+
+The server checks only the envelope's shape. It answers 422 `notification.encrypted_too_large` (`ErrCodeNotificationEncryptedTooLarge`) when the push, actions and media included, would pass the 4 KB APNs payload, and 422 `notification.encryption_unavailable` to an organization key. `testdata/vectors-v1.json` is the vector file every implementation (server, apps, CLI, MCP, Home Assistant) is tested against; a test pins its hash.
 
 ### Resilience
 
@@ -258,6 +283,8 @@ All are zero-value-or-constructor ready and concurrency-safe.
 ### Test utilities (`testutil`)
 
 `MockPushWardServer(t)` starts an `httptest` server that records calls **and validates them against the public API contract** (slug pattern, name/field length caps, per-template required fields, color/URL rules, the generic/steps/media-only activity-image trio, the media-only player fields and their control slots), returning proper `201`/`200`/`400`/`404` with RFC 9457 Problem bodies - not a blind `200 OK`. Also `MockPushWardServerFailingPatches` (drives update-failure paths), `GetCalls`, `CountPath`, `UnmarshalBody`, `RequireValueMap`, and the `APICall` struct.
+
+Acknowledged sends become receipts the way the server keeps them: notification ids count up from 1, a newer acknowledged send from the same key with the same `collapse_id` supersedes the older receipt, and the 26th active one is a `409 notification_receipt.limit_exceeded`. `GET /notifications/receipts/{id}`, `POST /notifications/receipts/{id}/cancel` and `POST /notifications/receipts/cancel` read and cancel them (no long-poll; receipts expire on time but never repeat). They are scoped to the exact `Authorization` header, which is how the server scopes an `hlk_` key; an `hla_` app token there reaches every receipt on the account. Out-of-range `repeat_seconds`, `expire_seconds` or `action_title` and more than 10 tags get the server's schema answer, a 422 with no code; the other acknowledge rules (push false, level passive, the `pw_ack` id, a tag off the pattern, tags without acknowledge) get its `400 notification.invalid`. `MockPushWardServerWith(t, MockOptions{...})` picks the failures: `NotifyStatus` / `ActivityStatus` (what `MockPushWardServerRejecting` sets), `AckStatus` + `AckCode` for acknowledged sends only (the same as `MockPushWardServerRejectingAck(t, status, code)`), and `CancelStatus` for both cancels. `CallsTo` picks the recorded calls to one method and path, in order.
 
 ## Development
 
