@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -244,11 +246,135 @@ type testNotificationAction struct {
 	Icon       string            `json:"icon,omitempty"`
 }
 
+// testAcknowledge mirrors pushward.NotificationAcknowledge.
+type testAcknowledge struct {
+	RepeatSeconds int    `json:"repeat_seconds,omitempty"`
+	ExpireSeconds int    `json:"expire_seconds,omitempty"`
+	ActionTitle   string `json:"action_title,omitempty"`
+}
+
+// notificationRequest is the part of POST /notifications the mock checks.
+type notificationRequest struct {
+	Title        string                   `json:"title"`
+	Subtitle     string                   `json:"subtitle,omitempty"`
+	Body         string                   `json:"body"`
+	URL          string                   `json:"url,omitempty"`
+	Level        string                   `json:"level,omitempty"`
+	CollapseID   string                   `json:"collapse_id,omitempty"`
+	ActivitySlug string                   `json:"activity_slug,omitempty"`
+	Actions      []testNotificationAction `json:"actions,omitempty"`
+	Push         *bool                    `json:"push,omitempty"`
+	Encrypted    string                   `json:"encrypted,omitempty"`
+	Acknowledge  *testAcknowledge         `json:"acknowledge,omitempty"`
+	Tags         []string                 `json:"tags,omitempty"`
+	CallbackURL  string                   `json:"callback_url,omitempty"`
+}
+
+// Acknowledged-alert bounds, as the server applies them.
+const (
+	defaultAckRepeatSeconds = 60
+	defaultAckExpireSeconds = 3600
+	maxActiveReceipts       = 25
+	maxReceiptTags          = 10
+)
+
+var receiptTagPattern = regexp.MustCompile(`^[\x21-\x7E]{1,64}$`)
+
+// mockReceipt is a receipt as the mock holds it. key is the sender's
+// Authorization header, and every read, cancel and supersede matches it
+// exactly. The server scopes that way only for integration keys: an hla_ app
+// token reaches every receipt on the account.
+type mockReceipt struct {
+	id         int64
+	key        string
+	collapseID string
+	status     string
+	reason     string
+	repeat     int
+	tags       []string
+	created    time.Time
+	expires    time.Time
+	canceled   time.Time
+}
+
+// active reports whether r still repeats, expiring it first when its time
+// is up, as the server's sweep would have.
+func (r *mockReceipt) active(now time.Time) bool {
+	if r.status == pushward.ReceiptStatusActive && !now.Before(r.expires) {
+		r.status = pushward.ReceiptStatusExpired
+	}
+	return r.status == pushward.ReceiptStatusActive
+}
+
+func (r *mockReceipt) cancel(now time.Time, reason string) {
+	r.status, r.reason, r.canceled = pushward.ReceiptStatusCanceled, reason, now
+}
+
+func (r *mockReceipt) view(now time.Time) map[string]any {
+	r.active(now)
+	v := map[string]any{
+		"notification_id": r.id, "status": r.status, "repeat_seconds": r.repeat, "repeats_sent": 0,
+		"expires_at": r.expires, "created_at": r.created,
+	}
+	if len(r.tags) > 0 {
+		v["tags"] = r.tags
+	}
+	if r.status == pushward.ReceiptStatusCanceled {
+		v["canceled_at"], v["cancel_reason"] = r.canceled, r.reason
+	}
+	return v
+}
+
+// MockOptions changes how MockPushWardServerWith answers. The zero value is
+// MockPushWardServer.
+type MockOptions struct {
+	// NotifyStatus and ActivityStatus answer every POST /notifications and
+	// POST /activities that validates (see MockPushWardServerRejecting).
+	// 0 keeps the success path.
+	NotifyStatus   int
+	ActivityStatus int
+	// AckStatus answers only the acknowledged sends, with AckCode as the
+	// Problem code when it is set; a send without acknowledge still
+	// succeeds. It drives a fallback that resends without acknowledge.
+	AckStatus int
+	AckCode   string
+	// CancelStatus answers both receipt cancels, by id and by tag, once the
+	// request validates. The client retries a 5xx with backoff, so a test
+	// that wants a quick failure picks a 4xx.
+	CancelStatus int
+}
+
 // MockPushWardServer starts an httptest server that records all requests and
 // validates them against the PushWard public API contract.
+//
+// Acknowledged sends are held as receipts the way the server holds them:
+// ids count up from 1 across all sends, a newer acknowledged send from the
+// same key with the same collapse_id cancels the older receipt (superseded),
+// and the 26th active receipt is a 409 notification_receipt.limit_exceeded.
+// GET /notifications/receipts/{id} (no long-poll), POST
+// /notifications/receipts/{id}/cancel and POST /notifications/receipts/cancel
+// read and cancel them. Receipts expire on time but never repeat. Acknowledge
+// fields out of range and more than 10 tags are a 422 with no code, from the
+// server's schema; the rest of the acknowledge rules are a 400
+// notification.invalid.
 func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex) {
 	t.Helper()
-	return mockPushWardServer(t, 0, 0)
+	return mockPushWardServer(t, MockOptions{})
+}
+
+// MockPushWardServerWith is MockPushWardServer answering as opts says.
+func MockPushWardServerWith(t *testing.T, opts MockOptions) (*httptest.Server, *[]APICall, *sync.Mutex) {
+	t.Helper()
+	return mockPushWardServer(t, opts)
+}
+
+// MockPushWardServerRejectingAck is MockPushWardServer answering status, with
+// code as the Problem code when it is not empty, to every acknowledged send
+// that validates. Sends without acknowledge succeed, so a sender that falls
+// back to a plain send gets through on its second try.
+func MockPushWardServerRejectingAck(t *testing.T, status int, code string) (*httptest.Server, *[]APICall, *sync.Mutex) {
+	t.Helper()
+	return mockPushWardServer(t, MockOptions{AckStatus: status, AckCode: code})
 }
 
 // MockPushWardServerRejecting is MockPushWardServer answering notifyStatus to
@@ -262,7 +388,7 @@ func MockPushWardServer(t *testing.T) (*httptest.Server, *[]APICall, *sync.Mutex
 // tell a rejected call from a malformed one.
 func MockPushWardServerRejecting(t *testing.T, notifyStatus, activityStatus int) (*httptest.Server, *[]APICall, *sync.Mutex) {
 	t.Helper()
-	return mockPushWardServer(t, notifyStatus, activityStatus)
+	return mockPushWardServer(t, MockOptions{NotifyStatus: notifyStatus, ActivityStatus: activityStatus})
 }
 
 // AssertUpstreamRefusalSurfaces checks that a webhook handler passes an upstream
@@ -293,8 +419,9 @@ func AssertUpstreamRefusalSurfaces(t *testing.T, deliver func(t *testing.T, stat
 	}
 }
 
-func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httptest.Server, *[]APICall, *sync.Mutex) {
+func mockPushWardServer(t *testing.T, opts MockOptions) (*httptest.Server, *[]APICall, *sync.Mutex) {
 	t.Helper()
+	notifyStatus, activityStatus := opts.NotifyStatus, opts.ActivityStatus
 	if notifyStatus == 0 {
 		notifyStatus = http.StatusCreated
 	}
@@ -305,6 +432,10 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 	// template is still validated against the template the activity has.
 	// Guarded by mu.
 	activities := make(map[string]map[string]any)
+	// receipts holds the acknowledged sends by notification id, and lastID
+	// is the id of the latest accepted send. Guarded by mu.
+	receipts := make(map[int64]*mockReceipt)
+	var lastID int64
 
 	mux := http.NewServeMux()
 
@@ -400,22 +531,13 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 	mux.HandleFunc("POST /notifications", func(w http.ResponseWriter, r *http.Request) {
 		body := recordCall(&calls, &mu, r)
 
-		var req struct {
-			Title        string                   `json:"title"`
-			Subtitle     string                   `json:"subtitle,omitempty"`
-			Body         string                   `json:"body"`
-			URL          string                   `json:"url,omitempty"`
-			Level        string                   `json:"level,omitempty"`
-			ActivitySlug string                   `json:"activity_slug,omitempty"`
-			Actions      []testNotificationAction `json:"actions,omitempty"`
-			Push         *bool                    `json:"push,omitempty"`
-			Encrypted    string                   `json:"encrypted,omitempty"`
-			Acknowledge  json.RawMessage          `json:"acknowledge,omitempty"`
-			Tags         []string                 `json:"tags,omitempty"`
-			CallbackURL  string                   `json:"callback_url,omitempty"`
-		}
+		var req notificationRequest
 		if err := json.Unmarshal(body, &req); err != nil {
 			respondError(w, http.StatusBadRequest, "invalid JSON: "+err.Error())
+			return
+		}
+		if err := validateAcknowledgeSchema(&req); err != nil {
+			respondError(w, http.StatusUnprocessableEntity, err.Error())
 			return
 		}
 		// An encrypted send carries its text inside the envelope, so title
@@ -442,23 +564,6 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 				return
 			}
 		}
-		acknowledged := len(req.Acknowledge) > 0 && string(req.Acknowledge) != "null"
-		if acknowledged && ((req.Push != nil && !*req.Push) || req.Level == "passive") {
-			respondError(w, http.StatusBadRequest, "acknowledge needs a push that alerts: not with push false or level passive")
-			return
-		}
-		if !acknowledged && (len(req.Tags) > 0 || req.CallbackURL != "") {
-			respondError(w, http.StatusBadRequest, "tags and callback_url require acknowledge")
-			return
-		}
-		// The server also refuses private and cluster hosts; the mock checks
-		// only the scheme and host.
-		if req.CallbackURL != "" {
-			if u, err := url.Parse(req.CallbackURL); err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
-				respondError(w, http.StatusBadRequest, "callback_url must be an https URL with a host")
-				return
-			}
-		}
 		if req.ActivitySlug != "" && !slugPattern.MatchString(req.ActivitySlug) {
 			respondError(w, http.StatusBadRequest, "invalid activity_slug: "+req.ActivitySlug)
 			return
@@ -473,14 +578,59 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 				return
 			}
 		}
+		// Last, as on the server.
+		if err := validateAcknowledge(&req); err != nil {
+			respondProblem(w, http.StatusBadRequest, pushward.ErrCodeNotificationInvalid, err.Error())
+			return
+		}
 
 		if notifyStatus >= 400 {
 			respondError(w, notifyStatus, "notification rejected")
 			return
 		}
+		ack := req.Acknowledge
+		if ack != nil && opts.AckStatus >= 400 {
+			respondProblem(w, opts.AckStatus, opts.AckCode, "acknowledge rejected")
+			return
+		}
 
+		mu.Lock()
+		defer mu.Unlock()
+		now := time.Now().UTC()
+		var rec *mockReceipt
+		if ack != nil {
+			// The same key's active receipt with this collapse id is
+			// superseded before the cap is counted, so a resend never
+			// hits the limit on its own predecessor.
+			key := r.Header.Get("Authorization")
+			var superseded []*mockReceipt
+			active := 0
+			for _, rc := range receipts {
+				switch {
+				case !rc.active(now):
+				case req.CollapseID != "" && rc.key == key && rc.collapseID == req.CollapseID:
+					superseded = append(superseded, rc)
+				default:
+					active++
+				}
+			}
+			if active >= maxActiveReceipts {
+				respondProblem(w, http.StatusConflict, pushward.ErrCodeNotificationReceiptLimit,
+					fmt.Sprintf("acknowledged notification limit reached (max %d active)", maxActiveReceipts))
+				return
+			}
+			for _, rc := range superseded {
+				rc.cancel(now, pushward.ReceiptCancelSuperseded)
+			}
+			rec = &mockReceipt{
+				key: key, collapseID: req.CollapseID, status: pushward.ReceiptStatusActive,
+				repeat: ack.RepeatSeconds, tags: req.Tags,
+				created: now, expires: now.Add(time.Duration(ack.ExpireSeconds) * time.Second),
+			}
+		}
+		lastID++
 		pushed := req.Push == nil || *req.Push
-		resp := map[string]any{"id": 1, "pushed": pushed}
+		resp := map[string]any{"id": lastID, "pushed": pushed}
 		// As on the server: a url-less silent action has its answer recorded.
 		for _, a := range req.Actions {
 			if a.URL == "" && !a.Foreground {
@@ -490,17 +640,91 @@ func mockPushWardServer(t *testing.T, notifyStatus, activityStatus int) (*httpte
 		// An acknowledged send is always answerable (the server adds a
 		// pw_ack button when no action records an answer) and returns its
 		// receipt.
-		if acknowledged {
-			now := time.Now().UTC()
+		if rec != nil {
+			rec.id = lastID
+			receipts[lastID] = rec
 			resp["answerable"] = true
-			resp["receipt"] = map[string]any{
-				"notification_id": 1, "status": "active", "repeat_seconds": 60, "repeats_sent": 0,
-				"expires_at": now.Add(time.Hour), "created_at": now, "tags": req.Tags,
-			}
+			resp["receipt"] = rec.view(now)
 		}
 
 		w.WriteHeader(notifyStatus)
 		_ = json.NewEncoder(w).Encode(resp)
+	})
+
+	// receipt looks up the {id} of a receipt request as the server would for
+	// this caller, or answers it: 422 for an id that is not a number (huma's
+	// path check), 404 for one this key did not send with acknowledge. Call
+	// with mu held.
+	receipt := func(w http.ResponseWriter, r *http.Request) *mockReceipt {
+		id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+		if err != nil {
+			respondError(w, http.StatusUnprocessableEntity, "id must be an integer")
+			return nil
+		}
+		rc := receipts[id]
+		if rc == nil || rc.key != r.Header.Get("Authorization") {
+			respondProblem(w, http.StatusNotFound, pushward.ErrCodeNotificationReceiptNotFound,
+				"notification has no receipt (it was not sent with acknowledge)")
+			return nil
+		}
+		return rc
+	}
+
+	mux.HandleFunc("GET /notifications/receipts/{id}", func(w http.ResponseWriter, r *http.Request) {
+		recordCall(&calls, &mu, r)
+		mu.Lock()
+		defer mu.Unlock()
+		if rc := receipt(w, r); rc != nil {
+			respondJSON(w, http.StatusOK, rc.view(time.Now().UTC()))
+		}
+	})
+
+	// A receipt that already finished comes back unchanged.
+	mux.HandleFunc("POST /notifications/receipts/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		recordCall(&calls, &mu, r)
+		if opts.CancelStatus >= 400 {
+			respondError(w, opts.CancelStatus, "cancel rejected")
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		rc := receipt(w, r)
+		if rc == nil {
+			return
+		}
+		now := time.Now().UTC()
+		if rc.active(now) {
+			rc.cancel(now, pushward.ReceiptCancelAPI)
+		}
+		respondJSON(w, http.StatusOK, rc.view(now))
+	})
+
+	mux.HandleFunc("POST /notifications/receipts/cancel", func(w http.ResponseWriter, r *http.Request) {
+		body := recordCall(&calls, &mu, r)
+		var req struct {
+			Tag string `json:"tag"`
+		}
+		// The server's schema check, so a 422 without a code.
+		if err := json.Unmarshal(body, &req); err != nil || !receiptTagPattern.MatchString(req.Tag) {
+			respondError(w, http.StatusUnprocessableEntity, "tag must be 1-64 printable ASCII characters without spaces")
+			return
+		}
+		if opts.CancelStatus >= 400 {
+			respondError(w, opts.CancelStatus, "cancel rejected")
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		now := time.Now().UTC()
+		key := r.Header.Get("Authorization")
+		n := 0
+		for _, rc := range receipts {
+			if rc.key == key && rc.active(now) && slices.Contains(rc.tags, req.Tag) {
+				rc.cancel(now, pushward.ReceiptCancelTag)
+				n++
+			}
+		}
+		respondJSON(w, http.StatusOK, map[string]int{"canceled": n})
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -561,6 +785,18 @@ func CountPath(calls []APICall, path string) int {
 		}
 	}
 	return n
+}
+
+// CallsTo returns the recorded calls to method and path, in the order they
+// were made.
+func CallsTo(calls []APICall, method, path string) []APICall {
+	var out []APICall
+	for _, c := range calls {
+		if c.Method == method && c.Path == path {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // GetCalls returns a snapshot of the recorded API calls.
@@ -648,15 +884,116 @@ func recordCall(calls *[]APICall, mu *sync.Mutex, r *http.Request) json.RawMessa
 	return json.RawMessage(body)
 }
 
-func respondError(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+func respondError(w http.ResponseWriter, status int, msg string) {
+	respondProblem(w, status, "", msg)
+}
+
+// respondProblem is respondError with the Problem code the client exposes
+// as HTTPError.Code; an empty code is left out, as the server leaves it out
+// of a schema check's 422.
+func respondProblem(w http.ResponseWriter, status int, code, msg string) {
+	p := map[string]any{
 		"type":   "about:blank",
-		"title":  http.StatusText(code),
-		"status": code,
+		"title":  http.StatusText(status),
+		"status": status,
 		"detail": msg,
-	})
+	}
+	if code != "" {
+		p["code"] = code
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(p)
+}
+
+func respondJSON(w http.ResponseWriter, status int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(v)
+}
+
+// validateAcknowledgeSchema is the part of the acknowledged-alert rules that
+// lives in the server's OpenAPI schema. huma checks it before the handler
+// runs and answers 422 with no code. An omitted field (0 here) takes the
+// server default instead.
+func validateAcknowledgeSchema(req *notificationRequest) error {
+	if len(req.Tags) > maxReceiptTags {
+		return fmt.Errorf("tags must have at most %d entries", maxReceiptTags)
+	}
+	ack := req.Acknowledge
+	if ack == nil {
+		return nil
+	}
+	if ack.RepeatSeconds != 0 && (ack.RepeatSeconds < 30 || ack.RepeatSeconds > 3600) {
+		return fmt.Errorf("acknowledge.repeat_seconds must be between 30 and 3600")
+	}
+	if ack.ExpireSeconds != 0 && (ack.ExpireSeconds < 60 || ack.ExpireSeconds > 10800) {
+		return fmt.Errorf("acknowledge.expire_seconds must be between 60 and 10800")
+	}
+	if utf8.RuneCountInString(ack.ActionTitle) > 64 {
+		return fmt.Errorf("acknowledge.action_title must be at most 64 characters")
+	}
+	return nil
+}
+
+// validateAcknowledge is the handler's check of the acknowledged-alert
+// fields, each refusal a 400 notification.invalid: tags and callback_url need
+// acknowledge, acknowledge needs a push that alerts, pw_ack is reserved, the
+// button it adds needs room among the actions, and each tag must match the
+// pattern. Like the server it fills the defaults and de-duplicates the tags
+// in place.
+func validateAcknowledge(req *notificationRequest) error {
+	ack := req.Acknowledge
+	if ack == nil {
+		if len(req.Tags) > 0 || req.CallbackURL != "" {
+			return fmt.Errorf("tags and callback_url require acknowledge")
+		}
+		return nil
+	}
+	if req.Push != nil && !*req.Push {
+		return fmt.Errorf("acknowledge requires push")
+	}
+	if req.Level == pushward.LevelPassive {
+		return fmt.Errorf("acknowledge is not available for level passive")
+	}
+	if ack.RepeatSeconds == 0 {
+		ack.RepeatSeconds = defaultAckRepeatSeconds
+	}
+	if ack.ExpireSeconds == 0 {
+		ack.ExpireSeconds = defaultAckExpireSeconds
+	}
+
+	answerable := false
+	for _, a := range req.Actions {
+		if a.ID == pushward.AckActionID {
+			return fmt.Errorf("actions[].id pw_ack is reserved for the acknowledge button")
+		}
+		answerable = answerable || (a.URL == "" && !a.Foreground)
+	}
+	if !answerable && len(req.Actions) >= 10 {
+		return fmt.Errorf("acknowledge adds an acknowledge button, and 10 actions leave no room for it")
+	}
+
+	tags := make([]string, 0, len(req.Tags))
+	for _, tag := range req.Tags {
+		if !receiptTagPattern.MatchString(tag) {
+			return fmt.Errorf("tags must be 1-64 printable ASCII characters without spaces")
+		}
+		if !slices.Contains(tags, tag) {
+			tags = append(tags, tag)
+		}
+	}
+	req.Tags = tags
+
+	// The server also refuses private and cluster hosts, and a callback
+	// sent with anything but an integration key; the mock checks only the
+	// scheme and host.
+	if req.CallbackURL != "" {
+		if u, err := url.Parse(req.CallbackURL); err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil {
+			return fmt.Errorf("callback_url must be an https URL with a host")
+		}
+	}
+	return nil
 }
 
 func validateCreateRequest(req *createRequest) error {
