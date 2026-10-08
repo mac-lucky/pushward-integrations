@@ -23,6 +23,8 @@ LABEL org.opencontainers.image.title="pushward-forgejo" \
 # apk upgrade first: the digest-pinned base can lag Alpine package fixes, and
 # upgrading at build picks them up without waiting for a base-image rebuild.
 # Stale openssl failed the CI grype gate on 2026-08-27.
+# PKG_REFRESH is new on every CI build, so this RUN never comes from the layer cache.
+ARG PKG_REFRESH
 RUN apk upgrade --no-cache && apk add --no-cache ca-certificates && adduser -D -u 1000 appuser
 
 COPY --from=builder /pushward-forgejo /pushward-forgejo
