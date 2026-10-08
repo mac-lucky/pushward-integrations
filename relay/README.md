@@ -36,13 +36,16 @@ external service --POST /<provider>--> pushward-relay --REST API--> pushward-ser
 
 A service POSTs its native webhook to a per-provider route (e.g. `POST /grafana`). The relay extracts the tenant's `hlk_` key from the `Authorization` header, decodes the payload, maps the event to the PushWard activity lifecycle (create / update / two-phase end) or a one-shot push notification, and calls the [pushward-server](https://pushward.app) REST API. The server delivers via APNs to the PushWard iOS app. Per-tenant state (alert grouping, ArgoCD sync tracking, download dedup) is persisted in PostgreSQL with TTL cleanup.
 
+Relay notifications are not end-to-end encrypted. The relay never holds a user's encryption key, so the text it builds from a webhook reaches the server readable, like any other notification sent without one.
+
 ## Features
 
 - **Multi-tenant by design** - tenants are identified by their `hlk_` integration key, extracted from every request by shared auth middleware. No per-service key configuration; one relay serves many users.
-- **20 webhook routes** across **16 configurable provider blocks** (the `starr` block serves Radarr, Sonarr, and Prowlarr; the `gitea` block serves Gitea and Forgejo). See [Providers](#providers).
+- **22 webhook routes** across **16 configurable provider blocks** (the `starr` block serves Radarr, Sonarr, and Prowlarr; the `gitea` block serves Gitea and Forgejo). See [Providers](#providers).
 - **Universal webhook** - `POST /` routes a payload it recognises to its provider, and anything else to the universal route: 67 presets map documented payloads (Alertmanager, PagerDuty, GitHub, GitLab, Sentry and more) to alert or progress cards, and any other JSON becomes one plain notification. Off by default. See [Root route](#root-route-post-).
 - **Two-phase end lifecycle** - completion events send a final `ONGOING` update (so the result shows on the Dynamic Island), then `ENDED` after a short display delay. Used by ArgoCD, Radarr, Sonarr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest, Gitea, Forgejo, Komodo, and TrueNAS. Grafana, Prowlarr, Bazarr, and Changedetection are fire-and-forget.
 - **Push notifications** - one-shot APNs alerts for events that don't fit a Live Activity (Grafana alerts, Bazarr subtitle downloads, Prowlarr grabs).
+- **Acknowledged alerts** - `?ack=1` makes an alert's push repeat until someone acknowledges it, and the resolve stops it. See [Acknowledged alerts](#acknowledged-alerts-ack1).
 - **Cross-provider notification threads** - Radarr/Sonarr/Overseerr/Jellyfin notifications about the same movie (TMDB id) or show (TVDB id) collapse into one iOS notification thread.
 - **PostgreSQL state store** - persistent alert grouping, sync tracking, and download dedup with a background TTL sweep every 30s.
 - **Per-tenant client pool** - LRU pool of PushWard API clients keyed by `hlk_` hash (up to 1,000 concurrent tenants), wrapped in a shared circuit breaker.
@@ -231,6 +234,8 @@ The key itself is only checked when the relay calls PushWard on your behalf, so 
 | POST | `/komodo` | Komodo Custom-alerter webhooks |
 | POST | `/truenas/v2/alerts` | TrueNAS OpsGenie create-alert calls |
 | DELETE | `/truenas/v2/alerts/{id}` | TrueNAS OpsGenie close-alert calls |
+| POST | `/truenas/ack/v2/alerts` | The same, with `ack=1` turned on by the path (see [TrueNAS](#truenas)) |
+| DELETE | `/truenas/ack/v2/alerts/{id}` | The same, and stops the alert's repeats first |
 | POST | `/` | Any webhook: handed to the provider that sent it, else to the universal route (see [Root route](#root-route-post-)) |
 | GET | `/health` | Liveness - returns `ok` |
 | GET | `/ready` | Readiness - `ready`, or `503` if the DB ping fails |
@@ -272,15 +277,18 @@ Every route requires the `hlk_` integration key. The relay accepts it two ways (
 
 ### Query parameters
 
-Append query parameters to any webhook URL to override how the relay handles that one request. They work on every route (including the TrueNAS `DELETE`), and an explicit parameter always wins over the provider's computed value and the static config. Leave them off and behavior is byte-for-byte unchanged.
+Append query parameters to a webhook URL to override how the relay handles that one request. The relay reads them on every route, and an explicit parameter always wins over the provider's computed value and the static config. Leave them off and behavior is byte-for-byte unchanged. TrueNAS can't send any: it appends `/v2/alerts` to the API URL it is given, so a query string there never arrives as one. It gets acknowledged alerts from its own path instead (see [TrueNAS](#truenas)).
 
 | Parameter | Values | Effect |
 |---|---|---|
 | `channels` | comma-separated subset of `activity`, `notification` | Restricts delivery to the listed surfaces. `channels=notification` never creates or updates a Live Activity (each event is delivered as a one-shot notification where the provider has one); `channels=activity` drops every push notification the handler would send (new and resolved) but keeps the Live Activity flow. |
 | `priority` | integer `0`-`10` | Overrides the provider's `priority` config for the activity it creates. |
 | `level` | `passive`, `active`, `time-sensitive`, `critical` | Overrides the interruption level of every notification the handler sends. |
+| `ack` | `1` or `0` | `1` makes an alert's push repeat until someone taps **Acknowledge** on it, or until `ack_expire` runs out; the resolve stops it. Grafana, Uptime Kuma, Gatus, Komodo and universal-route alerts. See [Acknowledged alerts](#acknowledged-alerts-ack1). |
+| `ack_repeat` | seconds, `30`-`3600` (default `300`) | How often the alert repeats. Needs `ack=1`. |
+| `ack_expire` | seconds, `60`-`10800` (default `3600`) | How long it keeps repeating if nobody acknowledges it. Needs `ack=1`. |
 
-An unknown `channels` value, an out-of-range or non-integer `priority`, or an invalid `level` returns `400` before the handler runs.
+An unknown `channels` value, an out-of-range or non-integer `priority`, an invalid `level`, an `ack` that is not `1`/`0`, an `ack_repeat` or `ack_expire` out of range or without `ack=1`, and `ack=1` with `level=passive` (a passive push doesn't alert, so there is nothing to repeat) return `400` before the handler runs.
 
 Example: deliver Komodo as notifications only, at priority 8, with a passive interruption level:
 
@@ -289,6 +297,18 @@ https://relay.pushward.app/komodo?channels=notification&priority=8&level=passive
 ```
 
 Note the asymmetry: Live-Activity-only providers (ArgoCD, Proxmox, Gitea/Forgejo, Jellyfin playback) have no one-shot notification to fall back to, so `channels=notification` suppresses their output entirely; notification-only providers (Grafana, Prowlarr, Bazarr) have no Live Activity, so `channels=activity` suppresses theirs.
+
+#### Acknowledged alerts (`ack=1`)
+
+```
+https://relay.pushward.app/uptimekuma?ack=1&ack_repeat=60
+```
+
+The push for a new alert (Grafana firing, Uptime Kuma DOWN, Gatus TRIGGERED, a Komodo condition, a TrueNAS alert, a universal-route alert card) repeats until someone taps **Acknowledge** on it or `ack_expire` runs out. Repeats don't count against the notification quota, and the server stops after 50 of them. Only that push repeats: resolved notifications, passive ones (a Komodo `OK` event) and every other provider's notifications go out as before, and so does everything with `channels=activity`, which sends no push at all.
+
+Each repeating alert is tagged `relay.<collapse id>`, the collapse id the provider already gives that alert: one per Grafana alert name, Uptime Kuma monitor, Gatus endpoint, Komodo condition or TrueNAS alias, and the card's slug on the universal route. When the alert resolves (nothing left firing in the Grafana group, Uptime Kuma UP, Gatus RESOLVED, Komodo `resolved`, the TrueNAS clear, a universal card ending), the relay cancels that tag first and sends the resolved notification after it, so a late repeat can't land on top of "Resolved". The Grafana tag follows the existing per-alertname collapse: with a contact point that groups by instance or folder, one subgroup resolving cancels the repeats of another that still fires under the same alert name. A Grafana group that changes while it still fires starts repeats again only for an alert that wasn't firing before, so one of its alerts resolving doesn't restart what someone already acknowledged. The tag is rebuilt from the resolve webhook alone, so a relay restart between the two changes nothing; the resolve has to carry `ack=1` as well, which it does when the service posts both to the same URL. The cancel waits at most 5 seconds and a failure is only logged: the resolved notification still goes out. Komodo one-shot events (build failed, container stopped, ...) never resolve, so they repeat until acknowledged or expired. With `ack=1` they are keyed on their condition (target and alert type, and a Custom alert's source) rather than on each event, so a crash loop's next event replaces the receipt of the one before instead of taking another of the 25.
+
+The server allows 25 repeating alerts per account at a time, shared with everything else that sends acknowledged notifications with your keys (the CLI, MCP server, Home Assistant integration, Grafana plugin). When it refuses the acknowledge for that or any other reason of its own (acknowledged alerts switched off on the server, an acknowledge field it rejects), the relay sends the same notification once more without it, so the alert still arrives, only without repeats; `pushward_relay_ack_fallback_total{provider,reason}` counts these. A `401`, `403`, `429` or server error is not retried this way. Two known gaps: a repeat already on its way when the cancel runs can still arrive once, and a key only cancels what it sent itself, so after moving a service to a new `hlk_` key the alerts still repeating from the old one run until they are acknowledged, expire, or the old key is revoked.
 
 ### Root route: `POST /`
 
@@ -320,7 +340,7 @@ Anything the relay doesn't recognise goes to the universal route, and so does a 
 https://relay.pushward.app/?source=alertmanager
 ```
 
-`channels`, `priority` and `level` pass through to whichever route handles the request.
+`channels`, `priority`, `level`, `ack`, `ack_repeat` and `ack_expire` pass through to whichever route handles the request.
 
 The relay reads the body for detection only when the request carries an `hlk_` key and a JSON `Content-Type`, declares no `Content-Length` of 1 MB or more, and comes from an IP that is still under its rate limit. A missing or `text/plain` `Content-Type` counts as JSON, because it is rewritten to `application/json` before this check. A chunked body declares no length, so it is read up to 1 MB and passed on undetected if it gets that far. A request that fails any of these goes to the universal route, which answers `401` for a missing key, `413` for a body over the limit and `429` over the rate limit; with the universal route off, it gets `404`. `pushward_relay_root_dispatch_total{route,via}` counts where requests to `/` went and why: `header` or `body` for a detected sender, `disabled`, `veto`, `none`, or `skipped` for one whose body was not inspected.
 
@@ -920,7 +940,9 @@ Emulates the OpsGenie alert service that TrueNAS ships with. TrueNAS opens an al
 
 **Setup:** In TrueNAS, go to **System Settings > Alert Services > Add**. Set **Type** to **OpsGenie**, **API Key** to your `hlk_` key, and **API URL** to `https://relay.pushward.app/truenas` (no trailing slash). Pick the alert **Level** to forward, then **Send Test Alert** to verify (a test flows as a real create then clear).
 
-**Limitations:** TrueNAS's OpsGenie payload carries no hostname (multi-NAS setups cannot tell boxes apart in the activity) and no severity level, so alerts render with a fixed warning style; filter what you forward using the per-service **Level** in TrueNAS. The API URL must have no trailing slash.
+**Acknowledged alerts:** set the **API URL** to `https://relay.pushward.app/truenas/ack` instead. Each alert's push then repeats every 5 minutes, for up to an hour, until someone acknowledges it, and the clear stops it (see [Acknowledged alerts](#acknowledged-alerts-ack1)). This is `ack=1` turned on by the path, at the default `ack_repeat` and `ack_expire`: TrueNAS appends `/v2/alerts` to the API URL, so it can't carry a query string.
+
+**Limitations:** TrueNAS's OpsGenie payload carries no hostname (multi-NAS setups cannot tell boxes apart in the activity) and no severity level, so alerts render with a fixed warning style; filter what you forward using the per-service **Level** in TrueNAS. The API URL must have no trailing slash and can't take [query parameters](#query-parameters).
 
 ## Development
 
