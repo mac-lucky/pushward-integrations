@@ -8,6 +8,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/mac-lucky/pushward-integrations/relay/internal/ack"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
@@ -31,6 +32,10 @@ type Handler struct {
 // the Handler. TrueNAS's OpsGenie alert service creates an alert with a POST and
 // clears it with a DELETE keyed by the alert alias, so the relay emulates that
 // pair.
+//
+// The pair is registered twice. TrueNAS appends /v2/alerts to the API URL it
+// is given, so a query string there never reaches the relay as one, and the
+// second pair under /truenas/ack turns on ?ack=1 by its path instead.
 func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.TrueNASConfig) *Handler {
 	h := &Handler{
 		store:   store,
@@ -49,7 +54,28 @@ func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *
 		"Clear TrueNAS OpsGenie alert",
 		"Ends the Live Activity for a TrueNAS alert cleared via the OpsGenie close-alert call.",
 		[]string{"TrueNAS"}, h.handleDelete)
+	humautil.RegisterWebhook(api, "/truenas/ack/v2/alerts", "post-truenas-alert-ack",
+		"Receive TrueNAS OpsGenie alert, repeating until acknowledged",
+		"Same as POST /truenas/v2/alerts, with the push repeating until acknowledged (ack=1).",
+		[]string{"TrueNAS"}, func(ctx context.Context, input *createInput) (*humautil.WebhookResponse, error) {
+			return h.handleCreate(overrides.WithAck(ctx), input)
+		})
+	humautil.RegisterDelete(api, "/truenas/ack/v2/alerts/{id}", "delete-truenas-alert-ack",
+		"Clear TrueNAS OpsGenie alert sent with ack",
+		"Same as DELETE /truenas/v2/alerts/{id}, and stops the alert's repeats first.",
+		[]string{"TrueNAS"}, func(ctx context.Context, input *deleteInput) (*humautil.WebhookResponse, error) {
+			return h.handleDelete(overrides.WithAck(ctx), input)
+		})
 	return h
+}
+
+type createInput struct {
+	Body createAlert
+}
+
+type deleteInput struct {
+	ID             string `path:"id"`
+	IdentifierType string `query:"identifierType"`
 }
 
 func (h *Handler) Ender() *lifecycle.Ender { return h.ender }
@@ -57,10 +83,7 @@ func (h *Handler) Ender() *lifecycle.Ender { return h.ender }
 func slugFor(alias string) string   { return text.SlugHash("truenas", alias, 6) }
 func mapKeyFor(alias string) string { return "truenas:" + alias }
 
-func (h *Handler) handleCreate(ctx context.Context, input *struct {
-	Body createAlert
-},
-) (*humautil.WebhookResponse, error) {
+func (h *Handler) handleCreate(ctx context.Context, input *createInput) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "truenas")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
@@ -153,7 +176,7 @@ func (h *Handler) create(ctx context.Context, userKey string, log *slog.Logger, 
 		notif := notification(p.Alias, title, slug)
 		notif.Body = stateText
 		notif.Level = ov.LevelOr(pushward.LevelActive)
-		if err := pwClient.SendNotification(ctx, notif); err != nil {
+		if err := ack.Send(ctx, pwClient, log, notif, slug); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
 		}
 	}
@@ -161,11 +184,7 @@ func (h *Handler) create(ctx context.Context, userKey string, log *slog.Logger, 
 	return nil
 }
 
-func (h *Handler) handleDelete(ctx context.Context, input *struct {
-	ID             string `path:"id"`
-	IdentifierType string `query:"identifierType"`
-},
-) (*humautil.WebhookResponse, error) {
+func (h *Handler) handleDelete(ctx context.Context, input *deleteInput) (*humautil.WebhookResponse, error) {
 	ctx = metrics.WithProvider(ctx, "truenas")
 	userKey := auth.KeyFromContext(ctx)
 	log := slog.With("tenant", auth.KeyHash(userKey))
@@ -181,6 +200,9 @@ func (h *Handler) handleDelete(ctx context.Context, input *struct {
 }
 
 func (h *Handler) clear(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, alias string) error {
+	// Before the state check, so a restart since the create still stops it.
+	ack.Cancel(ctx, pwClient, log, slugFor(alias))
+
 	mapKey := mapKeyFor(alias)
 	raw, err := h.store.Get(ctx, "truenas", userKey, mapKey, "")
 	if err != nil {

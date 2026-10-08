@@ -14,6 +14,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/mac-lucky/pushward-integrations/relay/internal/ack"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
@@ -211,8 +212,19 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		// CollapseID derivation) - text.Slug collapses distinct alertnames like
 		// "High CPU"/"high_cpu" to one key, cross-contaminating dedup.
 		stateKey := text.SlugHash("grafana", alertname, 6)
+
+		// A group with nothing firing left stops the repeats of its alert
+		// (?ack=1) ahead of the dedup check. The tag comes from the collapse
+		// id, so this needs no state and works after a restart.
+		firing := len(g.firing) > 0
+		if !firing {
+			ack.Cancel(ctx, cl, log, stateKey)
+		}
+
 		currentState := h.buildState(g)
-		if h.stateUnchanged(ctx, userKey, stateKey, currentState, log) {
+		prev := h.loadState(ctx, userKey, stateKey, log)
+		if currentState.equals(prev) {
+			log.Debug("alert state unchanged, skipping", "alertname", stateKey)
 			continue
 		}
 
@@ -225,7 +237,14 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		}
 		req.Level = ov.LevelOr(req.Level)
 
-		if err := cl.SendNotification(ctx, req); err != nil {
+		// Only a fingerprint that was not firing before starts repeats. A
+		// group that changed by resolving some of its alerts goes out plain,
+		// so an alert already acknowledged does not start over.
+		identity := ""
+		if newlyFiring(g, prev) {
+			identity = stateKey
+		}
+		if err := ack.Send(ctx, cl, log, req, identity); err != nil {
 			log.Error("failed to send notification", "alertname", alertname, "error", err)
 			apiErr = err
 			continue
@@ -293,25 +312,34 @@ func (h *Handler) buildState(g *alertGroup) *alertGroupState {
 	return s
 }
 
-// stateUnchanged checks if the alert group state matches the previously stored state.
-func (h *Handler) stateUnchanged(ctx context.Context, userKey, stateKey string, current *alertGroupState, log *slog.Logger) bool {
+// loadState returns the previously stored state of an alert group, or nil
+// when there is none or it cannot be read. nil compares as changed, so a store
+// error never drops a notification.
+func (h *Handler) loadState(ctx context.Context, userKey, stateKey string, log *slog.Logger) *alertGroupState {
 	raw, err := h.store.Get(ctx, "grafana", userKey, stateKey, "")
 	if err != nil {
 		log.Warn("failed to read alert state", "key", stateKey, "error", err)
-		return false // on error, treat as changed to avoid dropping notifications
+		return nil
 	}
 	if raw == nil {
-		return false // no prior state
+		return nil // no prior state
 	}
 
 	var prev alertGroupState
 	if err := json.Unmarshal(raw, &prev); err != nil {
 		log.Warn("failed to decode alert state", "key", stateKey, "error", err)
-		return false
+		return nil
 	}
-	if current.equals(&prev) {
-		log.Debug("alert state unchanged, skipping", "alertname", stateKey)
-		return true
+	return &prev
+}
+
+// newlyFiring reports whether g fires an alert that prev did not have firing.
+// A nil prev (no state, or an unreadable one) makes every firing alert new.
+func newlyFiring(g *alertGroup, prev *alertGroupState) bool {
+	for _, a := range g.firing {
+		if prev == nil || !slices.Contains(prev.Firing, a.Fingerprint) {
+			return true
+		}
 	}
 	return false
 }

@@ -71,6 +71,15 @@ var (
 		Help:      "Webhooks accepted but not acted on in full, by provider and reason.",
 	}, []string{"provider", "reason"})
 
+	// AckFallbackTotal counts alerts sent with ?ack=1 that the server would
+	// not repeat, each then sent once without acknowledge. reason is the ack
+	// package's closed set, never the server's free-text detail.
+	AckFallbackTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "pushward_relay",
+		Name:      "ack_fallback_total",
+		Help:      "Acknowledged alerts the server refused, sent again without acknowledge, by provider and reason.",
+	}, []string{"provider", "reason"})
+
 	APICallRetriesTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "pushward_relay",
 		Name:      "api_call_retries_total",

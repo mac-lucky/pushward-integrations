@@ -10,6 +10,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/mac-lucky/pushward-integrations/relay/internal/ack"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
@@ -185,7 +186,7 @@ func (h *Handler) handleResolvable(ctx context.Context, userKey string, log *slo
 		notif := h.notification(p, name, slug)
 		notif.Body = name + text.SepDot + stateText
 		notif.Level = ov.LevelOr(pushward.LevelActive)
-		if err := pwClient.SendNotification(ctx, notif); err != nil {
+		if err := ack.Send(ctx, pwClient, log, notif, slug); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
 		}
 	}
@@ -194,6 +195,9 @@ func (h *Handler) handleResolvable(ctx context.Context, userKey string, log *slo
 }
 
 func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *komodoPayload, slug, mapKey string) error {
+	// Before the state check, so a restart since the trigger still stops it.
+	ack.Cancel(ctx, pwClient, log, slug)
+
 	existing, err := h.store.Get(ctx, "komodo", userKey, mapKey, "")
 	if err != nil {
 		log.Error("failed to check state", "target", p.Target.ID, "error", err)
@@ -245,7 +249,9 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 
 // handleOneShot maps a non-resolvable Komodo event to a single push
 // notification. Levels map OK -> passive, WARNING -> active, CRITICAL ->
-// time-sensitive.
+// time-sensitive. Nothing resolves a one-shot, so with ?ack=1 a WARNING or
+// CRITICAL one repeats until acknowledged, expired or superseded by the next
+// event of its condition.
 func (h *Handler) handleOneShot(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *komodoPayload) error {
 	ov := overrides.FromContext(ctx)
 	// A one-shot has no Live Activity to keep, so channels=activity leaves
@@ -263,7 +269,13 @@ func (h *Handler) handleOneShot(ctx context.Context, userKey string, log *slog.L
 		}
 	}
 	notif.Level = ov.LevelOr(oneShotLevel(p.Level))
-	if err := pwClient.SendNotification(ctx, notif); err != nil {
+	// One receipt per event would let a crash loop fill the account's 25
+	// repeating alerts. Keyed on the condition instead, each event of it
+	// supersedes the receipt of the one before.
+	if ack.Wanted(ctx, notif) {
+		notif.CollapseID = conditionCollapseID(p)
+	}
+	if err := ack.Send(ctx, pwClient, log, notif, notif.CollapseID); err != nil {
 		log.Error("failed to send notification", "type", p.Data.Type, "error", err)
 		return err
 	}
@@ -300,6 +312,17 @@ func slugAndKey(p *komodoPayload) (slug, mapKey string) {
 
 func oneShotCollapseID(p *komodoPayload) string {
 	cond := p.Target.Type + "/" + p.Target.ID + "/" + p.Data.Type + "/" + strconv.FormatInt(p.TS, 10)
+	return text.SlugHash("komodo", cond, 6)
+}
+
+// conditionCollapseID is oneShotCollapseID without the time: the target and the
+// alert type, plus a Custom alert's source, since every Custom alert targets
+// System/"system". Only acknowledged one-shots use it.
+func conditionCollapseID(p *komodoPayload) string {
+	cond := p.Target.Type + "/" + p.Target.ID + "/" + p.Data.Type
+	if src, _, ok := customSource(p.Data.Data.Message); ok && p.Data.Type == "Custom" {
+		cond += "/" + src
+	}
 	return text.SlugHash("komodo", cond, 6)
 }
 

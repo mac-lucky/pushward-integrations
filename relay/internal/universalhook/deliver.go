@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/mac-lucky/pushward-integrations/relay/internal/ack"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
@@ -93,6 +94,22 @@ func (h *Handler) deliverNotification(ctx context.Context, r *request, m univers
 // prefix, when set, leads the body ("Resolved").
 func (h *Handler) notify(ctx context.Context, r *request, ev universal.Event, slug, level, prefix string) error {
 	return h.clients.SendNotification(ctx, r.key, r.sendLog, h.notification(ctx, r, ev, slug, level, prefix))
+}
+
+// raise sends the notification of an event that opens card a, or would have
+// if cards were on. With ?ack=1 an alert repeats until acknowledged, tagged
+// by a's slug so that end can stop it.
+func (h *Handler) raise(ctx context.Context, r *request, ev universal.Event, a activity, slug, level string) error {
+	if ev.Kind != universal.KindAlert {
+		return h.notify(ctx, r, ev, slug, level, "")
+	}
+	req := h.notification(ctx, r, ev, slug, level, "")
+	if err := ack.Send(ctx, h.clients.Get(r.key), r.sendLog, req, a.slug); err != nil {
+		r.sendLog.Error("failed to send notification", "source", req.Source, "error", err)
+		return err
+	}
+	r.sendLog.Info("notification sent", "source", req.Source)
+	return nil
 }
 
 func (h *Handler) notification(ctx context.Context, r *request, ev universal.Event, slug, level, prefix string) pushward.SendNotificationRequest {
@@ -204,7 +221,7 @@ func (h *Handler) ongoing(ctx context.Context, r *request, m universal.Mapping, 
 		// The push is the only delivery left, so its failure is the
 		// request's.
 		if ov.NotifyFallback(alert) {
-			return h.notify(ctx, r, ev, "", levelOf(m, ev), "")
+			return h.raise(ctx, r, ev, a, "", levelOf(m, ev))
 		}
 		return nil
 	}
@@ -230,7 +247,7 @@ func (h *Handler) ongoing(ctx context.Context, r *request, m universal.Mapping, 
 			// without activity rights) would be refused on every retry; the
 			// event still reaches the user as a plain notification.
 			if refused(err) {
-				if nerr := h.notify(ctx, r, ev, "", levelOf(m, ev), ""); nerr == nil {
+				if nerr := h.raise(ctx, r, ev, a, "", levelOf(m, ev)); nerr == nil {
 					return nil
 				}
 			}
@@ -256,8 +273,8 @@ func (h *Handler) ongoing(ctx context.Context, r *request, m universal.Mapping, 
 	// A new alert interrupts; a progress start does not.
 	if isNew && ov.NotifyFallback(alert) {
 		// The card already carries the event, so a failed push is logged
-		// by the pool and not the request's failure.
-		_ = h.notify(ctx, r, ev, a.slug, levelOf(m, ev), "")
+		// and not the request's failure.
+		_ = h.raise(ctx, r, ev, a, a.slug, levelOf(m, ev))
 	}
 	return nil
 }
@@ -291,6 +308,11 @@ func (h *Handler) card(ctx context.Context, r *request, a activity) (cardState, 
 }
 
 func (h *Handler) end(ctx context.Context, r *request, ev universal.Event, a activity) error {
+	// Before the state check, so a restart since the alert still stops it.
+	if ev.Kind == universal.KindAlert {
+		ack.Cancel(ctx, h.clients.Get(r.key), r.log, a.slug)
+	}
+
 	ov := overrides.FromContext(ctx)
 	content, outcome := h.finalContent(r, ev)
 

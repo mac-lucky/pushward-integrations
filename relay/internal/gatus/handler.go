@@ -8,6 +8,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/mac-lucky/pushward-integrations/relay/internal/ack"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
@@ -213,7 +214,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 		notifReq := h.buildNotification(p, slug, subtitle)
 		notifReq.Body = p.EndpointName + text.SepDot + stateText
 		notifReq.Level = ov.LevelOr(pushward.LevelActive)
-		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
+		if err := ack.Send(ctx, pwClient, log, notifReq, slug); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
 		}
 	}
@@ -222,6 +223,8 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 
 func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *gatusPayload) error {
 	slug, mapKey := h.slugAndKey(p)
+	// Before the state check, so a restart since TRIGGERED still stops it.
+	ack.Cancel(ctx, pwClient, log, slug)
 
 	existing, err := h.store.Get(ctx, "gatus", userKey, mapKey, "")
 	if err != nil {

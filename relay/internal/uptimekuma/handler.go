@@ -11,6 +11,7 @@ import (
 
 	"github.com/danielgtaylor/huma/v2"
 
+	"github.com/mac-lucky/pushward-integrations/relay/internal/ack"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
@@ -111,6 +112,12 @@ func (h *Handler) slugAndKey(p *uptimekumaPayload) (slug, mapKey, monitorIDStr s
 	return
 }
 
+// collapseID is the collapse id of a monitor's notifications and the identity
+// its DOWN alert repeats under with ?ack=1, so UP can cancel it with no state.
+func collapseID(p *uptimekumaPayload) string {
+	return text.SlugHash("uptimekuma", strconv.Itoa(p.Monitor.ID), 6)
+}
+
 func (h *Handler) subtitle(p *uptimekumaPayload) string {
 	return "Uptime Kuma" + text.SepDot + text.TruncateHard(p.Monitor.Name, 50)
 }
@@ -120,7 +127,7 @@ func (h *Handler) buildNotification(p *uptimekumaPayload, subtitle string, monit
 		Title:      text.TruncateHard(p.Monitor.Name, 100),
 		Subtitle:   subtitle,
 		ThreadID:   "uptimekuma",
-		CollapseID: text.SlugHash("uptimekuma", monitorIDStr, 6),
+		CollapseID: collapseID(p),
 		Source:     "uptimekuma",
 		Push:       pushward.BoolPtr(true),
 		Metadata: map[string]string{
@@ -214,7 +221,7 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 		notifReq := h.buildNotification(p, subtitle, monitorIDStr)
 		notifReq.Body = p.Monitor.Name + text.SepDot + stateText
 		notifReq.Level = ov.LevelOr(pushward.LevelActive)
-		if err := pwClient.SendNotification(ctx, notifReq); err != nil {
+		if err := ack.Send(ctx, pwClient, log, notifReq, collapseID(p)); err != nil {
 			log.Error("failed to send notification", "slug", slug, "error", err)
 		}
 	}
@@ -222,6 +229,9 @@ func (h *Handler) handleDown(ctx context.Context, userKey string, log *slog.Logg
 }
 
 func (h *Handler) handleUp(ctx context.Context, userKey string, log *slog.Logger, pwClient *pushward.Client, p *uptimekumaPayload) error {
+	// Before the state check, so a restart since the DOWN still stops it.
+	ack.Cancel(ctx, pwClient, log, collapseID(p))
+
 	_, mapKey, _ := h.slugAndKey(p)
 
 	existing, err := h.store.Get(ctx, "uptimekuma", userKey, mapKey, "")

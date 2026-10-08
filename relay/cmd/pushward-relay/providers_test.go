@@ -52,6 +52,12 @@ var fixtureRoutes = map[string]string{
 	"uptimekuma":      "/uptimekuma",
 }
 
+// ackRoutes maps a fixture directory to a second route that runs the same
+// handlers with ?ack=1 turned on by the path.
+var ackRoutes = map[string]string{
+	"truenas": "/truenas/ack/v2/alerts",
+}
+
 // stateful are the providers whose fixtures leave a relay_state row behind.
 // changedetection, unmanic and bazarr are handed no store at all, and the
 // universal route opens no card for a payload it does not know.
@@ -100,6 +106,9 @@ func TestRegisterProviders_HashesKeys(t *testing.T) {
 	for _, path := range fixtureRoutes {
 		routed[path] = true
 	}
+	for _, path := range ackRoutes {
+		routed[path] = true
+	}
 	for path, item := range api.OpenAPI().Paths {
 		if item.Post != nil && !routed[path] {
 			t.Errorf("POST %s has no fixture directory in fixtureRoutes", path)
@@ -133,8 +142,14 @@ func TestRegisterProviders_HashesKeys(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if resp := post(mux, fixtureRoutes[dir], body); resp.Code != http.StatusOK {
-				t.Errorf("POST %s %s/%s: %d %s", fixtureRoutes[dir], dir, filepath.Base(name), resp.Code, resp.Body.String())
+			paths := []string{fixtureRoutes[dir]}
+			if p, ok := ackRoutes[dir]; ok {
+				paths = append(paths, p)
+			}
+			for _, path := range paths {
+				if resp := post(mux, path, body); resp.Code != http.StatusOK {
+					t.Errorf("POST %s %s/%s: %d %s", path, dir, filepath.Base(name), resp.Code, resp.Body.String())
+				}
 			}
 		}
 	}
