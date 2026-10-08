@@ -969,9 +969,9 @@ type SendNotificationRequest struct {
 	// end to end with the user's encryption key; leave those four empty when
 	// it is set. The server stores and pushes placeholder text instead, and
 	// only the user's devices holding the key read the real text. Everything
-	// else stays readable to the server. This client does not seal: the
-	// caller brings the envelope. Organization keys get 422
-	// ErrCodeNotificationEncryptionUnavailable.
+	// else stays readable to the server. This client sends what it is given;
+	// shared/e2e.SealRequest moves the four fields into the envelope.
+	// Organization keys get 422 ErrCodeNotificationEncryptionUnavailable.
 	Encrypted string `json:"encrypted,omitempty"`
 	// Acknowledge repeats the push until someone taps an action without a
 	// URL, or until it expires; SentNotification.Receipt then tracks it.
