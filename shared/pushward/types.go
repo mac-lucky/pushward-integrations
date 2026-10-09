@@ -1150,9 +1150,9 @@ const (
 // content, SendAt and Recurrence; NotificationID, SentAt and Delivery are set
 // once it is sent, FailureReason ("quota_exceeded", "receipt_limit",
 // "key_revoked", "target_deleted" or "internal_error") when it failed, and
-// CanceledAt when it was canceled. receipt_limit means it asked for
-// Acknowledge while 25 acknowledged notifications were already active; like
-// quota_exceeded, a repeating schedule skips that send.
+// CanceledAt when it was canceled. receipt_limit appears only on older
+// schedules: a send that comes due while 25 acknowledged notifications are
+// already active now goes out once without Acknowledge instead.
 //
 // A repeating schedule keeps one ID for the whole series. After each send it
 // goes back to ScheduledStatusScheduled with SendAt moved to the next
