@@ -1,0 +1,112 @@
+name: Auto Tag
+
+# Cuts the next patch tag of each bridge whose build inputs changed on main
+# (`<bridge>/vX.Y.Z`, published by release.yml), so a merged Renovate bump of
+# Go, the base image or a Go module ships without a manual tag. The inputs
+# are a bridge's Dockerfile, go.mod and go.sum, and shared/go.mod and go.sum,
+# which tag all six. Code changes are released by hand, as are minor and
+# major versions: shared/ also carries test helpers and doc comments, and a
+# trigger on its Go files would cut six releases for each of those. The relay
+# is never tagged here: its tag is the production deploy.
+#
+# A dispatch with `images` (GHCR package names, e.g. "pushward-github
+# pushward-grafana") cuts a patch tag of those bridges whatever changed: a
+# rebuild picks up base packages and the newest Go patch. The nightly GHCR
+# scan in mac-lucky/forgejo-fleet-ops dispatches it that way when a rebuild
+# alone would clear an image's findings, and finds its own runs again by the
+# run name.
+#
+# The tags are pushed with a mac-lucky-ci GitHub App token (a tag pushed with
+# github.token would not start release.yml); the job token only reads.
+
+run-name: ${{ inputs.images && format('rebuild {0}', inputs.images) || '' }}
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '*/Dockerfile'
+      - '*/go.mod'
+      - '*/go.sum'
+  workflow_dispatch:
+    inputs:
+      images:
+        description: 'GHCR packages to rebuild, space-separated (pushward-<bridge>)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auto-tag
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Pick the bridges
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      bridges: ${{ steps.pick.outputs.bridges }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # A push is diffed against its "before" commit, which can be several
+          # commits back.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Pick the bridges
+        id: pick
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          IMAGES: ${{ inputs.images }}
+        run: |
+          set -euo pipefail
+          all=(backrest bambulab forgejo github grafana sabnzbd)
+          picked=()
+          if [ "$EVENT" = workflow_dispatch ]; then
+            read -r -a images <<<"$IMAGES"
+            for image in "${images[@]}"; do
+              b="${image#pushward-}"
+              if [ "$image" != "$b" ] && [[ " ${all[*]} " == *" $b "* ]]; then
+                picked+=("$b")
+              else
+                echo "::notice::$image is not one of the six bridge images; skipped"
+              fi
+            done
+          elif ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
+            # A new branch or a force push: no base to diff, so nothing is
+            # tagged rather than everything.
+            echo "::notice::no previous commit to diff against; tag by hand if a release is due"
+          else
+            files=$(git diff --name-only "$BEFORE" HEAD)
+            echo "$files"
+            for b in "${all[@]}"; do
+              if grep -qxE "${b}/(Dockerfile|go\.mod|go\.sum)|shared/go\.(mod|sum)" <<<"$files"; then
+                picked+=("$b")
+              fi
+            done
+          fi
+          bridges=$(printf '%s\n' "${picked[@]}" | sort -u | jq -Rnc '[inputs | select(length > 0)]')
+          echo "bridges=$bridges"
+          echo "bridges=$bridges" >> "$GITHUB_OUTPUT"
+
+  tag:
+    name: Tag ${{ matrix.bridge }}
+    needs: plan
+    if: needs.plan.outputs.bridges != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        bridge: ${{ fromJSON(needs.plan.outputs.bridges) }}
+    uses: mac-lucky/actions-shared-workflows/.github/workflows/auto-tag-reusable.yml@master
+    with:
+      mode: patch
+      tag_prefix: ${{ matrix.bridge }}/
+    secrets:
+      CI_APP_CLIENT_ID: ${{ secrets.CI_APP_CLIENT_ID }}
+      CI_APP_PRIVATE_KEY: ${{ secrets.CI_APP_PRIVATE_KEY }}
