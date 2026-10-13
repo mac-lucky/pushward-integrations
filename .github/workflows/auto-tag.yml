@@ -9,6 +9,11 @@ name: Auto Tag
 # trigger on its Go files would cut six releases for each of those. The relay
 # is never tagged here: its tag is the production deploy.
 #
+# A push compares each bridge's inputs at HEAD with its newest `<bridge>/v*`
+# tag, not with the push's "before" commit, so a run that was cancelled while
+# queued or a tag job that failed is caught up by the next qualifying push. A
+# bridge with no such tag yet is skipped: its first release is cut by hand.
+#
 # A dispatch with `images` (GHCR package names, e.g. "pushward-github
 # pushward-grafana") cuts a patch tag of those bridges whatever changed: a
 # rebuild picks up base packages and the newest Go patch. The nightly GHCR
@@ -53,8 +58,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          # A push is diffed against its "before" commit, which can be several
-          # commits back.
+          # Full history and tags: a push is diffed against each bridge's
+          # newest tag.
           fetch-depth: 0
           persist-credentials: false
 
@@ -62,7 +67,6 @@ jobs:
         id: pick
         env:
           EVENT: ${{ github.event_name }}
-          BEFORE: ${{ github.event.before }}
           IMAGES: ${{ inputs.images }}
         run: |
           set -euo pipefail
@@ -78,15 +82,18 @@ jobs:
                 echo "::notice::$image is not one of the six bridge images; skipped"
               fi
             done
-          elif ! git cat-file -e "${BEFORE}^{commit}" 2>/dev/null; then
-            # A new branch or a force push: no base to diff, so nothing is
-            # tagged rather than everything.
-            echo "::notice::no previous commit to diff against; tag by hand if a release is due"
           else
-            files=$(git diff --name-only "$BEFORE" HEAD)
-            echo "$files"
             for b in "${all[@]}"; do
-              if grep -qxE "${b}/(Dockerfile|go\.mod|go\.sum)|shared/go\.(mod|sum)" <<<"$files"; then
+              # The tag the reusable's patch mode bumps.
+              last=$(git tag --list "${b}/v*" | grep -E "^${b}/v[0-9]+\.[0-9]+\.[0-9]+$" | sort -V | tail -n1 || true)
+              if [ -z "$last" ]; then
+                echo "::notice::$b has no ${b}/v* tag yet; cut its first release by hand"
+                continue
+              fi
+              files=$(git diff --name-only "$last" HEAD -- \
+                "${b}/Dockerfile" "${b}/go.mod" "${b}/go.sum" shared/go.mod shared/go.sum)
+              if [ -n "$files" ]; then
+                printf '%s changed since %s:\n%s\n' "$b" "$last" "$files"
                 picked+=("$b")
               fi
             done
