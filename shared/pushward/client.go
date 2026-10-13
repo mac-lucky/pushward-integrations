@@ -408,10 +408,11 @@ const (
 	ErrCodeNotificationAnswerNotFound       = "notification_answer.not_found"
 	ErrCodeAnswerWaitLimit                  = "answer_wait.limit_exceeded"
 
-	// End-to-end encryption (SendNotificationRequest.Encrypted). An
-	// organization key cannot send encrypted; an encrypted push whose
-	// payload, with actions and media, would pass 4 KB is refused as too
-	// large (send it with Push false, or shorten it).
+	// End-to-end encryption (SendNotificationRequest.Encrypted).
+	// encryption_unavailable is the 422 an organization key gets only while
+	// PushWard has not enabled encryption for organizations; an encrypted
+	// push whose payload, with actions and media, would pass 4 KB is refused
+	// as too large (send it with Push false, or shorten it).
 	ErrCodeNotificationEncryptionUnavailable = "notification.encryption_unavailable"
 	ErrCodeNotificationEncryptedTooLarge     = "notification.encrypted_too_large"
 

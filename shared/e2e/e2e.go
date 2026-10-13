@@ -1,7 +1,7 @@
 // Package e2e seals a notification's title, subtitle, body and url into the
 // pw1 end-to-end envelope. pushward-server stores and pushes only the
-// ciphertext and checks the envelope's shape; the user's devices holding the
-// key are the only ones that open it.
+// ciphertext and checks the envelope's shape; only the devices holding the
+// key (the user's, or for an organization key its members') open it.
 //
 // testdata/vectors-v1.json is the test vector file every implementation
 // (server, apps, CLI, MCP, Home Assistant and this package) passes.

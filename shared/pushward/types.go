@@ -971,7 +971,9 @@ type SendNotificationRequest struct {
 	// only the user's devices holding the key read the real text. Everything
 	// else stays readable to the server. This client sends what it is given;
 	// shared/e2e.SealRequest moves the four fields into the envelope.
-	// Organization keys get 422 ErrCodeNotificationEncryptionUnavailable.
+	// An organization key seals with the organization's own key instead,
+	// which members add in PushWard 1.18 or later; members without it see a
+	// locked notification (1.17 or later) or the placeholders (older builds).
 	Encrypted string `json:"encrypted,omitempty"`
 	// Acknowledge repeats the push until someone taps an action without a
 	// URL, or until it expires; SentNotification.Receipt then tracks it.

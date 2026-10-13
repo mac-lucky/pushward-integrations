@@ -230,9 +230,11 @@ err = client.SendNotification(ctx, req)
 
 `key.KID()` is the 8-character Key ID the app shows next to the key; put it on a settings page so the user can check both sides hold the same one. fmt and slog print a key as `e2e key <kid>`, never the key.
 
+An organization's integration key works the same way with the organization's key in place of a personal one. An admin creates it outside the app (`pushward e2e generate`, or `openssl rand -hex 32`; **Create Key** in the app would make it their own key) and hands it out, and members add it in PushWard 1.18 or later under Settings > End-to-End Encryption > Organization Keys. A member without it sees a locked notification on 1.17 or later, and the server's placeholder text on older builds.
+
 An envelope is at most 3072 characters, about 2266 bytes of JSON. `SealRequest` shortens instead of refusing: title and subtitle are cut to 256 code points and the body to 4096 (the apps show no more), then the body loses characters from its end and, only once it is down to one, the title. Length is measured in JSON bytes, so CJK text keeps about a third as many characters as ASCII, and escaped characters count at their escaped size. It returns `ErrTooLong` only when the subtitle and url alone overfill the envelope; `Seal` is the strict form that refuses anything over. The url has to pass the server's rule (`javascript:`, `data:`, `file:` and `vbscript:` are refused), because the server cannot check it once sealed.
 
-The server checks only the envelope's shape. It answers 422 `notification.encrypted_too_large` (`ErrCodeNotificationEncryptedTooLarge`) when the push, actions and media included, would pass the 4 KB APNs payload, and 422 `notification.encryption_unavailable` to an organization key. `testdata/vectors-v1.json` is the vector file every implementation (server, apps, CLI, MCP, Home Assistant) is tested against; a test pins its hash.
+The server checks only the envelope's shape. It answers 422 `notification.encrypted_too_large` (`ErrCodeNotificationEncryptedTooLarge`) when the push, actions and media included, would pass the 4 KB APNs payload. An organization key gets 422 `notification.encryption_unavailable` (`ErrCodeNotificationEncryptionUnavailable`) only if PushWard turns encryption for organizations off again; it has been on since 2026-10-13. `testdata/vectors-v1.json` is the vector file every implementation (server, apps, CLI, MCP, Home Assistant) is tested against; a test pins its hash.
 
 ### Resilience
 
