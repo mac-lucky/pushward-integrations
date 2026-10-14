@@ -3,6 +3,7 @@ package starr
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -15,6 +16,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/humautil"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/lifecycle"
+	"github.com/mac-lucky/pushward-integrations/relay/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/overrides"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/poster"
@@ -75,20 +77,14 @@ func (h *Handler) handleRadarrHuma(ctx context.Context, input *struct {
 	RawBody []byte
 },
 ) (*humautil.WebhookResponse, error) {
-	if err := h.handleRadarrWebhook(ctx, input.RawBody); err != nil {
-		return nil, err
-	}
-	return humautil.NewOK(), nil
+	return h.handleRadarrWebhook(ctx, input.RawBody)
 }
 
 func (h *Handler) handleSonarrHuma(ctx context.Context, input *struct {
 	RawBody []byte
 },
 ) (*humautil.WebhookResponse, error) {
-	if err := h.handleSonarrWebhook(ctx, input.RawBody); err != nil {
-		return nil, err
-	}
-	return humautil.NewOK(), nil
+	return h.handleSonarrWebhook(ctx, input.RawBody)
 }
 
 func (h *Handler) handleProwlarrHuma(ctx context.Context, input *struct {
@@ -99,6 +95,37 @@ func (h *Handler) handleProwlarrHuma(ctx context.Context, input *struct {
 		return nil, err
 	}
 	return humautil.NewOK(), nil
+}
+
+// errActivityLimited stands in for a CreateActivity error at the account's
+// activity limit on a Grab or Download whose notification already went out.
+var errActivityLimited = errors.New("activity limit reached")
+
+// createFailed maps a CreateActivity error on a Grab or Download. Both send
+// their notification before creating the activity, so at the activity limit
+// the event is already delivered and only the card is missing, unless the
+// request turned notifications off and the card was the only delivery.
+func createFailed(ov *overrides.Overrides, err error) error {
+	var limitErr *pushward.ActivityLimitError
+	if errors.As(err, &limitErr) && ov.AllowsNotification() {
+		return errActivityLimited
+	}
+	return err
+}
+
+// respond answers a Radarr or Sonarr webhook from its handler's error. The
+// activity limit answers 200 ignored_activity: a bulk import past the limit
+// is the account's state, not a failed delivery, and an error status would
+// count every such import as an upstream failure.
+func respond(apiErr error) (*humautil.WebhookResponse, error) {
+	switch {
+	case apiErr == nil:
+		return humautil.NewOK(), nil
+	case errors.Is(apiErr, errActivityLimited):
+		metrics.WebhookIgnoredTotal.WithLabelValues("starr", string(humautil.StatusIgnoredActivity)).Inc()
+		return humautil.NewIgnored(humautil.StatusIgnoredActivity, "activity limit reached"), nil
+	}
+	return nil, humautil.UpstreamError(apiErr)
 }
 
 // shouldNotify returns true if the given event type should send a push notification

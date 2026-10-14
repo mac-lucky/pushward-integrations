@@ -18,10 +18,10 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
-func (h *Handler) handleSonarrWebhook(ctx context.Context, raw []byte) error {
+func (h *Handler) handleSonarrWebhook(ctx context.Context, raw []byte) (*humautil.WebhookResponse, error) {
 	envelope, err := decodeEnvelope(raw)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	ctx = metrics.WithProvider(ctx, "starr")
@@ -33,13 +33,13 @@ func (h *Handler) handleSonarrWebhook(ctx context.Context, raw []byte) error {
 	case "Grab":
 		p, err := unmarshalPayload[SonarrGrabPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleSonarrGrab(ctx, userKey, log, p)
 	case "Download":
 		p, err := unmarshalPayload[SonarrDownloadPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleSonarrDownload(ctx, userKey, log, p)
 	case "Test":
@@ -47,65 +47,62 @@ func (h *Handler) handleSonarrWebhook(ctx context.Context, raw []byte) error {
 	case "Health":
 		p, err := unmarshalPayload[HealthPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleHealth(ctx, userKey, log, "sonarr", p)
 	case "HealthRestored":
 		p, err := unmarshalPayload[HealthRestoredPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleHealthRestored(ctx, userKey, log, "sonarr", p)
 	case "ManualInteractionRequired":
 		p, err := unmarshalPayload[ManualInteractionPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleSonarrManualInteraction(ctx, userKey, log, p)
 	case "Rename":
 		p, err := unmarshalPayload[SonarrSeriesEventPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleSonarrRename(ctx, userKey, log, p)
 	case "SeriesAdd":
 		p, err := unmarshalPayload[SonarrSeriesEventPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleSonarrSeriesAdd(ctx, userKey, log, p)
 	case "SeriesDelete":
 		p, err := unmarshalPayload[SonarrSeriesDeletePayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleSonarrSeriesDelete(ctx, userKey, log, p)
 	case "EpisodeFileDelete":
 		p, err := unmarshalPayload[SonarrEpisodeFileDeletePayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleSonarrEpisodeFileDelete(ctx, userKey, log, p)
 	case "ApplicationUpdate":
 		p, err := unmarshalPayload[ApplicationUpdatePayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleApplicationUpdate(ctx, userKey, log, "sonarr", p)
 	case "ImportComplete":
 		p, err := unmarshalPayload[SonarrImportCompletePayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleSonarrImportComplete(ctx, userKey, log, p)
 	default:
 		slog.Debug("ignored event", "event_type", envelope.EventType)
 	}
 
-	if apiErr != nil {
-		return humautil.UpstreamError(apiErr)
-	}
-	return nil
+	return respond(apiErr)
 }
 
 // sonarrSeriesURL constructs a deep link to a series in the Sonarr UI.
@@ -197,7 +194,7 @@ func (h *Handler) handleSonarrGrab(ctx context.Context, userKey string, log *slo
 		if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL, h.config.CreateOptions()...); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
-			return err
+			return createFailed(ov, err)
 		}
 	}
 
@@ -309,7 +306,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 		if err := cl.CreateActivity(ctx, slug, text.Truncate(subtitle, 100), ov.PriorityOr(h.config.Priority), endedTTL, staleTTL, h.config.CreateOptions()...); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
-			return err
+			return createFailed(ov, err)
 		}
 		log.Info("created activity (download without grab)", "slug", slug)
 	}

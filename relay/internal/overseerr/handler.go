@@ -63,12 +63,13 @@ func (h *Handler) Ender() *lifecycle.Ender {
 type skipReason string
 
 const (
-	reasonNoMediaType  skipReason = "media.media_type is empty" + mediaBlockHint
-	reasonBadMediaType skipReason = "media.media_type is not movie or tv"
-	reasonNoTmdbID     skipReason = "media.tmdbId is empty" + mediaBlockHint
-	reasonBadTmdbID    skipReason = "media.tmdbId is not a number"
-	reasonUnknownType  skipReason = "unsupported notification_type"
-	reasonNoChannel    skipReason = "the notification channel is suppressed for this request"
+	reasonNoMediaType   skipReason = "media.media_type is empty" + mediaBlockHint
+	reasonBadMediaType  skipReason = "media.media_type is not movie or tv"
+	reasonNoTmdbID      skipReason = "media.tmdbId is empty" + mediaBlockHint
+	reasonBadTmdbID     skipReason = "media.tmdbId is not a number"
+	reasonUnknownType   skipReason = "unsupported notification_type"
+	reasonNoChannel     skipReason = "the notification channel is suppressed for this request"
+	reasonActivityLimit skipReason = "activity limit reached"
 )
 
 // mediaBlockHint names the misconfiguration behind almost every occurrence: a
@@ -190,6 +191,12 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 	if err := cl.CreateActivity(ctx, slug, name, ov.PriorityOr(h.config.Priority),
 		int(h.config.CleanupDelay.Seconds()), int(h.config.StaleTimeout.Seconds()), h.config.CreateOptions()...); err != nil {
 		log.Error("failed to create overseerr activity", "slug", slug, "error", err)
+		// At the account's activity limit the push above already delivered
+		// the event; only the card is missing.
+		var limitErr *pushward.ActivityLimitError
+		if errors.As(err, &limitErr) && notifErr == nil && ov.AllowsNotification() {
+			return ignored(humautil.StatusIgnoredActivity, reasonActivityLimit), nil
+		}
 		return nil, humautil.UpstreamError(err)
 	}
 

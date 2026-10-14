@@ -909,6 +909,43 @@ func TestUpstreamRefusalOnActivitySurfacesUnchanged(t *testing.T) {
 	}
 }
 
+// At the account's activity limit the push has already delivered the event, so
+// the request answers 200 ignored_activity; with notifications off the card
+// was the only delivery and the 409 surfaces.
+func TestActivityLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name, query string
+		want        int
+	}{
+		{"notification sent", "", http.StatusOK},
+		{"activity only", "?channels=activity", http.StatusConflict},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lifecycle.SetRetryDelay(10 * time.Millisecond)
+			srv, calls, mu := testutil.MockPushWardServerRejecting(t, 0, http.StatusConflict)
+			mux, api := humautil.NewTestAPI()
+			RegisterRoutes(api, state.NewMemoryStore(), client.NewPool(srv.URL, nil), testConfig(), poster.Disabled{})
+
+			req := httptest.NewRequest(http.MethodPost, "/overseerr"+tc.query, strings.NewReader(availableBody))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", "Bearer hlk_test")
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+			if w.Code != tc.want {
+				t.Fatalf("got %d, want %d (%s)", w.Code, tc.want, w.Body.String())
+			}
+			if tc.want == http.StatusOK {
+				if r := decodeBody(t, w); r.Body.Status != humautil.StatusIgnoredActivity || r.Body.Detail != string(reasonActivityLimit) {
+					t.Errorf("body = %+v", r.Body)
+				}
+				if n := testutil.CountPath(testutil.GetCalls(calls, mu), "/notifications"); n != 1 {
+					t.Errorf("%d notifications, want 1", n)
+				}
+			}
+		})
+	}
+}
+
 // A payload the upstream already refused on the push will be refused on the
 // activity too, so the handler must not spend two more round-trips learning it.
 func TestAuthFailureSkipsTheActivityCalls(t *testing.T) {

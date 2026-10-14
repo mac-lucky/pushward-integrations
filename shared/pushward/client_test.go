@@ -453,6 +453,56 @@ func TestCreateActivity_LimitReached(t *testing.T) {
 	if err.Error() != "activity limit reached" {
 		t.Errorf("unexpected error: %v", err)
 	}
+	var limitErr *ActivityLimitError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("expected *ActivityLimitError, got %T", err)
+	}
+	// Callers that only map statuses (the relay's upstream error mapping, the
+	// universal webhook's refusal check) must still see the 409 and its code.
+	var httpErr *HTTPError
+	if !errors.As(err, &httpErr) {
+		t.Fatalf("expected the error to unwrap to *HTTPError, got %T", err)
+	}
+	if httpErr.StatusCode != http.StatusConflict || httpErr.Code != ErrCodeActivityLimitExceeded {
+		t.Errorf("got status %d code %q, want 409 %q", httpErr.StatusCode, httpErr.Code, ErrCodeActivityLimitExceeded)
+	}
+}
+
+// A server that predates Problem codes still says "limit" in its body.
+func TestCreateActivity_LimitReachedLegacyBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"activity limit reached (max 50)"}`))
+	}))
+	defer srv.Close()
+
+	err := NewClient(srv.URL, "hlk_test").CreateActivity(context.Background(), "gh-repo", "CI", 1, 0, 0)
+	var limitErr *ActivityLimitError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("expected *ActivityLimitError, got %T: %v", err, err)
+	}
+	if limitErr.StatusCode != http.StatusConflict {
+		t.Errorf("status = %d, want 409", limitErr.StatusCode)
+	}
+}
+
+// An upsert PATCH that would create a new activity hits the same limit.
+func TestPatchActivity_UpsertLimitReached(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/problem+json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"type":"about:blank","title":"Conflict","status":409,"detail":"activity limit reached (max 50)","code":"activity.limit_exceeded"}`))
+	}))
+	defer srv.Close()
+
+	err := NewClient(srv.URL, "hlk_test").PatchActivity(context.Background(), "gh-repo", PatchRequest{State: StateOngoing}, WithUpsert())
+	var limitErr *ActivityLimitError
+	if !errors.As(err, &limitErr) {
+		t.Fatalf("expected *ActivityLimitError, got %T: %v", err, err)
+	}
+	if limitErr.Code != ErrCodeActivityLimitExceeded {
+		t.Errorf("code = %q, want %q", limitErr.Code, ErrCodeActivityLimitExceeded)
+	}
 }
 
 func TestCreateActivity_UnknownConflictSurfacesError(t *testing.T) {

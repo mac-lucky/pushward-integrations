@@ -448,6 +448,8 @@ Push notification events (no Live Activity, no template):
 
 In the default `activity` mode, `Grab` and `Download` also write a notification record (not pushed) alongside the Live Activity; in `notify`/`smart` mode they are delivered as standalone push notifications instead.
 
+When the account is at its Live Activity limit, `Grab` and `Download` still write that notification and answer `200` with `{"status":"ignored_activity","detail":"activity limit reached"}`, so a large import does not show up as failed webhooks. With `?channels=activity` the card is the only delivery, and the limit answers `409`.
+
 Routing is governed by `starr.mode`: `activity` (default, all events -> Live Activity), `notify` (all -> push), or `smart` (handler decides per event).
 
 **Setup:** In Radarr/Sonarr, go to **Settings > Connect > + > Webhook**. Set the URL to `https://relay.pushward.app/radarr` (or `/sonarr`). Leave Username as any value, set Password to your `hlk_` key (Basic Auth). Enable triggers: On Grab, On Import, On Health Issue, On Health Restored. Click Test, then Save.
@@ -1008,6 +1010,7 @@ Logs are structured JSON on stdout (`slog`). View them with `docker logs <contai
 | `config load` fails: `stale_timeout must be > 0` | A provider has a non-positive `stale_timeout`. | Set a positive duration (a non-positive TTL writes state rows that are never cleaned up). |
 | `/ready` returns `503` | DB ping check failed. | Verify `PUSHWARD_DATABASE_DSN` / `password_file` and that PostgreSQL is reachable. |
 | Upstream `401`/`403`/`429` surfaced to the sender | The PushWard server rejected the `hlk_` key or rate-limited. | Check the key is valid and has capacity; the relay forwards these statuses so the source app reports the real cause. |
+| `409` with `upstream conflict: <code>` | The account is at a PushWard limit, most often `activity.limit_exceeded` (too many Live Activities open at once). | End some activities or let them expire. Radarr, Sonarr and Overseerr answer `200 ignored_activity` instead when their notification already went out. |
 | The provider's `Test` button reports a failure | The self-test could not reach PushWard - most often a refused key. | Read the status: it is the upstream's own. A failed test is no longer answered with `200`, so the button reflects whether the integration actually works. |
 
 ## Requirements & License

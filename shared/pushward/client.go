@@ -90,9 +90,9 @@ type ResultInfo struct {
 //
 // Logging policy: the client never logs an error it returns. Callers already
 // log the returned error, and every field they might want is on the typed
-// *HTTPError / *QuotaExceededError or on ResultInfo (attempts, duration). It
-// logs only conditions a caller cannot otherwise observe, such as being
-// throttled mid-retry.
+// *HTTPError (or the *QuotaExceededError / *ActivityLimitError wrapping it) or
+// on ResultInfo (attempts, duration). It logs only conditions a caller cannot
+// otherwise observe, such as being throttled mid-retry.
 type Client struct {
 	httpClient  *http.Client
 	baseURL     string
@@ -519,10 +519,23 @@ func (e *QuotaExceededError) Error() string {
 // not: a *QuotaExceededError is not assignable to a *HTTPError target.
 func (e *QuotaExceededError) Unwrap() error { return e.HTTPError }
 
-// newHTTPError builds the typed error for a Problem body, upgrading it to a
-// *QuotaExceededError when the server reports a quota cap.
-func newHTTPError(status int, p problem) error {
-	he := &HTTPError{
+// ActivityLimitError is the 409 activity.limit_exceeded: the account already
+// has as many activities as its plan allows, from CreateActivity or a
+// PatchActivity WithUpsert that would create one. It clears only when one of
+// them ends, so a retry of the same call fails the same way. It wraps the
+// *HTTPError, so errors.As(err, &httpErr) still sees the 409 and its code.
+type ActivityLimitError struct {
+	*HTTPError
+}
+
+// Error keeps the text CreateActivity has always returned for the limit.
+func (e *ActivityLimitError) Error() string { return "activity limit reached" }
+
+// Unwrap lets errors.As reach the embedded *HTTPError.
+func (e *ActivityLimitError) Unwrap() error { return e.HTTPError }
+
+func (p problem) httpError(status int) *HTTPError {
+	return &HTTPError{
 		StatusCode:   status,
 		Type:         p.Type,
 		Title:        p.Title,
@@ -530,8 +543,17 @@ func newHTTPError(status int, p problem) error {
 		Code:         p.Code,
 		RetryAfterMs: p.RetryAfterMs,
 	}
-	if p.Code == ErrCodeQuotaExceeded {
+}
+
+// newHTTPError builds the typed error for a Problem body, upgrading it to a
+// *QuotaExceededError or *ActivityLimitError when the code says so.
+func newHTTPError(status int, p problem) error {
+	he := p.httpError(status)
+	switch p.Code {
+	case ErrCodeQuotaExceeded:
 		return &QuotaExceededError{HTTPError: he, Kind: p.Kind, Used: p.Used, Limit: p.Limit, ResetAt: p.ResetAt}
+	case ErrCodeActivityLimitExceeded:
+		return &ActivityLimitError{HTTPError: he}
 	}
 	return he
 }
@@ -550,6 +572,7 @@ func (e *HTTPError) Error() string {
 var (
 	_ error = (*HTTPError)(nil)
 	_ error = (*QuotaExceededError)(nil)
+	_ error = (*ActivityLimitError)(nil)
 )
 
 // breakerSignal classifies a request outcome for the circuit breaker. The
@@ -662,7 +685,7 @@ func DismissalTTLOptions(d *time.Duration) []CreateOption {
 // CreateActivity creates (or refreshes) an activity via POST /activities.
 // The server upserts and always returns 201 with an X-Resource-Action header
 // distinguishing created vs. updated, so duplicate slugs are no longer a 409.
-// A 409 now signals only activity.limit_exceeded - surfaced as a typed error.
+// A 409 now signals only activity.limit_exceeded, returned as *ActivityLimitError.
 // Optional body fields ride in as CreateOption rather than more positional
 // parameters: the signature is frozen by pushward-grafana-plugin, which pins
 // this module and calls CreateActivity from two places, so widening it is a
@@ -686,7 +709,7 @@ func (c *Client) CreateActivity(ctx context.Context, slug, name string, priority
 			// not yet migrated to RFC 9457 Problem bodies; remove once the
 			// Code path is universally available.
 			if p.Code == ErrCodeActivityLimitExceeded || bytes.Contains(body, []byte("limit")) {
-				return true, fmt.Errorf("activity limit reached")
+				return true, &ActivityLimitError{HTTPError: p.httpError(http.StatusConflict)}
 			}
 			return true, newHTTPError(http.StatusConflict, p)
 		},

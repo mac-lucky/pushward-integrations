@@ -382,7 +382,8 @@ func MockPushWardServerRejectingAck(t *testing.T, status int, code string) (*htt
 // 0 for either to keep that side on the success path, which is what separates
 // the two cases worth testing: a push the server refuses while activities still
 // work, and an integration key it refuses outright (401/403) or a tenant over
-// quota (429), where nothing gets through. Handlers are expected to surface the
+// quota (429), where nothing gets through. An activityStatus of 409 answers as
+// the server does at the account's activity limit (activity.limit_exceeded). Handlers are expected to surface the
 // latter unchanged rather than as a generic 502, since the caller is the one
 // holding the key. Requests are validated before being rejected, so a test can
 // tell a rejected call from a malformed one.
@@ -453,6 +454,12 @@ func mockPushWardServer(t *testing.T, opts MockOptions) (*httptest.Server, *[]AP
 			return
 		}
 
+		if activityStatus == http.StatusConflict {
+			// The only 409 the server answers here, as the create is an
+			// upsert; same code and detail as the server sends.
+			respondProblem(w, activityStatus, pushward.ErrCodeActivityLimitExceeded, "activity limit reached (max 50)")
+			return
+		}
 		if activityStatus >= 400 {
 			respondError(w, activityStatus, "activity rejected")
 			return

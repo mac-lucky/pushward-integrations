@@ -67,6 +67,10 @@ var authChallenge = http.Header{"Www-Authenticate": []string{`Bearer realm="push
 // credential of its own, so an auth failure at the next hop really is about the
 // credential this caller supplied: it surfaces unchanged, and the caller
 // (Sonarr, Overseerr, etc.) reports "auth failed" instead of a generic 502.
+//
+// A 409 is a limit on the caller's account (active activities, acknowledged
+// notifications) and passes through as a 409 with the server's code: it is
+// not a relay fault, and a 502 would count it as one.
 func UpstreamError(err error) error {
 	var he *pushward.HTTPError
 	if errors.As(err, &he) {
@@ -75,6 +79,12 @@ func UpstreamError(err error) error {
 			return huma.ErrorWithHeaders(huma.Error401Unauthorized("upstream rejected integration key"), authChallenge)
 		case http.StatusForbidden:
 			return huma.Error403Forbidden("upstream denied integration key")
+		case http.StatusConflict:
+			msg := "upstream conflict"
+			if he.Code != "" {
+				msg += ": " + he.Code
+			}
+			return huma.Error409Conflict(msg)
 		case http.StatusTooManyRequests:
 			return huma.Error429TooManyRequests("upstream rate limited")
 		}

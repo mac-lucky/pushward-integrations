@@ -18,10 +18,10 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
-func (h *Handler) handleRadarrWebhook(ctx context.Context, raw []byte) error {
+func (h *Handler) handleRadarrWebhook(ctx context.Context, raw []byte) (*humautil.WebhookResponse, error) {
 	envelope, err := decodeEnvelope(raw)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	ctx = metrics.WithProvider(ctx, "starr")
@@ -33,13 +33,13 @@ func (h *Handler) handleRadarrWebhook(ctx context.Context, raw []byte) error {
 	case "Grab":
 		p, err := unmarshalPayload[RadarrGrabPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleRadarrGrab(ctx, userKey, log, p)
 	case "Download":
 		p, err := unmarshalPayload[RadarrDownloadPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleRadarrDownload(ctx, userKey, log, p)
 	case "Test":
@@ -47,59 +47,56 @@ func (h *Handler) handleRadarrWebhook(ctx context.Context, raw []byte) error {
 	case "Health":
 		p, err := unmarshalPayload[HealthPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleHealth(ctx, userKey, log, "radarr", p)
 	case "HealthRestored":
 		p, err := unmarshalPayload[HealthRestoredPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleHealthRestored(ctx, userKey, log, "radarr", p)
 	case "ManualInteractionRequired":
 		p, err := unmarshalPayload[ManualInteractionPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleRadarrManualInteraction(ctx, userKey, log, p)
 	case "Rename":
 		p, err := unmarshalPayload[RadarrMovieEventPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleRadarrRename(ctx, userKey, log, p)
 	case "MovieAdded":
 		p, err := unmarshalPayload[RadarrMovieEventPayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleRadarrMovieAdded(ctx, userKey, log, p)
 	case "MovieDelete":
 		p, err := unmarshalPayload[RadarrMovieDeletePayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleRadarrMovieDelete(ctx, userKey, log, p)
 	case "MovieFileDelete":
 		p, err := unmarshalPayload[RadarrMovieFileDeletePayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleRadarrMovieFileDelete(ctx, userKey, log, p)
 	case "ApplicationUpdate":
 		p, err := unmarshalPayload[ApplicationUpdatePayload](raw)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		apiErr = h.handleApplicationUpdate(ctx, userKey, log, "radarr", p)
 	default:
 		slog.Debug("ignored event", "event_type", envelope.EventType)
 	}
 
-	if apiErr != nil {
-		return humautil.UpstreamError(apiErr)
-	}
-	return nil
+	return respond(apiErr)
 }
 
 func movieTitle(m RadarrMovie) string {
@@ -219,7 +216,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 		if err := cl.CreateActivity(ctx, slug, title, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL, h.config.CreateOptions()...); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
-			return err
+			return createFailed(ov, err)
 		}
 		log.Info("created activity", "slug", slug, "title", title)
 	}
@@ -327,7 +324,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 		if err := cl.CreateActivity(ctx, slug, title, ov.PriorityOr(h.config.Priority), endedTTL, staleTTL, h.config.CreateOptions()...); err != nil {
 			log.Error("failed to create activity", "slug", slug, "error", err)
 			h.deleteTrackedSlug(ctx, userKey, mapKey)
-			return err
+			return createFailed(ov, err)
 		}
 		log.Info("created activity (untracked download)", "slug", slug, "title", title)
 	}

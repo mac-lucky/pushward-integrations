@@ -648,6 +648,7 @@ func TestProgressWithoutValueKeepsLast(t *testing.T) {
 }
 
 // A card the server refuses for good still reaches the user as a notification.
+// The mock answers the create with the server's activity.limit_exceeded body.
 func TestActivityRefusedFallsBackToNotification(t *testing.T) {
 	lifecycle.SetRetryDelay(10 * time.Millisecond)
 	srv, calls, mu := testutil.MockPushWardServerRejecting(t, 0, http.StatusConflict)
