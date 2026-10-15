@@ -1,6 +1,6 @@
 module github.com/mac-lucky/pushward-integrations/backrest
 
-go 1.26.5
+go 1.27.2
 
 require github.com/mac-lucky/pushward-integrations/shared v0.0.0
 

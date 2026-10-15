@@ -190,8 +190,8 @@ Docker builds use the **repo root as the build context** with `-f sabnzbd/Docker
 # Build the image (note the trailing "." = repo root, not the sabnzbd dir)
 docker build -f sabnzbd/Dockerfile -t pushward-sabnzbd .
 
-# Optional: override the Go toolchain (Dockerfile default ARG GO_VERSION=1.26.5, matching go.mod)
-docker build -f sabnzbd/Dockerfile --build-arg GO_VERSION=1.26.5 -t pushward-sabnzbd .
+# Optional: override the Go toolchain (Dockerfile default ARG GO_VERSION=1.27.2, matching go.mod)
+docker build -f sabnzbd/Dockerfile --build-arg GO_VERSION=1.27.2 -t pushward-sabnzbd .
 ```
 
 ## CI/CD & Releases
@@ -230,7 +230,7 @@ docker logs -f pushward-sabnzbd
 
 ## Requirements & License
 
-- Go 1.26.x (build), Docker (deploy).
+- Go 1.27.x (build), Docker (deploy).
 - A running PushWard server, a SABnzbd instance, and the PushWard iOS app.
 
 Part of the public [pushward-integrations](https://github.com/mac-lucky/pushward-integrations) repository - see the repository root for license details.

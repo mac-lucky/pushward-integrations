@@ -242,10 +242,10 @@ golangci-lint run
 docker build -f grafana/Dockerfile -t pushward-grafana .
 
 # Override the Go toolchain at build time if needed
-docker build -f grafana/Dockerfile --build-arg GO_VERSION=1.26.5 -t pushward-grafana .
+docker build -f grafana/Dockerfile --build-arg GO_VERSION=1.27.2 -t pushward-grafana .
 ```
 
-> The module targets `go 1.26.5` (`go.mod`), matching the Dockerfile's default `GO_VERSION` build arg (`1.26.5`); override it with `--build-arg GO_VERSION=<x.y.z>` only if you need a different toolchain.
+> The module targets `go 1.27.2` (`go.mod`), matching the Dockerfile's default `GO_VERSION` build arg (`1.27.2`); override it with `--build-arg GO_VERSION=<x.y.z>` only if you need a different toolchain.
 
 ## CI/CD & Releases
 
@@ -286,7 +286,7 @@ Logs are structured JSON on stdout (`docker logs pushward-grafana`). The process
 
 ## Requirements & License
 
-- Go 1.26.x toolchain (for building from source); Docker for the container image.
+- Go 1.27.x toolchain (for building from source); Docker for the container image.
 - A running PushWard server, an `hlk_` integration key, a Prometheus/VictoriaMetrics endpoint, and the PushWard iOS app.
 
 Part of the public [pushward-integrations](https://github.com/mac-lucky/pushward-integrations) repository.

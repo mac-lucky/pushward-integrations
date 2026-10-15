@@ -1,6 +1,6 @@
 module github.com/mac-lucky/pushward-integrations/shared
 
-go 1.26.5
+go 1.27.2
 
 require gopkg.in/yaml.v3 v3.0.1
 

@@ -968,7 +968,7 @@ golangci-lint run
 
 # Docker (context is the repo root so the Dockerfile can COPY shared/)
 docker build -f relay/Dockerfile -t pushward-relay .
-docker build -f relay/Dockerfile --build-arg GO_VERSION=1.26.5 -t pushward-relay .
+docker build -f relay/Dockerfile --build-arg GO_VERSION=1.27.2 -t pushward-relay .
 ```
 
 > The Postgres state tests (`relay/internal/state/...`) sit behind the `integration` build tag, use testcontainers-go and need a running Docker daemon: `go test -tags integration ./relay/internal/state/... -race -count=1`.
@@ -1015,7 +1015,7 @@ Logs are structured JSON on stdout (`slog`). View them with `docker logs <contai
 
 ## Requirements & License
 
-- **Go** `1.26.x` (toolchain `1.26.5`; Docker builds default to `golang:1.26.5-alpine`, final image `alpine:3.23`).
+- **Go** `1.27.x` (toolchain `1.27.2`; Docker builds default to `golang:1.27.2-alpine`, final image `alpine:3.23`).
 - **PostgreSQL** for the state store.
 - A running **PushWard server** and a per-tenant `hlk_` integration key.
 

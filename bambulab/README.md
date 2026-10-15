@@ -198,11 +198,11 @@ golangci-lint run
 The Docker build context is the **repository root** (not the bridge directory) so the Dockerfile can `COPY shared/`:
 
 ```bash
-# Build (default Go toolchain ARG is 1.26.5)
+# Build (default Go toolchain ARG is 1.27.2)
 docker build -f bambulab/Dockerfile -t pushward-bambulab .
 
 # Pin the Go toolchain to match go.mod
-docker build --build-arg GO_VERSION=1.26.5 -f bambulab/Dockerfile -t pushward-bambulab .
+docker build --build-arg GO_VERSION=1.27.2 -f bambulab/Dockerfile -t pushward-bambulab .
 ```
 
 ## CI/CD & Releases
@@ -239,7 +239,7 @@ Logs are structured JSON on stdout at `Info` level. With Docker: `docker logs -f
 
 ## Requirements
 
-- Go **1.26+** (the module declares `go 1.26.5`).
+- Go **1.27+** (the module declares `go 1.27.2`).
 - A reachable Bambu Lab printer (MQTT/TLS on port `8883`) and a running PushWard server.
 
 ## License

@@ -184,7 +184,7 @@ The `pushward.Client` retries up to 5 attempts with exponential backoff + jitter
 
 ## Project structure
 
-This is a Go workspace (`go.work`, Go 1.26.5) with one shared module plus seven independently-versioned bridge modules under `github.com/mac-lucky/pushward-integrations/<module>`:
+This is a Go workspace (`go.work`, Go 1.27.2) with one shared module plus seven independently-versioned bridge modules under `github.com/mac-lucky/pushward-integrations/<module>`:
 
 ```
 pushward-integrations/
@@ -240,8 +240,8 @@ The build context is the **repo root** (not the bridge directory) so the Dockerf
 docker build -f relay/Dockerfile -t pushward-relay .
 docker build -f grafana/Dockerfile -t pushward-grafana .
 
-# Pin the Go toolchain (Dockerfile ARG default is 1.26.5)
-docker build --build-arg GO_VERSION=1.26.5 -f github/Dockerfile -t pushward-github .
+# Pin the Go toolchain (Dockerfile ARG default is 1.27.2)
+docker build --build-arg GO_VERSION=1.27.2 -f github/Dockerfile -t pushward-github .
 ```
 
 Each image builds from a `golang:<ver>-alpine` builder into an `alpine:3.23` runtime, statically (`CGO_ENABLED=0`), and runs as non-root UID 1000.
@@ -309,5 +309,5 @@ Bridges log structured JSON to stdout - `docker logs -f <container>` (or `kubect
 
 ## Requirements
 
-- Go 1.26.5 (workspace toolchain) and Docker for builds.
+- Go 1.27.2 (workspace toolchain) and Docker for builds.
 - A running PushWard server, an `hlk_` integration key, the PushWard iOS app, and the backend each bridge integrates with (see [Prerequisites](#prerequisites)).

@@ -1,6 +1,6 @@
 module github.com/mac-lucky/pushward-integrations/relay
 
-go 1.26.5
+go 1.27.2
 
 require (
 	github.com/danielgtaylor/huma/v2 v2.39.1
