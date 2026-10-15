@@ -244,7 +244,7 @@ docker build -f grafana/Dockerfile -t pushward-grafana .
 docker build --build-arg GO_VERSION=1.27.2 -f github/Dockerfile -t pushward-github .
 ```
 
-Each image builds from a `golang:<ver>-alpine` builder into an `alpine:3.23` runtime, statically (`CGO_ENABLED=0`), and runs as non-root UID 1000.
+Each image builds from a `golang:<ver>-alpine` builder into an `alpine:3.24` runtime, statically (`CGO_ENABLED=0`), and runs as non-root UID 1000.
 
 ## CI/CD & Releases
 

@@ -1015,7 +1015,7 @@ Logs are structured JSON on stdout (`slog`). View them with `docker logs <contai
 
 ## Requirements & License
 
-- **Go** `1.27.x` (toolchain `1.27.2`; Docker builds default to `golang:1.27.2-alpine`, final image `alpine:3.23`).
+- **Go** `1.27.x` (toolchain `1.27.2`; Docker builds default to `golang:1.27.2-alpine`, final image `alpine:3.24`).
 - **PostgreSQL** for the state store.
 - A running **PushWard server** and a per-tenant `hlk_` integration key.
 
