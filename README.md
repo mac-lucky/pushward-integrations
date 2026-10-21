@@ -35,7 +35,7 @@ Each bridge has its own README with full configuration and per-event behavior.
 | [bambulab](./bambulab/) | Bambu Lab 3D-print progress via local MQTT (TLS) | - (outbound only) | `ghcr.io/mac-lucky/pushward-bambulab` |
 | [forgejo](./forgejo/) | Forgejo Actions workflow-run CI/CD progress (poller) | - (outbound only) | `ghcr.io/mac-lucky/pushward-forgejo` |
 | [github](./github/) | GitHub Actions workflow-run CI/CD progress (poller) | - (outbound only) | `ghcr.io/mac-lucky/pushward-github` |
-| [grafana](./grafana/) | Grafana alert timelines with Prometheus/VictoriaMetrics history + PromQL-polled iOS widgets | 8090 | `ghcr.io/mac-lucky/pushward-grafana` |
+| [grafana](./grafana/) | Grafana alert timelines with Prometheus/VictoriaMetrics history + PromQL-polled widgets | 8090 | `ghcr.io/mac-lucky/pushward-grafana` |
 | [sabnzbd](./sabnzbd/) | SABnzbd download + post-processing progress | 8090 | `ghcr.io/mac-lucky/pushward-sabnzbd` |
 | [relay](./relay/) | Multi-tenant webhook gateway: 22 provider routes, plus a universal route for any other JSON webhook | 8090 (+ 9090 metrics) | `ghcr.io/mac-lucky/pushward-relay` |
 

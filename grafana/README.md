@@ -6,7 +6,7 @@
 [![CI](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml)
 [![Image](https://img.shields.io/badge/ghcr.io-pushward--grafana-2496ED?logo=docker&logoColor=white)](https://github.com/mac-lucky/pushward-integrations/pkgs/container/pushward-grafana)
 
-Turns Grafana alerts into [PushWard](https://pushward.app) **Live Activity timelines** on iPhone - a live sparkline of the firing metric on the Dynamic Island and Lock Screen, backfilled from Prometheus / VictoriaMetrics history and updated as the metric moves. It can also poll PromQL on a schedule and publish the results as PushWard **iOS Home / Lock Screen widgets**.
+Turns Grafana alerts into [PushWard](https://pushward.app) **Live Activity timelines** on iPhone - a live sparkline of the firing metric on the Dynamic Island and Lock Screen, backfilled from Prometheus / VictoriaMetrics history and updated as the metric moves. It can also poll PromQL on a schedule and publish the results as PushWard **Home / Lock Screen widgets**.
 
 > **New to PushWard?** Learn what it is at **[pushward.app](https://pushward.app)** and download the app from the **[App Store](https://apps.apple.com/app/id6759689999)**.
 
