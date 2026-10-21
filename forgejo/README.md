@@ -49,7 +49,7 @@ Forgejo Actions --> pushward-forgejo --> pushward-server --> APNs --> PushWard i
 - A Forgejo instance with Actions enabled, reachable from wherever this runs.
 - A Forgejo **API token** with read access to the repos you want to watch. It does *not* need the
   `read:organization` scope - discovery falls back to the user endpoint when that scope is absent.
-- A **PushWard integration key** (`hlk_` prefix) and the PushWard iOS app.
+- A **PushWard integration key** (`hlk_` prefix) and the PushWard app.
 
 ## Installation
 

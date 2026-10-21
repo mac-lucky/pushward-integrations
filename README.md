@@ -5,9 +5,9 @@
 
 [![CI](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml/badge.svg)](https://github.com/mac-lucky/pushward-integrations/actions/workflows/ci.yml)
 
-Turn events from the services you already run - GitHub Actions, Forgejo Actions, SABnzbd, a Bambu Lab printer, Grafana, and ~19 self-hosted apps behind the relay - into real-time **PushWard Live Activities, widgets, and push notifications** on your iPhone (Dynamic Island + Lock Screen). This is a Go [workspace](https://go.dev/ref/mod#workspaces) of small "bridge" programs, each shipped as its own Docker image.
+Turn events from the services you already run - GitHub Actions, Forgejo Actions, SABnzbd, a Bambu Lab printer, Grafana, and ~19 self-hosted apps behind the relay - into real-time **PushWard Live Activities, widgets, and push notifications** on your phone, with Live Activities on the iPhone Dynamic Island and Lock Screen. This is a Go [workspace](https://go.dev/ref/mod#workspaces) of small "bridge" programs, each shipped as its own Docker image.
 
-> **New to PushWard?** PushWard is a push-notification platform whose iOS app renders live, updating Live Activities and widgets from any source. Learn more at **[pushward.app](https://pushward.app)** and get the iOS app on the **[App Store](https://apps.apple.com/app/id6759689999)**.
+> **New to PushWard?** PushWard is a push-notification platform whose app renders live, updating Live Activities and widgets from any source. Learn more at **[pushward.app](https://pushward.app)** and get the app on the **[App Store](https://apps.apple.com/app/id6759689999)**.
 
 ## How it works
 
@@ -78,8 +78,8 @@ Auth styles differ by what each service's webhook UI allows: most providers acce
 ## Prerequisites
 
 - A reachable **PushWard server** - the public base is `https://api.pushward.app`.
-- A **PushWard integration key** (`hlk_` prefix), created in the PushWard iOS app under Settings -> Integration Keys. Publishing widgets (the `grafana` bridge) needs a key with the `widgets` scope.
-- The **PushWard iOS app** installed and subscribed to the activity/widget slugs the bridge produces.
+- A **PushWard integration key** (`hlk_` prefix), created in the PushWard app under Settings -> Integration Keys. Publishing widgets (the `grafana` bridge) needs a key with the `widgets` scope.
+- The **PushWard app** installed and subscribed to the activity/widget slugs the bridge produces.
 - The **backend each bridge talks to**: a GitHub token (github), a Forgejo instance URL + API token (forgejo), a Backrest instance (backrest), a SABnzbd instance (sabnzbd), a Bambu Lab printer on the LAN (bambulab), a Prometheus/VictoriaMetrics endpoint (grafana), or PostgreSQL plus the external services' webhooks (relay).
 
 ## Installation
@@ -300,7 +300,7 @@ Bridges log structured JSON to stdout - `docker logs -f <container>` (or `kubect
 | Symptom | Likely cause / fix |
 |---|---|
 | `401`/`403` from the server | Wrong or scope-limited `hlk_` key. Publishing widgets needs a key with the `widgets` scope |
-| Nothing appears on iPhone | Wrong `PUSHWARD_URL`, or the iOS app isn't subscribed to the activity/widget slug the bridge produces |
+| Nothing appears on the phone | Wrong `PUSHWARD_URL`, or the app isn't subscribed to the activity/widget slug the bridge produces |
 | "webhook is unauthenticated" warning | `sabnzbd.webhook_secret` / grafana `webhook_token` is unset - set one and configure the matching header on the sender |
 | Relay won't start | `PUSHWARD_DATABASE_DSN` missing, or `server.metrics_address` equals `server.address` (they must differ) |
 | Relay rate-limits real traffic to one bucket | Set `trusted_proxy_cidrs` so the relay trusts your proxy's forwarded-IP headers |
@@ -310,4 +310,4 @@ Bridges log structured JSON to stdout - `docker logs -f <container>` (or `kubect
 ## Requirements
 
 - Go 1.27.2 (workspace toolchain) and Docker for builds.
-- A running PushWard server, an `hlk_` integration key, the PushWard iOS app, and the backend each bridge integrates with (see [Prerequisites](#prerequisites)).
+- A running PushWard server, an `hlk_` integration key, the PushWard app, and the backend each bridge integrates with (see [Prerequisites](#prerequisites)).

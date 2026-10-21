@@ -211,4 +211,4 @@ timeline:
 #
 # battery, schedule and flow are server widget templates this bridge does not
 # offer: each needs several independent readings in a single push, and the
-# poller runs one query per widget. Create those through the API or the iOS app.
+# poller runs one query per widget. Create those through the API or the app.

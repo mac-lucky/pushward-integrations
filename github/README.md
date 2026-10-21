@@ -11,7 +11,7 @@ Polls the GitHub Actions API for in-progress workflow runs and pushes their live
 
 If you would rather not run a poller, [pushward-action](https://github.com/mac-lucky/pushward-action) does the same from inside a workflow: a step starts the card, a final `if: always()` step ends it, and it can also send notifications and wait for an approval. Pick one per repository, since both at once give every run two cards.
 
-> **New to PushWard?** Learn more at **[pushward.app](https://pushward.app)** and get the iOS app on the **[App Store](https://apps.apple.com/app/id6759689999)**.
+> **New to PushWard?** Learn more at **[pushward.app](https://pushward.app)** and get the app on the **[App Store](https://apps.apple.com/app/id6759689999)**.
 
 ## How it works
 
@@ -46,7 +46,7 @@ GitHub Actions API --poll--> pushward-github --POST/PATCH /activities--> PushWar
 - A running [PushWard](https://pushward.app) server (the public API is `https://api.pushward.app`).
 - A PushWard integration key (`hlk_` prefix) with the activity-manage capability.
 - A GitHub personal access token with `actions:read` (read workflow runs and jobs); add `repo` to discover and monitor private repositories.
-- The PushWard iOS app installed and subscribed to the repos you want to see.
+- The PushWard app installed and subscribed to the repos you want to see.
 
 ## Installation
 
@@ -245,7 +245,7 @@ Logs are structured JSON written to stdout at info level. View them with `docker
 | `configured poll rate exceeds the forge's hourly request budget` at startup | Too many repos for the configured `idle_interval`. Raise it, or narrow `github.owner` / `github.repos`. See [Request budget](#request-budget). |
 | `detection interval paced by the forge's request budget` | The window is running short, so new runs are noticed less often until it refills. Runs already being tracked are unaffected. Use a dedicated token if it is shared with heavy usage. |
 | `repo has no workflows` / `repo has no Actions` | Expected, and the point: that repo is skipped for half an hour rather than probed every pass. |
-| No Live Activity appears on the phone | No in-progress run yet, the iOS app isn't subscribed to that repo's slug, or no compatible iOS build is installed. |
+| No Live Activity appears on the phone | No in-progress run yet, the app isn't subscribed to that repo's slug, or no compatible app build is installed. |
 
 ## License
 

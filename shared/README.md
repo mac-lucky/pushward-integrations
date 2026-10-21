@@ -8,7 +8,7 @@ Common Go building blocks every PushWard integration bridge reuses so each bridg
 
 This is a **library only** - no `main` package, no Dockerfile, no runnable binary. The bridges that import it (`github`, `sabnzbd`, `bambulab`, `grafana`, `relay`) are the things you build and run; see the [root README](../README.md) for those.
 
-> **New to PushWard?** Learn what it is at **[pushward.app](https://pushward.app)** and download the iOS app on the **[App Store](https://apps.apple.com/app/id6759689999)**.
+> **New to PushWard?** Learn what it is at **[pushward.app](https://pushward.app)** and download the app from the **[App Store](https://apps.apple.com/app/id6759689999)**.
 
 ## How it works
 

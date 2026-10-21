@@ -39,7 +39,7 @@ Grafana POSTs a firing alert to `POST /webhook`. The bridge resolves the series'
 - A **Prometheus or VictoriaMetrics** endpoint reachable from the bridge - queried directly for series history and instant values.
 - A **Grafana** instance configured to send alert webhooks to this bridge.
 - *(Optional)* A **Grafana service-account token** (Editor role) to enable PromQL auto-extraction and missed-resolve recovery.
-- The **PushWard iOS app** installed and subscribed to the relevant activity slugs.
+- The **PushWard app** installed and subscribed to the relevant activity slugs.
 
 ## Quickstart (Docker)
 
@@ -279,7 +279,7 @@ Logs are structured JSON on stdout (`docker logs pushward-grafana`). The process
 | Process exits immediately on start | A required value is missing: `pushward.url` / `PUSHWARD_URL`, `pushward.api_key` / `PUSHWARD_API_KEY`, or `metrics.url` / `PUSHWARD_METRICS_URL`. |
 | `403` on first widget create | The integration key lacks the `widgets` scope. Use a key with widget capability. |
 | Empty sparkline / no history | `pushward_query` is missing and auto-extraction is off (set `grafana.url` + `grafana.api_token`), or the metrics backend can't run the PromQL. Verify `metrics.url` and any `metrics.username` / `bearer_token` auth. |
-| Webhook accepted (`200`) but no activity appears | Processing is async - check logs for the firing alert. Confirm the alert has a non-empty fingerprint and that the activity slug is subscribed in the iOS app. |
+| Webhook accepted (`200`) but no activity appears | Processing is async - check logs for the firing alert. Confirm the alert has a non-empty fingerprint and that the activity slug is subscribed in the app. |
 | Activity never ends | The `resolved` webhook was dropped. Enable missed-resolve recovery with `grafana.url` + `grafana.api_token` + `alert_check_interval`; otherwise the stale sweeper closes it out after `stale_timeout`. |
 | `401`/`403` from Grafana to the bridge, or vice-versa | The `webhook_token` in the contact point's `Authorization: Bearer` header must match `PUSHWARD_WEBHOOK_TOKEN`; the Grafana service-account token must have Editor role. |
 | Firing alerts silently dropped | The in-memory active-alert cap (500) was hit; a rate-limited warning is logged. Reduce alert volume or tune grouping. |
@@ -287,6 +287,6 @@ Logs are structured JSON on stdout (`docker logs pushward-grafana`). The process
 ## Requirements & License
 
 - Go 1.27.x toolchain (for building from source); Docker for the container image.
-- A running PushWard server, an `hlk_` integration key, a Prometheus/VictoriaMetrics endpoint, and the PushWard iOS app.
+- A running PushWard server, an `hlk_` integration key, a Prometheus/VictoriaMetrics endpoint, and the PushWard app.
 
 Part of the public [pushward-integrations](https://github.com/mac-lucky/pushward-integrations) repository.

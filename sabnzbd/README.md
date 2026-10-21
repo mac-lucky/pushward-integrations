@@ -7,7 +7,7 @@
 
 Tracks SABnzbd downloads and post-processing as a live-updating [PushWard](https://pushward.app) Live Activity on iPhone (Dynamic Island + Lock Screen). SABnzbd calls the bridge's webhook when an NZB is added; the bridge then polls the SABnzbd JSON API through the download and unpack phases and pushes progress, speed, ETA, and a completion summary to the PushWard server.
 
-> **New to PushWard?** Learn what it does at **[pushward.app](https://pushward.app)** and get the iOS app on the **[App Store](https://apps.apple.com/app/id6759689999)**.
+> **New to PushWard?** Learn what it does at **[pushward.app](https://pushward.app)** and get the app on the **[App Store](https://apps.apple.com/app/id6759689999)**.
 
 ## How it works
 
@@ -38,7 +38,7 @@ SABnzbd (NZB added)  --webhook-->  pushward-sabnzbd  --REST-->  PushWard server 
 - A running **PushWard server** (public API: `https://api.pushward.app`).
 - A **PushWard integration key** (`hlk_` prefix).
 - A **SABnzbd** instance reachable over HTTP with its API key.
-- The **PushWard iOS app** installed and subscribed to the `sabnzbd` activity slug.
+- The **PushWard app** installed and subscribed to the `sabnzbd` activity slug.
 
 ## Installation
 
@@ -225,12 +225,12 @@ docker logs -f pushward-sabnzbd
 | `webhook secret not configured -- webhook endpoint is unauthenticated` | Expected when no secret is set; set `PUSHWARD_SABNZBD_WEBHOOK_SECRET` to require `X-Webhook-Secret`. |
 | Webhook returns `401 unauthorized` | A secret is configured but the request's `X-Webhook-Secret` is missing or wrong. |
 | `SABnzbd never started downloading, giving up` | The queue stayed idle after the bounded wait and nothing was post-processing - check that SABnzbd actually queued the NZB and isn't paused. |
-| No Live Activity on the phone | Confirm the iOS app is subscribed to the `sabnzbd` slug, the `hlk_` key is valid, and `PUSHWARD_URL` points at your server. |
+| No Live Activity on the phone | Confirm the app is subscribed to the `sabnzbd` slug, the `hlk_` key is valid, and `PUSHWARD_URL` points at your server. |
 | `fetching queue` / `unexpected status` errors | The bridge can't reach SABnzbd (5s HTTP timeout) or the API key is wrong - verify `sabnzbd.url` resolves and the key is correct (it is redacted in logs). |
 
 ## Requirements & License
 
 - Go 1.27.x (build), Docker (deploy).
-- A running PushWard server, a SABnzbd instance, and the PushWard iOS app.
+- A running PushWard server, a SABnzbd instance, and the PushWard app.
 
 Part of the public [pushward-integrations](https://github.com/mac-lucky/pushward-integrations) repository - see the repository root for license details.

@@ -58,7 +58,7 @@ Relay notifications are not end-to-end encrypted. The relay never holds a user's
 
 - A running **PushWard server** (`https://api.pushward.app`, or your own deployment)
 - A **PostgreSQL** database for the relay state store
-- The **PushWard iOS app** ([App Store](https://apps.apple.com/app/id6759689999)) subscribed to the slugs you push to
+- The **PushWard app** ([App Store](https://apps.apple.com/app/id6759689999)) subscribed to the slugs you push to
 - One **PushWard integration key** (`hlk_` prefix) per tenant - created in the PushWard app
 
 ## Quickstart (Docker)

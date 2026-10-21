@@ -7,7 +7,7 @@
 
 Mirrors a Bambu Lab 3D printer's print progress as a [PushWard](https://pushward.app) Live Activity on iOS - progress bar, layer count, remaining time, and nozzle temperature live on the Dynamic Island and Lock Screen. Connects directly to the printer over local MQTT (no Bambu cloud), and reports paused, finished, failed, and cancelled prints in real time.
 
-> **New to PushWard?** Learn more at **[pushward.app](https://pushward.app)** and get the iOS app on the **[App Store](https://apps.apple.com/app/id6759689999)**.
+> **New to PushWard?** Learn more at **[pushward.app](https://pushward.app)** and get the app on the **[App Store](https://apps.apple.com/app/id6759689999)**.
 
 ## How it works
 
@@ -36,7 +36,7 @@ One Live Activity is maintained per printer, keyed by the constant slug `bambu-<
 
 - A running **PushWard server** (public production base: `https://api.pushward.app`).
 - A PushWard **integration key** (`hlk_` prefix) with the `activity:manage` scope.
-- The **PushWard iOS app** (from the [App Store](https://apps.apple.com/app/id6759689999)), subscribed to the activity.
+- The **PushWard app** (from the [App Store](https://apps.apple.com/app/id6759689999)), subscribed to the activity.
 - A **Bambu Lab printer** with **LAN-only Mode** and its **Developer Mode** option enabled (Developer Mode is what opens the local MQTT channel), reachable on your local network. You will need:
   - The printer's local **IP address** (or hostname).
   - The **Access Code**, read from the printer's screen - the exact path is model-dependent (Settings -> WLAN on P1P/P1S, the General tab in Settings on X1/H2, the LAN Only Mode screen on A1/A1 mini). Used as the MQTT password.
@@ -233,7 +233,7 @@ Logs are structured JSON on stdout at `Info` level. With Docker: `docker logs -f
 | `MQTT connect` auth errors | Wrong `access_code`. Re-read it from the printer's LAN settings screen (path varies by model). |
 | `peer cert fingerprint mismatch` | The pinned `cert_fingerprint_sha256` no longer matches (printer regenerated its cert). Re-extract the fingerprint, or clear it to fall back to auto-pin. |
 | `BambuLab TLS verification disabled via insecure_skip_verify` (warning) | Expected only if you set `insecure_skip_verify: true`. Prefer fingerprint pinning. |
-| No activity appears on iPhone | Check `PUSHWARD_URL`/`PUSHWARD_API_KEY`, that the key has `activity:manage` scope, and that the iOS app is installed and subscribed. |
+| No activity appears on the phone | Check `PUSHWARD_URL`/`PUSHWARD_API_KEY`, that the key has `activity:manage` scope, and that the app is installed and subscribed. |
 | `polling.update_interval must be >= 2s` | Raise `update_interval` (or `PUSHWARD_POLL_INTERVAL`) to at least `2s`. |
 | `pushward.priority must be 0-10` | Set `priority` within `0`-`10`. |
 
