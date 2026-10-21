@@ -25,6 +25,10 @@ const (
 	TemplateLog       = "log"
 	TemplateMedia     = "media"
 	TemplateApproval  = "approval"
+	// TemplateTimer is the name the docs give the countdown template. The
+	// server accepts it on input only: stored rows and responses still say
+	// TemplateCountdown.
+	TemplateTimer = "timer"
 )
 
 // Steps-template wire bounds, mirroring the server's per-entry validation.
@@ -94,6 +98,15 @@ const (
 	ImageShapePoster ImageShape = "poster" // 2:3 portrait, e.g. movie/series art
 	ImageShapeSquare ImageShape = "square" // 1:1, the default when omitted
 	ImageShapeCircle ImageShape = "circle" // 1:1 clipped to a circle, e.g. avatars
+)
+
+// CountdownDirection picks which way the countdown template's clock runs.
+// Mirrors the server's direction enum; an omitted value counts down.
+type CountdownDirection string
+
+const (
+	CountdownDown CountdownDirection = "down"
+	CountdownUp   CountdownDirection = "up"
 )
 
 // Trend direction constants annotate a board tile (and value/gauge widget)
@@ -389,6 +402,19 @@ type Content struct {
 	// (and the iOS AlarmKit snooze window). 60-3600; server defaults to 300 when
 	// omitted. Only meaningful with Alarm set.
 	SnoozeSeconds *int `json:"snooze_seconds,omitempty"`
+	// Direction CountdownUp counts up from StartDate (the server fills in now
+	// when it is unset) and has no end: Duration, EndDate, WarningThreshold,
+	// CompletionMessage, Alarm and SnoozeSeconds are a 422 there. Goal is up
+	// only, in seconds: the card fills a ruler toward it and then shows the
+	// overtime. ShowRuler nil means shown. Paused is a write-only switch for
+	// either direction (true pauses, false resumes, re-sending the current
+	// state is a no-op); the server keeps the result in paused_at and
+	// paused_seconds, which this client never decodes. Clients before iOS
+	// 1.19.0 show neither counting up nor a pause.
+	Direction CountdownDirection `json:"direction,omitempty"`
+	Goal      *int               `json:"goal,omitempty"`
+	ShowRuler *bool              `json:"show_ruler,omitempty"`
+	Paused    *bool              `json:"paused,omitempty"`
 
 	// Gauge template: Value is float64
 	// Timeline template: Value is map[string]float64
@@ -578,6 +604,14 @@ type ContentPatch struct {
 	CompletionMessage *string `json:"completion_message,omitempty"`
 	Alarm             *bool   `json:"alarm,omitempty"`
 	SnoozeSeconds     *int    `json:"snooze_seconds,omitempty"`
+	// Same rules as the matching Content fields. A switch to CountdownUp
+	// starts a new run server-side: an unsent StartDate becomes now and the
+	// stored down-only fields are dropped. Goal's null-clear form is
+	// unreachable here, as for the other pointers.
+	Direction *CountdownDirection `json:"direction,omitempty"`
+	Goal      *int                `json:"goal,omitempty"`
+	ShowRuler *bool               `json:"show_ruler,omitempty"`
+	Paused    *bool               `json:"paused,omitempty"`
 
 	// Gauge template: Value is float64
 	// Timeline template: Value is map[string]float64

@@ -259,6 +259,35 @@ func TestApprovalWireNames(t *testing.T) {
 	}
 }
 
+// TestTimerWireNames pins the countdown clock keys on Content and ContentPatch.
+// A resume is paused:false, so the pointer has to carry false onto the wire
+// instead of omitting it.
+func TestTimerWireNames(t *testing.T) {
+	up := CountdownUp
+	full := Content{Template: TemplateTimer, Direction: CountdownUp, Goal: IntPtr(7200), ShowRuler: BoolPtr(false), Paused: BoolPtr(false)}
+	patch := ContentPatch{Direction: &up, Goal: IntPtr(7200), ShowRuler: BoolPtr(false), Paused: BoolPtr(false)}
+	want := `"direction":"up","goal":7200,"show_ruler":false,"paused":false`
+	for name, v := range map[string]any{"Content": full, "ContentPatch": patch} {
+		if got := string(mustJSON(t, v)); !strings.Contains(got, want) {
+			t.Errorf("%s = %s, want it to contain %s", name, got, want)
+		}
+	}
+	empty := jsonKeys(t, ContentPatch{})
+	for _, k := range []string{"direction", "goal", "show_ruler", "paused"} {
+		if empty[k] || jsonKeys(t, Content{})[k] {
+			t.Errorf("an unset %q must stay off the wire", k)
+		}
+	}
+	// goal comes back from the server as integer seconds.
+	var back Content
+	if err := json.Unmarshal([]byte(`{"template":"countdown","direction":"up","goal":5400,"paused_at":1755500000}`), &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Direction != CountdownUp || back.Goal == nil || *back.Goal != 5400 {
+		t.Errorf("decoded %+v", back)
+	}
+}
+
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)

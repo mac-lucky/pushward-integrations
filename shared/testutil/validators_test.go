@@ -122,6 +122,56 @@ func TestValidateCountdown(t *testing.T) {
 			body:       `{"state":"ongoing","content":{"template":"countdown","progress":0.5,"end_date":1800000000,"warning_threshold":-1}}`,
 			wantStatus: 400,
 		},
+		{
+			name:       "timer alias counting up with a goal string",
+			body:       `{"state":"ongoing","content":{"template":"timer","progress":0,"direction":"up","goal":"1h30m","show_ruler":false}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "counting up paused with goal seconds",
+			body:       `{"state":"ongoing","content":{"template":"countdown","progress":0,"direction":"up","start_date":1700000000,"goal":7200,"paused":true}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "pausing a count-down",
+			body:       `{"state":"ongoing","content":{"template":"timer","progress":0.5,"end_date":1800000000,"paused":true}}`,
+			wantStatus: 200,
+		},
+		{
+			name:       "counting up with an end_date",
+			body:       `{"state":"ongoing","content":{"template":"timer","progress":0,"direction":"up","end_date":1800000000}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "counting up with a warning_threshold",
+			body:       `{"state":"ongoing","content":{"template":"timer","progress":0,"direction":"up","warning_threshold":60}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "goal on a count-down",
+			body:       `{"state":"ongoing","content":{"template":"countdown","progress":0.5,"end_date":1800000000,"goal":60}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "goal in days",
+			body:       `{"state":"ongoing","content":{"template":"timer","progress":0,"direction":"up","goal":"2d"}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "goal of zero",
+			body:       `{"state":"ongoing","content":{"template":"timer","progress":0,"direction":"up","goal":0}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "unknown direction",
+			body:       `{"state":"ongoing","content":{"template":"timer","progress":0,"direction":"sideways","end_date":1800000000}}`,
+			wantStatus: 400,
+		},
+		{
+			name:       "clock fields on another template",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"paused":true}}`,
+			wantStatus: 400,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -131,6 +181,19 @@ func TestValidateCountdown(t *testing.T) {
 				t.Errorf("got status %d, want %d", got, tt.wantStatus)
 			}
 		})
+	}
+}
+
+// The server never stores paused, so a later switch to another template does
+// not inherit it.
+func TestTimerPausedIsNotStored(t *testing.T) {
+	srv, _, _ := testutil.MockPushWardServer(t)
+	createActivity(t, srv.URL, "nap", "Nap")
+	if got := patchActivity(t, srv.URL, "nap", `{"state":"ongoing","content":{"template":"timer","progress":0,"direction":"up","paused":true}}`); got != 200 {
+		t.Fatalf("pause: status %d", got)
+	}
+	if got := patchActivity(t, srv.URL, "nap", `{"content":{"template":"generic","direction":null}}`); got != 200 {
+		t.Errorf("switch to generic after a pause: status %d, want 200", got)
 	}
 }
 

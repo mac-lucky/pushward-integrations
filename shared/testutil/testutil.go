@@ -30,7 +30,11 @@ type APICall struct {
 var (
 	slugPattern    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 	hexColor       = regexp.MustCompile(`^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$`)
-	validTemplates = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "gauge": true, "timeline": true, "board": true, "log": true, "media": true, "approval": true}
+	validTemplates = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "timer": true, "gauge": true, "timeline": true, "board": true, "log": true, "media": true, "approval": true}
+	// validDirections includes "" because an omitted direction counts down.
+	validDirections = map[string]bool{"": true, string(pushward.CountdownDown): true, string(pushward.CountdownUp): true}
+	// durationString is the server's string form of duration and goal.
+	durationString = regexp.MustCompile(`^(\d+|(\d+[hms])+)$`)
 	// validTrends / validLogLevels include "" because trend and level are
 	// optional - an omitted value is valid; only a non-empty unknown value fails.
 	validTrends     = map[string]bool{"": true, pushward.TrendUp: true, pushward.TrendDown: true, pushward.TrendFlat: true}
@@ -131,6 +135,10 @@ type apiContent struct {
 	Alarm              *bool                              `json:"alarm,omitempty"`
 	SnoozeSeconds      *int                               `json:"snooze_seconds,omitempty"`
 	WarningThreshold   *int                               `json:"warning_threshold,omitempty"`
+	Direction          string                             `json:"direction,omitempty"`
+	Goal               any                                `json:"goal,omitempty"`
+	ShowRuler          *bool                              `json:"show_ruler,omitempty"`
+	Paused             *bool                              `json:"paused,omitempty"`
 	Value              any                                `json:"value,omitempty"`
 	MinValue           *float64                           `json:"min_value,omitempty"`
 	MaxValue           *float64                           `json:"max_value,omitempty"`
@@ -530,6 +538,11 @@ func mockPushWardServer(t *testing.T, opts MockOptions) (*httptest.Server, *[]AP
 		}
 		// Stored only once it validates: a rejected patch leaves the activity
 		// as it was, so the next patch merges onto what the server would hold.
+		// That is countdown for a timer, and never the write-only paused switch.
+		if merged["template"] == pushward.TemplateTimer {
+			merged["template"] = pushward.TemplateCountdown
+		}
+		delete(merged, "paused")
 		activities[slug] = merged
 
 		w.WriteHeader(http.StatusOK)
@@ -1112,7 +1125,7 @@ func validateContent(c *apiContent) error {
 	// Under merge-patch, template may be absent on ticks; only per-template
 	// required-field validation is gated on it.
 	if c.Template != "" && !validTemplates[c.Template] {
-		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, gauge, timeline, board, log, media, approval")
+		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, timer, gauge, timeline, board, log, media, approval")
 	}
 	if c.Progress < 0 || c.Progress > 1 {
 		return fmt.Errorf("progress must be 0.0-1.0")
@@ -1170,6 +1183,9 @@ func validateContent(c *apiContent) error {
 	if err := validateApprovalFields(c); err != nil {
 		return err
 	}
+	if err := validateClockFields(c); err != nil {
+		return err
+	}
 	if err := validateWindow(c); err != nil {
 		return err
 	}
@@ -1183,7 +1199,7 @@ func validateContent(c *apiContent) error {
 		if err := validateSteps(c); err != nil {
 			return err
 		}
-	case "countdown":
+	case pushward.TemplateCountdown, pushward.TemplateTimer:
 		if err := validateCountdown(c); err != nil {
 			return err
 		}
@@ -1408,7 +1424,33 @@ func validateSteps(c *apiContent) error {
 	return nil
 }
 
+// validateClockFields is the off-template gate for the countdown clock, the
+// shape of validateApprovalFields.
+func validateClockFields(c *apiContent) error {
+	hasClock := c.Direction != "" || c.Goal != nil || c.ShowRuler != nil || c.Paused != nil
+	if hasClock && c.Template != "" && c.Template != pushward.TemplateCountdown && c.Template != pushward.TemplateTimer {
+		return fmt.Errorf("direction, show_ruler, goal and paused are only valid on the timer (countdown) template, got %q", c.Template)
+	}
+	return nil
+}
+
 func validateCountdown(c *apiContent) error {
+	if !validDirections[c.Direction] {
+		return fmt.Errorf("direction must be down or up, got %q", c.Direction)
+	}
+	if c.Direction == string(pushward.CountdownUp) {
+		// The server starts a new run on a flip to up and drops the stored
+		// down-only fields; the mock does not, so a test that flips a stored
+		// countdown has to null them in the same patch.
+		if c.EndDate != nil || c.Duration != nil || c.WarningThreshold != nil ||
+			c.CompletionMessage != "" || c.Alarm != nil || c.SnoozeSeconds != nil {
+			return fmt.Errorf("end_date, duration, warning_threshold, completion_message, alarm and snooze_seconds are not used when direction is up")
+		}
+		return validateGoal(c.Goal)
+	}
+	if c.Goal != nil {
+		return fmt.Errorf("goal is only used when direction is up")
+	}
 	// The window's own bounds are validateWindow's, on every template.
 	if c.EndDate == nil {
 		return fmt.Errorf("end_date is required for countdown template")
@@ -1417,6 +1459,30 @@ func validateCountdown(c *apiContent) error {
 		return fmt.Errorf("warning_threshold must be >= 0")
 	}
 	return nil
+}
+
+// maxGoalSeconds is the server's 5-year cap on goal (and duration).
+const maxGoalSeconds = 157788000
+
+// validateGoal takes goal the way the server does: integer seconds, or a
+// duration string like 2h or 1h30m.
+func validateGoal(goal any) error {
+	switch g := goal.(type) {
+	case nil:
+		return nil
+	case float64:
+		if g != float64(int64(g)) || g < 1 || g > maxGoalSeconds {
+			return fmt.Errorf("goal must be whole seconds from 1 to %d, got %v", maxGoalSeconds, g)
+		}
+		return nil
+	case string:
+		if !durationString.MatchString(g) {
+			return fmt.Errorf("goal must be integer seconds or a duration string (30s, 1h30m), got %q", g)
+		}
+		return nil
+	default:
+		return fmt.Errorf("goal must be integer seconds or a duration string")
+	}
 }
 
 func validateGauge(c *apiContent) error {
