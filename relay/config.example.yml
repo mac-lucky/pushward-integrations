@@ -14,8 +14,8 @@ telemetry:
 
 # Each tenant (hlk_ key) gets a breaker of its own, so one tenant's failing
 # calls stop only that tenant's. A breaker for the whole server, with the same
-# settings, opens only when a run of failures with no success between them
-# spans at least 3 tenants.
+# settings, opens only when a run of failures with no success between them and
+# no gap longer than the cooldown spans at least 3 tenants.
 circuit_breaker:
   threshold: 5                              # consecutive API failures before opening a breaker
   cooldown: 30s                             # how long a breaker stays open before allowing a probe

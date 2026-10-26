@@ -18,25 +18,33 @@ const serverTenants = 3
 // serverBreaker opens for every tenant. It counts consecutive faults across
 // the whole pool, and lets them through to its CircuitBreaker only once they
 // reach the threshold and came from at least minTenants tenants. Any genuine
-// success, from any tenant, ends the streak: the server is up.
+// success, from any tenant, ends the streak: the server is up. So does a gap
+// longer than window since the last fault: faults from different tenants
+// hours apart say nothing about the server now.
 type serverBreaker struct {
 	cb         *pushward.CircuitBreaker // threshold 1: the gate below decides
 	threshold  int
 	minTenants int
+	window     time.Duration
+	now        func() time.Time
 
-	mu     sync.Mutex
-	streak int
+	mu        sync.Mutex
+	streak    int
+	lastFault time.Time
 	// tenants holds the key hashes in the current streak. It stays small:
 	// it is cleared whenever the streak ends, and the streak ends at the
 	// latest when it reaches max(threshold, minTenants) tenants.
 	tenants map[string]struct{}
 }
 
+// newServerBreaker uses cooldown for the streak window too.
 func newServerBreaker(threshold int, cooldown time.Duration) *serverBreaker {
 	return &serverBreaker{
 		cb:         pushward.NewCircuitBreaker(1, cooldown),
 		threshold:  threshold,
 		minTenants: serverTenants,
+		window:     cooldown,
+		now:        time.Now,
 		tenants:    make(map[string]struct{}),
 	}
 }
@@ -68,7 +76,12 @@ func (s *serverBreaker) recordFailure(tenant string) {
 		s.cb.RecordFailure()
 		return
 	}
+	now := s.now()
+	if s.streak > 0 && now.Sub(s.lastFault) > s.window {
+		s.resetLocked()
+	}
 	s.streak++
+	s.lastFault = now
 	s.tenants[tenant] = struct{}{}
 	if s.streak >= s.threshold && len(s.tenants) >= s.minTenants {
 		s.cb.RecordFailure()

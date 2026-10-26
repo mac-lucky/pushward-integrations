@@ -73,8 +73,8 @@ func WithClientOptions(opts ...pushward.ClientOption) Option {
 // WithBreakers gives every tenant a circuit breaker of its own, opening after
 // threshold consecutive faults for cooldown, in front of one breaker for the
 // whole server with the same settings. The server breaker opens only for a
-// fault streak that spans several tenants (serverTenants), so one tenant's
-// failures leave the others delivering.
+// fault streak that spans several tenants (serverTenants) with no gap longer
+// than cooldown, so one tenant's failures leave the others delivering.
 func WithBreakers(threshold int, cooldown time.Duration) Option {
 	return func(p *Pool) {
 		p.server = newServerBreaker(threshold, cooldown)

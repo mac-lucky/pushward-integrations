@@ -355,3 +355,29 @@ func TestBreakers_GaugesClearWhenCooldownEnds(t *testing.T) {
 		t.Error("ServerBreakerOpen still true after the cooldown")
 	}
 }
+
+// Faults from three tenants that arrive further apart than the window are no
+// streak: each one finds the last too old and starts over.
+func TestServerBreaker_QuietGapEndsStreak(t *testing.T) {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	s := newServerBreaker(3, 30*time.Second)
+	s.now = func() time.Time { return now }
+
+	for _, k := range []string{"a", "b", "c", "a", "b", "c"} {
+		s.recordFailure(k)
+		now = now.Add(31 * time.Second)
+		if s.blocking() {
+			t.Fatalf("opened on faults %s apart", 31*time.Second)
+		}
+	}
+
+	// Inside the window the same three tenants open it. The gap is measured
+	// from the last fault, not the first, so a steady trickle keeps counting.
+	for _, k := range []string{"a", "b", "c"} {
+		s.recordFailure(k)
+		now = now.Add(20 * time.Second)
+	}
+	if !s.blocking() {
+		t.Fatal("did not open on faults 20s apart from three tenants")
+	}
+}
