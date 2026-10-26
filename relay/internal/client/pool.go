@@ -25,8 +25,24 @@ const maxClients = 1000
 // this only bites the pathological large-Retry-After case.
 const retryBudget = 20 * time.Second
 
+// maxIdleConnsPerHost is how many idle connections to PushWard the transport
+// keeps. Every tenant client talks to that one host, and http.DefaultTransport
+// keeps 2, so a burst of webhooks closed most of its connections afterwards
+// and the next burst paid for new TLS handshakes.
+const maxIdleConnsPerHost = 64
+
+// NewTransport returns http.DefaultTransport's settings (dial, TLS handshake
+// and idle timeouts included) with room for maxIdleConnsPerHost idle
+// connections to the PushWard host.
+func NewTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConnsPerHost = maxIdleConnsPerHost
+	return t
+}
+
 // Pool manages a pool of pushward.Client instances keyed by hlk_ key hash.
-// All clients share the same base URL but use different API keys.
+// All clients share the same base URL and HTTP client but use different API
+// keys.
 type Pool struct {
 	baseURL    string
 	httpClient *http.Client
@@ -34,9 +50,13 @@ type Pool struct {
 	clients    *lrumap.Map[*pushward.Client]
 }
 
-// NewPool creates a new client pool. When httpClient is non-nil it is shared
-// by every client created from the pool (e.g. for trace-propagating transports).
+// NewPool creates a new client pool. When httpClient is nil the pool builds
+// one on NewTransport with a 10s timeout; either way every client created from
+// the pool shares it, and with it the idle connections.
 func NewPool(baseURL string, httpClient *http.Client, opts ...pushward.ClientOption) *Pool {
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 10 * time.Second, Transport: NewTransport()}
+	}
 	return &Pool{
 		baseURL:    baseURL,
 		httpClient: httpClient,
@@ -64,9 +84,7 @@ func (p *Pool) Get(hlkKey string) *pushward.Client {
 	return p.clients.GetOrCreate(hash, func() *pushward.Client {
 		opts := []pushward.ClientOption{pushward.WithRetryBudget(retryBudget)}
 		opts = append(opts, p.opts...)
-		if p.httpClient != nil {
-			opts = append(opts, pushward.WithHTTPClient(p.httpClient))
-		}
+		opts = append(opts, pushward.WithHTTPClient(p.httpClient))
 		return pushward.NewClient(p.baseURL, hlkKey, opts...)
 	})
 }

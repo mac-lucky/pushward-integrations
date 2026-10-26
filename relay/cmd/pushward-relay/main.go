@@ -110,11 +110,12 @@ func main() {
 
 	// Client pool - use an instrumented transport when tracing is enabled
 	// so outbound requests propagate trace context to pushward-server.
+	// Without it the pool builds its own client on the same transport.
 	var httpClient *http.Client
 	if cfg.Telemetry.Endpoint != "" {
 		httpClient = &http.Client{
 			Timeout:   10 * time.Second,
-			Transport: otelhttp.NewTransport(http.DefaultTransport),
+			Transport: otelhttp.NewTransport(client.NewTransport()),
 		}
 	}
 	breaker := pushward.NewCircuitBreaker(cfg.CircuitBreaker.Threshold, cfg.CircuitBreaker.Cooldown)
