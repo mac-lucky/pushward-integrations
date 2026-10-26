@@ -125,7 +125,7 @@ func main() {
 	slog.Info("circuit breaker configured", "threshold", cfg.CircuitBreaker.Threshold, "cooldown", cfg.CircuitBreaker.Cooldown)
 
 	// Router
-	mux := server.NewMux(pool.Ping)
+	mux := server.NewMux(state.ReadyCheck(pool.Ping, state.ReadyGrace))
 
 	// Huma API - auto-generates OpenAPI 3.1 spec at /openapi.json and docs at /docs.
 	humaConfig := huma.DefaultConfig("PushWard Relay", "1.0.0")

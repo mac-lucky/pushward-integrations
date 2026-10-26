@@ -238,7 +238,7 @@ The key itself is only checked when the relay calls PushWard on your behalf, so 
 | DELETE | `/truenas/ack/v2/alerts/{id}` | The same, and stops the alert's repeats first |
 | POST | `/` | Any webhook: handed to the provider that sent it, else to the universal route (see [Root route](#root-route-post-)) |
 | GET | `/health` | Liveness - returns `ok` |
-| GET | `/ready` | Readiness - `ready`, or `503` if the DB ping fails |
+| GET | `/ready` | Readiness - `ready`, or `503` once the DB ping has kept failing for 30s |
 | GET | `/openapi.json` | Auto-generated OpenAPI 3.1 spec |
 | GET | `/docs` | Interactive API docs |
 | GET | `/metrics` | Prometheus metrics - served on the **separate** internal listener (`:9090`), not on `:8090` |
@@ -1008,7 +1008,7 @@ Logs are structured JSON on stdout (`slog`). View them with `docker logs <contai
 | All traffic shares one IP bucket | Running behind a reverse proxy/Cloudflare without `trusted_proxy_cidrs`. A startup warning is logged. | Set `PUSHWARD_TRUSTED_PROXY_CIDRS` to your proxy's CIDRs. |
 | `config load` fails: `metrics_address must differ from address` | `server.metrics_address` equals `server.address`. | Use different ports (defaults `:8090` / `:9090`), or set `metrics_address` empty to disable metrics. |
 | `config load` fails: `stale_timeout must be > 0` | A provider has a non-positive `stale_timeout`. | Set a positive duration (a non-positive TTL writes state rows that are never cleaned up). |
-| `/ready` returns `503` | DB ping check failed. | Verify `PUSHWARD_DATABASE_DSN` / `password_file` and that PostgreSQL is reachable. |
+| `/ready` returns `503` | The DB ping has been failing for at least 30s (shorter blips only log `database ping failed, staying ready`). | Verify `PUSHWARD_DATABASE_DSN` / `password_file` and that PostgreSQL is reachable. |
 | Upstream `401`/`403`/`429` surfaced to the sender | The PushWard server rejected the `hlk_` key or rate-limited. | Check the key is valid and has capacity; the relay forwards these statuses so the source app reports the real cause. |
 | `409` with `upstream conflict: <code>` | The account is at a PushWard limit, most often `activity.limit_exceeded` (too many Live Activities open at once). | End some activities or let them expire. Radarr, Sonarr and Overseerr answer `200 ignored_activity` instead when their notification already went out. |
 | The provider's `Test` button reports a failure | The self-test could not reach PushWard - most often a refused key. | Read the status: it is the upstream's own. A failed test is no longer answered with `200`, so the button reflects whether the integration actually works. |
