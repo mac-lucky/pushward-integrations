@@ -10,6 +10,18 @@ import (
 // allowing requests through.
 var ErrCircuitOpen = errors.New("circuit breaker is open")
 
+// Breaker is what a Client asks before each call and tells how the call went.
+// *CircuitBreaker is the stock one. WithBreaker takes any other, for a caller
+// that splits the decision, e.g. the relay's breaker per tenant in front of
+// one for the whole server.
+type Breaker interface {
+	Allow() bool
+	RecordSuccess()
+	RecordReachable()
+	RecordFailure()
+	Abort()
+}
+
 type circuitState int
 
 const (

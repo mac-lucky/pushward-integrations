@@ -135,7 +135,7 @@ server.ListenAndServe(ctx, cfg.Server.Address, mux) // graceful shutdown on ctx 
 
 ### Client
 
-`NewClient(baseURL, apiKey string, opts ...ClientOption) *Client` - default `http.Client` timeout is 10s; auth is `Authorization: Bearer <apiKey>`. Functional options: `WithHTTPClient`, `WithOnResult` (per-call result callback), `WithCircuitBreaker`.
+`NewClient(baseURL, apiKey string, opts ...ClientOption) *Client` - default `http.Client` timeout is 10s; auth is `Authorization: Bearer <apiKey>`. Functional options: `WithHTTPClient`, `WithOnResult` (per-call result callback), `WithCircuitBreaker`, `WithBreaker` (any `Breaker` implementation).
 
 | Method | REST call | Notes |
 |---|---|---|
@@ -254,7 +254,7 @@ if errors.As(err, &he) && he.Code == pushward.ErrCodeActivityLimitExceeded {
 }
 ```
 
-**Circuit breaker (optional):** `NewCircuitBreaker(threshold, cooldown)` opens after N consecutive backend faults and half-opens for a single probe after the cooldown. Only genuine `5xx`/network exhaustion trips it; `4xx`/`409`/`429` prove the backend is reachable and never open it. Attach with `WithCircuitBreaker`; calls return `ErrCircuitOpen` while open. The relay shares one breaker across all tenants.
+**Circuit breaker (optional):** `NewCircuitBreaker(threshold, cooldown)` opens after N consecutive backend faults and half-opens for a single probe after the cooldown. Only genuine `5xx`/network exhaustion trips it; `4xx`/`409`/`429` prove the backend is reachable and never open it. Attach with `WithCircuitBreaker`; calls return `ErrCircuitOpen` while open. `WithBreaker` takes any `Breaker` (the five methods `*CircuitBreaker` has): the relay gives each tenant's client its own breaker in front of a server-wide one.
 
 ### Widget poller (`widgets`)
 

@@ -833,6 +833,57 @@ func TestDoWithRetry_CircuitOpenReturnsError(t *testing.T) {
 	}
 }
 
+// recordingBreaker is a Breaker that admits or refuses every call and counts
+// what the client reports.
+type recordingBreaker struct {
+	allow                    bool
+	success, reachable, fail int
+}
+
+func (b *recordingBreaker) Allow() bool      { return b.allow }
+func (b *recordingBreaker) RecordSuccess()   { b.success++ }
+func (b *recordingBreaker) RecordReachable() { b.reachable++ }
+func (b *recordingBreaker) RecordFailure()   { b.fail++ }
+func (b *recordingBreaker) Abort()           {}
+
+func TestWithBreaker_CustomBreakerDecidesAndHearsOutcome(t *testing.T) {
+	status := http.StatusOK
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+	}))
+	defer srv.Close()
+
+	b := &recordingBreaker{}
+	c := NewClient(srv.URL, "key", WithBreaker(b))
+	if err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", "", nil, nil); err != ErrCircuitOpen {
+		t.Fatalf("refused by the breaker: got %v, want ErrCircuitOpen", err)
+	}
+
+	b.allow = true
+	if err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", "", nil, nil); err != nil {
+		t.Fatalf("2xx: %v", err)
+	}
+	status = http.StatusNotFound
+	_ = c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", "", nil, nil)
+	if b.success != 1 || b.reachable != 1 || b.fail != 0 {
+		t.Errorf("success=%d reachable=%d fail=%d, want 1/1/0", b.success, b.reachable, b.fail)
+	}
+}
+
+// The field is an interface now, so a nil *CircuitBreaker must not end up in
+// it as a typed nil.
+func TestWithCircuitBreaker_NilMeansNoBreaker(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "key", WithCircuitBreaker(nil))
+	if err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", "", nil, nil); err != nil {
+		t.Fatalf("expected the call to go through, got %v", err)
+	}
+}
+
 // A half-open probe that resolves to a non-retryable 4xx proves the backend is
 // reachable, so it must close the breaker rather than leave it wedged in
 // half-open forever (regression for breaker-half-open-wedge).

@@ -98,7 +98,7 @@ type Client struct {
 	baseURL     string
 	apiKey      string
 	onResult    func(context.Context, ResultInfo)
-	breaker     *CircuitBreaker
+	breaker     Breaker
 	retryBudget time.Duration
 }
 
@@ -115,9 +115,23 @@ func WithOnResult(fn func(context.Context, ResultInfo)) ClientOption {
 	return func(cl *Client) { cl.onResult = fn }
 }
 
-// WithCircuitBreaker attaches a circuit breaker to the client.
+// WithCircuitBreaker attaches a circuit breaker to the client. A nil cb means
+// no breaker.
 func WithCircuitBreaker(cb *CircuitBreaker) ClientOption {
-	return func(cl *Client) { cl.breaker = cb }
+	return func(cl *Client) {
+		// A nil *CircuitBreaker stored in the interface field would not
+		// compare equal to nil and would panic on the first call.
+		if cb == nil {
+			cl.breaker = nil
+			return
+		}
+		cl.breaker = cb
+	}
+}
+
+// WithBreaker attaches any Breaker implementation. A nil b means no breaker.
+func WithBreaker(b Breaker) ClientOption {
+	return func(cl *Client) { cl.breaker = b }
 }
 
 // WithRetryBudget caps the total wall-clock time a single call may spend
