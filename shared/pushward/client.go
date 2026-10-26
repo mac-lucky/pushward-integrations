@@ -129,8 +129,12 @@ func WithCircuitBreaker(cb *CircuitBreaker) ClientOption {
 	}
 }
 
-// WithBreaker attaches any Breaker implementation. A nil b means no breaker.
+// WithBreaker attaches any Breaker implementation. A nil b, a nil
+// *CircuitBreaker included, means no breaker.
 func WithBreaker(b Breaker) ClientOption {
+	if cb, ok := b.(*CircuitBreaker); ok {
+		return WithCircuitBreaker(cb)
+	}
 	return func(cl *Client) { cl.breaker = b }
 }
 

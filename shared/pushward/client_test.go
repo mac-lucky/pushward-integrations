@@ -871,16 +871,22 @@ func TestWithBreaker_CustomBreakerDecidesAndHearsOutcome(t *testing.T) {
 }
 
 // The field is an interface now, so a nil *CircuitBreaker must not end up in
-// it as a typed nil.
-func TestWithCircuitBreaker_NilMeansNoBreaker(t *testing.T) {
+// it as a typed nil, whichever option it came through.
+func TestNilBreakerMeansNoBreaker(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer srv.Close()
 
-	c := NewClient(srv.URL, "key", WithCircuitBreaker(nil))
-	if err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", "", nil, nil); err != nil {
-		t.Fatalf("expected the call to go through, got %v", err)
+	for name, opt := range map[string]ClientOption{
+		"WithCircuitBreaker(nil)":             WithCircuitBreaker(nil),
+		"WithBreaker(nil)":                    WithBreaker(nil),
+		"WithBreaker((*CircuitBreaker)(nil))": WithBreaker((*CircuitBreaker)(nil)),
+	} {
+		c := NewClient(srv.URL, "key", opt)
+		if err := c.doWithRetry(context.Background(), "create", http.MethodPost, srv.URL+"/test", "", nil, nil); err != nil {
+			t.Errorf("%s: expected the call to go through, got %v", name, err)
+		}
 	}
 }
 
