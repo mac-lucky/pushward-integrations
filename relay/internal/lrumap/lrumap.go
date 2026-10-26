@@ -124,6 +124,16 @@ func (m *Map[V]) Peek(key string) (V, bool) {
 	return e.value, true
 }
 
+// Range calls fn for every entry without counting as an access. It holds the
+// read lock throughout, so fn must not call back into the Map.
+func (m *Map[V]) Range(fn func(key string, value V)) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for k, e := range m.entries {
+		fn(k, e.value)
+	}
+}
+
 // Sweep removes entries whose lastAccess is older than maxAge.
 // Returns the number of entries removed.
 func (m *Map[V]) Sweep(maxAge time.Duration) int {

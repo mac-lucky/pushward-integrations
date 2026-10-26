@@ -118,7 +118,15 @@ var (
 	CircuitBreakerOpen = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: "pushward_relay",
 		Name:      "circuit_breaker_open",
-		Help:      "Whether the circuit breaker is open (1) or closed (0).",
+		Help:      "Whether the circuit breaker for the whole server is open (1) or closed (0).",
+	})
+
+	// TenantCircuitBreakersOpen counts the pooled tenants whose own breaker
+	// is open, the ones a server-wide gauge of 0 says nothing about.
+	TenantCircuitBreakersOpen = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: "pushward_relay",
+		Name:      "tenant_circuit_breakers_open",
+		Help:      "Tenants whose own circuit breaker is open or probing.",
 	})
 )
 

@@ -48,7 +48,7 @@ Relay notifications are not end-to-end encrypted. The relay never holds a user's
 - **Acknowledged alerts** - `?ack=1` makes an alert's push repeat until someone acknowledges it, and the resolve stops it. See [Acknowledged alerts](#acknowledged-alerts-ack1).
 - **Cross-provider notification threads** - Radarr/Sonarr/Overseerr/Jellyfin notifications about the same movie (TMDB id) or show (TVDB id) collapse into one iOS notification thread.
 - **PostgreSQL state store** - persistent alert grouping, sync tracking, and download dedup with a background TTL sweep every 30s.
-- **Per-tenant client pool** - LRU pool of PushWard API clients keyed by `hlk_` hash (up to 1,000 concurrent tenants), wrapped in a shared circuit breaker.
+- **Per-tenant client pool** - LRU pool of PushWard API clients keyed by `hlk_` hash (up to 1,000 concurrent tenants). Each tenant has its own circuit breaker, so one tenant's failing calls don't stop the others; a server-wide breaker opens only for a run of failures, no success in between, that spans at least 3 tenants (server down, connections refused, 503s for everyone).
 - **Dual-layer rate limiting** - per-IP (5 req/s, burst 20; an IPv6 client's whole /64 shares one bucket) and per-key (1 req/s, burst 10) token buckets.
 - **Live credential rotation** - optional DB `password_file` watched via fsnotify; the connection pool resets automatically when the file changes.
 - **Built-in observability** - auto-generated OpenAPI 3.1 spec (`/openapi.json`) + interactive docs (`/docs`), Prometheus `/metrics` on a separate internal listener, and optional OpenTelemetry OTLP/gRPC tracing.
@@ -115,8 +115,8 @@ Settings come from a YAML config file (`-config` flag, default `config.yml`) **o
 | `PUSHWARD_SERVER_METRICS_ADDRESS` | `server.metrics_address` | Listen address for the internal-only Prometheus metrics server (`GET /metrics`). Must differ from `server.address` or config load fails. Set empty to disable. | `:9090` |
 | `PUSHWARD_DATABASE_PASSWORD_FILE` | `database.password_file` | Path to a file holding the DB password; overrides the password in the DSN and is watched via fsnotify for live rotation (pool resets on change). | _(empty)_ |
 | `PUSHWARD_TRUSTED_PROXY_CIDRS` | `trusted_proxy_cidrs` | CIDRs of trusted reverse proxies. Only when `RemoteAddr` falls in one of these are `CF-Connecting-IP` / `X-Real-IP` / `X-Forwarded-For` honored for per-IP rate limiting. Comma-separated as env; a YAML list in the file. | _(empty)_ |
-| _(none)_ | `circuit_breaker.threshold` | Consecutive outbound-API failures before the breaker opens. Must be `>= 1`. | `5` |
-| _(none)_ | `circuit_breaker.cooldown` | How long the breaker stays open before allowing a probe. Must be `>= 1s`. | `30s` |
+| _(none)_ | `circuit_breaker.threshold` | Consecutive outbound-API failures before a tenant's breaker opens, and before the server-wide one does (which also needs 3 tenants among them). Must be `>= 1`. | `5` |
+| _(none)_ | `circuit_breaker.cooldown` | How long a breaker stays open before allowing a probe. Must be `>= 1s`. | `30s` |
 
 ### State keys
 

@@ -118,12 +118,11 @@ func main() {
 			Transport: otelhttp.NewTransport(client.NewTransport()),
 		}
 	}
-	breaker := pushward.NewCircuitBreaker(cfg.CircuitBreaker.Threshold, cfg.CircuitBreaker.Cooldown)
 	clients := client.NewPool(baseURL, httpClient,
-		pushward.WithOnResult(metrics.RecordAPICall),
-		pushward.WithCircuitBreaker(breaker),
+		client.WithClientOptions(pushward.WithOnResult(metrics.RecordAPICall)),
+		client.WithBreakers(cfg.CircuitBreaker.Threshold, cfg.CircuitBreaker.Cooldown),
 	)
-	slog.Info("circuit breaker configured", "threshold", cfg.CircuitBreaker.Threshold, "cooldown", cfg.CircuitBreaker.Cooldown)
+	slog.Info("circuit breakers configured", "threshold", cfg.CircuitBreaker.Threshold, "cooldown", cfg.CircuitBreaker.Cooldown)
 
 	// Router
 	mux := server.NewMux(state.ReadyCheck(pool.Ping, state.ReadyGrace))
@@ -213,10 +212,11 @@ func main() {
 		metrics.DBPoolIdleConns.Set(float64(stat.IdleConns()))
 		metrics.DBPoolAcquiredConns.Set(float64(stat.AcquiredConns()))
 		val := 0.0
-		if breaker.IsOpen() {
+		if clients.ServerBreakerOpen() {
 			val = 1
 		}
 		metrics.CircuitBreakerOpen.Set(val)
+		metrics.TenantCircuitBreakersOpen.Set(float64(clients.OpenTenantBreakers()))
 	})
 	defer metricsCollect.Stop()
 

@@ -47,22 +47,58 @@ type Pool struct {
 	baseURL    string
 	httpClient *http.Client
 	opts       []pushward.ClientOption
-	clients    *lrumap.Map[*pushward.Client]
+	clients    *lrumap.Map[*pooled]
+
+	// Set by WithBreakers. A nil server means the clients carry no breaker.
+	server    *serverBreaker
+	threshold int
+	cooldown  time.Duration
+}
+
+// pooled is one tenant's client and the breaker it carries, if any. Both go
+// when the LRU evicts the entry.
+type pooled struct {
+	cl      *pushward.Client
+	breaker *tenantBreaker
+}
+
+// Option configures a Pool.
+type Option func(*Pool)
+
+// WithClientOptions applies opts to every client the pool creates.
+func WithClientOptions(opts ...pushward.ClientOption) Option {
+	return func(p *Pool) { p.opts = append(p.opts, opts...) }
+}
+
+// WithBreakers gives every tenant a circuit breaker of its own, opening after
+// threshold consecutive faults for cooldown, in front of one breaker for the
+// whole server with the same settings. The server breaker opens only for a
+// fault streak that spans several tenants (serverTenants), so one tenant's
+// failures leave the others delivering.
+func WithBreakers(threshold int, cooldown time.Duration) Option {
+	return func(p *Pool) {
+		p.server = newServerBreaker(threshold, cooldown)
+		p.threshold = threshold
+		p.cooldown = cooldown
+	}
 }
 
 // NewPool creates a new client pool. When httpClient is nil the pool builds
 // one on NewTransport with a 10s timeout; either way every client created from
 // the pool shares it, and with it the idle connections.
-func NewPool(baseURL string, httpClient *http.Client, opts ...pushward.ClientOption) *Pool {
+func NewPool(baseURL string, httpClient *http.Client, opts ...Option) *Pool {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 10 * time.Second, Transport: NewTransport()}
 	}
-	return &Pool{
+	p := &Pool{
 		baseURL:    baseURL,
 		httpClient: httpClient,
-		opts:       opts,
-		clients:    lrumap.New[*pushward.Client](maxClients),
+		clients:    lrumap.New[*pooled](maxClients),
 	}
+	for _, o := range opts {
+		o(p)
+	}
+	return p
 }
 
 // SendNotification resolves the client for userKey and sends a notification.
@@ -78,13 +114,42 @@ func (p *Pool) SendNotification(ctx context.Context, userKey string, log *slog.L
 
 // Get returns a pushward.Client for the given hlk_ key, creating one if needed.
 // Every pooled client carries the retry budget; a caller-supplied option of the
-// same kind still wins, since options apply in order.
+// same kind still wins, since options apply in order. The tenant breaker goes
+// last, so it replaces any breaker in the client options.
 func (p *Pool) Get(hlkKey string) *pushward.Client {
 	hash := lrumap.KeyHash(hlkKey)
-	return p.clients.GetOrCreate(hash, func() *pushward.Client {
+	return p.clients.GetOrCreate(hash, func() *pooled {
 		opts := []pushward.ClientOption{pushward.WithRetryBudget(retryBudget)}
 		opts = append(opts, p.opts...)
 		opts = append(opts, pushward.WithHTTPClient(p.httpClient))
-		return pushward.NewClient(p.baseURL, hlkKey, opts...)
+		e := &pooled{}
+		if p.server != nil {
+			e.breaker = &tenantBreaker{
+				tenant: hash,
+				own:    pushward.NewCircuitBreaker(p.threshold, p.cooldown),
+				server: p.server,
+			}
+			opts = append(opts, pushward.WithBreaker(e.breaker))
+		}
+		e.cl = pushward.NewClient(p.baseURL, hlkKey, opts...)
+		return e
+	}).cl
+}
+
+// ServerBreakerOpen reports whether the breaker for the whole server is open
+// or probing. It is false without WithBreakers.
+func (p *Pool) ServerBreakerOpen() bool {
+	return p.server != nil && p.server.isOpen()
+}
+
+// OpenTenantBreakers counts the pooled tenants whose own breaker is open or
+// probing.
+func (p *Pool) OpenTenantBreakers() int {
+	n := 0
+	p.clients.Range(func(_ string, e *pooled) {
+		if e.breaker != nil && e.breaker.own.IsOpen() {
+			n++
+		}
 	})
+	return n
 }

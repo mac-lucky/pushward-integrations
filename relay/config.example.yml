@@ -12,9 +12,13 @@ telemetry:
   tls_key_path: ""                        # client private key PEM for mTLS
   sample_rate: 1.0                        # sampling rate 0.0-1.0 (1.0 = sample everything)
 
+# Each tenant (hlk_ key) gets a breaker of its own, so one tenant's failing
+# calls stop only that tenant's. A breaker for the whole server, with the same
+# settings, opens only when a run of failures with no success between them
+# spans at least 3 tenants.
 circuit_breaker:
-  threshold: 5                              # consecutive API failures before opening the breaker
-  cooldown: 30s                             # how long the breaker stays open before allowing a probe
+  threshold: 5                              # consecutive API failures before opening a breaker
+  cooldown: 30s                             # how long a breaker stays open before allowing a probe
 
 # Poster images on Radarr/Sonarr, Jellyfin and Overseerr cards. The relay sends
 # the artwork URL for the phone to load, and fetches the image itself once to

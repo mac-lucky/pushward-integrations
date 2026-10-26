@@ -43,7 +43,9 @@ type PosterConfig struct {
 // IsEnabled reads Enabled, treating an absent key as on.
 func (p PosterConfig) IsEnabled() bool { return p.Enabled == nil || *p.Enabled }
 
-// CircuitBreakerConfig controls the circuit breaker for outbound PushWard API calls.
+// CircuitBreakerConfig controls the circuit breakers for outbound PushWard API
+// calls: one per tenant and one for the whole server, both with these
+// settings (see client.WithBreakers).
 type CircuitBreakerConfig struct {
 	Threshold int           `yaml:"threshold"` // Consecutive failures to open (default 5).
 	Cooldown  time.Duration `yaml:"cooldown"`  // How long to stay open (default 30s).
