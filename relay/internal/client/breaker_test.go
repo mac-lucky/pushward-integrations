@@ -1,6 +1,7 @@
 package client
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -243,5 +244,84 @@ func TestServerBreaker_SuccessEndsStreakReachableDoesNot(t *testing.T) {
 	s.recordFailure("b")
 	if !s.isOpen() {
 		t.Fatal("a reachable 4xx/429 reset the streak")
+	}
+}
+
+// The tenant's own breaker is past its cooldown, so Allow admits the call as
+// its half-open probe, but the server breaker refuses it. The call never runs,
+// so own must be re-armed: left half-open it refuses the tenant for good.
+func TestBreakers_OwnProbeRefusedByServerIsRearmed(t *testing.T) {
+	const cooldown = 100 * time.Millisecond
+	var healthy atomic.Bool
+	srv, _ := hitsByKey(t, func(string) int {
+		if healthy.Load() {
+			return http.StatusOK
+		}
+		return http.StatusInternalServerError
+	})
+	p := breakerPool(srv.URL, 5, cooldown)
+
+	for range 5 {
+		_ = send(p, "hlk_a")
+	}
+	time.Sleep(cooldown * 3 / 2) // own(a) may probe now
+	// Open the server breaker directly: faults sent through tenants would
+	// first have to stay inside the server streak's window.
+	for _, k := range []string{"x", "y", "z", "x", "y"} {
+		p.server.recordFailure(k)
+	}
+	if !p.ServerBreakerOpen() {
+		t.Fatal("server breaker did not open")
+	}
+	if err := send(p, "hlk_a"); !errors.Is(err, pushward.ErrCircuitOpen) {
+		t.Fatalf("want ErrCircuitOpen while the server breaker is open, got %v", err)
+	}
+
+	healthy.Store(true)
+	time.Sleep(cooldown * 3 / 2)
+	if err := send(p, "hlk_b"); err != nil {
+		t.Fatalf("server probe: %v", err)
+	}
+	time.Sleep(cooldown * 3 / 2)
+	if err := send(p, "hlk_a"); err != nil {
+		t.Fatalf("tenant a after recovery: %v (own breaker wedged half-open?)", err)
+	}
+}
+
+// A server probe abandoned during retry backoff never reports an outcome, so
+// Abort must re-arm the server breaker: left half-open it refuses every tenant.
+func TestBreakers_AbandonedServerProbeIsRearmed(t *testing.T) {
+	const cooldown = 50 * time.Millisecond
+	var healthy atomic.Bool
+	srv, _ := hitsByKey(t, func(string) int {
+		if healthy.Load() {
+			return http.StatusOK
+		}
+		return http.StatusServiceUnavailable
+	})
+	p := NewPool(srv.URL, nil,
+		WithClientOptions(pushward.WithRetryBudget(10*time.Second)),
+		WithBreakers(3, cooldown),
+	)
+	for _, k := range []string{"a", "b", "c"} {
+		p.server.recordFailure(k)
+	}
+	if !p.ServerBreakerOpen() {
+		t.Fatal("server breaker did not open")
+	}
+	time.Sleep(cooldown * 3 / 2)
+
+	// The first backoff is at least 500ms, so the deadline cuts it short.
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	err := p.SendNotification(ctx, "hlk_d", discardLogger(), pushward.SendNotificationRequest{Title: "t", Body: "b"})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("want the deadline to end the backoff, got %v", err)
+	}
+
+	healthy.Store(true)
+	time.Sleep(cooldown * 3 / 2)
+	if err := send(p, "hlk_e"); err != nil {
+		t.Fatalf("after the abandoned probe: %v (server breaker wedged half-open?)", err)
 	}
 }
