@@ -254,7 +254,7 @@ if errors.As(err, &he) && he.Code == pushward.ErrCodeActivityLimitExceeded {
 }
 ```
 
-**Circuit breaker (optional):** `NewCircuitBreaker(threshold, cooldown)` opens after N consecutive backend faults and half-opens for a single probe after the cooldown. Only genuine `5xx`/network exhaustion trips it; `4xx`/`409`/`429` prove the backend is reachable and never open it. Attach with `WithCircuitBreaker`; calls return `ErrCircuitOpen` while open. `WithBreaker` takes any `Breaker` (the five methods `*CircuitBreaker` has): the relay gives each tenant's client its own breaker in front of a server-wide one.
+**Circuit breaker (optional):** `NewCircuitBreaker(threshold, cooldown)` opens after N consecutive backend faults and half-opens for a single probe after the cooldown. Only genuine `5xx`/network exhaustion trips it; `4xx`/`409`/`429` prove the backend is reachable and never open it. Attach with `WithCircuitBreaker`; calls return `ErrCircuitOpen` while open. `WithBreaker` takes any `Breaker` (the five methods `*CircuitBreaker` has): the relay gives each tenant's client its own breaker in front of a server-wide one. For a gauge use `Blocking()`, true only while `Allow` would refuse; `IsOpen()` stays true past the cooldown until the next call.
 
 ### Widget poller (`widgets`)
 

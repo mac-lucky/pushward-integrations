@@ -56,6 +56,39 @@ func TestCircuitBreaker_HalfOpenAfterCooldown(t *testing.T) {
 	}
 }
 
+// IsOpen sticks after the cooldown until someone calls Allow; Blocking
+// follows what Allow would answer.
+func TestCircuitBreaker_BlockingEndsWithCooldown(t *testing.T) {
+	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+	cb := NewCircuitBreaker(1, 5*time.Second)
+	cb.now = func() time.Time { return now }
+
+	if cb.Blocking() {
+		t.Fatal("closed breaker reports Blocking")
+	}
+	cb.RecordFailure()
+	if !cb.Blocking() {
+		t.Fatal("open breaker inside its cooldown does not report Blocking")
+	}
+	now = now.Add(6 * time.Second)
+	if cb.Blocking() {
+		t.Error("Blocking stayed true past the cooldown")
+	}
+	if !cb.IsOpen() {
+		t.Error("IsOpen changed without a call to Allow")
+	}
+	if !cb.Allow() {
+		t.Fatal("expected a probe after the cooldown")
+	}
+	if !cb.Blocking() {
+		t.Error("half-open breaker with its probe out does not report Blocking")
+	}
+	cb.RecordSuccess()
+	if cb.Blocking() {
+		t.Error("closed breaker reports Blocking after a successful probe")
+	}
+}
+
 func TestCircuitBreaker_HalfOpenToClosedOnSuccess(t *testing.T) {
 	now := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 	cb := NewCircuitBreaker(1, 5*time.Second)

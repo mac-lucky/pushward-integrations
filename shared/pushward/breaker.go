@@ -144,3 +144,20 @@ func (cb *CircuitBreaker) IsOpen() bool {
 	defer cb.mu.Unlock()
 	return cb.state != stateClosed
 }
+
+// Blocking reports whether Allow would refuse a call right now: open with the
+// cooldown still running, or half-open with its probe out. IsOpen stays true
+// past the cooldown until the next Allow, so a breaker nobody calls again
+// reads as open forever; Blocking does not.
+func (cb *CircuitBreaker) Blocking() bool {
+	cb.mu.Lock()
+	defer cb.mu.Unlock()
+	switch cb.state {
+	case stateOpen:
+		return !cb.now().After(cb.openUntil)
+	case stateHalfOpen:
+		return true
+	default:
+		return false
+	}
+}
