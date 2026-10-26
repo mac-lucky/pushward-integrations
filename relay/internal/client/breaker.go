@@ -41,9 +41,11 @@ func newServerBreaker(threshold int, cooldown time.Duration) *serverBreaker {
 	}
 }
 
-func (s *serverBreaker) allow() bool  { return s.cb.Allow() }
-func (s *serverBreaker) abort()       { s.cb.Abort() }
-func (s *serverBreaker) isOpen() bool { return s.cb.IsOpen() }
+func (s *serverBreaker) allow() bool { return s.cb.Allow() }
+func (s *serverBreaker) abort()      { s.cb.Abort() }
+
+// blocking reports whether the breaker refuses calls right now.
+func (s *serverBreaker) blocking() bool { return s.cb.Blocking() }
 
 func (s *serverBreaker) recordSuccess() {
 	s.mu.Lock()

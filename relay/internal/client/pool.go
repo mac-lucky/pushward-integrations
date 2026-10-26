@@ -136,18 +136,21 @@ func (p *Pool) Get(hlkKey string) *pushward.Client {
 	}).cl
 }
 
-// ServerBreakerOpen reports whether the breaker for the whole server is open
-// or probing. It is false without WithBreakers.
+// ServerBreakerOpen reports whether the breaker for the whole server refuses
+// calls right now: open inside its cooldown, or probing. It is false without
+// WithBreakers.
 func (p *Pool) ServerBreakerOpen() bool {
-	return p.server != nil && p.server.isOpen()
+	return p.server != nil && p.server.blocking()
 }
 
-// OpenTenantBreakers counts the pooled tenants whose own breaker is open or
-// probing.
+// OpenTenantBreakers counts the pooled tenants whose own breaker refuses calls
+// right now. A tenant that tripped its breaker and then went quiet stays in
+// the pool until eviction, so this must not count a breaker whose cooldown is
+// over and that nobody has called since.
 func (p *Pool) OpenTenantBreakers() int {
 	n := 0
 	p.clients.Range(func(_ string, e *pooled) {
-		if e.breaker != nil && e.breaker.own.IsOpen() {
+		if e.breaker != nil && e.breaker.own.Blocking() {
 			n++
 		}
 	})

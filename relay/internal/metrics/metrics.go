@@ -126,7 +126,7 @@ var (
 	TenantCircuitBreakersOpen = promauto.NewGauge(prometheus.GaugeOpts{
 		Namespace: "pushward_relay",
 		Name:      "tenant_circuit_breakers_open",
-		Help:      "Tenants whose own circuit breaker is open or probing.",
+		Help:      "Tenants whose own circuit breaker refuses calls (open inside its cooldown, or probing).",
 	})
 )
 

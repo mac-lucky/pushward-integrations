@@ -207,18 +207,18 @@ func TestServerBreaker_NeedsFaultsFromSeveralTenants(t *testing.T) {
 	for range 20 {
 		s.recordFailure("a")
 	}
-	if s.isOpen() {
+	if s.blocking() {
 		t.Fatal("opened on one tenant's faults")
 	}
 	if len(s.tenants) != 1 {
 		t.Errorf("tracking %d tenants, want 1", len(s.tenants))
 	}
 	s.recordFailure("b")
-	if s.isOpen() {
+	if s.blocking() {
 		t.Fatal("opened on two tenants' faults")
 	}
 	s.recordFailure("c")
-	if !s.isOpen() {
+	if !s.blocking() {
 		t.Fatal("did not open on faults from three tenants")
 	}
 	if s.streak != 0 || len(s.tenants) != 0 {
@@ -236,13 +236,13 @@ func TestServerBreaker_SuccessEndsStreakReachableDoesNot(t *testing.T) {
 	for _, k := range []string{"a", "b", "c", "a"} {
 		s.recordFailure(k)
 	}
-	if s.isOpen() {
+	if s.blocking() {
 		t.Fatal("a success did not end the streak")
 	}
 
 	s.recordReachable()
 	s.recordFailure("b")
-	if !s.isOpen() {
+	if !s.blocking() {
 		t.Fatal("a reachable 4xx/429 reset the streak")
 	}
 }
@@ -323,5 +323,35 @@ func TestBreakers_AbandonedServerProbeIsRearmed(t *testing.T) {
 	time.Sleep(cooldown * 3 / 2)
 	if err := send(p, "hlk_e"); err != nil {
 		t.Fatalf("after the abandoned probe: %v (server breaker wedged half-open?)", err)
+	}
+}
+
+// A breaker past its cooldown no longer refuses anything, even though nobody
+// has called Allow since. The gauges must drop back to zero for a tenant that
+// tripped its breaker and then went quiet, since it stays pooled until
+// eviction.
+func TestBreakers_GaugesClearWhenCooldownEnds(t *testing.T) {
+	const cooldown = 50 * time.Millisecond
+	srv, _ := hitsByKey(t, func(string) int { return http.StatusInternalServerError })
+	p := breakerPool(srv.URL, 2, cooldown)
+
+	_ = send(p, "hlk_a")
+	_ = send(p, "hlk_a")
+	for _, k := range []string{"x", "y", "z"} {
+		p.server.recordFailure(k)
+	}
+	if got := p.OpenTenantBreakers(); got != 1 {
+		t.Fatalf("OpenTenantBreakers = %d, want 1", got)
+	}
+	if !p.ServerBreakerOpen() {
+		t.Fatal("server breaker did not open")
+	}
+
+	time.Sleep(cooldown * 3 / 2)
+	if got := p.OpenTenantBreakers(); got != 0 {
+		t.Errorf("OpenTenantBreakers after the cooldown = %d, want 0", got)
+	}
+	if p.ServerBreakerOpen() {
+		t.Error("ServerBreakerOpen still true after the cooldown")
 	}
 }
