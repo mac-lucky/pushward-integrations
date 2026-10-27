@@ -399,7 +399,7 @@ func TestValidateMedia(t *testing.T) {
 	}{
 		{
 			name: "full contract",
-			body: media(`"media_title":"Snooze","subtitle":"SZA","compact_label":"SOS","playback_state":"playing","position_seconds":47.5,"duration_seconds":214,"position_at":` + now + `,"volume":0.35,"favorite":true,` +
+			body: media(`"media_title":"Snooze","subtitle":"SZA","compact_label":"SOS","compact_trailing_icon":"mdi:spotify","playback_state":"playing","position_seconds":47.5,"duration_seconds":214,"position_at":` + now + `,"volume":0.35,"favorite":true,` +
 				`"image_url":"https://example.com/art.jpg","image_shape":"square","image_thumbhash":"` + stdHash + `",` +
 				`"controls":{"previous":{"url":"https://ha.example/api/webhook/pw-prev"},"play_pause":{"url":"https://ha.example/api/webhook/pw-toggle","method":"POST"},` +
 				`"play":{"url":"https://ha.example/api/webhook/pw-play"},"pause":{"url":"https://ha.example/api/webhook/pw-pause"},"next":{"url":"https://ha.example/api/webhook/pw-next"},` +
@@ -481,6 +481,34 @@ func TestValidateMedia(t *testing.T) {
 			// compact_label is a base field, so the cap holds on every template.
 			name:       "compact_label over the bound on generic",
 			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"compact_label":"TNYAX"}}`,
+			wantStatus: 400,
+		},
+		{
+			// A plane, an arrow and "GA": 4 runes, 8 bytes. The trailing
+			// cap counts runes too.
+			name:       "compact_trailing_label at the bound",
+			body:       media(`"compact_trailing_label":"\u2708\u2191GA"`),
+			wantStatus: 200,
+		},
+		{
+			name:       "compact_trailing_label over the bound on generic",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"compact_trailing_label":"TO/GA"}}`,
+			wantStatus: 400,
+		},
+		{
+			// The server trims before it caps, so padding does not count.
+			name:       "padded compact labels within the bound once trimmed",
+			body:       media(`"compact_label":"  SOS  ","compact_trailing_label":"  TN  "`),
+			wantStatus: 200,
+		},
+		{
+			name:       "compact_trailing_icon at the bound",
+			body:       media(`"compact_trailing_icon":"mdi:` + strings.Repeat("a", 124) + `"`),
+			wantStatus: 200,
+		},
+		{
+			name:       "compact_trailing_icon over the bound on generic",
+			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"compact_trailing_icon":"mdi:` + strings.Repeat("a", 125) + `"}}`,
 			wantStatus: 400,
 		},
 		{

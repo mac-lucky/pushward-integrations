@@ -107,71 +107,73 @@ type updateRequest struct {
 }
 
 type apiContent struct {
-	Template           string                             `json:"template"`
-	Progress           float64                            `json:"progress"`
-	State              string                             `json:"state,omitempty"`
-	Icon               string                             `json:"icon,omitempty"`
-	Subtitle           string                             `json:"subtitle,omitempty"`
-	CompactLabel       string                             `json:"compact_label,omitempty"`
-	AccentColor        string                             `json:"accent_color,omitempty"`
-	BackgroundColor    string                             `json:"background_color,omitempty"`
-	TextColor          string                             `json:"text_color,omitempty"`
-	CurrentStep        *int                               `json:"current_step,omitempty"`
-	TotalSteps         *int                               `json:"total_steps,omitempty"`
-	StepRows           []int                              `json:"step_rows,omitempty"`
-	StepLabels         []string                           `json:"step_labels,omitempty"`
-	StepColors         []string                           `json:"step_colors,omitempty"`
-	StepWeights        []float64                          `json:"step_weights,omitempty"`
-	URL                string                             `json:"url,omitempty"`
-	SecondaryURL       string                             `json:"secondary_url,omitempty"`
-	Severity           string                             `json:"severity,omitempty"`
-	FiredAt            *int64                             `json:"fired_at,omitempty"`
-	SeverityLabel      string                             `json:"severity_label,omitempty"`
-	RemainingTime      *int                               `json:"remaining_time,omitempty"`
-	CompletionMessage  string                             `json:"completion_message,omitempty"`
-	EndDate            *int64                             `json:"end_date,omitempty"`
-	StartDate          *int64                             `json:"start_date,omitempty"`
-	LiveProgress       *bool                              `json:"live_progress,omitempty"`
-	Alarm              *bool                              `json:"alarm,omitempty"`
-	SnoozeSeconds      *int                               `json:"snooze_seconds,omitempty"`
-	WarningThreshold   *int                               `json:"warning_threshold,omitempty"`
-	Direction          string                             `json:"direction,omitempty"`
-	Goal               any                                `json:"goal,omitempty"`
-	ShowRuler          *bool                              `json:"show_ruler,omitempty"`
-	Paused             *bool                              `json:"paused,omitempty"`
-	Value              any                                `json:"value,omitempty"`
-	MinValue           *float64                           `json:"min_value,omitempty"`
-	MaxValue           *float64                           `json:"max_value,omitempty"`
-	Unit               string                             `json:"unit,omitempty"`
-	Scale              string                             `json:"scale,omitempty"`
-	Decimals           *int                               `json:"decimals,omitempty"`
-	Smoothing          *bool                              `json:"smoothing,omitempty"`
-	Thresholds         []testThreshold                    `json:"thresholds,omitempty"`
-	Units              map[string]string                  `json:"units,omitempty"`
-	History            map[string][]pushward.HistoryPoint `json:"history,omitempty"`
-	PrimarySeries      string                             `json:"primary_series,omitempty"`
-	Duration           *string                            `json:"duration,omitempty"`
-	Tiles              []testBoardTile                    `json:"tiles,omitempty"`
-	Lines              []testLogLine                      `json:"lines,omitempty"`
-	TapAction          *testTapAction                     `json:"tap_action,omitempty"`
-	URLAction          *testTapAction                     `json:"url_action,omitempty"`
-	SecondaryURLAction *testTapAction                     `json:"secondary_url_action,omitempty"`
-	ImageURL           string                             `json:"image_url,omitempty"`
-	ImageShape         string                             `json:"image_shape,omitempty"`
-	ImageThumbhash     string                             `json:"image_thumbhash,omitempty"`
-	MediaTitle         string                             `json:"media_title,omitempty"`
-	PlaybackState      string                             `json:"playback_state,omitempty"`
-	PositionSeconds    *float64                           `json:"position_seconds,omitempty"`
-	DurationSeconds    *float64                           `json:"duration_seconds,omitempty"`
-	PositionAt         *int64                             `json:"position_at,omitempty"`
-	Volume             *float64                           `json:"volume,omitempty"`
-	Favorite           *bool                              `json:"favorite,omitempty"`
-	Controls           *testMediaControls                 `json:"controls,omitempty"`
-	Options            []testApprovalOption               `json:"options,omitempty"`
-	Source             string                             `json:"source,omitempty"`
-	Details            []testApprovalDetail               `json:"details,omitempty"`
-	OnExpire           string                             `json:"on_expire,omitempty"`
-	Answer             map[string]any                     `json:"answer,omitempty"`
+	Template             string                             `json:"template"`
+	Progress             float64                            `json:"progress"`
+	State                string                             `json:"state,omitempty"`
+	Icon                 string                             `json:"icon,omitempty"`
+	Subtitle             string                             `json:"subtitle,omitempty"`
+	CompactLabel         string                             `json:"compact_label,omitempty"`
+	CompactTrailingLabel string                             `json:"compact_trailing_label,omitempty"`
+	CompactTrailingIcon  string                             `json:"compact_trailing_icon,omitempty"`
+	AccentColor          string                             `json:"accent_color,omitempty"`
+	BackgroundColor      string                             `json:"background_color,omitempty"`
+	TextColor            string                             `json:"text_color,omitempty"`
+	CurrentStep          *int                               `json:"current_step,omitempty"`
+	TotalSteps           *int                               `json:"total_steps,omitempty"`
+	StepRows             []int                              `json:"step_rows,omitempty"`
+	StepLabels           []string                           `json:"step_labels,omitempty"`
+	StepColors           []string                           `json:"step_colors,omitempty"`
+	StepWeights          []float64                          `json:"step_weights,omitempty"`
+	URL                  string                             `json:"url,omitempty"`
+	SecondaryURL         string                             `json:"secondary_url,omitempty"`
+	Severity             string                             `json:"severity,omitempty"`
+	FiredAt              *int64                             `json:"fired_at,omitempty"`
+	SeverityLabel        string                             `json:"severity_label,omitempty"`
+	RemainingTime        *int                               `json:"remaining_time,omitempty"`
+	CompletionMessage    string                             `json:"completion_message,omitempty"`
+	EndDate              *int64                             `json:"end_date,omitempty"`
+	StartDate            *int64                             `json:"start_date,omitempty"`
+	LiveProgress         *bool                              `json:"live_progress,omitempty"`
+	Alarm                *bool                              `json:"alarm,omitempty"`
+	SnoozeSeconds        *int                               `json:"snooze_seconds,omitempty"`
+	WarningThreshold     *int                               `json:"warning_threshold,omitempty"`
+	Direction            string                             `json:"direction,omitempty"`
+	Goal                 any                                `json:"goal,omitempty"`
+	ShowRuler            *bool                              `json:"show_ruler,omitempty"`
+	Paused               *bool                              `json:"paused,omitempty"`
+	Value                any                                `json:"value,omitempty"`
+	MinValue             *float64                           `json:"min_value,omitempty"`
+	MaxValue             *float64                           `json:"max_value,omitempty"`
+	Unit                 string                             `json:"unit,omitempty"`
+	Scale                string                             `json:"scale,omitempty"`
+	Decimals             *int                               `json:"decimals,omitempty"`
+	Smoothing            *bool                              `json:"smoothing,omitempty"`
+	Thresholds           []testThreshold                    `json:"thresholds,omitempty"`
+	Units                map[string]string                  `json:"units,omitempty"`
+	History              map[string][]pushward.HistoryPoint `json:"history,omitempty"`
+	PrimarySeries        string                             `json:"primary_series,omitempty"`
+	Duration             *string                            `json:"duration,omitempty"`
+	Tiles                []testBoardTile                    `json:"tiles,omitempty"`
+	Lines                []testLogLine                      `json:"lines,omitempty"`
+	TapAction            *testTapAction                     `json:"tap_action,omitempty"`
+	URLAction            *testTapAction                     `json:"url_action,omitempty"`
+	SecondaryURLAction   *testTapAction                     `json:"secondary_url_action,omitempty"`
+	ImageURL             string                             `json:"image_url,omitempty"`
+	ImageShape           string                             `json:"image_shape,omitempty"`
+	ImageThumbhash       string                             `json:"image_thumbhash,omitempty"`
+	MediaTitle           string                             `json:"media_title,omitempty"`
+	PlaybackState        string                             `json:"playback_state,omitempty"`
+	PositionSeconds      *float64                           `json:"position_seconds,omitempty"`
+	DurationSeconds      *float64                           `json:"duration_seconds,omitempty"`
+	PositionAt           *int64                             `json:"position_at,omitempty"`
+	Volume               *float64                           `json:"volume,omitempty"`
+	Favorite             *bool                              `json:"favorite,omitempty"`
+	Controls             *testMediaControls                 `json:"controls,omitempty"`
+	Options              []testApprovalOption               `json:"options,omitempty"`
+	Source               string                             `json:"source,omitempty"`
+	Details              []testApprovalDetail               `json:"details,omitempty"`
+	OnExpire             string                             `json:"on_expire,omitempty"`
+	Answer               map[string]any                     `json:"answer,omitempty"`
 }
 
 // testApprovalOption mirrors pushward.ApprovalOption.
@@ -543,6 +545,15 @@ func mockPushWardServer(t *testing.T, opts MockOptions) (*httptest.Server, *[]AP
 			merged["template"] = pushward.TemplateCountdown
 		}
 		delete(merged, "paused")
+		for k, v := range map[string]string{
+			"compact_label":          content.CompactLabel,
+			"compact_trailing_label": content.CompactTrailingLabel,
+			"compact_trailing_icon":  content.CompactTrailingIcon,
+		} {
+			if _, ok := merged[k]; ok {
+				merged[k] = v
+			}
+		}
 		activities[slug] = merged
 
 		w.WriteHeader(http.StatusOK)
@@ -1139,8 +1150,19 @@ func validateContent(c *apiContent) error {
 	if utf8.RuneCountInString(c.Subtitle) > 256 {
 		return fmt.Errorf("subtitle must be at most 256 runes")
 	}
+	// The server trims the compact ear fields before it caps them, and stores
+	// the trimmed value.
+	c.CompactLabel = strings.TrimSpace(c.CompactLabel)
+	c.CompactTrailingLabel = strings.TrimSpace(c.CompactTrailingLabel)
+	c.CompactTrailingIcon = strings.TrimSpace(c.CompactTrailingIcon)
 	if utf8.RuneCountInString(c.CompactLabel) > pushward.MaxCompactLabelRunes {
 		return fmt.Errorf("compact_label must be at most %d runes", pushward.MaxCompactLabelRunes)
+	}
+	if utf8.RuneCountInString(c.CompactTrailingLabel) > pushward.MaxCompactTrailingLabelRunes {
+		return fmt.Errorf("compact_trailing_label must be at most %d runes", pushward.MaxCompactTrailingLabelRunes)
+	}
+	if utf8.RuneCountInString(c.CompactTrailingIcon) > pushward.MaxCompactTrailingIconRunes {
+		return fmt.Errorf("compact_trailing_icon must be at most %d runes", pushward.MaxCompactTrailingIconRunes)
 	}
 	if utf8.RuneCountInString(c.CompletionMessage) > 512 {
 		return fmt.Errorf("completion_message must be at most 512 runes")

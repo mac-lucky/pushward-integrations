@@ -52,6 +52,15 @@ const MaxSeverityLabelRunes = 40
 // Dynamic Island compact leading ear on every template.
 const MaxCompactLabelRunes = 4
 
+// MaxCompactTrailingLabelRunes and MaxCompactTrailingIconRunes cap
+// content.compact_trailing_label and content.compact_trailing_icon, which
+// replace the template's own atom in the compact trailing ear on every
+// template. The label gets the leading label's 4, the icon the icon's 128.
+const (
+	MaxCompactTrailingLabelRunes = MaxCompactLabelRunes
+	MaxCompactTrailingIconRunes  = 128
+)
+
 // DismissalTTLMax mirrors the server's dismissal_ttl ceiling: iOS will not hold
 // an ended Live Activity on the Lock Screen longer than 4h.
 const DismissalTTLMax = 14400
@@ -337,13 +346,20 @@ type Content struct {
 	// CompactLabel replaces the icon (or the steps ring / timeline stack) in
 	// the Dynamic Island compact leading ear, on every template. At most
 	// MaxCompactLabelRunes. Empty keeps the per-template default.
-	CompactLabel    string `json:"compact_label,omitempty"`
-	AccentColor     string `json:"accent_color,omitempty"`
-	BackgroundColor string `json:"background_color,omitempty"`
-	TextColor       string `json:"text_color,omitempty"`
-	RemainingTime   *int   `json:"remaining_time,omitempty"`
-	URL             string `json:"url,omitempty"`
-	SecondaryURL    string `json:"secondary_url,omitempty"`
+	CompactLabel string `json:"compact_label,omitempty"`
+	// CompactTrailingLabel and CompactTrailingIcon replace the template's own
+	// atom (the steps count or ETA, a countdown clock) in the compact trailing
+	// ear, on every template; the label wins when both are set. At most
+	// MaxCompactTrailingLabelRunes and MaxCompactTrailingIconRunes; the icon is
+	// an SF Symbol or mdi: name. Empty keeps the per-template default.
+	CompactTrailingLabel string `json:"compact_trailing_label,omitempty"`
+	CompactTrailingIcon  string `json:"compact_trailing_icon,omitempty"`
+	AccentColor          string `json:"accent_color,omitempty"`
+	BackgroundColor      string `json:"background_color,omitempty"`
+	TextColor            string `json:"text_color,omitempty"`
+	RemainingTime        *int   `json:"remaining_time,omitempty"`
+	URL                  string `json:"url,omitempty"`
+	SecondaryURL         string `json:"secondary_url,omitempty"`
 
 	// Tap-action routing (any template). tap_action overrides the widget-wide
 	// tap target; url_action / secondary_url_action render as routed buttons
@@ -555,14 +571,17 @@ type ContentPatch struct {
 	State    *string  `json:"state,omitempty"`
 	Icon     *string  `json:"icon,omitempty"`
 	Subtitle *string  `json:"subtitle,omitempty"`
-	// CompactLabel: same rules as the matching Content field.
-	CompactLabel    *string `json:"compact_label,omitempty"`
-	AccentColor     *string `json:"accent_color,omitempty"`
-	BackgroundColor *string `json:"background_color,omitempty"`
-	TextColor       *string `json:"text_color,omitempty"`
-	RemainingTime   *int    `json:"remaining_time,omitempty"`
-	URL             *string `json:"url,omitempty"`
-	SecondaryURL    *string `json:"secondary_url,omitempty"`
+	// CompactLabel, CompactTrailingLabel, CompactTrailingIcon: same rules as
+	// the matching Content fields.
+	CompactLabel         *string `json:"compact_label,omitempty"`
+	CompactTrailingLabel *string `json:"compact_trailing_label,omitempty"`
+	CompactTrailingIcon  *string `json:"compact_trailing_icon,omitempty"`
+	AccentColor          *string `json:"accent_color,omitempty"`
+	BackgroundColor      *string `json:"background_color,omitempty"`
+	TextColor            *string `json:"text_color,omitempty"`
+	RemainingTime        *int    `json:"remaining_time,omitempty"`
+	URL                  *string `json:"url,omitempty"`
+	SecondaryURL         *string `json:"secondary_url,omitempty"`
 
 	// Tap-action routing (any template). Each slot is a *TapAction: nil is
 	// omitted (preserve server-side). A present value is deep-merged into the

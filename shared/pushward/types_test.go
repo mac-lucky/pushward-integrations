@@ -288,6 +288,30 @@ func TestTimerWireNames(t *testing.T) {
 	}
 }
 
+// TestCompactTrailingWireNames pins the trailing-ear keys on Content and
+// ContentPatch, and that an unset one stays off the wire (a null would clear
+// the stored value under merge-patch).
+func TestCompactTrailingWireNames(t *testing.T) {
+	full := Content{Template: TemplateSteps, CompactLabel: "A359", CompactTrailingLabel: "GA", CompactTrailingIcon: "airplane.departure"}
+	patch := ContentPatch{CompactTrailingLabel: StringPtr("GA"), CompactTrailingIcon: StringPtr("airplane.departure")}
+	want := `"compact_trailing_label":"GA","compact_trailing_icon":"airplane.departure"`
+	for name, v := range map[string]any{"Content": full, "ContentPatch": patch} {
+		if got := string(mustJSON(t, v)); !strings.Contains(got, want) {
+			t.Errorf("%s = %s, want it to contain %s", name, got, want)
+		}
+	}
+	for _, k := range []string{"compact_trailing_label", "compact_trailing_icon"} {
+		if jsonKeys(t, ContentPatch{})[k] || jsonKeys(t, Content{})[k] {
+			t.Errorf("an unset %q must stay off the wire", k)
+		}
+	}
+	// An empty string is how a patch clears the slot back to the template's
+	// own value, so it has to reach the server rather than be dropped.
+	if got := string(mustJSON(t, ContentPatch{CompactTrailingLabel: StringPtr("")})); got != `{"compact_trailing_label":""}` {
+		t.Errorf("clearing patch = %s", got)
+	}
+}
+
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)
