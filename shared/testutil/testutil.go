@@ -1132,6 +1132,10 @@ func reencode(m map[string]any, into any) error {
 	return json.Unmarshal(raw, into)
 }
 
+// iconName is the charset the server holds compact_trailing_icon to: every SF
+// Symbol and mdi: name fits it.
+var iconName = regexp.MustCompile(`^[A-Za-z0-9._:-]*$`)
+
 func validateContent(c *apiContent) error {
 	// Under merge-patch, template may be absent on ticks; only per-template
 	// required-field validation is gated on it.
@@ -1163,6 +1167,9 @@ func validateContent(c *apiContent) error {
 	}
 	if utf8.RuneCountInString(c.CompactTrailingIcon) > pushward.MaxCompactTrailingIconRunes {
 		return fmt.Errorf("compact_trailing_icon must be at most %d runes", pushward.MaxCompactTrailingIconRunes)
+	}
+	if !iconName.MatchString(c.CompactTrailingIcon) {
+		return fmt.Errorf("compact_trailing_icon must be an SF Symbol or mdi: icon name (letters, digits, '.', '-', '_' and ':')")
 	}
 	if utf8.RuneCountInString(c.CompletionMessage) > 512 {
 		return fmt.Errorf("completion_message must be at most 512 runes")

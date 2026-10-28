@@ -507,6 +507,19 @@ func TestValidateMedia(t *testing.T) {
 			wantStatus: 200,
 		},
 		{
+			// Trimmed first, so the padding is not held against the charset.
+			name:       "padded compact_trailing_icon",
+			body:       media(`"compact_trailing_icon":"  mdi:airplane-takeoff  "`),
+			wantStatus: 200,
+		},
+		{
+			name: "compact_trailing_icon outside the icon-name charset",
+			body: media(`"compact_trailing_icon":"airplane departure"`) + "\n" +
+				media(`"compact_trailing_icon":"\u2708"`) + "\n" +
+				`{"state":"ongoing","content":{"template":"generic","progress":0.5,"compact_trailing_icon":"mdi:plane/takeoff"}}`,
+			wantStatus: 400,
+		},
+		{
 			name:       "compact_trailing_icon over the bound on generic",
 			body:       `{"state":"ongoing","content":{"template":"generic","progress":0.5,"compact_trailing_icon":"mdi:` + strings.Repeat("a", 125) + `"}}`,
 			wantStatus: 400,
