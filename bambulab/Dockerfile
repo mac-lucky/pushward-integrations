@@ -14,7 +14,7 @@ COPY shared/ ./shared/
 COPY bambulab/ ./bambulab/
 RUN cd bambulab && CGO_ENABLED=0 go build -ldflags="-s -w" -o /pushward-bambulab ./cmd/pushward-bambulab
 
-FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+FROM alpine:3.24@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
 LABEL org.opencontainers.image.title="pushward-bambulab" \
       org.opencontainers.image.description="BambuLab 3D printer Live Activity bridge for PushWard" \
