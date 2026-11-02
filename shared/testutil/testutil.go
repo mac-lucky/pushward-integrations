@@ -174,6 +174,8 @@ type apiContent struct {
 	Details              []testApprovalDetail               `json:"details,omitempty"`
 	OnExpire             string                             `json:"on_expire,omitempty"`
 	Answer               map[string]any                     `json:"answer,omitempty"`
+	Step                 *int                               `json:"step,omitempty"`
+	StepCount            *int                               `json:"step_count,omitempty"`
 }
 
 // testApprovalOption mirrors pushward.ApprovalOption.
@@ -1289,16 +1291,17 @@ func validateWindow(c *apiContent) error {
 // approval template itself a client-sent answer is stripped, not rejected.
 func validateApprovalFields(c *apiContent) error {
 	hasApproval := len(c.Options) > 0 || c.Source != "" || len(c.Details) > 0 ||
-		c.OnExpire != "" || c.Answer != nil
+		c.OnExpire != "" || c.Answer != nil || c.Step != nil || c.StepCount != nil
 	if hasApproval && c.Template != "" && c.Template != pushward.TemplateApproval {
-		return fmt.Errorf("options, source, details, on_expire and answer are only valid on the approval template, got %q", c.Template)
+		return fmt.Errorf("options, source, details, on_expire, answer, step and step_count are only valid on the approval template, got %q", c.Template)
 	}
 	return nil
 }
 
 // validateApproval re-implements the server's approval template rules: 2-4
 // options with unique slug-charset ids, the two generic button slots
-// reserved, and on_expire tied to end_date and an option id. The per-option
+// reserved, step and step_count together with 1 <= step <= step_count <= 10,
+// and on_expire tied to end_date and an option id. The per-option
 // rules live in validateApprovalOption. The server also fills an empty method
 // with POST on http(s) options (not echoed here; the mock is stateless) and
 // strips a client-sent answer instead of rejecting it.
@@ -1336,6 +1339,19 @@ func validateApproval(c *apiContent) error {
 		}
 		if d.Value == "" || utf8.RuneCountInString(d.Value) > 64 {
 			return fmt.Errorf("details[%d].value is required and at most 64 runes", i)
+		}
+	}
+	// Checked on the merged content, like the server: a next-step patch that
+	// carries only step is fine while step_count is stored.
+	if (c.Step == nil) != (c.StepCount == nil) {
+		return fmt.Errorf("step and step_count must be set together")
+	}
+	if c.StepCount != nil {
+		if *c.StepCount < 1 || *c.StepCount > 10 {
+			return fmt.Errorf("step_count must be between 1 and 10, got %d", *c.StepCount)
+		}
+		if *c.Step < 1 || *c.Step > *c.StepCount {
+			return fmt.Errorf("step must be between 1 and step_count (%d), got %d", *c.StepCount, *c.Step)
 		}
 	}
 	if c.OnExpire == "" {

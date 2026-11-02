@@ -1174,6 +1174,41 @@ func TestValidateSteps_RejectedTickIsNotStored(t *testing.T) {
 	}
 }
 
+// TestValidateApprovalSteps: step and step_count go together and stay within
+// 1 <= step <= step_count <= 10, judged on the merged content, so moving to
+// the next question can send step alone.
+func TestValidateApprovalSteps(t *testing.T) {
+	const options = `"options":[{"id":"yes","title":"Yes"},{"id":"no","title":"No"}]`
+	seed := `{"state":"ongoing","content":{"template":"approval","progress":0,"step":1,"step_count":3,` + options + `}}`
+	tests := []struct {
+		name       string
+		tick       string
+		wantStatus int
+	}{
+		{"next step alone", `{"state":"ongoing","content":{"step":2}}`, 200},
+		{"last step", `{"state":"ongoing","content":{"step":3}}`, 200},
+		{"step past step_count", `{"state":"ongoing","content":{"step":4}}`, 400},
+		{"step zero", `{"state":"ongoing","content":{"step":0}}`, 400},
+		{"step_count over 10", `{"state":"ongoing","content":{"step_count":11}}`, 400},
+		{"step dropped, step_count kept", `{"state":"ongoing","content":{"step":null}}`, 400},
+		{"both dropped", `{"state":"ongoing","content":{"step":null,"step_count":null}}`, 200},
+		{"steps kept on another template", `{"state":"ongoing","content":{"template":"generic","options":null}}`, 400},
+		{"steps dropped on another template", `{"state":"ongoing","content":{"template":"generic","options":null,"step":null,"step_count":null}}`, 200},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "approve", "Approve")
+			if got := patchActivity(t, srv.URL, "approve", seed); got != 200 {
+				t.Fatalf("seed: got status %d", got)
+			}
+			if got := patchActivity(t, srv.URL, "approve", tt.tick); got != tt.wantStatus {
+				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+}
+
 func TestValidateApprovalRejectsAlarm(t *testing.T) {
 	srv, _, _ := testutil.MockPushWardServer(t)
 	createActivity(t, srv.URL, "approve", "Approve")

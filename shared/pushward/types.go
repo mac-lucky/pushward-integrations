@@ -293,10 +293,12 @@ const (
 //
 // Omit URL entirely for the server-recorded form: the server fills the option
 // with a signed answer URL of its own, and the first tap is written to
-// Content.Answer, pushed to every device, and ends the activity a few seconds
-// later (DismissalTTL controls how long the answered card lingers on the Lock
-// Screen). Mixing both forms in one activity is allowed; a tap on an option
-// with your own URL is never recorded in Answer.
+// Content.Answer and pushed to every device. On a single question or the last
+// step it also ends the activity a few seconds later (DismissalTTL controls
+// how long the answered card lingers on the Lock Screen); on an earlier step
+// the card stays ongoing for the next one (see Content.Step). Mixing both
+// forms in one activity is allowed; a tap on an option with your own URL is
+// never recorded in Answer.
 type ApprovalOption struct {
 	ID         string            `json:"id"`
 	Title      string            `json:"title"`
@@ -322,9 +324,9 @@ type ApprovalDetail struct {
 // (By "user") or the deadline sweep applied OnExpire (By "expired"; Option is
 // then "none" when no default was set; At is unix seconds). Never send it -
 // the server strips it from writes. A re-sent Options set EQUAL to the live
-// one (compared by id/title/style/icon/url/method) KEEPS the recorded answer;
-// only a changed set - e.g. fresh option ids - opens a new round and clears
-// it.
+// one (compared by id/title/style/icon/url/method) on the same Step KEEPS the
+// recorded answer; a changed set - e.g. fresh option ids - or a changed Step
+// opens a new round and clears it.
 // Unlike the other server-owned fields this one IS decoded here on purpose:
 // polling an activity until Answer is set is how a producer with no webhook
 // endpoint of its own reads the outcome. Client.GetActivity is that read path.
@@ -484,19 +486,31 @@ type Content struct {
 	// answer buttons. Options and Details replace wholesale on each update
 	// (RFC 7396 array semantics). Re-sending an Options set equal to the
 	// live one (id/title/style/icon/url/method compared; Details and EndDate
-	// do not count) keeps the recorded Answer - only a changed set starts a
-	// new round and clears it, so re-arm by changing the option ids. Source (at most 24 runes) is the
-	// producer badge in the card header. OnExpire names the option id the
-	// server records when EndDate passes unanswered ("none" to just expire)
-	// and requires EndDate. url_action / secondary_url_action are rejected on
-	// this template (the server reserves those slots to keep older app builds
-	// answerable), and so are alarm / snooze_seconds. Every field but Options
-	// is optional; Answer is read-only, see its type.
-	Options  []ApprovalOption `json:"options,omitempty"`
-	Source   string           `json:"source,omitempty"`
-	Details  []ApprovalDetail `json:"details,omitempty"`
-	OnExpire string           `json:"on_expire,omitempty"`
-	Answer   *ApprovalAnswer  `json:"answer,omitempty"`
+	// do not count) on the same Step keeps the recorded Answer - a changed
+	// set or a changed Step starts a new round and clears it, so re-arm by
+	// changing the option ids or moving to another step. Source (at most 24
+	// runes) is the producer badge in the card header. OnExpire names the
+	// option id the server records when EndDate passes unanswered ("none" to
+	// just expire) and requires EndDate; that ends the card on any step.
+	// url_action / secondary_url_action are rejected on this template (the
+	// server reserves those slots to keep older app builds answerable), and
+	// so are alarm / snooze_seconds. Every field but Options is optional;
+	// Answer is read-only, see its type.
+	//
+	// Step and StepCount walk one card through several questions in place,
+	// shown as a 2/3 counter (server v1.64.0): both or neither, 1 <= Step <=
+	// StepCount <= 10. An answer on a step before the last keeps the activity
+	// ongoing until the caller PATCHes the next step; if none comes within 10
+	// minutes, or EndDate passes first, the server ends it with that answer.
+	// The last step's answer ends it like a single question. EndDate and
+	// OnExpire are one deadline for the whole walk.
+	Options   []ApprovalOption `json:"options,omitempty"`
+	Source    string           `json:"source,omitempty"`
+	Details   []ApprovalDetail `json:"details,omitempty"`
+	OnExpire  string           `json:"on_expire,omitempty"`
+	Answer    *ApprovalAnswer  `json:"answer,omitempty"`
+	Step      *int             `json:"step,omitempty"`
+	StepCount *int             `json:"step_count,omitempty"`
 }
 
 // OrgTargetRequest narrows who an organization key's activity or notification
@@ -677,15 +691,19 @@ type ContentPatch struct {
 	Controls        *MediaControls `json:"controls,omitempty"`
 
 	// Approval template. Options and Details replace wholesale (RFC 7396
-	// array semantics); an Options set equal to the live one keeps the
-	// server-recorded answer, and only a changed set (e.g. fresh option ids)
-	// starts a new round and clears it. The answer itself is server-owned and has no
-	// patch field - read it back from the response Content. With omitempty an
-	// empty Details slice cannot express clearing, matching Tiles and Lines.
-	Options  []ApprovalOption `json:"options,omitempty"`
-	Source   *string          `json:"source,omitempty"`
-	Details  []ApprovalDetail `json:"details,omitempty"`
-	OnExpire *string          `json:"on_expire,omitempty"`
+	// array semantics); an Options set equal to the live one on the same Step
+	// keeps the server-recorded answer, and a changed set (e.g. fresh option
+	// ids) or a changed Step starts a new round and clears it. The answer
+	// itself is server-owned and has no patch field - read it back from the
+	// response Content. With omitempty an empty Details slice cannot express
+	// clearing, matching Tiles and Lines. Step and StepCount follow
+	// Content.Step; the merged content must carry both or neither.
+	Options   []ApprovalOption `json:"options,omitempty"`
+	Source    *string          `json:"source,omitempty"`
+	Details   []ApprovalDetail `json:"details,omitempty"`
+	OnExpire  *string          `json:"on_expire,omitempty"`
+	Step      *int             `json:"step,omitempty"`
+	StepCount *int             `json:"step_count,omitempty"`
 }
 
 // PatchRequest is the typed body for PATCH /activities/{slug}. State is a

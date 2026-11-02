@@ -195,22 +195,26 @@ func TestApprovalWireNames(t *testing.T) {
 		{ID: "deny", Title: "Deny"},
 	}
 	details := []ApprovalDetail{{Label: "To", Value: "ops@example.com"}}
-	wantApproval := []string{"details", "on_expire", "options", "source"}
+	wantApproval := []string{"details", "on_expire", "options", "source", "step", "step_count"}
 
 	full := Content{
-		Template: TemplateApproval,
-		State:    "Ship it?",
-		Options:  options,
-		Source:   "Agent",
-		Details:  details,
-		OnExpire: "deny",
-		Answer:   &ApprovalAnswer{Option: "send", At: 1755500000, By: "user"},
+		Template:  TemplateApproval,
+		State:     "Ship it?",
+		Options:   options,
+		Source:    "Agent",
+		Details:   details,
+		OnExpire:  "deny",
+		Answer:    &ApprovalAnswer{Option: "send", At: 1755500000, By: "user"},
+		Step:      IntPtr(1),
+		StepCount: IntPtr(3),
 	}
 	patch := ContentPatch{
-		Options:  options,
-		Source:   StringPtr("Agent"),
-		Details:  details,
-		OnExpire: StringPtr("deny"),
+		Options:   options,
+		Source:    StringPtr("Agent"),
+		Details:   details,
+		OnExpire:  StringPtr("deny"),
+		Step:      IntPtr(2),
+		StepCount: IntPtr(3),
 	}
 	for name, v := range map[string]any{"Content": full, "ContentPatch": patch} {
 		got := jsonKeys(t, v)
