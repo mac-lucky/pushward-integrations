@@ -170,13 +170,20 @@ func TestOversizedBodyIs413(t *testing.T) {
 		})
 	}
 
-	// Exactly the limit is too large too, as huma counts it.
+	// As huma counts it (http.MaxBytesReader since huma 2.40): exactly the
+	// limit is served, one byte more is too large.
 	exact := append([]byte(`{"pad":"`), bytes.Repeat([]byte("x"), humautil.MaxWebhookBytes-10)...)
 	exact = append(exact, `"}`...)
 	req := relaytest.NewRequest("/", exact, nil)
 	req.ContentLength = -1
+	if w := serve(root, req); w.Code == http.StatusRequestEntityTooLarge {
+		t.Errorf("a body of exactly %d bytes: status 413, want it served", len(exact))
+	}
+	over := append(exact[:len(exact)-2:len(exact)-2], `x"}`...)
+	req = relaytest.NewRequest("/", over, nil)
+	req.ContentLength = -1
 	if w := serve(root, req); w.Code != http.StatusRequestEntityTooLarge {
-		t.Errorf("a body of exactly %d bytes: status %d, want 413", len(exact), w.Code)
+		t.Errorf("a body of %d bytes: status %d, want 413", len(over), w.Code)
 	}
 }
 
