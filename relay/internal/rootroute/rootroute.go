@@ -138,7 +138,7 @@ func (rt *Router) route(w http.ResponseWriter, r *http.Request) (route, via, rul
 		return rt.fallback(), viaSkipped, "", ""
 	}
 	body, err := rt.read(w, r)
-	if err != nil || len(body) >= humautil.MaxWebhookBytes {
+	if err != nil || len(body) > humautil.MaxWebhookBytes {
 		return rt.fallback(), viaSkipped, "", ""
 	}
 	m, ok, err := rt.detect(r, body)
@@ -167,7 +167,7 @@ func (rt *Router) readable(r *http.Request) bool {
 	if err != nil || (mt != "application/json" && !strings.HasSuffix(mt, "+json")) {
 		return false
 	}
-	if r.ContentLength >= humautil.MaxWebhookBytes {
+	if r.ContentLength > humautil.MaxWebhookBytes {
 		return false
 	}
 	return !ratelimit.IPExhausted(ratelimit.ClientIP(r.RemoteAddr, r.Header.Get))
@@ -187,7 +187,7 @@ func (rt *Router) detect(r *http.Request, body []byte) (detect.Match, bool, erro
 	return m, ok, nil
 }
 
-// read reads up to MaxWebhookBytes of the body and puts it back, so the
+// read reads up to MaxWebhookBytes+1 of the body and puts it back, so the
 // route that serves the request reads it again from the start: the bytes
 // read, then the rest, or the read's error. It takes no shared slot: the
 // deadline and the size cap bound a slow sender here as they do on every
@@ -203,9 +203,11 @@ func (rt *Router) read(w http.ResponseWriter, r *http.Request) ([]byte, error) {
 	}
 	var buf bytes.Buffer
 	if r.ContentLength > 0 {
-		buf.Grow(int(min(r.ContentLength, humautil.MaxWebhookBytes)) + bytes.MinRead)
+		buf.Grow(int(min(r.ContentLength, humautil.MaxWebhookBytes+1)) + bytes.MinRead)
 	}
-	_, err := buf.ReadFrom(io.LimitReader(orig, humautil.MaxWebhookBytes))
+	// One byte past the limit tells a body of exactly the limit, which huma
+	// accepts, from one it refuses.
+	_, err := buf.ReadFrom(io.LimitReader(orig, humautil.MaxWebhookBytes+1))
 	rest := io.Reader(orig)
 	if err != nil {
 		rest = errReader{err}
