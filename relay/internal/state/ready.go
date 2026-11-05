@@ -32,6 +32,8 @@ type readiness struct {
 }
 
 func (r *readiness) check(ctx context.Context) error {
+	// The time limit comes from server.NewMux: a caller without one would let
+	// a hung ping outlive the kubelet's probe.
 	err := r.ping(ctx)
 
 	r.mu.Lock()
