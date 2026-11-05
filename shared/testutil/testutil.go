@@ -189,6 +189,8 @@ type testApprovalOption struct {
 	Method     string            `json:"method,omitempty"`
 	Headers    map[string]string `json:"headers,omitempty"`
 	Body       string            `json:"body,omitempty"`
+	// AuthenticationRequired is typed so a non-bool value fails the decode, as on the server.
+	AuthenticationRequired bool `json:"authentication_required,omitempty"`
 }
 
 // testApprovalDetail mirrors pushward.ApprovalDetail.

@@ -1209,6 +1209,31 @@ func TestValidateApprovalSteps(t *testing.T) {
 	}
 }
 
+// TestValidateApprovalAuthenticationRequired: the flag is a plain bool on
+// each option; any other JSON type is refused, like the server's schema.
+func TestValidateApprovalAuthenticationRequired(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		wantStatus int
+	}{
+		{"true", `true`, 200},
+		{"false", `false`, 200},
+		{"string", `"yes"`, 400},
+		{"number", `1`, 400},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "approve", "Approve")
+			body := `{"state":"ongoing","content":{"template":"approval","progress":0,"options":[{"id":"yes","title":"Yes","authentication_required":` + tt.value + `},{"id":"no","title":"No"}]}}`
+			if got := patchActivity(t, srv.URL, "approve", body); got != tt.wantStatus {
+				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+}
+
 func TestValidateApprovalRejectsAlarm(t *testing.T) {
 	srv, _, _ := testutil.MockPushWardServer(t)
 	createActivity(t, srv.URL, "approve", "Approve")
