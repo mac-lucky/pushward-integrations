@@ -84,7 +84,7 @@ func TestReadyCheck_SurvivesBlipFailsWhenSustained(t *testing.T) {
 
 // A database that hangs instead of refusing connections is cut off by the
 // limit in server.NewMux, so /ready still answers inside the grace and before
-// the kubelet's 3s probe timeout.
+// a 3s probe timeout, and the timed-out ping counts toward the grace.
 func TestReadyCheck_HungPingStaysReadyBeforeProbeTimeout(t *testing.T) {
 	r := &readiness{
 		ping: func(ctx context.Context) error {
@@ -97,8 +97,8 @@ func TestReadyCheck_HungPingStaysReadyBeforeProbeTimeout(t *testing.T) {
 	srv := httptest.NewServer(server.NewMux(r.check))
 	defer srv.Close()
 
-	// The client gives up where the kubelet would: without the limit in
-	// NewMux the ping only ends when this request does.
+	// The client gives up where a probe would: without the limit in NewMux
+	// the ping only ends when this request does.
 	client := &http.Client{Timeout: 3 * time.Second}
 	resp, err := client.Get(srv.URL + "/ready")
 	if err != nil {
@@ -107,5 +107,10 @@ func TestReadyCheck_HungPingStaysReadyBeforeProbeTimeout(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("/ready = %d, want %d inside the grace", resp.StatusCode, http.StatusOK)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.downSince.IsZero() {
+		t.Error("hung ping did not start the grace, a hanging database would never fail /ready")
 	}
 }
