@@ -326,7 +326,7 @@ type ApprovalDetail struct {
 // (By "user") or the deadline sweep applied OnExpire (By "expired"; Option is
 // then "none" when no default was set; At is unix seconds). Never send it -
 // the server strips it from writes. A re-sent Options set EQUAL to the live
-// one (compared by id/title/style/icon/url/method) on the same Step KEEPS the
+// one (compared field by field, authentication_required included) on the same Step KEEPS the
 // recorded answer; a changed set - e.g. fresh option ids - or a changed Step
 // opens a new round and clears it.
 // Unlike the other server-owned fields this one IS decoded here on purpose:
