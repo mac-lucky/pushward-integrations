@@ -309,6 +309,8 @@ type ApprovalOption struct {
 	Method     string            `json:"method,omitempty"`
 	Headers    map[string]string `json:"headers,omitempty"`
 	Body       string            `json:"body,omitempty"`
+	// AuthenticationRequired makes the phone ask for an unlock before the option fires; the server cannot enforce it.
+	AuthenticationRequired bool `json:"authentication_required,omitempty"`
 }
 
 // ApprovalDetail is one label/value context row shown between the question

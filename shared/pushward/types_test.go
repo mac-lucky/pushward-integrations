@@ -191,6 +191,7 @@ func TestApprovalWireNames(t *testing.T) {
 			ID: "send", Title: "Send", Style: ApprovalStylePrimary, Icon: "paperplane.fill",
 			URL: "https://ha.example/approve", Foreground: true, Method: "POST",
 			Headers: map[string]string{"Authorization": "Bearer k"}, Body: `{"go":true}`,
+			AuthenticationRequired: true,
 		},
 		{ID: "deny", Title: "Deny"},
 	}
@@ -239,7 +240,7 @@ func TestApprovalWireNames(t *testing.T) {
 		// Mode A carries every routing field; foreground marshals here even
 		// though the server 422s it on an http(s) url (it is live for custom
 		// schemes).
-		{"body", "foreground", "headers", "icon", "id", "method", "style", "title", "url"},
+		{"authentication_required", "body", "foreground", "headers", "icon", "id", "method", "style", "title", "url"},
 		{"id", "title"}, // mode B: with no URL of its own, no routing field travels
 	}
 	for i, want := range wantOptionKeys {
@@ -259,6 +260,26 @@ func TestApprovalWireNames(t *testing.T) {
 	for _, f := range reflect.VisibleFields(reflect.TypeOf(ContentPatch{})) {
 		if f.Name == "Answer" || strings.HasPrefix(f.Tag.Get("json"), "answer") {
 			t.Error("ContentPatch must not carry an answer field: the answer is server-owned")
+		}
+	}
+}
+
+// TestApprovalOptionAuthenticationRequiredRoundTrip: a bridge that reads an
+// activity and re-sends its options must keep the unlock gate, and an
+// ungated option must not send the key at all.
+func TestApprovalOptionAuthenticationRequiredRoundTrip(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		in := ApprovalOption{ID: "send", Title: "Send", AuthenticationRequired: on}
+		raw := mustJSON(t, in)
+		if got := jsonKeys(t, in)["authentication_required"]; got != on {
+			t.Errorf("on=%v: key present = %v in %s", on, got, raw)
+		}
+		var back ApprovalOption
+		if err := json.Unmarshal(raw, &back); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(back, in) {
+			t.Errorf("on=%v: round trip = %+v, want %+v", on, back, in)
 		}
 	}
 }
