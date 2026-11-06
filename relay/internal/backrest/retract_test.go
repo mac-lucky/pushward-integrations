@@ -26,8 +26,13 @@ type retractHarness struct {
 
 func newRetractHarness(t *testing.T) *retractHarness {
 	t.Helper()
+	return newRetractHarnessWith(t, testutil.MockOptions{})
+}
+
+func newRetractHarnessWith(t *testing.T, opts testutil.MockOptions) *retractHarness {
+	t.Helper()
 	lifecycle.SetRetryDelay(10 * time.Millisecond)
-	srv, calls, mu := testutil.MockPushWardServer(t)
+	srv, calls, mu := testutil.MockPushWardServerWith(t, opts)
 	store := state.NewMemoryStore()
 	mux, api := humautil.NewTestAPI()
 	h := RegisterRoutes(api, store, client.NewPool(srv.URL, nil), testConfig())
@@ -59,13 +64,23 @@ func (rh *retractHarness) retracts(t *testing.T) []string {
 	return out
 }
 
-func (rh *retractHarness) recorded(t *testing.T, op string) bool {
+func (rh *retractHarness) record(t *testing.T, op string) failure {
 	t.Helper()
-	ok, err := rh.store.Exists(context.Background(), "backrest", "hlk_test", failureKey(&backrestPayload{Plan: "daily", Repo: "nas"}, op), "")
+	raw, err := rh.store.Get(context.Background(), "backrest", "hlk_test", failureKey(&backrestPayload{Plan: "daily", Repo: "nas"}, op), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	return ok
+	var rec failure
+	if raw != nil {
+		testutil.UnmarshalBody(t, raw, &rec)
+	}
+	return rec
+}
+
+// recorded reports whether a failure push for op is on record.
+func (rh *retractHarness) recorded(t *testing.T, op string) bool {
+	t.Helper()
+	return rh.record(t, op).Slug != ""
 }
 
 var (
@@ -97,8 +112,76 @@ func TestRetractOnlyItsOwnOperation(t *testing.T) {
 	rh := newRetractHarness(t)
 	rh.post(t, "retract=1", condSnapshotError)
 	rh.post(t, "retract=1", condPruneSuccess)
+	if rs := rh.retracts(t); len(rs) != 0 {
+		t.Errorf("a prune success retracted %q", rs)
+	}
 	if !rh.recorded(t, "SNAPSHOT") {
 		t.Error("a prune success cleared the snapshot failure's record")
+	}
+}
+
+// A retract that does not reach leaves the record, so the next success of the
+// operation tries again.
+func TestRetractKeptWhenItMisses(t *testing.T) {
+	zero := 0
+	for _, tc := range []struct {
+		name string
+		opts testutil.MockOptions
+	}{
+		{"no device", testutil.MockOptions{RetractDevices: &zero}},
+		{"refused", testutil.MockOptions{RetractStatus: http.StatusForbidden}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rh := newRetractHarnessWith(t, tc.opts)
+			rh.post(t, "retract=1", condSnapshotError)
+			rh.post(t, "", condSnapshotSuccess)
+			if rec := rh.record(t, "SNAPSHOT"); rec.Slug != opSlug || rec.Gen != 0 {
+				t.Fatalf("record after a missed retract = %+v, want it kept", rec)
+			}
+			rh.post(t, "", condSnapshotSuccess)
+			if rs := rh.retracts(t); len(rs) != 2 || rs[0] != opSlug || rs[1] != opSlug {
+				t.Errorf("retracts %q, want %s tried by both successes", rs, opSlug)
+			}
+		})
+	}
+}
+
+// The retract is a delayed silent push, so once one reached, the plan and
+// repo's next pushes go out under a new id it cannot take down, and still
+// replace each other there. So does the any-error alert's.
+func TestRetractMovesLaterPushesToNewID(t *testing.T) {
+	rh := newRetractHarness(t)
+	rh.post(t, "retract=1", condSnapshotError)
+	rh.post(t, "retract=1", condAnyError)
+	rh.post(t, "retract=1", condSnapshotSuccess)
+	rh.post(t, "retract=1", condForgetError)
+	rh.post(t, "retract=1", condPruneError)
+	rh.post(t, "retract=1", condAnyError)
+
+	ns := notifications(t, testutil.GetCalls(rh.calls, rh.mu))
+	var ids []string
+	for _, n := range ns {
+		ids = append(ids, n.CollapseID)
+	}
+	want := []string{opSlug, alertSlug, opSlug + "-1", opSlug + "-1", alertSlug + "-1"}
+	if strings.Join(ids, " ") != strings.Join(want, " ") {
+		t.Fatalf("pushed under %q, want %q", ids, want)
+	}
+	if ns[2].ActivitySlug != opSlug {
+		t.Errorf("activity slug %q, want the activity's own %s", ns[2].ActivitySlug, opSlug)
+	}
+	if rec := rh.record(t, "PRUNE"); rec.Slug != opSlug+"-1" || rec.Op != "PRUNE" {
+		t.Errorf("record = %+v, want the prune failure under its new id", rec)
+	}
+
+	rh.post(t, "retract=1", condPruneSuccess)
+	rh.post(t, "channels=notification", condCheckSuccess)
+	if rs := rh.retracts(t); strings.Join(rs, " ") != strings.Join([]string{opSlug, alertSlug, opSlug + "-1", alertSlug + "-1"}, " ") {
+		t.Errorf("retracts %q", rs)
+	}
+	ns = notifications(t, testutil.GetCalls(rh.calls, rh.mu))
+	if last := ns[len(ns)-1]; last.CollapseID != opSlug+"-2" {
+		t.Errorf("push after the second retract under %q, want %s", last.CollapseID, opSlug+"-2")
 	}
 }
 

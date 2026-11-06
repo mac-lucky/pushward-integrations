@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -272,10 +273,11 @@ func endState(spec eventSpec, p *backrestPayload) string {
 	return spec.state
 }
 
-// notify sends the push. hasActivity says whether an activity is open for slug,
-// which is not the same question as whether this request may touch the activity
-// surface: a suppressed outcome can still be closing one an earlier hook opened.
-func (h *Handler) notify(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, spec eventSpec, slug, stateText string, hasActivity bool) error {
+// notify sends the push under collapseID. hasActivity says whether an activity
+// is open for slug, which is not the same question as whether this request may
+// touch the activity surface: a suppressed outcome can still be closing one an
+// earlier hook opened.
+func (h *Handler) notify(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, spec eventSpec, slug, collapseID, stateText string, hasActivity bool) error {
 	ov := overrides.FromContext(ctx)
 	title := text.TruncateHard(p.planName(), 100)
 	if title == "" {
@@ -295,7 +297,7 @@ func (h *Handler) notify(ctx context.Context, userKey string, log *slog.Logger, 
 		Subtitle:   h.subtitle(p),
 		Body:       body,
 		ThreadID:   "backrest",
-		CollapseID: slug,
+		CollapseID: collapseID,
 		Source:     "backrest",
 		Level:      ov.LevelOr(level),
 		Push:       pushward.BoolPtr(true),
@@ -347,10 +349,22 @@ const opAny = "ANY"
 // failure is the record of a failure push sent with ?retract=1. There is one
 // per collapse id, as on the device: the plan and repo's id, which snapshot,
 // prune, check and forget all push under, and its any-error alert's id. Op is
-// the operation whose failure the push under Slug shows now.
+// the operation whose failure the push under Slug shows now; both are empty
+// once no recorded push is up. Gen counts the retracts that reached a device:
+// the retract is a delayed silent push, so the pushes after one go out under
+// a new id it cannot take down.
 type failure struct {
 	Slug string
 	Op   string
+	Gen  int `json:",omitempty"`
+}
+
+// collapseID is the id a push for slug goes out under.
+func (f failure) collapseID(slug string) string {
+	if f.Gen == 0 {
+		return slug
+	}
+	return slug + "-" + strconv.Itoa(f.Gen)
 }
 
 func failureKey(p *backrestPayload, op string) string {
@@ -366,46 +380,71 @@ func operation(event string) string {
 	return op
 }
 
+// loadFailure reads the record under key; the zero failure when there is none.
+func (h *Handler) loadFailure(ctx context.Context, userKey string, log *slog.Logger, key string) failure {
+	var rec failure
+	raw, err := h.store.Get(ctx, "backrest", userKey, key, "")
+	if err != nil {
+		log.Warn("state store read failed", "error", err, "provider", "backrest", "key", key)
+	} else if raw != nil && json.Unmarshal(raw, &rec) != nil {
+		rec = failure{}
+	}
+	return rec
+}
+
+// saveFailure writes rec under key, or deletes the key when rec holds nothing.
+func (h *Handler) saveFailure(ctx context.Context, userKey string, log *slog.Logger, key string, rec failure) {
+	if rec == (failure{}) {
+		if err := h.store.Delete(ctx, "backrest", userKey, key, ""); err != nil {
+			log.Warn("state store delete failed", "error", err, "provider", "backrest", "key", key)
+		}
+		return
+	}
+	data, _ := json.Marshal(rec)
+	if err := h.store.Set(ctx, "backrest", userKey, key, "", data, failureTTL); err != nil {
+		log.Warn("state store write failed", "error", err, "provider", "backrest", "key", key)
+	}
+}
+
 // trackFailure is ?retract=1 for Backrest, where a success sends no push under
 // the default channels and so leaves the last failure push up. A failure push
 // sent on such a request is recorded, replacing the record of whatever
 // failure it replaced on the device. The next success of that operation takes
 // it back, and the plan and repo's any-error alert with it, unless the success
 // itself went out under the failure's collapse id and replaced it. A success
-// of another operation leaves it: that failure is still current. sentUnder is
-// the collapse id this outcome's push went out under, "" when none did.
+// of another operation leaves it: that failure is still current. rec is the
+// record under failureKey(p, op), which gave the push its collapse id;
+// sentUnder is the id this outcome's push went out under, "" when none did.
 // Without a record nothing is called.
-func (h *Handler) trackFailure(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, spec eventSpec, sentUnder string) {
+func (h *Handler) trackFailure(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, spec eventSpec, rec failure, sentUnder string) {
 	op := operation(p.Event)
 	if spec.problem {
 		if sentUnder != "" && overrides.FromContext(ctx).Retract() {
-			key := failureKey(p, op)
-			data, _ := json.Marshal(failure{Slug: sentUnder, Op: op})
-			if err := h.store.Set(ctx, "backrest", userKey, key, "", data, failureTTL); err != nil {
-				log.Warn("state store write failed", "error", err, "provider", "backrest", "key", key)
-			}
+			h.saveFailure(ctx, userKey, log, failureKey(p, op), failure{Slug: sentUnder, Op: op, Gen: rec.Gen})
 		}
 		return
 	}
 	if spec.kind != kindEnd {
 		return
 	}
-	for _, key := range []string{failureKey(p, op), failureKey(p, opAny)} {
-		raw, err := h.store.Get(ctx, "backrest", userKey, key, "")
-		if err != nil || raw == nil {
-			continue
-		}
-		var rec failure
-		if json.Unmarshal(raw, &rec) == nil && rec.Slug != sentUnder {
-			if rec.Op != op && rec.Op != opAny {
-				continue
-			}
-			h.clients.Retract(ctx, userKey, log, rec.Slug)
-		}
-		if err := h.store.Delete(ctx, "backrest", userKey, key, ""); err != nil {
-			log.Warn("state store delete failed", "error", err, "provider", "backrest", "key", key)
-		}
+	h.clearFailure(ctx, userKey, log, failureKey(p, op), op, rec, sentUnder)
+	anyKey := failureKey(p, opAny)
+	h.clearFailure(ctx, userKey, log, anyKey, op, h.loadFailure(ctx, userKey, log, anyKey), sentUnder)
+}
+
+// clearFailure handles a success of op for the record rec under key. A retract
+// that did not reach leaves the record, so the next success tries again.
+func (h *Handler) clearFailure(ctx context.Context, userKey string, log *slog.Logger, key, op string, rec failure, sentUnder string) {
+	if rec.Slug == "" || (rec.Slug != sentUnder && rec.Op != op && rec.Op != opAny) {
+		return
 	}
+	if rec.Slug != sentUnder {
+		if !h.clients.Retract(ctx, userKey, log, rec.Slug) {
+			return
+		}
+		rec.Gen++
+	}
+	h.saveFailure(ctx, userKey, log, key, failure{Gen: rec.Gen})
 }
 
 func (h *Handler) createActivity(ctx context.Context, userKey string, log *slog.Logger, slug string, p *backrestPayload) (*pushward.Client, error) {
@@ -474,6 +513,9 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 	stateText := endState(spec, p)
 	content := h.stepsContent(p, spec, stateText, 2)
 
+	rec := h.loadFailure(ctx, userKey, log, failureKey(p, operation(p.Event)))
+	collapseID := rec.collapseID(slug)
+
 	if !ov.AllowsActivity() {
 		// Backrest allows several hooks with different URLs, so a start can
 		// arrive on /backrest while the outcome arrives with channels=notification.
@@ -483,11 +525,11 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 		if ov.NotifyFallback(spec.problem) {
 			// The push is the only delivery left, so its failure is the
 			// request's failure and the sender gets a 502 to retry on.
-			if err = h.notify(ctx, userKey, log, p, spec, slug, stateText, tracked); err == nil {
-				sentUnder = slug
+			if err = h.notify(ctx, userKey, log, p, spec, slug, collapseID, stateText, tracked); err == nil {
+				sentUnder = collapseID
 			}
 		}
-		h.trackFailure(ctx, userKey, log, p, spec, sentUnder)
+		h.trackFailure(ctx, userKey, log, p, spec, rec, sentUnder)
 		return err
 	}
 
@@ -512,10 +554,10 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 	sentUnder := ""
 	// The activity already carries the outcome, so a failed push is logged
 	// and swallowed rather than failing the webhook.
-	if ov.NotifyFallback(spec.problem) && h.notify(ctx, userKey, log, p, spec, slug, stateText, true) == nil {
-		sentUnder = slug
+	if ov.NotifyFallback(spec.problem) && h.notify(ctx, userKey, log, p, spec, slug, collapseID, stateText, true) == nil {
+		sentUnder = collapseID
 	}
-	h.trackFailure(ctx, userKey, log, p, spec, sentUnder)
+	h.trackFailure(ctx, userKey, log, p, spec, rec, sentUnder)
 
 	log.Info("backrest end scheduled", "slug", slug, "event", p.Event, "state", stateText)
 	return nil
@@ -548,6 +590,13 @@ func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Log
 		Severity:    spec.severity,
 	}
 
+	// Only the any-error alert is ever recorded, so only its id can move on.
+	var rec failure
+	if spec.problem {
+		rec = h.loadFailure(ctx, userKey, log, failureKey(p, operation(p.Event)))
+	}
+	collapseID := rec.collapseID(slug)
+
 	// No EndIfTracked here, unlike handleEnd: an alert creates its activity and
 	// schedules its end in the same request, so there is never one left open by
 	// an earlier request for a later one to close.
@@ -555,9 +604,9 @@ func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Log
 		if !ov.NotifyFallback(spec.problem) {
 			return nil
 		}
-		err := h.notify(ctx, userKey, log, p, spec, slug, stateText, false)
+		err := h.notify(ctx, userKey, log, p, spec, slug, collapseID, stateText, false)
 		if err == nil {
-			h.trackFailure(ctx, userKey, log, p, spec, slug)
+			h.trackFailure(ctx, userKey, log, p, spec, rec, collapseID)
 		}
 		return err
 	}
@@ -574,8 +623,8 @@ func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Log
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
-	if ov.NotifyFallback(spec.problem) && h.notify(ctx, userKey, log, p, spec, slug, stateText, true) == nil {
-		h.trackFailure(ctx, userKey, log, p, spec, slug)
+	if ov.NotifyFallback(spec.problem) && h.notify(ctx, userKey, log, p, spec, slug, collapseID, stateText, true) == nil {
+		h.trackFailure(ctx, userKey, log, p, spec, rec, collapseID)
 	}
 
 	log.Info("backrest alert", "slug", slug, "event", p.Event, "state", stateText)
