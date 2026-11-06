@@ -335,14 +335,17 @@ func manualInteractionKey(provider, downloadID string) string {
 
 // retractManualInteraction takes back the manual-interaction push of a
 // download that has now imported, when one was recorded under ?retract=1.
-// Without a record nothing is called.
+// Without a record nothing is called. The record goes either way: no later
+// event of the download could try again.
 func (h *Handler) retractManualInteraction(ctx context.Context, userKey string, log *slog.Logger, provider, downloadID string) {
 	key := manualInteractionKey(provider, downloadID)
 	id, ok := h.getTrackedSlug(ctx, userKey, key)
 	if !ok {
 		return
 	}
-	h.clients.Retract(ctx, userKey, log, id)
+	if !h.clients.Retract(ctx, userKey, log, id) {
+		log.Warn("manual-interaction push left up, the retract did not reach", "provider", provider, "collapse_id", id)
+	}
 	h.deleteTrackedSlug(ctx, userKey, key)
 }
 

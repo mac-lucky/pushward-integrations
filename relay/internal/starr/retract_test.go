@@ -1,6 +1,9 @@
 package starr
 
 import (
+	"bytes"
+	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -176,5 +179,27 @@ func TestManualInteractionRetractedOnImport(t *testing.T) {
 	rs := retractsIn(t, testutil.GetCalls(calls, mu))
 	if len(rs) != 2 || rs[1] != manualInteractionCollapseID("sonarr", "dl-S") {
 		t.Errorf("retracts %q, want the sonarr one last", rs)
+	}
+}
+
+// An import whose retract does not reach says so in the log, and the record
+// goes anyway: no later event of the download would try again.
+func TestManualInteractionMissedRetractLogged(t *testing.T) {
+	zero := 0
+	srv, _, _ := testutil.MockPushWardServerWith(t, testutil.MockOptions{RetractDevices: &zero})
+	_, api := humautil.NewTestAPI()
+	h := RegisterRoutes(api, state.NewMemoryStore(), client.NewPool(srv.URL, nil), testConfig(), poster.Disabled{})
+	ctx := context.Background()
+	id := manualInteractionCollapseID("radarr", "dl-A")
+	if err := h.setTrackedSlug(ctx, "hlk_test", manualInteractionKey("radarr", "dl-A"), id, manualInteractionTTL); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	h.retractManualInteraction(ctx, "hlk_test", slog.New(slog.NewTextHandler(&buf, nil)), "radarr", "dl-A")
+	if out := buf.String(); !strings.Contains(out, "level=WARN") || !strings.Contains(out, id) {
+		t.Errorf("log %q, want a warning naming %s", out, id)
+	}
+	if _, ok := h.getTrackedSlug(ctx, "hlk_test", manualInteractionKey("radarr", "dl-A")); ok {
+		t.Error("record kept after the import")
 	}
 }
