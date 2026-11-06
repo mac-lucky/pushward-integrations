@@ -1040,8 +1040,9 @@ func TestNotifyOnlyEventBodies(t *testing.T) {
 	}
 }
 
-// A resolved issue goes under its report's collapse id and replaces it; with
-// ?retract=1 the report is taken back instead, unless that reached no device.
+// A resolved or reopened issue goes under its report's collapse id and
+// replaces it; with ?retract=1 a resolve takes it back instead, unless that
+// reached no device.
 func TestIssueResolvedReplacesReport(t *testing.T) {
 	zero := 0
 	issue := func(typ string) string {
@@ -1054,15 +1055,15 @@ func TestIssueResolvedReplacesReport(t *testing.T) {
 		notifications int
 		retracts      int
 	}{
-		{"replaces", "", testutil.MockOptions{}, 2, 0},
-		{"retract=1", "?retract=1", testutil.MockOptions{}, 1, 1},
-		{"retract reaching no device falls back", "?retract=1", testutil.MockOptions{RetractDevices: &zero}, 2, 1},
+		{"replaces", "", testutil.MockOptions{}, 4, 0},
+		{"retract=1", "?retract=1", testutil.MockOptions{}, 2, 2},
+		{"retract reaching no device falls back", "?retract=1", testutil.MockOptions{RetractDevices: &zero}, 4, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, calls, mu := testutil.MockPushWardServerWith(t, tc.opts)
 			h, api := humautil.NewTestAPI()
 			RegisterRoutes(api, state.NewMemoryStore(), client.NewPool(srv.URL, nil), testConfig(), poster.Disabled{})
-			for _, typ := range []string{"ISSUE_CREATED", "ISSUE_RESOLVED"} {
+			for _, typ := range []string{"ISSUE_CREATED", "ISSUE_RESOLVED", "ISSUE_REOPENED", "ISSUE_RESOLVED"} {
 				req := httptest.NewRequest(http.MethodPost, "/overseerr"+tc.query, strings.NewReader(issue(typ)))
 				req.Header.Set("Content-Type", "application/json")
 				req.Header.Set("Authorization", "Bearer hlk_test")
@@ -1083,15 +1084,19 @@ func TestIssueResolvedReplacesReport(t *testing.T) {
 			if len(ns) != tc.notifications || ns[0].CollapseID != report {
 				t.Fatalf("notifications = %+v, want %d starting with the report", ns, tc.notifications)
 			}
-			if len(ns) == 2 && (ns[1].CollapseID != report || ns[1].Body != "Issue resolved") {
-				t.Errorf("resolve = %+v, want it under the report's id", ns[1])
+			for _, n := range ns {
+				if n.CollapseID != report {
+					t.Errorf("%q went out under %q, want the report's id", n.Body, n.CollapseID)
+				}
 			}
 			rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract")
 			if len(rs) != tc.retracts {
 				t.Fatalf("%d retracts, want %d", len(rs), tc.retracts)
 			}
-			if len(rs) == 1 && !strings.Contains(string(rs[0].Body), report) {
-				t.Errorf("retract body %s, want the report's id", rs[0].Body)
+			for _, r := range rs {
+				if !strings.Contains(string(r.Body), report) {
+					t.Errorf("retract body %s, want the report's id", r.Body)
+				}
 			}
 		})
 	}

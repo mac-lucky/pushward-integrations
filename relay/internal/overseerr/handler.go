@@ -121,7 +121,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	case "ISSUE_RESOLVED":
 		return h.handleNotifyOnly(ctx, userKey, log, payload, labelIssueResolved, "")
 	case "ISSUE_REOPENED":
-		return h.handleNotifyOnly(ctx, userKey, log, payload, "Issue reopened", "")
+		return h.handleNotifyOnly(ctx, userKey, log, payload, labelIssueReopened, "")
 
 	case "TEST_NOTIFICATION":
 		if err := selftest.SendTest(ctx, h.clients.Get(userKey), log, "overseerr"); err != nil {
@@ -226,6 +226,7 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 const (
 	labelIssueReported = "Issue reported"
 	labelIssueResolved = "Issue resolved"
+	labelIssueReopened = "Issue reopened"
 )
 
 // handleNotifyOnly covers the event types that have no request lifecycle to
@@ -401,10 +402,11 @@ func collapseID(subject, label, mediaType, tmdbID string) string {
 	return fmt.Sprintf("overseerr-%s-%s-%s", mediaType, tmdbID, label)
 }
 
-// eventCollapseID is the collapse id of the push for label. A resolved issue
-// goes under its report's id, so it replaces the report.
+// eventCollapseID is the collapse id of the push for label. A resolved or
+// reopened issue goes under its report's id, so the latest of them is the one
+// left up, and a resolve after a reopen takes the reopen back.
 func eventCollapseID(p *overseerrPayload, label string) string {
-	if label == labelIssueResolved {
+	if label == labelIssueResolved || label == labelIssueReopened {
 		label = labelIssueReported
 	}
 	tmdbID := ""

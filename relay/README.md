@@ -329,7 +329,7 @@ A resolve normally sends a passive "Resolved" push under the alert's collapse id
 | TrueNAS | the alert's push | the clear, on `/truenas/retract` |
 | universal route | an alert card's push, when the preset keys it on a correlation value | the card ending |
 | Radarr, Sonarr, Prowlarr | that health check's push | `HealthRestored` |
-| Overseerr | the issue report | `ISSUE_RESOLVED` |
+| Overseerr | the issue report or reopen | `ISSUE_RESOLVED` |
 | Radarr, Sonarr | a download's manual-interaction push | the `Download` (import) of the same download |
 | Backrest | a failure push | the next success of the same plan, repo and operation |
 
@@ -703,7 +703,7 @@ These arrive as a push notification only, with no Live Activity:
 | `ISSUE_RESOLVED` | Issue resolved |
 | `ISSUE_REOPENED` | Issue reopened |
 
-`ISSUE_RESOLVED` goes out under the same collapse id as that title's `ISSUE_CREATED`, so it replaces the report. With `?retract=1` the report is taken back instead (see [Retracted alerts](#retracted-alerts-retract1)).
+`ISSUE_RESOLVED` and `ISSUE_REOPENED` go out under the same collapse id as that title's `ISSUE_CREATED`, so the latest of them replaces the others. With `?retract=1` a resolve takes the report or the reopen back instead (see [Retracted alerts](#retracted-alerts-retract1)).
 
 **Setup:** Go to **Settings > Notifications > Webhook**. Set the Webhook URL to
 `https://relay.pushward.app/overseerr` and the Authorization Header to `Bearer hlk_...`. The stock
