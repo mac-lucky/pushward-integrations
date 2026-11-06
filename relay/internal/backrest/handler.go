@@ -328,11 +328,10 @@ func notificationMetadata(p *backrestPayload) map[string]string {
 }
 
 // rememberSlug records which activity is open for this plan and repo, so a later
-// request can find it (see Ender.EndIfTracked) and so the ender can clear it. It
-// also records a failure push for ?retract=1 (see trackFailure).
-func (h *Handler) rememberSlug(ctx context.Context, userKey string, log *slog.Logger, mapKey, slug string, ttl time.Duration) {
+// request can find it (see Ender.EndIfTracked) and so the ender can clear it.
+func (h *Handler) rememberSlug(ctx context.Context, userKey string, log *slog.Logger, mapKey, slug string) {
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
-	if err := h.store.Set(ctx, "backrest", userKey, mapKey, "", data, ttl); err != nil {
+	if err := h.store.Set(ctx, "backrest", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
 		log.Warn("state store write failed", "error", err, "provider", "backrest", "slug", slug)
 	}
 }
@@ -342,13 +341,26 @@ func (h *Handler) rememberSlug(ctx context.Context, userKey string, log *slog.Lo
 // check or prune.
 const failureTTL = 7 * 24 * time.Hour
 
-// failureKey is the state row of a failure push sent with ?retract=1, one per
-// plan, repo and operation: SNAPSHOT, PRUNE, CHECK, FORGET or ANY (the
-// any-error alert), read off the condition name.
-func failureKey(p *backrestPayload, op string) string {
-	return fmt.Sprintf("retract:%s:%s:%s", p.Plan, p.Repo, op)
+// opAny is the operation of the any-error alert.
+const opAny = "ANY"
+
+// failure is the record of a failure push sent with ?retract=1. There is one
+// per collapse id, as on the device: the plan and repo's id, which snapshot,
+// prune, check and forget all push under, and its any-error alert's id. Op is
+// the operation whose failure the push under Slug shows now.
+type failure struct {
+	Slug string
+	Op   string
 }
 
+func failureKey(p *backrestPayload, op string) string {
+	if op == opAny {
+		return fmt.Sprintf("retract:%s:%s:%s", p.Plan, p.Repo, opAny)
+	}
+	return fmt.Sprintf("retract:%s:%s", p.Plan, p.Repo)
+}
+
+// operation reads SNAPSHOT, PRUNE, CHECK, FORGET or ANY off a condition name.
 func operation(event string) string {
 	op, _, _ := strings.Cut(strings.TrimPrefix(event, "CONDITION_"), "_")
 	return op
@@ -356,29 +368,38 @@ func operation(event string) string {
 
 // trackFailure is ?retract=1 for Backrest, where a success sends no push under
 // the default channels and so leaves the last failure push up. A failure push
-// sent on such a request is recorded; the next success of that plan, repo and
-// operation takes it back, and the plan and repo's any-error alert with it,
-// unless the success itself went out under the failure's collapse id and
-// replaced it. sentUnder is the collapse id this outcome's push went out
-// under, "" when none did. Without a record nothing is called.
+// sent on such a request is recorded, replacing the record of whatever
+// failure it replaced on the device. The next success of that operation takes
+// it back, and the plan and repo's any-error alert with it, unless the success
+// itself went out under the failure's collapse id and replaced it. A success
+// of another operation leaves it: that failure is still current. sentUnder is
+// the collapse id this outcome's push went out under, "" when none did.
+// Without a record nothing is called.
 func (h *Handler) trackFailure(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, spec eventSpec, sentUnder string) {
+	op := operation(p.Event)
 	if spec.problem {
 		if sentUnder != "" && overrides.FromContext(ctx).Retract() {
-			h.rememberSlug(ctx, userKey, log, failureKey(p, operation(p.Event)), sentUnder, failureTTL)
+			key := failureKey(p, op)
+			data, _ := json.Marshal(failure{Slug: sentUnder, Op: op})
+			if err := h.store.Set(ctx, "backrest", userKey, key, "", data, failureTTL); err != nil {
+				log.Warn("state store write failed", "error", err, "provider", "backrest", "key", key)
+			}
 		}
 		return
 	}
 	if spec.kind != kindEnd {
 		return
 	}
-	for _, op := range []string{operation(p.Event), operation(condAnyError)} {
-		key := failureKey(p, op)
+	for _, key := range []string{failureKey(p, op), failureKey(p, opAny)} {
 		raw, err := h.store.Get(ctx, "backrest", userKey, key, "")
 		if err != nil || raw == nil {
 			continue
 		}
-		var rec struct{ Slug string }
+		var rec failure
 		if json.Unmarshal(raw, &rec) == nil && rec.Slug != sentUnder {
+			if rec.Op != op && rec.Op != opAny {
+				continue
+			}
 			h.clients.Retract(ctx, userKey, log, rec.Slug)
 		}
 		if err := h.store.Delete(ctx, "backrest", userKey, key, ""); err != nil {
@@ -441,7 +462,7 @@ func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Log
 		return err
 	}
 
-	h.rememberSlug(ctx, userKey, log, mapKey, slug, h.config.StaleTimeout)
+	h.rememberSlug(ctx, userKey, log, mapKey, slug)
 
 	log.Info("backrest started", "slug", slug, "event", p.Event, "state", spec.state)
 	return nil
@@ -484,7 +505,7 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 		return err
 	}
 
-	h.rememberSlug(ctx, userKey, log, mapKey, slug, h.config.StaleTimeout)
+	h.rememberSlug(ctx, userKey, log, mapKey, slug)
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 

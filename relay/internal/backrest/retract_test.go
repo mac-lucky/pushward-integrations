@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -37,7 +38,7 @@ func newRetractHarness(t *testing.T) *retractHarness {
 func (rh *retractHarness) post(t *testing.T, query, event string) {
 	t.Helper()
 	body := fmt.Sprintf(`{"event":%q,"plan":"daily","repo":"nas","error":""}`, event)
-	if event != condSnapshotSuccess {
+	if !strings.HasSuffix(event, "_SUCCESS") {
 		body = fmt.Sprintf(`{"event":%q,"plan":"daily","repo":"nas","error":"boom"}`, event)
 	}
 	if w := sendQuery(t, rh.h, query, body); w.Code != http.StatusOK {
@@ -101,6 +102,26 @@ func TestRetractOnlyItsOwnOperation(t *testing.T) {
 	}
 }
 
+// Every operation pushes under the plan and repo's one collapse id, so a
+// prune failure replaces a check failure on the device. The check passing
+// then must not take back the prune failure; the prune passing does.
+func TestRetractFailureReplacedByAnotherOperation(t *testing.T) {
+	rh := newRetractHarness(t)
+	rh.post(t, "retract=1", condCheckError)
+	rh.post(t, "retract=1", condPruneError)
+	rh.post(t, "retract=1", condCheckSuccess)
+	if rs := rh.retracts(t); len(rs) != 0 {
+		t.Fatalf("the check passing retracted %q while the prune failure is up", rs)
+	}
+	rh.post(t, "retract=1", condPruneSuccess)
+	if rs := rh.retracts(t); len(rs) != 1 || rs[0] != opSlug {
+		t.Errorf("retracts %q, want %s once", rs, opSlug)
+	}
+	if rh.recorded(t, "PRUNE") {
+		t.Error("record left after the prune passed")
+	}
+}
+
 func TestRetractSuccessWithoutRecord(t *testing.T) {
 	rh := newRetractHarness(t)
 	rh.post(t, "retract=1", condSnapshotSuccess)
@@ -130,5 +151,19 @@ func TestRetractReplacedBySuccessPush(t *testing.T) {
 	ns := notifications(t, testutil.GetCalls(rh.calls, rh.mu))
 	if len(ns) != 2 || ns[1].CollapseID != opSlug {
 		t.Errorf("notifications = %+v, want the success under %s", ns, opSlug)
+	}
+}
+
+// Another operation's success push replaces the failure too.
+func TestRetractReplacedByAnotherOperationsPush(t *testing.T) {
+	rh := newRetractHarness(t)
+	rh.post(t, "channels=notification&retract=1", condCheckError)
+	rh.post(t, "channels=notification&retract=1", condPruneSuccess)
+	if rh.recorded(t, "CHECK") {
+		t.Error("record left after a prune success push replaced the check failure")
+	}
+	rh.post(t, "retract=1", condCheckSuccess)
+	if rs := rh.retracts(t); len(rs) != 0 {
+		t.Errorf("retracts %q, want none", rs)
 	}
 }
