@@ -46,6 +46,7 @@ Relay notifications are not end-to-end encrypted. The relay never holds a user's
 - **Two-phase end lifecycle** - completion events send a final `ONGOING` update (so the result shows on the Dynamic Island), then `ENDED` after a short display delay. Used by ArgoCD, Radarr, Sonarr, Jellyfin, Paperless, Unmanic, Proxmox, Overseerr, Uptime Kuma, Gatus, Backrest, Gitea, Forgejo, Komodo, and TrueNAS. Grafana, Prowlarr, Bazarr, and Changedetection are fire-and-forget.
 - **Push notifications** - one-shot APNs alerts for events that don't fit a Live Activity (Grafana alerts, Bazarr subtitle downloads, Prowlarr grabs).
 - **Acknowledged alerts** - `?ack=1` makes an alert's push repeat until someone acknowledges it, and the resolve stops it. See [Acknowledged alerts](#acknowledged-alerts-ack1).
+- **Retracted alerts** - `?retract=1` takes an alert's push back off the devices when it resolves, instead of leaving a "Resolved" in its place. See [Retracted alerts](#retracted-alerts-retract1).
 - **Cross-provider notification threads** - Radarr/Sonarr/Overseerr/Jellyfin notifications about the same movie (TMDB id) or show (TVDB id) collapse into one iOS notification thread.
 - **PostgreSQL state store** - persistent alert grouping, sync tracking, and download dedup with a background TTL sweep every 30s.
 - **Per-tenant client pool** - LRU pool of PushWard API clients keyed by `hlk_` hash (up to 1,000 concurrent tenants). Each tenant has its own circuit breaker, so one tenant's failing calls don't stop the others; a server-wide breaker opens only for a run of failures, with no success in between and no gap longer than the cooldown, that spans at least 3 tenants (server down, connections refused, 503s for everyone).
@@ -236,6 +237,8 @@ The key itself is only checked when the relay calls PushWard on your behalf, so 
 | DELETE | `/truenas/v2/alerts/{id}` | TrueNAS OpsGenie close-alert calls |
 | POST | `/truenas/ack/v2/alerts` | The same, with `ack=1` turned on by the path (see [TrueNAS](#truenas)) |
 | DELETE | `/truenas/ack/v2/alerts/{id}` | The same, and stops the alert's repeats first |
+| POST | `/truenas/retract/v2/alerts` | The same as `/truenas/v2/alerts`, with `retract=1` turned on by the path |
+| DELETE | `/truenas/retract/v2/alerts/{id}` | The same, and takes the alert's push back instead of sending "Resolved" |
 | POST | `/` | Any webhook: handed to the provider that sent it, else to the universal route (see [Root route](#root-route-post-)) |
 | GET | `/health` | Liveness - returns `ok` |
 | GET | `/ready` | Readiness - `ready`, or `503` once the DB ping has kept failing for 30s |
@@ -277,7 +280,7 @@ Every route requires the `hlk_` integration key. The relay accepts it two ways (
 
 ### Query parameters
 
-Append query parameters to a webhook URL to override how the relay handles that one request. The relay reads them on every route, and an explicit parameter always wins over the provider's computed value and the static config. Leave them off and behavior is byte-for-byte unchanged. TrueNAS can't send any: it appends `/v2/alerts` to the API URL it is given, so a query string there never arrives as one. It gets acknowledged alerts from its own path instead (see [TrueNAS](#truenas)).
+Append query parameters to a webhook URL to override how the relay handles that one request. The relay reads them on every route, and an explicit parameter always wins over the provider's computed value and the static config. Leave them off and behavior is byte-for-byte unchanged. TrueNAS can't send any: it appends `/v2/alerts` to the API URL it is given, so a query string there never arrives as one. It gets `ack=1` and `retract=1` from paths of its own instead (see [TrueNAS](#truenas)).
 
 | Parameter | Values | Effect |
 |---|---|---|
@@ -287,8 +290,9 @@ Append query parameters to a webhook URL to override how the relay handles that 
 | `ack` | `1` or `0` | `1` makes an alert's push repeat until someone taps **Acknowledge** on it, or until `ack_expire` runs out; the resolve stops it. Grafana, Uptime Kuma, Gatus, Komodo and universal-route alerts. See [Acknowledged alerts](#acknowledged-alerts-ack1). |
 | `ack_repeat` | seconds, `30`-`3600` (default `300`) | How often the alert repeats. Needs `ack=1`. |
 | `ack_expire` | seconds, `60`-`10800` (default `3600`) | How long it keeps repeating if nobody acknowledges it. Needs `ack=1`. |
+| `retract` | `1` or `0` | `1` takes a resolved alert's push back off the devices instead of sending "Resolved" over it. See [Retracted alerts](#retracted-alerts-retract1). |
 
-An unknown `channels` value, an out-of-range or non-integer `priority`, an invalid `level`, an `ack` that is not `1`/`0`, an `ack_repeat` or `ack_expire` out of range or without `ack=1`, and `ack=1` with `level=passive` (a passive push doesn't alert, so there is nothing to repeat) return `400` before the handler runs.
+An unknown `channels` value, an out-of-range or non-integer `priority`, an invalid `level`, an `ack` or `retract` that is not `1`/`0`, an `ack_repeat` or `ack_expire` out of range or without `ack=1`, and `ack=1` with `level=passive` (a passive push doesn't alert, so there is nothing to repeat) return `400` before the handler runs.
 
 Example: deliver Komodo as notifications only, at priority 8, with a passive interruption level:
 
@@ -309,6 +313,33 @@ The push for a new alert (Grafana firing, Uptime Kuma DOWN, Gatus TRIGGERED, a K
 Each repeating alert is tagged `relay.<collapse id>`, the collapse id the provider already gives that alert: one per Grafana alert name, Uptime Kuma monitor, Gatus endpoint, Komodo condition or TrueNAS alias, and the card's slug on the universal route. When the alert resolves (nothing left firing in the Grafana group, Uptime Kuma UP, Gatus RESOLVED, Komodo `resolved`, the TrueNAS clear, a universal card ending), the relay cancels that tag first and sends the resolved notification after it, so a late repeat can't land on top of "Resolved". The Grafana tag follows the existing per-alertname collapse: with a contact point that groups by instance or folder, one subgroup resolving cancels the repeats of another that still fires under the same alert name. A Grafana group that changes while it still fires starts repeats again only for an alert that wasn't firing before, so one of its alerts resolving doesn't restart what someone already acknowledged. The tag is rebuilt from the resolve webhook alone, so a relay restart between the two changes nothing; the resolve has to carry `ack=1` as well, which it does when the service posts both to the same URL. The cancel waits at most 5 seconds and a failure is only logged: the resolved notification still goes out. Komodo one-shot events (build failed, container stopped, ...) never resolve, so they repeat until acknowledged or expired. With `ack=1` they are keyed on their condition (target and alert type, and a Custom alert's source) rather than on each event, so a crash loop's next event replaces the receipt of the one before instead of taking another of the 25.
 
 The server allows 25 repeating alerts per account at a time, shared with everything else that sends acknowledged notifications with your keys (the CLI, MCP server, Home Assistant integration, Grafana plugin). When it refuses the acknowledge for that or any other reason of its own (acknowledged alerts switched off on the server, an acknowledge field it rejects), the relay sends the same notification once more without it, so the alert still arrives, only without repeats; `pushward_relay_ack_fallback_total{provider,reason}` counts these. A `401`, `403`, `429` or server error is not retried this way. Two known gaps: a repeat already on its way when the cancel runs can still arrive once, and a key only cancels what it sent itself, so after moving a service to a new `hlk_` key the alerts still repeating from the old one run until they are acknowledged, expire, or the old key is revoked.
+
+#### Retracted alerts (`retract=1`)
+
+```
+https://relay.pushward.app/gatus?retract=1
+```
+
+A resolve normally sends a passive "Resolved" push under the alert's collapse id. It replaces the alert on the lock screen and then sits there until someone clears it. With `retract=1` the relay asks the server to take the alert's push back off the devices instead (`POST /notifications/retract`) and sends no "Resolved". It does that only where the alert's push may still be up: an alert the relay still tracks, a push it recorded sending, or an event that only follows one (a restored health check, a resolved issue):
+
+| Provider | Taken back | On |
+|---|---|---|
+| Grafana | the alert name's push | nothing left firing in the group |
+| Uptime Kuma, Gatus, Komodo | the monitor's, endpoint's or condition's push | UP, RESOLVED, `resolved` |
+| TrueNAS | the alert's push | the clear, on `/truenas/retract` |
+| universal route | an alert card's push, when the preset keys it on a correlation value | the card ending |
+| Radarr, Sonarr, Prowlarr | that health check's push | `HealthRestored` |
+| Overseerr | the issue report | `ISSUE_RESOLVED` |
+| Radarr, Sonarr | a download's manual-interaction push | the `Download` (import) of the same download |
+| Backrest | a failure push | the next success of the same plan, repo and operation |
+
+It is best effort. The retract reaches the iPhone, iPad and Mac apps from 1.20 and the Android app, but never an Apple Watch or an app that was force-quit, and the server allows 10 a minute per key and per account. When it fails, times out (5 seconds) or reaches no device, the relay sends the "Resolved" as it would without `retract=1`, so the alert is still replaced. It never sends both: the retract is a delayed silent push and would take the "Resolved" down with the alert.
+
+A retract reaches the whole account, not only the key that sent the alert: every notification under that collapse id goes, whichever key or app sent it. So collapse ids need to be unique per account, and two of them are not. Grafana's is the alert name and Uptime Kuma's the monitor id, so two Grafana instances that both have a `DiskFull` alert, or two Uptime Kuma servers that both have monitor 1, share an id, and a resolve on one takes back the other's alert too. Give each such instance its own account, or leave `retract` off for them.
+
+Backrest sends no push for a success under the default channels, so a failure push stays up after the next good run. With `retract=1` on the hook that delivers failures, the relay records each failure push for 7 days, per plan, repo and operation (snapshot, prune, check, forget, and the any-error alert on its own). The next success of that operation takes it back, along with the plan and repo's any-error alert, whatever URL the success arrives on. Under `channels=notification` the success push replaces the failure, so the record is dropped and nothing is retracted. Prune, check and forget on one repo share a collapse id, so a check passing can take back a prune failure that is still current. A Radarr or Sonarr manual-interaction push sent with `retract=1` is recorded the same way, and the import of that download takes it back.
+
+With `ack=1` as well, the resolve still cancels the repeats first.
 
 ### Root route: `POST /`
 
@@ -340,7 +371,7 @@ Anything the relay doesn't recognise goes to the universal route, and so does a 
 https://relay.pushward.app/?source=alertmanager
 ```
 
-`channels`, `priority`, `level`, `ack`, `ack_repeat` and `ack_expire` pass through to whichever route handles the request.
+`channels`, `priority`, `level`, `ack`, `ack_repeat`, `ack_expire` and `retract` pass through to whichever route handles the request.
 
 The relay reads the body for detection only when the request carries an `hlk_` key and a JSON `Content-Type`, declares no `Content-Length` of 1 MB or more, and comes from an IP that is still under its rate limit. A missing or `text/plain` `Content-Type` counts as JSON, because it is rewritten to `application/json` before this check. A chunked body declares no length, so it is read up to 1 MB and passed on undetected if it gets that far. A request that fails any of these goes to the universal route, which answers `401` for a missing key, `413` for a body over the limit and `429` over the rate limit; with the universal route off, it gets `404`. `pushward_relay_root_dispatch_total{route,via}` counts where requests to `/` went and why: `header` or `body` for a detected sender, `disabled`, `veto`, `none`, or `skipped` for one whose body was not inspected.
 
@@ -445,6 +476,8 @@ Push notification events (no Live Activity, no template):
 |---|---|
 | `Health` | Warning / Critical · (health message) |
 | `HealthRestored` | Resolved · (health message) |
+
+Each health check type gets its own collapse id, `<app>-health-<type>` (`radarr-health-indexerstatuscheck`), so a fix of one issue no longer hides another one that is still live, and `HealthRestored` goes out under the same id and replaces that issue's alert. A `ManualInteractionRequired` push gets one id per download (`<app>-manual-interaction-<hash of downloadId>`), so a second title no longer replaces the first. With `?retract=1` a restored check and an imported download take the push back instead (see [Retracted alerts](#retracted-alerts-retract1)).
 
 In the default `activity` mode, `Grab` and `Download` also write a notification record (not pushed) alongside the Live Activity; in `notify`/`smart` mode they are delivered as standalone push notifications instead.
 
@@ -669,6 +702,8 @@ These arrive as a push notification only, with no Live Activity:
 | `ISSUE_COMMENT` | New comment |
 | `ISSUE_RESOLVED` | Issue resolved |
 | `ISSUE_REOPENED` | Issue reopened |
+
+`ISSUE_RESOLVED` goes out under the same collapse id as that title's `ISSUE_CREATED`, so it replaces the report. With `?retract=1` the report is taken back instead (see [Retracted alerts](#retracted-alerts-retract1)).
 
 **Setup:** Go to **Settings > Notifications > Webhook**. Set the Webhook URL to
 `https://relay.pushward.app/overseerr` and the Authorization Header to `Bearer hlk_...`. The stock
@@ -943,6 +978,8 @@ Emulates the OpsGenie alert service that TrueNAS ships with. TrueNAS opens an al
 **Setup:** In TrueNAS, go to **System Settings > Alert Services > Add**. Set **Type** to **OpsGenie**, **API Key** to your `hlk_` key, and **API URL** to `https://relay.pushward.app/truenas` (no trailing slash). Pick the alert **Level** to forward, then **Send Test Alert** to verify (a test flows as a real create then clear).
 
 **Acknowledged alerts:** set the **API URL** to `https://relay.pushward.app/truenas/ack` instead. Each alert's push then repeats every 5 minutes, for up to an hour, until someone acknowledges it, and the clear stops it (see [Acknowledged alerts](#acknowledged-alerts-ack1)). This is `ack=1` turned on by the path, at the default `ack_repeat` and `ack_expire`: TrueNAS appends `/v2/alerts` to the API URL, so it can't carry a query string.
+
+**Retracted alerts:** set the **API URL** to `https://relay.pushward.app/truenas/retract` and the clear takes the alert's push back instead of sending "Resolved" (`retract=1` by the path, see [Retracted alerts](#retracted-alerts-retract1)). There is no path that turns on both.
 
 **Limitations:** TrueNAS's OpsGenie payload carries no hostname (multi-NAS setups cannot tell boxes apart in the activity) and no severity level, so alerts render with a fixed warning style; filter what you forward using the per-service **Level** in TrueNAS. The API URL must have no trailing slash and can't take [query parameters](#query-parameters).
 
