@@ -500,6 +500,8 @@ Receives Prowlarr webhooks. All events are **push notifications**: indexer grabs
 
 **Events:** `Grab` -> push notification with indexer, size, and categories · `Health` / `HealthRestored` · `ApplicationUpdate` · `Test`.
 
+Health pushes use the same per-type collapse ids as Radarr and Sonarr, `prowlarr-health-<type>`, and `HealthRestored` replaces its own type's alert (or takes it back with `?retract=1`).
+
 **Setup:** In Prowlarr, go to **Settings > Connect > + > Webhook**. Set the URL to `https://relay.pushward.app/prowlarr`, leave Username as any value, set Password to your `hlk_` key (Basic Auth). Enable the triggers you want (On Grab, On Health Issue, etc.), then Test and Save.
 
 ### Bazarr
@@ -705,7 +707,7 @@ These arrive as a push notification only, with no Live Activity:
 | `ISSUE_RESOLVED` | Issue resolved |
 | `ISSUE_REOPENED` | Issue reopened |
 
-`ISSUE_RESOLVED` and `ISSUE_REOPENED` go out under the same collapse id as that title's `ISSUE_CREATED`, so the latest of them replaces the others. With `?retract=1` a resolve takes the report or the reopen back instead (see [Retracted alerts](#retracted-alerts-retract1)).
+`ISSUE_RESOLVED` and `ISSUE_REOPENED` go out under the same collapse id as their issue's `ISSUE_CREATED` (keyed by `issue_id`, or by the title when the payload has none), so the latest of them replaces the others and another issue on the same title stays up. With `?retract=1` a resolve takes the report or the reopen back instead (see [Retracted alerts](#retracted-alerts-retract1)).
 
 **Setup:** Go to **Settings > Notifications > Webhook**. Set the Webhook URL to
 `https://relay.pushward.app/overseerr` and the Authorization Header to `Bearer hlk_...`. The stock

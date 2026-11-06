@@ -1047,7 +1047,7 @@ func TestIssueResolvedReplacesReport(t *testing.T) {
 	zero := 0
 	issue := func(typ string) string {
 		return `{"notification_type":"` + typ + `","subject":"Inception (2010)","message":"No audio",
-			"media":{"media_type":"movie","tmdbId":"27205"}}`
+			"media":{"media_type":"movie","tmdbId":"27205"},"issue":{"issue_id":"7"}}`
 	}
 	for _, tc := range []struct {
 		name, query   string
@@ -1080,7 +1080,7 @@ func TestIssueResolvedReplacesReport(t *testing.T) {
 				testutil.UnmarshalBody(t, c.Body, &n)
 				ns = append(ns, n)
 			}
-			report := "overseerr-movie-27205-Issue reported"
+			report := "overseerr-movie-27205-Issue reported-7"
 			if len(ns) != tc.notifications || ns[0].CollapseID != report {
 				t.Fatalf("notifications = %+v, want %d starting with the report", ns, tc.notifications)
 			}
@@ -1099,6 +1099,29 @@ func TestIssueResolvedReplacesReport(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// Two issues on one title keep their own collapse ids, so resolving one
+// leaves the other's report up; a payload without an issue id keeps the
+// title's id.
+func TestIssueCollapseIDPerIssue(t *testing.T) {
+	payload := func(id string) *overseerrPayload {
+		p := &overseerrPayload{Subject: "Inception (2010)"}
+		p.Media.MediaType, p.Media.TmdbID, p.Issue.IssueID = "movie", "27205", id
+		return p
+	}
+	if a, b := eventCollapseID(payload("7"), labelIssueResolved), eventCollapseID(payload("8"), labelIssueReported); a == b {
+		t.Fatalf("issues 7 and 8 share %q", a)
+	}
+	if got := eventCollapseID(payload("7"), labelIssueReopened); got != "overseerr-movie-27205-Issue reported-7" {
+		t.Errorf("reopen id %q", got)
+	}
+	if got := eventCollapseID(payload(""), labelIssueResolved); got != "overseerr-movie-27205-Issue reported" {
+		t.Errorf("no issue id: %q", got)
+	}
+	if got := eventCollapseID(payload("x y"), labelIssueResolved); got != "overseerr-movie-27205-Issue reported" {
+		t.Errorf("non-numeric issue id: %q", got)
 	}
 }
 

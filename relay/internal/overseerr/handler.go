@@ -404,10 +404,16 @@ func collapseID(subject, label, mediaType, tmdbID string) string {
 
 // eventCollapseID is the collapse id of the push for label. A resolved or
 // reopened issue goes under its report's id, so the latest of them is the one
-// left up, and a resolve after a reopen takes the reopen back.
+// left up, and a resolve after a reopen takes the reopen back. The issue id
+// keys it when the payload has one, so resolving one issue leaves another
+// issue's report on the same title up.
 func eventCollapseID(p *overseerrPayload, label string) string {
-	if label == labelIssueResolved || label == labelIssueReopened {
+	switch label {
+	case labelIssueReported, labelIssueResolved, labelIssueReopened:
 		label = labelIssueReported
+		if isNumeric(p.Issue.IssueID) && len(p.Issue.IssueID) <= 10 {
+			label += "-" + p.Issue.IssueID
+		}
 	}
 	tmdbID := ""
 	if isNumeric(p.Media.TmdbID) {
