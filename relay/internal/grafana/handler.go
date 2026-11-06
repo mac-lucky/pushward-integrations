@@ -228,6 +228,14 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 			continue
 		}
 
+		// ?retract=1 takes a tracked alert back instead of sending Resolved
+		// over it; the Resolved still goes out when the retract reached no
+		// device. The collapse id is stateKey.
+		if !firing && prev != nil && ov.Retract() && h.clients.Retract(ctx, userKey, log, stateKey) {
+			h.updateState(ctx, userKey, stateKey, g, currentState, log)
+			continue
+		}
+
 		// Build and send notification.
 		var req pushward.SendNotificationRequest
 		if len(g.firing)+len(g.resolved) == 1 {

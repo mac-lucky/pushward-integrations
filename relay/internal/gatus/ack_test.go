@@ -30,9 +30,10 @@ func postWith(t *testing.T, h http.Handler, query, payload string) *httptest.Res
 }
 
 func TestAck(t *testing.T) {
-	acktest.Run(t, acktest.Provider{
-		Key: "hlk_test",
-		Tag: "relay." + text.SlugHash("gatus", "My API", 6),
+	p := acktest.Provider{
+		Key:        "hlk_test",
+		Tag:        "relay." + text.SlugHash("gatus", "My API", 6),
+		CollapseID: text.SlugHash("gatus", "My API", 6),
 		Handler: func(t *testing.T, url string) http.Handler {
 			return newHandlerWithStore(t, testConfig(), state.NewMemoryStore(), url)
 		},
@@ -42,5 +43,7 @@ func TestAck(t *testing.T) {
 		Resolve: func(t *testing.T, h http.Handler, query string) *httptest.ResponseRecorder {
 			return postWith(t, h, query, resolvedBody)
 		},
-	})
+	}
+	acktest.Run(t, p)
+	t.Run("retract", func(t *testing.T) { acktest.RunRetract(t, p) })
 }

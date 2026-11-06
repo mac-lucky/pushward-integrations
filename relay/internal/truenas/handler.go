@@ -33,9 +33,10 @@ type Handler struct {
 // clears it with a DELETE keyed by the alert alias, so the relay emulates that
 // pair.
 //
-// The pair is registered twice. TrueNAS appends /v2/alerts to the API URL it
-// is given, so a query string there never reaches the relay as one, and the
-// second pair under /truenas/ack turns on ?ack=1 by its path instead.
+// The pair is registered three times. TrueNAS appends /v2/alerts to the API
+// URL it is given, so a query string there never reaches the relay as one: the
+// pair under /truenas/ack turns on ?ack=1 by its path instead, and the pair
+// under /truenas/retract ?retract=1.
 func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *config.TrueNASConfig) *Handler {
 	h := &Handler{
 		store:   store,
@@ -65,6 +66,18 @@ func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *
 		"Same as DELETE /truenas/v2/alerts/{id}, and stops the alert's repeats first.",
 		[]string{"TrueNAS"}, func(ctx context.Context, input *deleteInput) (*humautil.WebhookResponse, error) {
 			return h.handleDelete(overrides.WithAck(ctx), input)
+		})
+	humautil.RegisterWebhook(api, "/truenas/retract/v2/alerts", "post-truenas-alert-retract",
+		"Receive TrueNAS OpsGenie alert, retracted when cleared",
+		"Same as POST /truenas/v2/alerts; the clear on this path takes the push back (retract=1).",
+		[]string{"TrueNAS"}, func(ctx context.Context, input *createInput) (*humautil.WebhookResponse, error) {
+			return h.handleCreate(overrides.WithRetract(ctx), input)
+		})
+	humautil.RegisterDelete(api, "/truenas/retract/v2/alerts/{id}", "delete-truenas-alert-retract",
+		"Clear TrueNAS OpsGenie alert, retracting its push",
+		"Same as DELETE /truenas/v2/alerts/{id}, but takes the alert's push back instead of sending Resolved over it.",
+		[]string{"TrueNAS"}, func(ctx context.Context, input *deleteInput) (*humautil.WebhookResponse, error) {
+			return h.handleDelete(overrides.WithRetract(ctx), input)
 		})
 	return h
 }
@@ -243,7 +256,9 @@ func (h *Handler) clear(ctx context.Context, userKey string, log *slog.Logger, p
 		}
 	}
 
-	if ov.AllowsNotification() {
+	// ?retract=1 takes the alert back instead of sending Resolved over it; the
+	// Resolved still goes out when the retract reached no device.
+	if ov.AllowsNotification() && (!ov.Retract() || !h.clients.Retract(ctx, userKey, log, rec.Slug)) {
 		notif := notification(alias, rec.Title, rec.Slug)
 		notif.Body = "Resolved" + text.SepDot + rec.Title
 		notif.Level = ov.LevelOr(pushward.LevelPassive)

@@ -48,17 +48,20 @@ func postWith(t *testing.T, h http.Handler, query, payload string) *httptest.Res
 }
 
 func TestAck(t *testing.T) {
-	acktest.Run(t, acktest.Provider{
-		Key:     testKey,
-		Tag:     "relay." + text.SlugHash("grafana", "DiskFull", 6),
-		Handler: handlerAt,
+	p := acktest.Provider{
+		Key:        testKey,
+		Tag:        "relay." + text.SlugHash("grafana", "DiskFull", 6),
+		CollapseID: text.SlugHash("grafana", "DiskFull", 6),
+		Handler:    handlerAt,
 		Fire: func(t *testing.T, h http.Handler, query string) *httptest.ResponseRecorder {
 			return postWith(t, h, query, firingDiskFull)
 		},
 		Resolve: func(t *testing.T, h http.Handler, query string) *httptest.ResponseRecorder {
 			return postWith(t, h, query, resolvedDiskFull)
 		},
-	})
+	}
+	acktest.Run(t, p)
+	t.Run("retract", func(t *testing.T) { acktest.RunRetract(t, p) })
 }
 
 // A refusal of the caller's own key is not a refusal of the acknowledge: it

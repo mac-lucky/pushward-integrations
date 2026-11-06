@@ -340,6 +340,12 @@ func (h *Handler) end(ctx context.Context, r *request, ev universal.Event, a act
 	if !ov.NotifyFallback(true) {
 		return nil
 	}
+	// ?retract=1 takes a tracked alert back instead of sending Resolved over
+	// it; the Resolved still goes out when the retract reached no device. Only
+	// a correlation key gives the alert's notification a collapse id, a.slug.
+	if ev.Kind == universal.KindAlert && tracked && ev.CorrelationKey != "" && ov.Retract() && h.clients.Retract(ctx, r.key, r.log, a.slug) {
+		return nil
+	}
 	level := pushward.LevelPassive
 	if ev.Kind == universal.KindProgress && failure(ev) != "" {
 		level = pushward.LevelActive

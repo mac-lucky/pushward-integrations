@@ -83,6 +83,8 @@ func TestParseInvalid(t *testing.T) {
 		"ack=0&ack_repeat=60",
 		// A passive notification does not alert, so it cannot repeat.
 		"ack=1&level=passive",
+		"retract=",
+		"retract=yes",
 	} {
 		t.Run(q, func(t *testing.T) {
 			if _, err := Parse(mustQuery(t, q)); err == nil {
@@ -242,5 +244,38 @@ func TestWithAck(t *testing.T) {
 	_ = WithAck(ctx)
 	if plain.Ack() != nil {
 		t.Error("WithAck modified the overrides it was given")
+	}
+}
+
+func TestParseRetract(t *testing.T) {
+	for q, want := range map[string]bool{
+		"": false, "retract=0": false, "retract=false": false,
+		"retract=1": true, "retract=true": true, "retract=1&channels=activity&ack=1": true,
+	} {
+		o, err := Parse(mustQuery(t, q))
+		if err != nil {
+			t.Fatalf("Parse(%q): %v", q, err)
+		}
+		if o.Retract() != want {
+			t.Errorf("Parse(%q).Retract() = %v, want %v", q, o.Retract(), want)
+		}
+	}
+	var nilOv *Overrides
+	if nilOv.Retract() {
+		t.Error("nil Overrides should not retract")
+	}
+}
+
+func TestWithRetract(t *testing.T) {
+	parsed, err := Parse(mustQuery(t, "channels=notification&ack=1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	o := FromContext(WithRetract(context.WithValue(context.Background(), contextKey{}, parsed)))
+	if !o.Retract() || o.Ack() == nil || o.AllowsActivity() {
+		t.Errorf("WithRetract = %+v, want retract with the query's ack and channels kept", o)
+	}
+	if parsed.Retract() {
+		t.Error("WithRetract modified the overrides it was given")
 	}
 }

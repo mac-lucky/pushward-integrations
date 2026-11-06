@@ -19,9 +19,10 @@ import (
 // and the resolved fixture, and the tag is that card's slug. It is pinned: a
 // relay that changed it would no longer cancel what the one before it sent.
 func TestAck(t *testing.T) {
-	acktest.Run(t, acktest.Provider{
-		Key: testKey,
-		Tag: "relay.u-6cf632a91dc7",
+	p := acktest.Provider{
+		Key:        testKey,
+		Tag:        "relay.u-6cf632a91dc7",
+		CollapseID: "u-6cf632a91dc7",
 		Handler: func(t *testing.T, url string) http.Handler {
 			hs := newHarnessAt(t, url, nil, nil, nil)
 			hs.h.config.Presets = true
@@ -33,7 +34,9 @@ func TestAck(t *testing.T) {
 		Resolve: func(t *testing.T, h http.Handler, query string) *httptest.ResponseRecorder {
 			return postTo(t, h, acktest.Target("/universal", query), fixture(t, "alertmanager_resolved.json"))
 		},
-	})
+	}
+	acktest.Run(t, p)
+	t.Run("retract", func(t *testing.T) { acktest.RunRetract(t, p) })
 }
 
 func postTo(t *testing.T, h http.Handler, target string, body []byte) *httptest.ResponseRecorder {

@@ -39,10 +39,11 @@ func call(t *testing.T, h http.Handler, method, target, body string) *httptest.R
 // The handlers honor ?ack=1 like any other route's. TrueNAS itself cannot
 // send it; TestAckRoutes covers the paths it uses instead.
 func TestAck(t *testing.T) {
-	acktest.Run(t, acktest.Provider{
-		Key:     "hlk_test",
-		Tag:     ackTag,
-		Handler: handlerAt,
+	p := acktest.Provider{
+		Key:        "hlk_test",
+		Tag:        ackTag,
+		CollapseID: text.SlugHash("truenas", alias, 6),
+		Handler:    handlerAt,
 		Fire: func(t *testing.T, h http.Handler, query string) *httptest.ResponseRecorder {
 			return call(t, h, http.MethodPost, acktest.Target("/truenas/v2/alerts", query), createBody)
 		},
@@ -53,7 +54,9 @@ func TestAck(t *testing.T) {
 			}
 			return call(t, h, http.MethodDelete, acktest.Target("/truenas/v2/alerts/"+alias, q), "")
 		},
-	})
+	}
+	acktest.Run(t, p)
+	t.Run("retract", func(t *testing.T) { acktest.RunRetract(t, p) })
 }
 
 // TrueNAS appends /v2/alerts to its API URL, so it opts in by path:
@@ -92,5 +95,25 @@ func TestAckRoutesKeepOtherOverrides(t *testing.T) {
 	}
 	if ns[0].Level != pushward.LevelCritical || ns[0].Acknowledge == nil {
 		t.Errorf("level %q acknowledge %+v, want critical and acknowledged", ns[0].Level, ns[0].Acknowledge)
+	}
+}
+
+// TrueNAS opts in to ?retract=1 by path too: https://relay.pushward.app/truenas/retract.
+func TestRetractRoutes(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	h := handlerAt(t, srv.URL)
+	if w := call(t, h, http.MethodPost, "/truenas/retract/v2/alerts", createBody); w.Code != http.StatusOK {
+		t.Fatalf("create: %d %s", w.Code, w.Body.String())
+	}
+	if w := call(t, h, http.MethodDelete, "/truenas/retract/v2/alerts/"+alias+"?identifierType=alias", ""); w.Code != http.StatusOK {
+		t.Fatalf("clear: %d %s", w.Code, w.Body.String())
+	}
+	recorded := testutil.GetCalls(calls, mu)
+	if ns := acktest.Notifications(t, recorded); len(ns) != 1 {
+		t.Fatalf("%d notifications, want only the alert", len(ns))
+	}
+	rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract")
+	if len(rs) != 1 || !strings.Contains(string(rs[0].Body), text.SlugHash("truenas", alias, 6)) {
+		t.Errorf("retracts = %+v, want one for the alert's collapse id", rs)
 	}
 }

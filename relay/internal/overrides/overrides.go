@@ -2,7 +2,8 @@
 // that let a webhook URL change a provider's delivery behavior for a single
 // request: channels (which delivery surfaces may be used), priority (the
 // CreateActivity priority), level (the notification interruption level), and
-// ack with ack_repeat and ack_expire (alerts repeat until acknowledged). An
+// ack with ack_repeat and ack_expire (alerts repeat until acknowledged), and
+// retract (a clear takes the alert's notification back). An
 // explicit param always wins over provider-computed values and static config;
 // absent params leave today's behavior unchanged.
 package overrides
@@ -34,6 +35,8 @@ type Overrides struct {
 	Level string
 	// ack is set when the request asked for acknowledged alerts (ack=1).
 	ack *Ack
+	// retract is set when the request asked for clears to retract (retract=1).
+	retract bool
 }
 
 // Ack is the acknowledge override: an alert notification repeats every
@@ -59,6 +62,12 @@ func (o *Overrides) Ack() *Ack {
 		return nil
 	}
 	return o.ack
+}
+
+// Retract reports whether the request asked a clear to take the alert's
+// notification back instead of sending a resolved one (retract=1).
+func (o *Overrides) Retract() bool {
+	return o != nil && o.retract
 }
 
 // AllowsActivity reports whether Live Activity calls (create/update/end) are
@@ -107,7 +116,7 @@ var validLevels = map[string]bool{
 	"critical":       true,
 }
 
-// Parse reads and validates the channels / priority / level / ack query
+// Parse reads and validates the channels / priority / level / ack / retract query
 // params. A missing param leaves its field at the zero value. Any invalid
 // value returns an error suitable for a 400 response.
 func Parse(q url.Values) (*Overrides, error) {
@@ -153,6 +162,15 @@ func Parse(q url.Values) (*Overrides, error) {
 
 	if err := parseAck(q, o); err != nil {
 		return nil, err
+	}
+
+	if q.Has("retract") {
+		raw := strings.TrimSpace(q.Get("retract"))
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return nil, fmt.Errorf("invalid retract %q: must be 1 or 0", raw)
+		}
+		o.retract = b
 	}
 	return o, nil
 }
@@ -234,5 +252,13 @@ func WithAck(ctx context.Context) context.Context {
 	if o.ack == nil {
 		o.ack = &Ack{RepeatSeconds: DefaultAckRepeat, ExpireSeconds: DefaultAckExpire}
 	}
+	return context.WithValue(ctx, contextKey{}, &o)
+}
+
+// WithRetract returns ctx with the request's overrides plus retract, for a
+// route that opts in by its path like WithAck.
+func WithRetract(ctx context.Context) context.Context {
+	o := *FromContext(ctx)
+	o.retract = true
 	return context.WithValue(ctx, contextKey{}, &o)
 }

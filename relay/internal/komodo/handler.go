@@ -235,7 +235,9 @@ func (h *Handler) handleResolved(ctx context.Context, userKey string, log *slog.
 		}
 	}
 
-	if ov.AllowsNotification() {
+	// ?retract=1 takes the alert back instead of sending Resolved over it; the
+	// Resolved still goes out when the retract reached no device.
+	if ov.AllowsNotification() && (!ov.Retract() || !h.clients.Retract(ctx, userKey, log, slug)) {
 		notif := h.notification(p, name, slug)
 		notif.Body = "Resolved" + text.SepDot + name
 		notif.Level = ov.LevelOr(pushward.LevelPassive)

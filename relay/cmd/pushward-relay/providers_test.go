@@ -52,10 +52,10 @@ var fixtureRoutes = map[string]string{
 	"uptimekuma":      "/uptimekuma",
 }
 
-// ackRoutes maps a fixture directory to a second route that runs the same
-// handlers with ?ack=1 turned on by the path.
-var ackRoutes = map[string]string{
-	"truenas": "/truenas/ack/v2/alerts",
+// pathRoutes maps a fixture directory to more routes that run the same
+// handlers with an override (?ack=1, ?retract=1) turned on by the path.
+var pathRoutes = map[string][]string{
+	"truenas": {"/truenas/ack/v2/alerts", "/truenas/retract/v2/alerts"},
 }
 
 // stateful are the providers whose fixtures leave a relay_state row behind.
@@ -106,8 +106,10 @@ func TestRegisterProviders_HashesKeys(t *testing.T) {
 	for _, path := range fixtureRoutes {
 		routed[path] = true
 	}
-	for _, path := range ackRoutes {
-		routed[path] = true
+	for _, paths := range pathRoutes {
+		for _, path := range paths {
+			routed[path] = true
+		}
 	}
 	for path, item := range api.OpenAPI().Paths {
 		if item.Post != nil && !routed[path] {
@@ -142,11 +144,7 @@ func TestRegisterProviders_HashesKeys(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			paths := []string{fixtureRoutes[dir]}
-			if p, ok := ackRoutes[dir]; ok {
-				paths = append(paths, p)
-			}
-			for _, path := range paths {
+			for _, path := range append([]string{fixtureRoutes[dir]}, pathRoutes[dir]...) {
 				if resp := post(mux, path, body); resp.Code != http.StatusOK {
 					t.Errorf("POST %s %s/%s: %d %s", path, dir, filepath.Base(name), resp.Code, resp.Body.String())
 				}

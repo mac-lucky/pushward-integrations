@@ -150,3 +150,49 @@ func TestPool_GetCachesPerKey(t *testing.T) {
 		t.Error("expected a distinct client instance per key")
 	}
 }
+
+func TestPool_Retract(t *testing.T) {
+	defer func(d time.Duration) { retractTimeout = d }(retractTimeout)
+	retractTimeout = 300 * time.Millisecond
+	var calls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		body, _ := io.ReadAll(r.Body)
+		switch {
+		case strings.Contains(string(body), "down"):
+			w.WriteHeader(http.StatusInternalServerError)
+		case strings.Contains(string(body), "nobody"):
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"devices":0}`))
+		default:
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"devices":2}`))
+		}
+	}))
+	defer srv.Close()
+	p := NewPool(srv.URL, nil)
+	var buf strings.Builder
+	log := slog.New(slog.NewTextHandler(&buf, nil))
+	ctx := context.Background()
+
+	if !p.Retract(ctx, "hlk_secret", log, "nas-disk") {
+		t.Error("retract that reached 2 devices = false")
+	}
+	if p.Retract(ctx, "hlk_secret", log, "nobody") {
+		t.Error("retract that reached no device = true")
+	}
+	start := time.Now()
+	if p.Retract(ctx, "hlk_secret", log, "down") {
+		t.Error("failing retract = true")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("failing retract took %s, want it cut at the timeout", elapsed)
+	}
+	n := calls.Load()
+	if p.Retract(ctx, "hlk_secret", log, "") || calls.Load() != n {
+		t.Error("empty collapse id made a call or returned true")
+	}
+	if out := buf.String(); !strings.Contains(out, "collapse_id=down") || strings.Contains(out, "hlk_secret") {
+		t.Errorf("log = %s, want the collapse id and no key", out)
+	}
+}

@@ -1,5 +1,6 @@
-// Package acktest runs a relay provider's alert through the ?ack=1 cases
-// against the mock PushWard server, shared across the provider handler tests.
+// Package acktest runs a relay provider's alert through the ?ack=1 and
+// ?retract=1 cases against the mock PushWard server, shared across the
+// provider handler tests.
 package acktest
 
 import (
@@ -20,6 +21,9 @@ type Provider struct {
 	Key string
 	// Tag is the receipt tag the firing notification must carry.
 	Tag string
+	// CollapseID is the firing notification's collapse id, the one a
+	// ?retract=1 resolve takes back. RunRetract needs it.
+	CollapseID string
 	// Handler builds the provider's routes, with a fresh state store,
 	// against a PushWard server at url.
 	Handler func(t *testing.T, url string) http.Handler
@@ -146,7 +150,63 @@ func Run(t *testing.T, p Provider) {
 	})
 }
 
-const cancelPath = "/notifications/receipts/cancel"
+// RunRetract checks p against the ?retract=1 cases: the resolve takes the
+// alert back instead of sending Resolved over it, the Resolved still goes out
+// under the alert's collapse id when the retract reaches no device or fails,
+// and nothing is retracted without the query or with notifications off.
+func RunRetract(t *testing.T, p Provider) {
+	t.Helper()
+	zero := 0
+	for _, tc := range []struct {
+		name, query   string
+		opts          testutil.MockOptions
+		retracts      int
+		notifications int
+	}{
+		{"retracts instead of resolving", "retract=1", testutil.MockOptions{}, 1, 1},
+		{"no device reached sends the resolved", "retract=1", testutil.MockOptions{RetractDevices: &zero}, 1, 2},
+		// A 4xx: the client retries a 5xx with backoff until the retract
+		// times out, which ends the same way, only slower.
+		{"failing retract sends the resolved", "retract=1", testutil.MockOptions{RetractStatus: http.StatusForbidden}, 1, 2},
+		{"off without the query", "", testutil.MockOptions{}, 0, 2},
+		{"channels=activity retracts nothing", "channels=activity&retract=1", testutil.MockOptions{}, 0, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, calls, mu := testutil.MockPushWardServerWith(t, tc.opts)
+			h := p.Handler(t, srv.URL)
+			ok(t, p.Fire(t, h, tc.query))
+			ok(t, p.Resolve(t, h, tc.query))
+			recorded := testutil.GetCalls(calls, mu)
+			rs := testutil.CallsTo(recorded, http.MethodPost, retractPath)
+			if len(rs) != tc.retracts {
+				t.Fatalf("%d retracts, want %d", len(rs), tc.retracts)
+			}
+			for _, c := range rs {
+				var body struct {
+					CollapseID string `json:"collapse_id"`
+				}
+				testutil.UnmarshalBody(t, c.Body, &body)
+				if body.CollapseID != p.CollapseID {
+					t.Errorf("retracted %q, want %q", body.CollapseID, p.CollapseID)
+				}
+			}
+			ns := Notifications(t, recorded)
+			if len(ns) != tc.notifications {
+				t.Fatalf("%d notifications, want %d", len(ns), tc.notifications)
+			}
+			for _, n := range ns {
+				if n.CollapseID != p.CollapseID {
+					t.Errorf("notification %q under %q, want %q", n.Body, n.CollapseID, p.CollapseID)
+				}
+			}
+		})
+	}
+}
+
+const (
+	cancelPath  = "/notifications/receipts/cancel"
+	retractPath = "/notifications/retract"
+)
 
 // Notifications decodes every POST /notifications in calls, in order.
 func Notifications(t *testing.T, calls []testutil.APICall) []pushward.SendNotificationRequest {

@@ -33,17 +33,20 @@ func postWith(t *testing.T, h http.Handler, query, payload string) *httptest.Res
 }
 
 func TestAck(t *testing.T) {
-	acktest.Run(t, acktest.Provider{
-		Key:     "hlk_test",
-		Tag:     "relay." + text.SlugHash("komodo", "Server/srv-1/ServerUnreachable", 6),
-		Handler: handlerAt,
+	p := acktest.Provider{
+		Key:        "hlk_test",
+		Tag:        "relay." + text.SlugHash("komodo", "Server/srv-1/ServerUnreachable", 6),
+		CollapseID: text.SlugHash("komodo", "Server/srv-1/ServerUnreachable", 6),
+		Handler:    handlerAt,
 		Fire: func(t *testing.T, h http.Handler, query string) *httptest.ResponseRecorder {
 			return postWith(t, h, query, bodyUnreachable)
 		},
 		Resolve: func(t *testing.T, h http.Handler, query string) *httptest.ResponseRecorder {
 			return postWith(t, h, query, bodyUnreachableResolved)
 		},
-	})
+	}
+	acktest.Run(t, p)
+	t.Run("retract", func(t *testing.T) { acktest.RunRetract(t, p) })
 }
 
 // Nothing resolves a one-shot, so it repeats until acknowledged or expired,

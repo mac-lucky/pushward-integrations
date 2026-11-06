@@ -112,6 +112,30 @@ func (p *Pool) SendNotification(ctx context.Context, userKey string, log *slog.L
 	return nil
 }
 
+// retractTimeout bounds a retract, which a clear path waits for before it
+// decides whether to send its resolved notification. A var so tests can
+// shorten it.
+var retractTimeout = 5 * time.Second
+
+// Retract takes back what userKey's account shows under collapseID and
+// reports whether the retract went out to at least one device. An empty
+// collapseID, an error (logged, never the key) or 0 devices is false, and the
+// caller then sends its resolved notification as it would without a retract.
+func (p *Pool) Retract(ctx context.Context, userKey string, log *slog.Logger, collapseID string) bool {
+	if collapseID == "" {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, retractTimeout)
+	defer cancel()
+	n, err := p.Get(userKey).RetractNotifications(ctx, collapseID)
+	if err != nil {
+		log.Warn("failed to retract notifications", "collapse_id", collapseID, "error", err)
+		return false
+	}
+	log.Info("retracted notifications", "collapse_id", collapseID, "devices", n)
+	return n > 0
+}
+
 // Get returns a pushward.Client for the given hlk_ key, creating one if needed.
 // Every pooled client carries the retry budget; a caller-supplied option of the
 // same kind still wins, since options apply in order. The tenant breaker goes
