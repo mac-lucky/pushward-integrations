@@ -228,6 +228,7 @@ func (h *Handler) handleSonarrDownload(ctx context.Context, userKey string, log 
 		log.Warn("download event missing downloadId")
 		return nil
 	}
+	h.retractManualInteraction(ctx, userKey, log, "sonarr", p.DownloadID)
 
 	slug, mapKey := sonarrContentKey(p.Series, p.Episodes, p.DownloadID)
 

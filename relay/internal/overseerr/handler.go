@@ -115,11 +115,11 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	case "MEDIA_AUTO_REQUESTED":
 		return h.handleNotifyOnly(ctx, userKey, log, payload, "Auto-requested", payload.Message)
 	case "ISSUE_CREATED":
-		return h.handleNotifyOnly(ctx, userKey, log, payload, "Issue reported", payload.Message)
+		return h.handleNotifyOnly(ctx, userKey, log, payload, labelIssueReported, payload.Message)
 	case "ISSUE_COMMENT":
 		return h.handleNotifyOnly(ctx, userKey, log, payload, "New comment", payload.Comment.Message)
 	case "ISSUE_RESOLVED":
-		return h.handleNotifyOnly(ctx, userKey, log, payload, "Issue resolved", "")
+		return h.handleNotifyOnly(ctx, userKey, log, payload, labelIssueResolved, "")
 	case "ISSUE_REOPENED":
 		return h.handleNotifyOnly(ctx, userKey, log, payload, "Issue reopened", "")
 
@@ -223,6 +223,11 @@ func (h *Handler) handleEvent(ctx context.Context, userKey string, log *slog.Log
 	return humautil.NewOK(), nil
 }
 
+const (
+	labelIssueReported = "Issue reported"
+	labelIssueResolved = "Issue resolved"
+)
+
 // handleNotifyOnly covers the event types that have no request lifecycle to
 // track. The push is the only delivery path, so a failed one fails the request
 // and a suppressed one is reported rather than answered "ok".
@@ -231,6 +236,12 @@ func (h *Handler) handleNotifyOnly(ctx context.Context, userKey string, log *slo
 	if !ov.AllowsNotification() {
 		log.Info("overseerr event", "type", label, "reason", reasonNoChannel)
 		return ignored(humautil.StatusIgnored, reasonNoChannel), nil
+	}
+	// ?retract=1 takes the issue report back instead of sending the resolve
+	// over it; the resolve still goes out when the retract reached no device.
+	if label == labelIssueResolved && ov.Retract() && h.clients.Retract(ctx, userKey, log, eventCollapseID(p, label)) {
+		log.Info("overseerr event", "type", label, "retracted", true)
+		return humautil.NewOK(), nil
 	}
 	if err := h.notify(ctx, ov, userKey, log, p, label, detail); err != nil {
 		return nil, humautil.UpstreamError(err)
@@ -263,7 +274,7 @@ func (h *Handler) notify(ctx context.Context, ov *overrides.Overrides, userKey s
 		Subtitle:   text.TruncateHard(p.Subject, 100),
 		Body:       body,
 		ThreadID:   mediathread.ThreadID(mediaType, tmdbID, p.tvdbID()),
-		CollapseID: collapseID(p.Subject, label, mediaType, tmdbID),
+		CollapseID: eventCollapseID(p, label),
 		Level:      ov.LevelOr(pushward.LevelActive),
 		Source:     "overseerr",
 		Media:      pushward.MediaImage(p.Image),
@@ -388,4 +399,17 @@ func collapseID(subject, label, mediaType, tmdbID string) string {
 		return text.SlugHash("overseerr", subject, 4) + "-" + label
 	}
 	return fmt.Sprintf("overseerr-%s-%s-%s", mediaType, tmdbID, label)
+}
+
+// eventCollapseID is the collapse id of the push for label. A resolved issue
+// goes under its report's id, so it replaces the report.
+func eventCollapseID(p *overseerrPayload, label string) string {
+	if label == labelIssueResolved {
+		label = labelIssueReported
+	}
+	tmdbID := ""
+	if isNumeric(p.Media.TmdbID) {
+		tmdbID = p.Media.TmdbID
+	}
+	return collapseID(p.Subject, label, p.threadType(), tmdbID)
 }

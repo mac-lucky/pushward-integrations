@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -267,7 +268,7 @@ func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Lo
 		Subtitle:   text.Truncate(p.Message, 80),
 		Body:       body,
 		ThreadID:   provider + "-health",
-		CollapseID: provider + "-health",
+		CollapseID: healthCollapseID(provider, p.Type),
 		Level:      pushward.LevelActive,
 		Source:     provider,
 		Push:       pushward.BoolPtr(true),
@@ -281,18 +282,68 @@ func (h *Handler) handleHealth(ctx context.Context, userKey string, log *slog.Lo
 	return h.sendNotification(ctx, userKey, log, req)
 }
 
-// handleHealthRestored sends a push notification when a health issue resolves.
+// handleHealthRestored sends a push notification when a health issue resolves,
+// under the issue's own collapse id so it replaces the alert. With ?retract=1
+// the alert is taken back instead, and the Restored goes out only when the
+// retract reached no device.
 func (h *Handler) handleHealthRestored(ctx context.Context, userKey string, log *slog.Logger, provider string, p *HealthRestoredPayload) error {
+	id := healthCollapseID(provider, p.Type)
+	if ov := overrides.FromContext(ctx); ov.Retract() && ov.AllowsNotification() && h.clients.Retract(ctx, userKey, log, id) {
+		return nil
+	}
 	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      text.Capitalize(provider) + " Health",
 		Subtitle:   text.Truncate(p.Message, 80),
 		Body:       "Resolved" + text.SepDot + text.Truncate(p.Message, 100),
 		ThreadID:   provider + "-health",
-		CollapseID: provider + "-health-restored",
+		CollapseID: id,
 		Level:      pushward.LevelPassive,
 		Source:     provider,
 		Push:       pushward.BoolPtr(true),
 	})
+}
+
+// healthCollapseID keys a health push by its check type, so the fix of one
+// issue cannot replace another that is still live. A type the id cannot hold
+// within the server's 64 characters is hashed.
+func healthCollapseID(provider, healthType string) string {
+	if healthType == "" {
+		return provider + "-health"
+	}
+	if id := text.Slug(provider+"-health-", healthType); len(id) <= 64 {
+		return id
+	}
+	return text.SlugHash(provider+"-health", healthType, 8)
+}
+
+// manualInteractionCollapseID gives each download its own manual-interaction
+// push, so a second title does not replace the first.
+func manualInteractionCollapseID(provider, downloadID string) string {
+	if downloadID == "" {
+		return provider + "-manual-interaction"
+	}
+	return text.SlugHash(provider+"-manual-interaction", downloadID, 6)
+}
+
+// manualInteractionTTL is how long a manual-interaction push sent with
+// ?retract=1 stays recorded for the download's import to take back.
+const manualInteractionTTL = 7 * 24 * time.Hour
+
+func manualInteractionKey(provider, downloadID string) string {
+	return "retract:" + provider + ":" + downloadID
+}
+
+// retractManualInteraction takes back the manual-interaction push of a
+// download that has now imported, when one was recorded under ?retract=1.
+// Without a record nothing is called.
+func (h *Handler) retractManualInteraction(ctx context.Context, userKey string, log *slog.Logger, provider, downloadID string) {
+	key := manualInteractionKey(provider, downloadID)
+	id, ok := h.getTrackedSlug(ctx, userKey, key)
+	if !ok {
+		return
+	}
+	h.clients.Retract(ctx, userKey, log, id)
+	h.deleteTrackedSlug(ctx, userKey, key)
 }
 
 // manualInteractionReason returns the human-readable failure reason from the
@@ -314,16 +365,27 @@ func (h *Handler) handleManualInteractionNotify(ctx context.Context, userKey str
 	if body == "" {
 		body = manualInteractionDefaultReason
 	}
-	return h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
+	id := manualInteractionCollapseID(provider, p.DownloadID)
+	if err := h.sendNotification(ctx, userKey, log, pushward.SendNotificationRequest{
 		Title:      text.Capitalize(provider),
 		Subtitle:   text.Truncate(p.DownloadInfo.Title, 80),
 		Body:       body,
 		ThreadID:   provider,
-		CollapseID: provider + "-manual-interaction",
+		CollapseID: id,
 		Level:      pushward.LevelActive,
 		Source:     provider,
 		Push:       pushward.BoolPtr(true),
-	})
+	}); err != nil {
+		return err
+	}
+	// With ?retract=1 the download's import takes the push back.
+	if ov := overrides.FromContext(ctx); ov.Retract() && ov.AllowsNotification() && p.DownloadID != "" {
+		data, _ := json.Marshal(trackedSlug{Slug: id})
+		if err := h.store.Set(ctx, "starr", userKey, manualInteractionKey(provider, p.DownloadID), "", data, manualInteractionTTL); err != nil {
+			log.Warn("state store write failed", "error", err, "provider", "starr")
+		}
+	}
+	return nil
 }
 
 // manualInteractionUpdate returns the UpdateRequest used to flip a tracked

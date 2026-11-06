@@ -1040,6 +1040,63 @@ func TestNotifyOnlyEventBodies(t *testing.T) {
 	}
 }
 
+// A resolved issue goes under its report's collapse id and replaces it; with
+// ?retract=1 the report is taken back instead, unless that reached no device.
+func TestIssueResolvedReplacesReport(t *testing.T) {
+	zero := 0
+	issue := func(typ string) string {
+		return `{"notification_type":"` + typ + `","subject":"Inception (2010)","message":"No audio",
+			"media":{"media_type":"movie","tmdbId":"27205"}}`
+	}
+	for _, tc := range []struct {
+		name, query   string
+		opts          testutil.MockOptions
+		notifications int
+		retracts      int
+	}{
+		{"replaces", "", testutil.MockOptions{}, 2, 0},
+		{"retract=1", "?retract=1", testutil.MockOptions{}, 1, 1},
+		{"retract reaching no device falls back", "?retract=1", testutil.MockOptions{RetractDevices: &zero}, 2, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, calls, mu := testutil.MockPushWardServerWith(t, tc.opts)
+			h, api := humautil.NewTestAPI()
+			RegisterRoutes(api, state.NewMemoryStore(), client.NewPool(srv.URL, nil), testConfig(), poster.Disabled{})
+			for _, typ := range []string{"ISSUE_CREATED", "ISSUE_RESOLVED"} {
+				req := httptest.NewRequest(http.MethodPost, "/overseerr"+tc.query, strings.NewReader(issue(typ)))
+				req.Header.Set("Content-Type", "application/json")
+				req.Header.Set("Authorization", "Bearer hlk_test")
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, req)
+				if w.Code != http.StatusOK {
+					t.Fatalf("%s: %d %s", typ, w.Code, w.Body.String())
+				}
+			}
+			recorded := testutil.GetCalls(calls, mu)
+			var ns []pushward.SendNotificationRequest
+			for _, c := range testutil.CallsTo(recorded, http.MethodPost, "/notifications") {
+				var n pushward.SendNotificationRequest
+				testutil.UnmarshalBody(t, c.Body, &n)
+				ns = append(ns, n)
+			}
+			report := "overseerr-movie-27205-Issue reported"
+			if len(ns) != tc.notifications || ns[0].CollapseID != report {
+				t.Fatalf("notifications = %+v, want %d starting with the report", ns, tc.notifications)
+			}
+			if len(ns) == 2 && (ns[1].CollapseID != report || ns[1].Body != "Issue resolved") {
+				t.Errorf("resolve = %+v, want it under the report's id", ns[1])
+			}
+			rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract")
+			if len(rs) != tc.retracts {
+				t.Fatalf("%d retracts, want %d", len(rs), tc.retracts)
+			}
+			if len(rs) == 1 && !strings.Contains(string(rs[0].Body), report) {
+				t.Errorf("retract body %s, want the report's id", rs[0].Body)
+			}
+		})
+	}
+}
+
 // A tv payload whose template lists tvdbId but not tmdbId can still group with
 // Sonarr's and Jellyfin's pushes about the same show. Gating the thread on the
 // activity key would throw that away.

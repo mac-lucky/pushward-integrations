@@ -251,6 +251,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 		log.Warn("download event missing downloadId")
 		return nil
 	}
+	h.retractManualInteraction(ctx, userKey, log, "radarr", p.DownloadID)
 
 	title := movieTitle(p.Movie)
 	slug, mapKey := radarrContentKey(p.Movie, p.DownloadID)
