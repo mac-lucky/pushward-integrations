@@ -390,16 +390,20 @@ func decodeState(raw json.RawMessage, stateKey string, log *slog.Logger) *alertG
 // another group's row lists one this webhook does not resolve, a row could not
 // be read, or there is a "" row. That one was written without retract=1 or
 // before groups had rows of their own, and shows only the group that posted
-// last, so other groups may fire unrecorded until it expires.
+// last, so other groups may fire unrecorded until it expires. Until a push
+// writes the "last" row it is also the last push, so a name already pushed
+// is not pushed again, nor its acknowledged repeats started over.
 func (h *Handler) loadName(ctx context.Context, userKey, stateKey, ownSub string, g *alertGroup, log *slog.Logger) (last *alertGroupState, tracked, elsewhere bool) {
 	rows, err := h.store.GetGroup(ctx, "grafana", userKey, stateKey)
 	if err != nil {
 		log.Warn("failed to read alert state", "key", stateKey, "error", err)
 		return nil, false, true
 	}
-	_, elsewhere = rows[""]
+	older, elsewhere := rows[""]
 	if raw, ok := rows[lastSub]; ok {
 		last = decodeState(raw, stateKey, log)
+	} else if elsewhere {
+		last = decodeState(older, stateKey, log)
 	}
 	for sub, raw := range rows {
 		if !strings.HasPrefix(sub, groupSubPrefix) {

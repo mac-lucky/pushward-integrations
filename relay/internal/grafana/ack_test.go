@@ -382,25 +382,32 @@ func TestRetractWithGroupsResolvingAtOnce(t *testing.T) {
 // A row written without retract=1, or by a relay before groups had rows of
 // their own, shows only the group that posted last. While one is there the
 // alert name is resolved with a Resolved push, never a retract.
+// Until a push writes the name's own last push, that row is also the last
+// push: the alert it shows firing is not sent again on its next repeat, and
+// with ack=1 its acknowledged repeats do not start over.
 func TestRetractNotWhileAnOlderRowIsThere(t *testing.T) {
-	srv, calls, mu := testutil.MockPushWardServer(t)
-	store := state.NewMemoryStore()
-	old, _ := json.Marshal(alertGroupState{Firing: []string{"a"}})
-	stateKey := text.SlugHash("grafana", "DiskFull", 6)
-	if err := store.Set(context.Background(), "grafana", testKey, stateKey, "", old, time.Hour); err != nil {
-		t.Fatal(err)
-	}
-	h := handlerWith(t, srv.URL, store)
-	for _, status := range []string{"firing", "resolved"} {
-		if w := postWith(t, h, "retract=1", instanceGroup(status, "a")); w.Code != http.StatusOK {
-			t.Fatalf("%d %s", w.Code, w.Body.String())
-		}
-	}
-	recorded := testutil.GetCalls(calls, mu)
-	if rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract"); len(rs) != 0 {
-		t.Errorf("%d retracts with an older row of the name still there", len(rs))
-	}
-	if ns := acktest.Notifications(t, recorded); len(ns) != 2 || ns[1].Level != pushward.LevelPassive {
-		t.Errorf("notifications = %+v, want the alert and its Resolved", ns)
+	for _, query := range []string{"retract=1", "ack=1&retract=1"} {
+		t.Run(query, func(t *testing.T) {
+			srv, calls, mu := testutil.MockPushWardServer(t)
+			store := state.NewMemoryStore()
+			old, _ := json.Marshal(alertGroupState{Firing: []string{"a"}})
+			stateKey := text.SlugHash("grafana", "DiskFull", 6)
+			if err := store.Set(context.Background(), "grafana", testKey, stateKey, "", old, time.Hour); err != nil {
+				t.Fatal(err)
+			}
+			h := handlerWith(t, srv.URL, store)
+			for _, status := range []string{"firing", "resolved"} {
+				if w := postWith(t, h, query, instanceGroup(status, "a")); w.Code != http.StatusOK {
+					t.Fatalf("%d %s", w.Code, w.Body.String())
+				}
+			}
+			recorded := testutil.GetCalls(calls, mu)
+			if rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract"); len(rs) != 0 {
+				t.Errorf("%d retracts with an older row of the name still there", len(rs))
+			}
+			if ns := acktest.Notifications(t, recorded); len(ns) != 1 || ns[0].Level != pushward.LevelPassive {
+				t.Errorf("notifications = %+v, want only the Resolved", ns)
+			}
+		})
 	}
 }
