@@ -356,6 +356,12 @@ type MockOptions struct {
 	// request validates. The client retries a 5xx with backoff, so a test
 	// that wants a quick failure picks a 4xx.
 	CancelStatus int
+	// RetractStatus answers POST /notifications/retract once the request
+	// validates, like CancelStatus.
+	RetractStatus int
+	// RetractDevices is the devices count a retract answers; nil answers 1,
+	// a retract that reached a device.
+	RetractDevices *int
 }
 
 // MockPushWardServer starts an httptest server that records all requests and
@@ -367,7 +373,8 @@ type MockOptions struct {
 // and the 26th active receipt is a 409 notification_receipt.limit_exceeded.
 // GET /notifications/receipts/{id} (no long-poll), POST
 // /notifications/receipts/{id}/cancel and POST /notifications/receipts/cancel
-// read and cancel them. Receipts expire on time but never repeat. Acknowledge
+// read and cancel them; POST /notifications/retract cancels every active
+// receipt under its collapse_id, whichever key sent it. Receipts expire on time but never repeat. Acknowledge
 // fields out of range and more than 10 tags are a 422 with no code, from the
 // server's schema; the rest of the acknowledge rules are a 400
 // notification.invalid.
@@ -760,6 +767,36 @@ func mockPushWardServer(t *testing.T, opts MockOptions) (*httptest.Server, *[]AP
 			}
 		}
 		respondJSON(w, http.StatusOK, map[string]int{"canceled": n})
+	})
+
+	// Account-wide, unlike the tag cancel: the mock holds one account, so
+	// every key's receipt under the collapse id ends.
+	mux.HandleFunc("POST /notifications/retract", func(w http.ResponseWriter, r *http.Request) {
+		body := recordCall(&calls, &mu, r)
+		var req struct {
+			CollapseID string `json:"collapse_id"`
+		}
+		if err := json.Unmarshal(body, &req); err != nil || req.CollapseID == "" || utf8.RuneCountInString(req.CollapseID) > 64 {
+			respondError(w, http.StatusUnprocessableEntity, "collapse_id must be 1-64 characters")
+			return
+		}
+		if opts.RetractStatus >= 400 {
+			respondError(w, opts.RetractStatus, "retract rejected")
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		now := time.Now().UTC()
+		for _, rc := range receipts {
+			if rc.collapseID == req.CollapseID && rc.active(now) {
+				rc.cancel(now, pushward.ReceiptCancelRetracted)
+			}
+		}
+		devices := 1
+		if opts.RetractDevices != nil {
+			devices = *opts.RetractDevices
+		}
+		respondJSON(w, http.StatusAccepted, map[string]int{"devices": devices})
 	})
 
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

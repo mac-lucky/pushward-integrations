@@ -908,6 +908,27 @@ func (c *Client) CancelNotificationReceiptsByTag(ctx context.Context, tag string
 	return out.Canceled, nil
 }
 
+// RetractNotifications takes back every notification shown under
+// collapseID via POST /notifications/retract and returns how many devices
+// the silent retract push went to. Its reach is account-wide: notifications
+// any key of the account sent under that id are removed, and active
+// acknowledged receipts under it end canceled with ReceiptCancelRetracted.
+// It is best effort (no Apple Watch, iOS and macOS apps from 1.20 only), so
+// devices > 0 does not prove removal and 0 means nothing could be reached.
+// The server allows 10 retracts a minute per key and per account. Never
+// send under the same id right after a retract: the delayed silent push can
+// remove the new notification too.
+func (c *Client) RetractNotifications(ctx context.Context, collapseID string) (int, error) {
+	var out struct {
+		Devices int `json:"devices"`
+	}
+	if err := c.doWithRetryInto(ctx, "notify.retract", http.MethodPost,
+		fmt.Sprintf("%s/notifications/retract", c.baseURL), "", map[string]string{"collapse_id": collapseID}, nil, &out); err != nil {
+		return 0, err
+	}
+	return out.Devices, nil
+}
+
 func (c *Client) notificationReceiptURL(id int64) string {
 	return fmt.Sprintf("%s/notifications/receipts/%d", c.baseURL, id)
 }

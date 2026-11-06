@@ -308,3 +308,71 @@ func TestMockCancelStatus(t *testing.T) {
 		t.Errorf("empty tag: %v", err)
 	}
 }
+
+// A retract reaches every key's receipt under the collapse id, unlike the
+// tag cancel.
+func TestMockRetract(t *testing.T) {
+	ctx := context.Background()
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	a := pushward.NewClient(srv.URL, "hlk_a")
+	b := pushward.NewClient(srv.URL, "hlk_b")
+	send := func(c *pushward.Client, collapseID string) int64 {
+		t.Helper()
+		sn, err := c.SendNotificationResult(ctx, pushward.SendNotificationRequest{
+			Title: "t", Body: "b", CollapseID: collapseID, Acknowledge: &pushward.NotificationAcknowledge{},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return sn.ID
+	}
+	fromA, fromB, other := send(a, "nas-disk"), send(b, "nas-disk"), send(a, "nas-fan")
+
+	if n, err := a.RetractNotifications(ctx, "nas-disk"); err != nil || n != 1 {
+		t.Fatalf("retract = %d, %v; want 1 device", n, err)
+	}
+	for _, tc := range []struct {
+		c      *pushward.Client
+		id     int64
+		status string
+	}{{a, fromA, pushward.ReceiptStatusCanceled}, {b, fromB, pushward.ReceiptStatusCanceled}, {a, other, pushward.ReceiptStatusActive}} {
+		r, err := tc.c.GetNotificationReceipt(ctx, tc.id, 0)
+		if err != nil || r.Status != tc.status {
+			t.Errorf("receipt %d = %+v, %v; want %s", tc.id, r, err, tc.status)
+		}
+		if tc.status == pushward.ReceiptStatusCanceled && r.CancelReason != pushward.ReceiptCancelRetracted {
+			t.Errorf("receipt %d cancel reason %q, want retracted", tc.id, r.CancelReason)
+		}
+	}
+	if n := len(testutil.CallsTo(testutil.GetCalls(calls, mu), http.MethodPost, "/notifications/retract")); n != 1 {
+		t.Errorf("CallsTo found %d retracts, want 1", n)
+	}
+	for _, id := range []string{"", strings.Repeat("x", 65)} {
+		if _, err := a.RetractNotifications(ctx, id); httpError(t, err).StatusCode != http.StatusUnprocessableEntity {
+			t.Errorf("collapse id of %d characters: %v", len(id), err)
+		}
+	}
+}
+
+func TestMockRetractOptions(t *testing.T) {
+	ctx := context.Background()
+	zero := 0
+	srv, _, _ := testutil.MockPushWardServerWith(t, testutil.MockOptions{RetractDevices: &zero})
+	if n, err := pushward.NewClient(srv.URL, "hlk_a").RetractNotifications(ctx, "x"); err != nil || n != 0 {
+		t.Errorf("RetractDevices 0: %d, %v", n, err)
+	}
+	srv, _, _ = testutil.MockPushWardServerWith(t, testutil.MockOptions{RetractStatus: http.StatusForbidden})
+	c := pushward.NewClient(srv.URL, "hlk_a")
+	sn, err := c.SendNotificationResult(ctx, pushward.SendNotificationRequest{
+		Title: "t", Body: "b", CollapseID: "x", Acknowledge: &pushward.NotificationAcknowledge{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.RetractNotifications(ctx, "x"); httpError(t, err).StatusCode != http.StatusForbidden {
+		t.Errorf("RetractStatus 403: %v", err)
+	}
+	if r, err := c.GetNotificationReceipt(ctx, sn.ID, 0); err != nil || r.Status != pushward.ReceiptStatusActive {
+		t.Errorf("receipt after a refused retract = %+v, %v", r, err)
+	}
+}

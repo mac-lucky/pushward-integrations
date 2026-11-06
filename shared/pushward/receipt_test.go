@@ -191,6 +191,36 @@ func TestCancelNotificationReceipts(t *testing.T) {
 	}
 }
 
+func TestRetractNotifications(t *testing.T) {
+	var got string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		got = r.Method + " " + r.URL.RequestURI() + " " + string(body)
+		if strings.Contains(string(body), "bad") {
+			w.WriteHeader(http.StatusUnprocessableEntity)
+			_, _ = w.Write([]byte(`{"status":422,"code":"validation.failed"}`))
+			return
+		}
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"devices":2}`))
+	}))
+	defer srv.Close()
+	c := NewClient(srv.URL, "hlk_test")
+
+	n, err := c.RetractNotifications(context.Background(), "nas-1-disk")
+	if err != nil || n != 2 {
+		t.Fatalf("retract = %d, %v", n, err)
+	}
+	if want := `POST /notifications/retract {"collapse_id":"nas-1-disk"}`; got != want {
+		t.Errorf("request = %s, want %s", got, want)
+	}
+	n, err = c.RetractNotifications(context.Background(), "bad")
+	var he *HTTPError
+	if !errors.As(err, &he) || he.StatusCode != http.StatusUnprocessableEntity || n != 0 {
+		t.Errorf("retract error = %d, %v, want 0 and a 422 *HTTPError", n, err)
+	}
+}
+
 func TestNotificationReceipt_ErrorsAreTyped(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

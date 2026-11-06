@@ -145,6 +145,7 @@ server.ListenAndServe(ctx, cfg.Server.Address, mux) // graceful shutdown on ctx 
 | `SendNotification(ctx, SendNotificationRequest)` | `POST /notifications` | Auto-fills `source_display_name` from `source` |
 | `GetNotificationReceipt(ctx, id, wait)` | `GET /notifications/receipts/{id}` | Receipt of a send with `Acknowledge`; `wait` long-polls while it is active |
 | `CancelNotificationReceipt(ctx, id)` / `CancelNotificationReceiptsByTag(ctx, tag)` | `POST /notifications/receipts/{id}/cancel`, `POST /notifications/receipts/cancel` | Stop the repeats; a key reaches only what it sent |
+| `RetractNotifications(ctx, collapseID)` | `POST /notifications/retract` | Take back what the devices show under a collapse id; returns the device count |
 | `CreateWidget(ctx, CreateWidgetRequest)` | `POST /widgets` | Upsert on (user, slug); `409` = `widget.limit_exceeded` |
 | `UpdateWidget(ctx, slug, UpdateWidgetRequest)` | `PATCH /widgets/{slug}` | Sends `Content-Type: application/merge-patch+json` (RFC 7396) |
 | `DeleteWidget(ctx, slug)` | `DELETE /widgets/{slug}` | - |
@@ -183,6 +184,16 @@ Webhooks headers (5 minute tolerance) and returns the event. `CallbackSecret(api
 which can deliver it twice, so set `CollapseID` too: a newer acknowledged send from the same key
 with the same collapse id replaces the older one's repeats. For the same reason a retried
 `CancelNotificationReceiptsByTag` can report 0 after the first attempt did the work.
+
+**Retracting notifications:** `RetractNotifications(ctx, collapseID)` sends a silent push that
+removes what each device shows under that collapse id and ends active receipts under it with
+`ReceiptCancelRetracted`. Unlike the receipt cancels it reaches the whole account: a notification
+any other key sent under the same id goes too. It is best effort. Apple Watch never gets it, the
+iOS and macOS apps only from 1.20, so the returned device count is not proof of removal and 0
+means nothing could be reached. The server allows 10 a minute per key and per account, shared
+with every other caller on that account. Bound the call with your own context. Never retract and
+then send under the same collapse id: the retract is a delayed low-priority push and can remove
+the new notification too. Either send under the id (it replaces) or retract it, not both.
 
 **Encrypted notifications:** the client sends what it is given. To encrypt, seal the request
 first with [`e2e.SealRequest`](#end-to-end-encryption-e2e), which moves `Title`, `Subtitle`, `Body`
@@ -286,7 +297,7 @@ All are zero-value-or-constructor ready and concurrency-safe.
 
 `MockPushWardServer(t)` starts an `httptest` server that records calls **and validates them against the public API contract** (slug pattern, name/field length caps, per-template required fields, color/URL rules, the generic/steps/media-only activity-image trio, the media-only player fields and their control slots), returning proper `201`/`200`/`400`/`404` with RFC 9457 Problem bodies - not a blind `200 OK`. Also `MockPushWardServerFailingPatches` (drives update-failure paths), `GetCalls`, `CountPath`, `UnmarshalBody`, `RequireValueMap`, and the `APICall` struct.
 
-Acknowledged sends become receipts the way the server keeps them: notification ids count up from 1, a newer acknowledged send from the same key with the same `collapse_id` supersedes the older receipt, and the 26th active one is a `409 notification_receipt.limit_exceeded`. `GET /notifications/receipts/{id}`, `POST /notifications/receipts/{id}/cancel` and `POST /notifications/receipts/cancel` read and cancel them (no long-poll; receipts expire on time but never repeat). They are scoped to the exact `Authorization` header, which is how the server scopes an `hlk_` key; an `hla_` app token there reaches every receipt on the account. Out-of-range `repeat_seconds`, `expire_seconds` or `action_title` and more than 10 tags get the server's schema answer, a 422 with no code; the other acknowledge rules (push false, level passive, the `pw_ack` id, a tag off the pattern, tags without acknowledge) get its `400 notification.invalid`. `MockPushWardServerWith(t, MockOptions{...})` picks the failures: `NotifyStatus` / `ActivityStatus` (what `MockPushWardServerRejecting` sets; an `ActivityStatus` of 409 answers with the server's `activity.limit_exceeded` body), `AckStatus` + `AckCode` for acknowledged sends only (the same as `MockPushWardServerRejectingAck(t, status, code)`), and `CancelStatus` for both cancels. `CallsTo` picks the recorded calls to one method and path, in order.
+Acknowledged sends become receipts the way the server keeps them: notification ids count up from 1, a newer acknowledged send from the same key with the same `collapse_id` supersedes the older receipt, and the 26th active one is a `409 notification_receipt.limit_exceeded`. `GET /notifications/receipts/{id}`, `POST /notifications/receipts/{id}/cancel` and `POST /notifications/receipts/cancel` read and cancel them (no long-poll; receipts expire on time but never repeat). They are scoped to the exact `Authorization` header, which is how the server scopes an `hlk_` key; an `hla_` app token there reaches every receipt on the account. Out-of-range `repeat_seconds`, `expire_seconds` or `action_title` and more than 10 tags get the server's schema answer, a 422 with no code; the other acknowledge rules (push false, level passive, the `pw_ack` id, a tag off the pattern, tags without acknowledge) get its `400 notification.invalid`. `MockPushWardServerWith(t, MockOptions{...})` picks the failures: `NotifyStatus` / `ActivityStatus` (what `MockPushWardServerRejecting` sets; an `ActivityStatus` of 409 answers with the server's `activity.limit_exceeded` body), `AckStatus` + `AckCode` for acknowledged sends only (the same as `MockPushWardServerRejectingAck(t, status, code)`), `CancelStatus` for both cancels, and `RetractStatus` / `RetractDevices` for `POST /notifications/retract` (it answers 1 device by default and cancels every active receipt under the collapse id, whichever key sent it). `CallsTo` picks the recorded calls to one method and path, in order.
 
 ## Development
 
