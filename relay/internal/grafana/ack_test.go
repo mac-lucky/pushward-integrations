@@ -146,6 +146,47 @@ func TestAckGroupWithoutStateIsNew(t *testing.T) {
 		pushward.NotificationAcknowledge{RepeatSeconds: 300, ExpireSeconds: 3600})
 }
 
+// A policy that groups by instance splits one alert name into groups whose
+// pushes share the collapse id. A group resolving while another still fires
+// sends its Resolved; the retract waits for the last group, whichever order
+// they resolve in.
+func TestRetractWaitsForEveryGroupOfTheName(t *testing.T) {
+	for _, order := range [][2]string{{"a", "b"}, {"b", "a"}} {
+		t.Run(order[0]+" resolves first", func(t *testing.T) {
+			srv, calls, mu := testutil.MockPushWardServer(t)
+			h := handlerAt(t, srv.URL)
+			post := func(alert string) {
+				t.Helper()
+				if w := postWith(t, h, "retract=1", diskFullGroup(alert)); w.Code != http.StatusOK {
+					t.Fatalf("%d %s", w.Code, w.Body.String())
+				}
+			}
+			post(diskFullAlert("firing", "a"))
+			post(diskFullAlert("firing", "b"))
+			post(diskFullAlert("resolved", order[0]))
+
+			recorded := testutil.GetCalls(calls, mu)
+			if rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract"); len(rs) != 0 {
+				t.Fatalf("%d retracts while %s still fires", len(rs), order[1])
+			}
+			ns := acktest.Notifications(t, recorded)
+			if len(ns) != 3 || ns[2].Level != pushward.LevelPassive {
+				t.Fatalf("notifications = %+v, want the Resolved of %s", ns, order[0])
+			}
+
+			post(diskFullAlert("resolved", order[1]))
+			recorded = testutil.GetCalls(calls, mu)
+			rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract")
+			if len(rs) != 1 || !strings.Contains(string(rs[0].Body), text.SlugHash("grafana", "DiskFull", 6)) {
+				t.Errorf("%d retracts, want one of the alert name's id once nothing fires", len(rs))
+			}
+			if n := len(acktest.Notifications(t, recorded)); n != 3 {
+				t.Errorf("%d notifications, want no Resolved after the retract", n)
+			}
+		})
+	}
+}
+
 // One resolve webhook can clear several alert names. Once a retract does not
 // reach, the rest resolve without one, so a rate-limited account does not
 // make each of them wait out its own timeout. A 403 stands in for the 429,

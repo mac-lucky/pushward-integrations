@@ -224,17 +224,24 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 
 		currentState := h.buildState(g)
 		prev := h.loadState(ctx, userKey, stateKey, log)
+		if ov.Retract() {
+			// A policy that groups by more than the alert name splits it into
+			// groups that share one collapse id, so the alerts the other
+			// groups reported firing stay tracked until a group resolves them.
+			currentState.Firing = append(currentState.Firing, firingElsewhere(g, prev)...)
+		}
 		if currentState.equals(prev) {
 			log.Debug("alert state unchanged, skipping", "alertname", stateKey)
 			continue
 		}
 
 		// ?retract=1 takes a tracked alert back instead of sending Resolved
-		// over it; the Resolved still goes out when the retract reached no
-		// device. The collapse id is stateKey.
-		if !firing && prev != nil && retract {
+		// over it, once nothing under the alert name fires any more; the
+		// Resolved still goes out when the retract reached no device. The
+		// collapse id is stateKey.
+		if len(currentState.Firing) == 0 && prev != nil && retract {
 			if h.clients.Retract(ctx, userKey, log, stateKey) {
-				h.updateState(ctx, userKey, stateKey, g, currentState, log)
+				h.updateState(ctx, userKey, stateKey, currentState, log)
 				continue
 			}
 			// The rest of this webhook resolves without retracting: what kept
@@ -268,7 +275,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 			"firing", len(g.firing), "resolved", len(g.resolved))
 
 		// Store state after successful send.
-		h.updateState(ctx, userKey, stateKey, g, currentState, log)
+		h.updateState(ctx, userKey, stateKey, currentState, log)
 	}
 
 	// The loop above keeps going after a failure, so apiErr holds the last one.
@@ -359,9 +366,25 @@ func newlyFiring(g *alertGroup, prev *alertGroupState) bool {
 	return false
 }
 
+// firingElsewhere lists the alerts prev had firing that g neither fires nor
+// resolves: those of another group under the same alert name.
+func firingElsewhere(g *alertGroup, prev *alertGroupState) []string {
+	if prev == nil {
+		return nil
+	}
+	var out []string
+	for _, fp := range prev.Firing {
+		in := func(a alert) bool { return a.Fingerprint == fp }
+		if !slices.ContainsFunc(g.firing, in) && !slices.ContainsFunc(g.resolved, in) {
+			out = append(out, fp)
+		}
+	}
+	return out
+}
+
 // updateState stores or deletes state after a successful notification send.
-func (h *Handler) updateState(ctx context.Context, userKey, stateKey string, g *alertGroup, current *alertGroupState, log *slog.Logger) {
-	if len(g.firing) == 0 {
+func (h *Handler) updateState(ctx context.Context, userKey, stateKey string, current *alertGroupState, log *slog.Logger) {
+	if len(current.Firing) == 0 {
 		// All resolved - delete state.
 		if err := h.store.Delete(ctx, "grafana", userKey, stateKey, ""); err != nil {
 			log.Warn("failed to delete alert state", "key", stateKey, "error", err)

@@ -324,7 +324,7 @@ A resolve normally sends a passive "Resolved" push under the alert's collapse id
 
 | Provider | Taken back | On |
 |---|---|---|
-| Grafana | the alert name's push | nothing left firing in the group |
+| Grafana | the alert name's push | nothing left firing under the alert name |
 | Uptime Kuma, Gatus, Komodo | the monitor's, endpoint's or condition's push | UP, RESOLVED, `resolved` |
 | TrueNAS | the alert's push | the clear, on `/truenas/retract` |
 | universal route | an alert card's push, when the preset keys it on a correlation value | the card ending |
@@ -338,6 +338,8 @@ It is best effort. The retract reaches the iPhone, iPad and Mac apps from 1.20 a
 For the same reason a retract can take down a new alert. A locked iPhone or a dozing Android phone can hold a silent push back for a while, so when an alert resolves and fires again before the retract has landed, as a flapping monitor does, the new alert's push goes with the old one and its inbox entry is marked read. Leave `retract` off for checks that flap.
 
 A retract reaches the whole account, not only the key that sent the alert: every notification under that collapse id goes, whichever key or app sent it. So collapse ids need to be unique per account, and several are built from names or numbers that two instances of one service can share: Grafana's alert name, Uptime Kuma's monitor id, Gatus's endpoint group and name, the health check type for Radarr, Sonarr and Prowlarr, and Backrest's plan and repo. Two Grafana instances that both have a `DiskFull` alert, two Uptime Kuma servers that both have monitor 1, or a `radarr` and a `radarr-4k` posting to one account share those ids, and a resolve on one takes back the other's alert too. Give each such instance its own account, or leave `retract` off for them.
+
+Grafana has one collapse id per alert name, and a notification policy that groups by more than the alert name (by instance, or the default `grafana_folder, alertname` with two rules of one name in two folders) splits a name into groups whose pushes replace each other on the device. With `retract=1` the relay keeps track of what every group of the name reported firing, and only the group that resolves the last of it takes the push back; one resolving earlier sends its "Resolved" over the other group's alert, as it would without `retract=1`. To have each alert name's push taken back as soon as it clears, group its policy by `alertname` alone.
 
 Backrest sends no push for a success under the default channels, so a failure push stays up after the next good run. With `retract=1` on the hook that delivers failures, the relay records the failure push for 7 days. Snapshot, prune, check and forget on one plan and repo push under one collapse id, so one operation's failure replaces another's on the device, and the record keeps the operation whose failure is showing. The next success of that operation takes it back, along with the plan and repo's any-error alert (which has an id of its own), whatever URL the success arrives on; a success of another operation leaves it up. Under `channels=notification` a success push replaces the failure, so the record is dropped and nothing is retracted. A Radarr or Sonarr manual-interaction push sent with `retract=1` is recorded the same way, and the import of that download takes it back.
 
