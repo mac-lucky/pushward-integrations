@@ -205,6 +205,7 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 	groups, groupOrder := h.groupAlerts(log, input.Body.Alerts)
 
 	var apiErr error
+	retract := ov.Retract()
 	for _, alertname := range groupOrder {
 		g := groups[alertname]
 
@@ -231,9 +232,15 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		// ?retract=1 takes a tracked alert back instead of sending Resolved
 		// over it; the Resolved still goes out when the retract reached no
 		// device. The collapse id is stateKey.
-		if !firing && prev != nil && ov.Retract() && h.clients.Retract(ctx, userKey, log, stateKey) {
-			h.updateState(ctx, userKey, stateKey, g, currentState, log)
-			continue
+		if !firing && prev != nil && retract {
+			if h.clients.Retract(ctx, userKey, log, stateKey) {
+				h.updateState(ctx, userKey, stateKey, g, currentState, log)
+				continue
+			}
+			// The rest of this webhook resolves without retracting: what kept
+			// this one from reaching (the account's rate limit, no device)
+			// holds for them too, and each would wait out its own timeout.
+			retract = false
 		}
 
 		// Build and send notification.

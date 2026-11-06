@@ -145,3 +145,33 @@ func TestAckGroupWithoutStateIsNew(t *testing.T) {
 	acktest.AssertAcked(t, ns[0], "relay."+text.SlugHash("grafana", "DiskFull", 6),
 		pushward.NotificationAcknowledge{RepeatSeconds: 300, ExpireSeconds: 3600})
 }
+
+// One resolve webhook can clear several alert names. Once a retract does not
+// reach, the rest resolve without one, so a rate-limited account does not
+// make each of them wait out its own timeout. A 403 stands in for the 429,
+// which the client retries until that timeout.
+func TestRetractStopsAfterOneMisses(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServerWith(t, testutil.MockOptions{RetractStatus: http.StatusForbidden})
+	h := handlerAt(t, srv.URL)
+	alert := func(name, status string) string {
+		return `{"status": "` + status + `", "labels": {"alertname": "` + name + `"}, "annotations": {"summary": "` + name + `"}, "fingerprint": "` + name + `"}`
+	}
+	names := []string{"DiskFull", "HighCPU", "HighMem"}
+	var firing, resolved []string
+	for _, n := range names {
+		firing = append(firing, alert(n, "firing"))
+		resolved = append(resolved, alert(n, "resolved"))
+	}
+	for _, payload := range []string{diskFullGroup(firing...), diskFullGroup(resolved...)} {
+		if w := postWith(t, h, "retract=1", payload); w.Code != http.StatusOK {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	}
+	recorded := testutil.GetCalls(calls, mu)
+	if rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract"); len(rs) != 1 {
+		t.Errorf("%d retracts, want 1", len(rs))
+	}
+	if ns := acktest.Notifications(t, recorded); len(ns) != 2*len(names) {
+		t.Errorf("%d notifications, want each alert and its resolve", len(ns))
+	}
+}
