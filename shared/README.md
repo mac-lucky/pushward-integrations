@@ -187,8 +187,11 @@ with the same collapse id replaces the older one's repeats. For the same reason 
 
 **Retracting notifications:** `RetractNotifications(ctx, collapseID)` sends a silent push that
 removes what each device shows under that collapse id and ends active receipts under it with
-`ReceiptCancelRetracted`. Unlike the receipt cancels it reaches the whole account: a notification
-any other key sent under the same id goes too. It is best effort. Apple Watch never gets it, the
+`ReceiptCancelRetracted`. Unlike the receipt cancels, a person's key or an organization key not
+scoped by groups or tags reaches the whole account: a notification any other key sent under the
+same id goes too, and so do the other keys' receipts under it. An organization key scoped by
+groups or tags reaches only its audience's devices (there it still removes whatever shows under
+the id) and ends only the receipts it sent. It is best effort. Apple Watch never gets it, the
 iOS and macOS apps only from 1.20, so the returned device count is not proof of removal and 0
 means nothing could be reached. The server allows 10 a minute per key and per account, shared
 with every other caller on that account. Bound the call with your own context. Never retract and

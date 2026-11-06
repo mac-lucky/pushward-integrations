@@ -910,11 +910,14 @@ func (c *Client) CancelNotificationReceiptsByTag(ctx context.Context, tag string
 
 // RetractNotifications takes back every notification shown under
 // collapseID via POST /notifications/retract and returns how many devices
-// the silent retract push went to. Its reach is account-wide: notifications
-// any key of the account sent under that id are removed, and active
-// acknowledged receipts under it end canceled with ReceiptCancelRetracted.
-// It is best effort (no Apple Watch, iOS and macOS apps from 1.20 only), so
-// devices > 0 does not prove removal and 0 means nothing could be reached.
+// the silent retract push went to. A person's key, or an organization key
+// not scoped by groups or tags, reaches every device of the account: what
+// any key sent under that id is removed, and every active acknowledged
+// receipt under it ends canceled with ReceiptCancelRetracted. An
+// organization key scoped by groups or tags reaches only its audience's
+// devices and cancels only the receipts it sent. It is best effort (no
+// Apple Watch, iOS and macOS apps from 1.20 only), so devices > 0 does not
+// prove removal and 0 means nothing could be reached.
 // The server allows 10 retracts a minute per key and per account. Never
 // send under the same id right after a retract: the delayed silent push can
 // remove the new notification too.

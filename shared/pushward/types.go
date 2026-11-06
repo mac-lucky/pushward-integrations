@@ -1123,7 +1123,7 @@ const (
 	ReceiptCancelSuperseded  = "superseded"   // a newer acknowledged send from the same key with the same collapse_id
 	ReceiptCancelKeyRevoked  = "key_revoked"  // the sending key was revoked, expired or lost notifications access
 	ReceiptCancelOrgDisabled = "org_disabled" // organizations were switched off
-	ReceiptCancelRetracted   = "retracted"    // RetractNotifications under the same collapse_id, from any key of the account
+	ReceiptCancelRetracted   = "retracted"    // RetractNotifications under the same collapse_id, from any key of the account (only the caller's own, for an organization key scoped by groups or tags)
 )
 
 // Callback delivery statuses (NotificationReceiptCallback.Status).
