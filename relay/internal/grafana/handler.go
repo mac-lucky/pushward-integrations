@@ -43,7 +43,8 @@ func RegisterRoutes(api huma.API, store state.Store, clients *client.Pool, cfg *
 }
 
 type grafanaPayload struct {
-	Alerts []alert `json:"alerts"`
+	Alerts   []alert `json:"alerts"`
+	GroupKey string  `json:"groupKey"`
 }
 
 type alert struct {
@@ -73,6 +74,21 @@ type alertGroupState struct {
 	Firing   []string `json:"firing"`
 	Resolved []string `json:"resolved"`
 }
+
+// With ?retract=1 an alert name keeps its state in rows by sub key. lastSub
+// holds the name's last push, which the dedup check and the ack repeats
+// compare against, as the "" row does without retract=1. Each notification
+// group of the name has a row of its own (groupSubPrefix plus its hashed
+// groupKey) with the alerts it reported firing, and a webhook writes only its
+// own group's row, so concurrent groups of one name never overwrite each other.
+const (
+	lastSub        = "last"
+	groupSubPrefix = "g-"
+)
+
+// groupSub is the sub key of a notification group's row. A payload without a
+// groupKey counts as one group.
+func groupSub(groupKey string) string { return groupSubPrefix + text.HashHex(groupKey, 8) }
 
 func (s *alertGroupState) equals(other *alertGroupState) bool {
 	if other == nil {
@@ -223,25 +239,31 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		}
 
 		currentState := h.buildState(g)
-		prev := h.loadState(ctx, userKey, stateKey, log)
+		ownSub := groupSub(input.Body.GroupKey)
+		var prev *alertGroupState
+		var tracked, elsewhere bool
 		if ov.Retract() {
-			// A policy that groups by more than the alert name splits it into
-			// groups that share one collapse id, so the alerts the other
-			// groups reported firing stay tracked until a group resolves them.
-			currentState.Firing = append(currentState.Firing, firingElsewhere(g, prev)...)
+			prev, tracked, elsewhere = h.loadName(ctx, userKey, stateKey, ownSub, g, log)
+			if firing {
+				// Written before the push goes out, so another group of the
+				// name resolving meanwhile sees it and does not retract.
+				h.updateState(ctx, userKey, stateKey, ownSub, currentState, log)
+			}
+		} else {
+			prev = h.loadState(ctx, userKey, stateKey, log)
 		}
 		if currentState.equals(prev) {
 			log.Debug("alert state unchanged, skipping", "alertname", stateKey)
 			continue
 		}
 
-		// ?retract=1 takes a tracked alert back instead of sending Resolved
-		// over it, once nothing under the alert name fires any more; the
-		// Resolved still goes out when the retract reached no device. The
-		// collapse id is stateKey.
-		if len(currentState.Firing) == 0 && prev != nil && retract {
+		// ?retract=1 takes the alert name's push back instead of sending
+		// Resolved over it, when this group was recorded firing and no other
+		// group of the name may still fire. Any doubt, and a retract that
+		// reached no device, sends the Resolved. The collapse id is stateKey.
+		if !firing && retract && tracked && !elsewhere {
 			if h.clients.Retract(ctx, userKey, log, stateKey) {
-				h.updateState(ctx, userKey, stateKey, currentState, log)
+				h.saveName(ctx, userKey, stateKey, ownSub, currentState, log)
 				continue
 			}
 			// The rest of this webhook resolves without retracting: what kept
@@ -275,7 +297,11 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 			"firing", len(g.firing), "resolved", len(g.resolved))
 
 		// Store state after successful send.
-		h.updateState(ctx, userKey, stateKey, currentState, log)
+		if ov.Retract() {
+			h.saveName(ctx, userKey, stateKey, ownSub, currentState, log)
+		} else {
+			h.updateState(ctx, userKey, stateKey, "", currentState, log)
+		}
 	}
 
 	// The loop above keeps going after a failure, so apiErr holds the last one.
@@ -346,13 +372,58 @@ func (h *Handler) loadState(ctx context.Context, userKey, stateKey string, log *
 	if raw == nil {
 		return nil // no prior state
 	}
+	return decodeState(raw, stateKey, log)
+}
 
-	var prev alertGroupState
-	if err := json.Unmarshal(raw, &prev); err != nil {
+func decodeState(raw json.RawMessage, stateKey string, log *slog.Logger) *alertGroupState {
+	var s alertGroupState
+	if err := json.Unmarshal(raw, &s); err != nil {
 		log.Warn("failed to decode alert state", "key", stateKey, "error", err)
 		return nil
 	}
-	return &prev
+	return &s
+}
+
+// loadName reads every row of an alert name (?retract=1) in one query. last is
+// the name's last push. tracked reports that this group's row has alerts
+// firing. elsewhere reports that another alert of the name may still fire:
+// another group's row lists one this webhook does not resolve, a row could not
+// be read, or there is a "" row. That one was written without retract=1 or
+// before groups had rows of their own, and shows only the group that posted
+// last, so other groups may fire unrecorded until it expires.
+func (h *Handler) loadName(ctx context.Context, userKey, stateKey, ownSub string, g *alertGroup, log *slog.Logger) (last *alertGroupState, tracked, elsewhere bool) {
+	rows, err := h.store.GetGroup(ctx, "grafana", userKey, stateKey)
+	if err != nil {
+		log.Warn("failed to read alert state", "key", stateKey, "error", err)
+		return nil, false, true
+	}
+	_, elsewhere = rows[""]
+	if raw, ok := rows[lastSub]; ok {
+		last = decodeState(raw, stateKey, log)
+	}
+	for sub, raw := range rows {
+		if !strings.HasPrefix(sub, groupSubPrefix) {
+			continue
+		}
+		switch s := decodeState(raw, stateKey, log); {
+		case s == nil:
+			elsewhere = true
+		case sub == ownSub:
+			tracked = len(s.Firing) > 0
+		case len(firingElsewhere(g, s)) > 0:
+			elsewhere = true
+		}
+	}
+	return last, tracked, elsewhere
+}
+
+// saveName stores the alert name's last push once it went out or was
+// retracted, and drops this group's row once nothing in it fires.
+func (h *Handler) saveName(ctx context.Context, userKey, stateKey, ownSub string, current *alertGroupState, log *slog.Logger) {
+	h.updateState(ctx, userKey, stateKey, lastSub, current, log)
+	if len(current.Firing) == 0 {
+		h.updateState(ctx, userKey, stateKey, ownSub, current, log)
+	}
 }
 
 // newlyFiring reports whether g fires an alert that prev did not have firing.
@@ -367,7 +438,8 @@ func newlyFiring(g *alertGroup, prev *alertGroupState) bool {
 }
 
 // firingElsewhere lists the alerts prev had firing that g neither fires nor
-// resolves: those of another group under the same alert name.
+// resolves: those of another group under the same alert name. An alert g
+// resolves is resolved for every group that holds it.
 func firingElsewhere(g *alertGroup, prev *alertGroupState) []string {
 	if prev == nil {
 		return nil
@@ -382,11 +454,12 @@ func firingElsewhere(g *alertGroup, prev *alertGroupState) []string {
 	return out
 }
 
-// updateState stores or deletes state after a successful notification send.
-func (h *Handler) updateState(ctx context.Context, userKey, stateKey string, current *alertGroupState, log *slog.Logger) {
+// updateState stores current in the row sub of the alert name, or deletes the
+// row when nothing in current fires.
+func (h *Handler) updateState(ctx context.Context, userKey, stateKey, sub string, current *alertGroupState, log *slog.Logger) {
 	if len(current.Firing) == 0 {
 		// All resolved - delete state.
-		if err := h.store.Delete(ctx, "grafana", userKey, stateKey, ""); err != nil {
+		if err := h.store.Delete(ctx, "grafana", userKey, stateKey, sub); err != nil {
 			log.Warn("failed to delete alert state", "key", stateKey, "error", err)
 		}
 		return
@@ -397,7 +470,7 @@ func (h *Handler) updateState(ctx context.Context, userKey, stateKey string, cur
 		log.Warn("failed to marshal alert state", "key", stateKey, "error", err)
 		return
 	}
-	if err := h.store.Set(ctx, "grafana", userKey, stateKey, "", data, h.config.StaleTimeout); err != nil {
+	if err := h.store.Set(ctx, "grafana", userKey, stateKey, sub, data, h.config.StaleTimeout); err != nil {
 		log.Warn("failed to store alert state", "key", stateKey, "error", err)
 	}
 }

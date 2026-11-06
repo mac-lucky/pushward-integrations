@@ -1,10 +1,15 @@
 package grafana
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/ack/acktest"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
@@ -32,8 +37,13 @@ const (
 
 func handlerAt(t *testing.T, url string) http.Handler {
 	t.Helper()
+	return handlerWith(t, url, state.NewMemoryStore())
+}
+
+func handlerWith(t *testing.T, url string, store state.Store) http.Handler {
+	t.Helper()
 	mux, api := humautil.NewTestAPI()
-	RegisterRoutes(api, state.NewMemoryStore(), client.NewPool(url, nil), testConfig())
+	RegisterRoutes(api, store, client.NewPool(url, nil), testConfig())
 	return mux
 }
 
@@ -79,6 +89,12 @@ func TestAckUpstreamRefusalSurfacesUnchanged(t *testing.T) {
 
 func diskFullGroup(alerts ...string) string {
 	return `{"alerts": [` + strings.Join(alerts, ",") + `]}`
+}
+
+// instanceGroup is the webhook of a policy grouped by instance: one group per
+// alert, each with its own groupKey.
+func instanceGroup(status, instance string) string {
+	return `{"groupKey": "{}:{instance=\"` + instance + `\"}", "alerts": [` + diskFullAlert(status, instance) + `]}`
 }
 
 func diskFullAlert(status, fingerprint string) string {
@@ -155,15 +171,15 @@ func TestRetractWaitsForEveryGroupOfTheName(t *testing.T) {
 		t.Run(order[0]+" resolves first", func(t *testing.T) {
 			srv, calls, mu := testutil.MockPushWardServer(t)
 			h := handlerAt(t, srv.URL)
-			post := func(alert string) {
+			post := func(status, instance string) {
 				t.Helper()
-				if w := postWith(t, h, "retract=1", diskFullGroup(alert)); w.Code != http.StatusOK {
+				if w := postWith(t, h, "retract=1", instanceGroup(status, instance)); w.Code != http.StatusOK {
 					t.Fatalf("%d %s", w.Code, w.Body.String())
 				}
 			}
-			post(diskFullAlert("firing", "a"))
-			post(diskFullAlert("firing", "b"))
-			post(diskFullAlert("resolved", order[0]))
+			post("firing", "a")
+			post("firing", "b")
+			post("resolved", order[0])
 
 			recorded := testutil.GetCalls(calls, mu)
 			if rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract"); len(rs) != 0 {
@@ -174,7 +190,7 @@ func TestRetractWaitsForEveryGroupOfTheName(t *testing.T) {
 				t.Fatalf("notifications = %+v, want the Resolved of %s", ns, order[0])
 			}
 
-			post(diskFullAlert("resolved", order[1]))
+			post("resolved", order[1])
 			recorded = testutil.GetCalls(calls, mu)
 			rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract")
 			if len(rs) != 1 || !strings.Contains(string(rs[0].Body), text.SlugHash("grafana", "DiskFull", 6)) {
@@ -214,5 +230,177 @@ func TestRetractStopsAfterOneMisses(t *testing.T) {
 	}
 	if ns := acktest.Notifications(t, recorded); len(ns) != 2*len(names) {
 		t.Errorf("%d notifications, want each alert and its resolve", len(ns))
+	}
+}
+
+// With ack=1 a group resolving cancels the repeats of the alert name, which
+// another group's push may own. That group's next push must start them again,
+// with retract=1 as without it.
+func TestAckRestartsForAGroupStillFiringAfterAnotherResolves(t *testing.T) {
+	for _, query := range []string{"ack=1", "ack=1&retract=1"} {
+		t.Run(query, func(t *testing.T) {
+			srv, calls, mu := testutil.MockPushWardServer(t)
+			h := handlerAt(t, srv.URL)
+			steps := []struct{ status, instance string }{{"firing", "a"}, {"firing", "b"}, {"resolved", "a"}, {"firing", "b"}}
+			for _, s := range steps {
+				if w := postWith(t, h, query, instanceGroup(s.status, s.instance)); w.Code != http.StatusOK {
+					t.Fatalf("%d %s", w.Code, w.Body.String())
+				}
+			}
+			var acked []bool
+			for _, n := range acktest.Notifications(t, testutil.GetCalls(calls, mu)) {
+				acked = append(acked, n.Acknowledge != nil)
+			}
+			if want := []bool{true, true, false, true}; !slices.Equal(acked, want) {
+				t.Errorf("acknowledged = %v, want %v", acked, want)
+			}
+		})
+	}
+}
+
+// readBarrier holds the store's reads until n of them wait, so the webhooks a
+// test sends at once all read their state before any of them writes.
+type readBarrier struct {
+	state.Store
+	mu      sync.Mutex
+	n       int
+	release chan struct{}
+}
+
+func (b *readBarrier) arm(n int) {
+	b.mu.Lock()
+	b.n, b.release = n, make(chan struct{})
+	b.mu.Unlock()
+}
+
+func (b *readBarrier) wait() {
+	b.mu.Lock()
+	if b.n == 0 {
+		b.mu.Unlock()
+		return
+	}
+	if b.n--; b.n == 0 {
+		close(b.release)
+	}
+	release := b.release
+	b.mu.Unlock()
+	select {
+	case <-release:
+	case <-time.After(5 * time.Second):
+	}
+}
+
+func (b *readBarrier) Get(ctx context.Context, provider, userKey, key, subKey string) (json.RawMessage, error) {
+	b.wait()
+	return b.Store.Get(ctx, provider, userKey, key, subKey)
+}
+
+func (b *readBarrier) GetGroup(ctx context.Context, provider, userKey, key string) (map[string]json.RawMessage, error) {
+	b.wait()
+	return b.Store.GetGroup(ctx, provider, userKey, key)
+}
+
+// postAtOnce sends one webhook per payload concurrently, every one of them
+// reading the store before any writes.
+func postAtOnce(t *testing.T, h http.Handler, store *readBarrier, query string, payloads ...string) {
+	t.Helper()
+	store.arm(len(payloads))
+	var wg sync.WaitGroup
+	codes := make([]int, len(payloads))
+	for i, p := range payloads {
+		wg.Go(func() { codes[i] = postWith(t, h, query, p).Code })
+	}
+	wg.Wait()
+	for _, c := range codes {
+		if c != http.StatusOK {
+			t.Fatalf("status %d", c)
+		}
+	}
+}
+
+// Grafana posts the groups of one rule evaluation at the same moment, to any
+// relay pod. Two groups firing at once must both stay recorded, so the first
+// to resolve does not take the push back while the other still fires.
+func TestRetractWithGroupsFiringAtOnce(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	store := &readBarrier{Store: state.NewMemoryStore()}
+	h := handlerWith(t, srv.URL, store)
+	postAtOnce(t, h, store, "retract=1", instanceGroup("firing", "a"), instanceGroup("firing", "b"))
+
+	for _, step := range []struct {
+		instance string
+		retracts int
+	}{{"a", 0}, {"b", 1}} {
+		if w := postWith(t, h, "retract=1", instanceGroup("resolved", step.instance)); w.Code != http.StatusOK {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+		rs := testutil.CallsTo(testutil.GetCalls(calls, mu), http.MethodPost, "/notifications/retract")
+		if len(rs) != step.retracts {
+			t.Fatalf("after %s resolved: %d retracts, want %d", step.instance, len(rs), step.retracts)
+		}
+	}
+}
+
+// Two groups resolving at once each still see the other firing, so both send
+// their Resolved. Neither may leave the other's alert recorded as firing:
+// that would keep the next firing of it from repeating with ack=1, and its
+// resolve from retracting.
+func TestRetractWithGroupsResolvingAtOnce(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	store := &readBarrier{Store: state.NewMemoryStore()}
+	h := handlerWith(t, srv.URL, store)
+	const query = "ack=1&retract=1"
+	for _, inst := range []string{"a", "b"} {
+		if w := postWith(t, h, query, instanceGroup("firing", inst)); w.Code != http.StatusOK {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	}
+	postAtOnce(t, h, store, query, instanceGroup("resolved", "a"), instanceGroup("resolved", "b"))
+	recorded := testutil.GetCalls(calls, mu)
+	if rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract"); len(rs) != 0 {
+		t.Fatalf("%d retracts while each saw the other firing", len(rs))
+	}
+	if ns := acktest.Notifications(t, recorded); len(ns) != 4 {
+		t.Fatalf("%d notifications, want both alerts and both Resolved", len(ns))
+	}
+
+	if w := postWith(t, h, query, instanceGroup("firing", "b")); w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	ns := acktest.Notifications(t, testutil.GetCalls(calls, mu))
+	if len(ns) != 5 || ns[4].Acknowledge == nil {
+		t.Errorf("b firing again: %d notifications, last acknowledge %+v, want a repeating push", len(ns), ns[len(ns)-1].Acknowledge)
+	}
+	if w := postWith(t, h, query, instanceGroup("resolved", "b")); w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	if rs := testutil.CallsTo(testutil.GetCalls(calls, mu), http.MethodPost, "/notifications/retract"); len(rs) != 1 {
+		t.Errorf("%d retracts once b resolved with nothing else firing, want 1", len(rs))
+	}
+}
+
+// A row written without retract=1, or by a relay before groups had rows of
+// their own, shows only the group that posted last. While one is there the
+// alert name is resolved with a Resolved push, never a retract.
+func TestRetractNotWhileAnOlderRowIsThere(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	store := state.NewMemoryStore()
+	old, _ := json.Marshal(alertGroupState{Firing: []string{"a"}})
+	stateKey := text.SlugHash("grafana", "DiskFull", 6)
+	if err := store.Set(context.Background(), "grafana", testKey, stateKey, "", old, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	h := handlerWith(t, srv.URL, store)
+	for _, status := range []string{"firing", "resolved"} {
+		if w := postWith(t, h, "retract=1", instanceGroup(status, "a")); w.Code != http.StatusOK {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	}
+	recorded := testutil.GetCalls(calls, mu)
+	if rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract"); len(rs) != 0 {
+		t.Errorf("%d retracts with an older row of the name still there", len(rs))
+	}
+	if ns := acktest.Notifications(t, recorded); len(ns) != 2 || ns[1].Level != pushward.LevelPassive {
+		t.Errorf("notifications = %+v, want the alert and its Resolved", ns)
 	}
 }
