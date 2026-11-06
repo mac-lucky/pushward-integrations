@@ -235,17 +235,17 @@ func (h *Handler) getTrackedSlug(ctx context.Context, userKey, mapKey string) (s
 	return ts.Slug, true
 }
 
-// setTrackedSlug stores a tracked download slug in the state store. The TTL is
-// derived from config (not a hardcoded 60m) so the dedup record can never
-// outlive the server-side activity: otherwise a retry Grab between the activity
-// expiry and the dedup expiry would skip CreateActivity and PATCH a slug the
-// server already evicted (404 -> 502).
-func (h *Handler) setTrackedSlug(ctx context.Context, userKey, mapKey, slug string) error {
+// setTrackedSlug stores a tracked slug in the state store for ttl. A tracked
+// download passes the config's StaleTimeout (not a hardcoded 60m) so the dedup
+// record can never outlive the server-side activity: otherwise a retry Grab
+// between the activity expiry and the dedup expiry would skip CreateActivity
+// and PATCH a slug the server already evicted (404 -> 502).
+func (h *Handler) setTrackedSlug(ctx context.Context, userKey, mapKey, slug string, ttl time.Duration) error {
 	data, err := json.Marshal(trackedSlug{Slug: slug})
 	if err != nil {
 		return err
 	}
-	return h.store.Set(ctx, "starr", userKey, mapKey, "", data, h.config.StaleTimeout)
+	return h.store.Set(ctx, "starr", userKey, mapKey, "", data, ttl)
 }
 
 // deleteTrackedSlug removes a tracked download from the state store.
@@ -380,8 +380,7 @@ func (h *Handler) handleManualInteractionNotify(ctx context.Context, userKey str
 	}
 	// With ?retract=1 the download's import takes the push back.
 	if ov := overrides.FromContext(ctx); ov.Retract() && ov.AllowsNotification() && p.DownloadID != "" {
-		data, _ := json.Marshal(trackedSlug{Slug: id})
-		if err := h.store.Set(ctx, "starr", userKey, manualInteractionKey(provider, p.DownloadID), "", data, manualInteractionTTL); err != nil {
+		if err := h.setTrackedSlug(ctx, userKey, manualInteractionKey(provider, p.DownloadID), id, manualInteractionTTL); err != nil {
 			log.Warn("state store write failed", "error", err, "provider", "starr")
 		}
 	}

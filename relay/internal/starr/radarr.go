@@ -205,7 +205,7 @@ func (h *Handler) handleRadarrGrab(ctx context.Context, userKey string, log *slo
 	// failed release), skip CreateActivity - the update below refreshes the
 	// existing activity back to "Grabbed".
 	_, alreadyTracked := h.getTrackedSlug(ctx, userKey, mapKey)
-	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
+	if err := h.setTrackedSlug(ctx, userKey, mapKey, slug, h.config.StaleTimeout); err != nil {
 		log.Error("failed to track download", "slug", slug, "error", err)
 		return nil
 	}
@@ -315,7 +315,7 @@ func (h *Handler) handleRadarrDownload(ctx context.Context, userKey string, log 
 	if tracked {
 		slug = stored
 	} else {
-		if err := h.setTrackedSlug(ctx, userKey, mapKey, slug); err != nil {
+		if err := h.setTrackedSlug(ctx, userKey, mapKey, slug, h.config.StaleTimeout); err != nil {
 			log.Error("failed to track download", "slug", slug, "error", err)
 			return nil
 		}
