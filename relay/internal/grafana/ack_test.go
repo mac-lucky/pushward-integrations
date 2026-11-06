@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -322,22 +323,138 @@ func postAtOnce(t *testing.T, h http.Handler, store *readBarrier, query string, 
 // relay pod. Two groups firing at once must both stay recorded, so the first
 // to resolve does not take the push back while the other still fires.
 func TestRetractWithGroupsFiringAtOnce(t *testing.T) {
-	srv, calls, mu := testutil.MockPushWardServer(t)
-	store := &readBarrier{Store: state.NewMemoryStore()}
-	h := handlerWith(t, srv.URL, store)
-	postAtOnce(t, h, store, "retract=1", instanceGroup("firing", "a"), instanceGroup("firing", "b"))
+	mem := state.NewMemoryStore()
+	store := &readBarrier{Store: mem}
+	srv, _, _ := testutil.MockPushWardServer(t)
+	postAtOnce(t, handlerWith(t, srv.URL, store), store, "retract=1", instanceGroup("firing", "a"), instanceGroup("firing", "b"))
 
-	for _, step := range []struct {
-		instance string
-		retracts int
-	}{{"a", 0}, {"b", 1}} {
-		if w := postWith(t, h, "retract=1", instanceGroup("resolved", step.instance)); w.Code != http.StatusOK {
+	// Both resolve orders, each from a copy of what the two webhooks left:
+	// whichever group a lost write would drop, one order resolves the other
+	// group first.
+	for _, order := range [][2]string{{"a", "b"}, {"b", "a"}} {
+		t.Run(order[0]+" resolves first", func(t *testing.T) {
+			twin := state.NewMemoryStore()
+			for _, r := range mem.Rows() {
+				if err := twin.Set(context.Background(), r.Provider, r.UserKey, r.Key, r.SubKey, r.Value, time.Hour); err != nil {
+					t.Fatal(err)
+				}
+			}
+			srv, calls, mu := testutil.MockPushWardServer(t)
+			h := handlerWith(t, srv.URL, twin)
+			for i, instance := range order {
+				if w := postWith(t, h, "retract=1", instanceGroup("resolved", instance)); w.Code != http.StatusOK {
+					t.Fatalf("%d %s", w.Code, w.Body.String())
+				}
+				rs := testutil.CallsTo(testutil.GetCalls(calls, mu), http.MethodPost, "/notifications/retract")
+				if len(rs) != i {
+					t.Fatalf("after %s resolved: %d retracts, want %d", instance, len(rs), i)
+				}
+			}
+		})
+	}
+}
+
+// A group's record is written before its push goes out: another group that
+// resolves while that push is still on its way must see it firing and send
+// its Resolved, or its retract would go out ahead of the push.
+func TestRetractSeesAGroupWhosePushIsStillOut(t *testing.T) {
+	mock, calls, mu := testutil.MockPushWardServer(t)
+	var hold atomic.Bool
+	arrived, release := make(chan struct{}), make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/notifications" && hold.CompareAndSwap(true, false) {
+			close(arrived)
+			<-release
+		}
+		mock.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	var once sync.Once
+	letGo := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(letGo)
+	h := handlerAt(t, srv.URL)
+
+	if w := postWith(t, h, "retract=1", instanceGroup("firing", "b")); w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	hold.Store(true)
+	done := make(chan int)
+	go func() { done <- postWith(t, h, "retract=1", instanceGroup("firing", "a")).Code }()
+	<-arrived
+	if w := postWith(t, h, "retract=1", instanceGroup("resolved", "b")); w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	letGo()
+	if code := <-done; code != http.StatusOK {
+		t.Fatalf("a firing: status %d", code)
+	}
+	recorded := testutil.GetCalls(calls, mu)
+	if rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract"); len(rs) != 0 {
+		t.Errorf("%d retracts while a's push was still on its way", len(rs))
+	}
+	if ns := acktest.Notifications(t, recorded); len(ns) != 3 {
+		t.Errorf("%d notifications, want b, its Resolved and a", len(ns))
+	}
+}
+
+// agingStore stands in for the passing of StaleTimeout: age drops every row
+// nothing wrote since the previous age.
+type agingStore struct {
+	*state.MemoryStore
+	mu      sync.Mutex
+	written map[string]bool
+}
+
+func (s *agingStore) Set(ctx context.Context, provider, userKey, key, subKey string, value json.RawMessage, ttl time.Duration) error {
+	s.mu.Lock()
+	s.written[key+"/"+subKey] = true
+	s.mu.Unlock()
+	return s.MemoryStore.Set(ctx, provider, userKey, key, subKey, value, ttl)
+}
+
+func (s *agingStore) age(t *testing.T) {
+	t.Helper()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, r := range s.Rows() {
+		if !s.written[r.Key+"/"+r.SubKey] {
+			if err := s.Delete(context.Background(), r.Provider, r.UserKey, r.Key, r.SubKey); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	clear(s.written)
+}
+
+// A group that keeps firing past StaleTimeout stays recorded through its
+// repeats, the deduped ones included, so another group's resolve sends its
+// Resolved instead of taking the still-firing alert's push back.
+func TestRetractKeepsAGroupRecordedThroughItsRepeats(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	store := &agingStore{MemoryStore: state.NewMemoryStore(), written: map[string]bool{}}
+	h := handlerWith(t, srv.URL, store)
+	post := func(status, instance string) {
+		t.Helper()
+		if w := postWith(t, h, "retract=1", instanceGroup(status, instance)); w.Code != http.StatusOK {
 			t.Fatalf("%d %s", w.Code, w.Body.String())
 		}
-		rs := testutil.CallsTo(testutil.GetCalls(calls, mu), http.MethodPost, "/notifications/retract")
-		if len(rs) != step.retracts {
-			t.Fatalf("after %s resolved: %d retracts, want %d", step.instance, len(rs), step.retracts)
-		}
+	}
+
+	post("firing", "a")
+	store.age(t)
+	post("firing", "a") // Grafana's repeat: deduped, nothing sent
+	if ns := acktest.Notifications(t, testutil.GetCalls(calls, mu)); len(ns) != 1 {
+		t.Fatalf("%d notifications after the repeat, want it deduped", len(ns))
+	}
+	store.age(t) // StaleTimeout after the first webhook, not after the repeat
+	post("firing", "b")
+	post("resolved", "b")
+	recorded := testutil.GetCalls(calls, mu)
+	if rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract"); len(rs) != 0 {
+		t.Errorf("%d retracts while a still fires", len(rs))
+	}
+	if ns := acktest.Notifications(t, recorded); len(ns) != 3 || ns[2].Level != pushward.LevelPassive {
+		t.Errorf("notifications = %+v, want a, b and b's Resolved", ns)
 	}
 }
 
