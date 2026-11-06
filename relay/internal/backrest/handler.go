@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -327,11 +328,62 @@ func notificationMetadata(p *backrestPayload) map[string]string {
 }
 
 // rememberSlug records which activity is open for this plan and repo, so a later
-// request can find it (see Ender.EndIfTracked) and so the ender can clear it.
-func (h *Handler) rememberSlug(ctx context.Context, userKey string, log *slog.Logger, mapKey, slug string) {
+// request can find it (see Ender.EndIfTracked) and so the ender can clear it. It
+// also records a failure push for ?retract=1 (see trackFailure).
+func (h *Handler) rememberSlug(ctx context.Context, userKey string, log *slog.Logger, mapKey, slug string, ttl time.Duration) {
 	data, _ := json.Marshal(struct{ Slug string }{Slug: slug})
-	if err := h.store.Set(ctx, "backrest", userKey, mapKey, "", data, h.config.StaleTimeout); err != nil {
+	if err := h.store.Set(ctx, "backrest", userKey, mapKey, "", data, ttl); err != nil {
 		log.Warn("state store write failed", "error", err, "provider", "backrest", "slug", slug)
+	}
+}
+
+// failureTTL is how long a failure push sent with ?retract=1 stays recorded
+// for the operation's next success to take back: a week covers a weekly
+// check or prune.
+const failureTTL = 7 * 24 * time.Hour
+
+// failureKey is the state row of a failure push sent with ?retract=1, one per
+// plan, repo and operation: SNAPSHOT, PRUNE, CHECK, FORGET or ANY (the
+// any-error alert), read off the condition name.
+func failureKey(p *backrestPayload, op string) string {
+	return fmt.Sprintf("retract:%s:%s:%s", p.Plan, p.Repo, op)
+}
+
+func operation(event string) string {
+	op, _, _ := strings.Cut(strings.TrimPrefix(event, "CONDITION_"), "_")
+	return op
+}
+
+// trackFailure is ?retract=1 for Backrest, where a success sends no push under
+// the default channels and so leaves the last failure push up. A failure push
+// sent on such a request is recorded; the next success of that plan, repo and
+// operation takes it back, and the plan and repo's any-error alert with it,
+// unless the success itself went out under the failure's collapse id and
+// replaced it. sentUnder is the collapse id this outcome's push went out
+// under, "" when none did. Without a record nothing is called.
+func (h *Handler) trackFailure(ctx context.Context, userKey string, log *slog.Logger, p *backrestPayload, spec eventSpec, sentUnder string) {
+	if spec.problem {
+		if sentUnder != "" && overrides.FromContext(ctx).Retract() {
+			h.rememberSlug(ctx, userKey, log, failureKey(p, operation(p.Event)), sentUnder, failureTTL)
+		}
+		return
+	}
+	if spec.kind != kindEnd {
+		return
+	}
+	for _, op := range []string{operation(p.Event), operation(condAnyError)} {
+		key := failureKey(p, op)
+		raw, err := h.store.Get(ctx, "backrest", userKey, key, "")
+		if err != nil || raw == nil {
+			continue
+		}
+		var rec struct{ Slug string }
+		if json.Unmarshal(raw, &rec) == nil && rec.Slug != sentUnder {
+			h.clients.Retract(ctx, userKey, log, rec.Slug)
+		}
+		if err := h.store.Delete(ctx, "backrest", userKey, key, ""); err != nil {
+			log.Warn("state store delete failed", "error", err, "provider", "backrest", "key", key)
+		}
 	}
 }
 
@@ -389,7 +441,7 @@ func (h *Handler) handleStart(ctx context.Context, userKey string, log *slog.Log
 		return err
 	}
 
-	h.rememberSlug(ctx, userKey, log, mapKey, slug)
+	h.rememberSlug(ctx, userKey, log, mapKey, slug, h.config.StaleTimeout)
 
 	log.Info("backrest started", "slug", slug, "event", p.Event, "state", spec.state)
 	return nil
@@ -405,12 +457,17 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 		// Backrest allows several hooks with different URLs, so a start can
 		// arrive on /backrest while the outcome arrives with channels=notification.
 		tracked := h.ender.EndIfTracked(ctx, log, userKey, mapKey, slug, content)
+		var err error
+		sentUnder := ""
 		if ov.NotifyFallback(spec.problem) {
 			// The push is the only delivery left, so its failure is the
 			// request's failure and the sender gets a 502 to retry on.
-			return h.notify(ctx, userKey, log, p, spec, slug, stateText, tracked)
+			if err = h.notify(ctx, userKey, log, p, spec, slug, stateText, tracked); err == nil {
+				sentUnder = slug
+			}
 		}
-		return nil
+		h.trackFailure(ctx, userKey, log, p, spec, sentUnder)
+		return err
 	}
 
 	cl, err := h.createActivity(ctx, userKey, log, slug, p)
@@ -427,15 +484,17 @@ func (h *Handler) handleEnd(ctx context.Context, userKey string, log *slog.Logge
 		return err
 	}
 
-	h.rememberSlug(ctx, userKey, log, mapKey, slug)
+	h.rememberSlug(ctx, userKey, log, mapKey, slug, h.config.StaleTimeout)
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
-	if ov.NotifyFallback(spec.problem) {
-		// The activity already carries the outcome, so a failed push is logged
-		// and swallowed rather than failing the webhook.
-		_ = h.notify(ctx, userKey, log, p, spec, slug, stateText, true)
+	sentUnder := ""
+	// The activity already carries the outcome, so a failed push is logged
+	// and swallowed rather than failing the webhook.
+	if ov.NotifyFallback(spec.problem) && h.notify(ctx, userKey, log, p, spec, slug, stateText, true) == nil {
+		sentUnder = slug
 	}
+	h.trackFailure(ctx, userKey, log, p, spec, sentUnder)
 
 	log.Info("backrest end scheduled", "slug", slug, "event", p.Event, "state", stateText)
 	return nil
@@ -472,10 +531,14 @@ func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Log
 	// schedules its end in the same request, so there is never one left open by
 	// an earlier request for a later one to close.
 	if !ov.AllowsActivity() {
-		if ov.NotifyFallback(spec.problem) {
-			return h.notify(ctx, userKey, log, p, spec, slug, stateText, false)
+		if !ov.NotifyFallback(spec.problem) {
+			return nil
 		}
-		return nil
+		err := h.notify(ctx, userKey, log, p, spec, slug, stateText, false)
+		if err == nil {
+			h.trackFailure(ctx, userKey, log, p, spec, slug)
+		}
+		return err
 	}
 
 	cl, err := h.createActivity(ctx, userKey, log, slug, p)
@@ -490,8 +553,8 @@ func (h *Handler) handleAlert(ctx context.Context, userKey string, log *slog.Log
 
 	h.ender.ScheduleEnd(userKey, mapKey, slug, content)
 
-	if ov.NotifyFallback(spec.problem) {
-		_ = h.notify(ctx, userKey, log, p, spec, slug, stateText, true)
+	if ov.NotifyFallback(spec.problem) && h.notify(ctx, userKey, log, p, spec, slug, stateText, true) == nil {
+		h.trackFailure(ctx, userKey, log, p, spec, slug)
 	}
 
 	log.Info("backrest alert", "slug", slug, "event", p.Event, "state", stateText)
