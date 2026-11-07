@@ -301,16 +301,16 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		if err := ack.Send(ctx, cl, log, req, identity); err != nil {
 			log.Error("failed to send notification", "alertname", alertname, "error", err)
 			apiErr = err
-			if ov.Retract() {
+			// With no last push read (none, or the read failed) there are no
+			// alerts to keep, and writing over a row that was not read would
+			// drop the ones acknowledged repeats compare against.
+			if ov.Retract() && prev != nil {
 				// The push may have reached the devices or not, so the last
 				// push is marked unsent: it compares as changed, keeps the
 				// alerts acknowledged repeats compare against, and unlike no
 				// row at all keeps a "" row from standing in for it.
-				failed := alertGroupState{Unsent: true}
-				if prev != nil {
-					failed = *prev
-					failed.Unsent = true
-				}
+				failed := *prev
+				failed.Unsent = true
 				// Detached, as a send cut short by the caller leaving ends
 				// with its context already done.
 				wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)

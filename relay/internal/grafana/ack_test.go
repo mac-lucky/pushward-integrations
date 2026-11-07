@@ -767,3 +767,30 @@ func TestRetractAfterASendCutShort(t *testing.T) {
 		t.Fatalf("notifications = %+v, want the alert and then the Resolved after the cut-short send", ns)
 	}
 }
+
+// readCtxStore fails a read on a done context as well, as PostgresStore does.
+type readCtxStore struct{ ctxStore }
+
+func (s readCtxStore) GetGroup(ctx context.Context, provider, userKey, key string) (map[string]json.RawMessage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	return s.MemoryStore.GetGroup(ctx, provider, userKey, key)
+}
+
+// A webhook whose context is done before its alert name is read sends
+// nothing, so the name's last push stays as it was: the alert firing again is
+// a repeat, and its acknowledged repeats do not start over.
+func TestRetractAckAfterAReadCutShort(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	h := handlerWith(t, srv.URL, readCtxStore{ctxStore{state.NewMemoryStore()}})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	gone := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r.WithContext(ctx)) })
+	for _, step := range []http.Handler{h, gone, h} {
+		postWith(t, step, "ack=1&retract=1", instanceGroup("firing", "a"))
+	}
+	if ns := acktest.Notifications(t, testutil.GetCalls(calls, mu)); len(ns) != 1 {
+		t.Fatalf("%d notifications, want the alert once", len(ns))
+	}
+}
