@@ -711,3 +711,59 @@ func TestRetractAfterAFailedSendWithAnOlderRow(t *testing.T) {
 		t.Fatalf("notifications = %+v, want the Resolved and then the retried alert", ns)
 	}
 }
+
+// After a failed send the alert going out again starts its repeats only for
+// alerts the push before it did not have firing: one someone acknowledged
+// stays acknowledged.
+func TestRetractAckAfterAFailedSend(t *testing.T) {
+	store := state.NewMemoryStore()
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	h, peer := handlerWith(t, srv.URL, store), failingPeer(t, store)
+	withB := func(status string) string {
+		return diskFullGroup(diskFullAlert("firing", "a"), diskFullAlert(status, "b"))
+	}
+	steps := []struct {
+		h       http.Handler
+		payload string
+	}{{h, withB("firing")}, {peer, withB("resolved")}, {h, withB("resolved")}}
+	for _, s := range steps {
+		postWith(t, s.h, "ack=1&retract=1", s.payload)
+	}
+	ns := acktest.Notifications(t, testutil.GetCalls(calls, mu))
+	if len(ns) != 2 {
+		t.Fatalf("%d notifications, want a and b, then b resolved again", len(ns))
+	}
+	acktest.AssertPlain(t, ns[1])
+}
+
+// ctxStore fails a write on a done context, as PostgresStore does.
+type ctxStore struct{ *state.MemoryStore }
+
+func (s ctxStore) Set(ctx context.Context, provider, userKey, key, subKey string, value json.RawMessage, ttl time.Duration) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return s.MemoryStore.Set(ctx, provider, userKey, key, subKey, value, ttl)
+}
+
+// A send cut short by Grafana giving up on the webhook leaves the last push
+// unknown too, though the request's context is done by the time that is
+// recorded.
+func TestRetractAfterASendCutShort(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	h := handlerWith(t, srv.URL, ctxStore{state.NewMemoryStore()})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	gone := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(w, r.WithContext(ctx)) })
+	steps := []struct {
+		h      http.Handler
+		status string
+	}{{h, "firing"}, {h, "resolved"}, {gone, "firing"}, {h, "resolved"}}
+	for _, s := range steps {
+		postWith(t, s.h, "retract=1", instanceGroup(s.status, "a"))
+	}
+	ns := acktest.Notifications(t, testutil.GetCalls(calls, mu))
+	if len(ns) != 2 || ns[1].Level != pushward.LevelPassive {
+		t.Fatalf("notifications = %+v, want the alert and then the Resolved after the cut-short send", ns)
+	}
+}

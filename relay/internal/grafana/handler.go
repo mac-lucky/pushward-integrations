@@ -73,6 +73,9 @@ type alertGroup struct {
 type alertGroupState struct {
 	Firing   []string `json:"firing"`
 	Resolved []string `json:"resolved"`
+	// Unsent marks a last push whose send failed: it equals no state, so the
+	// next webhook goes out, and its alerts are still those of the push before.
+	Unsent bool `json:"unsent,omitempty"`
 }
 
 // With ?retract=1 an alert name keeps its state in rows by sub key. lastSub
@@ -93,7 +96,7 @@ const (
 func groupSub(groupKey string) string { return groupSubPrefix + text.HashHex(groupKey, 8) }
 
 func (s *alertGroupState) equals(other *alertGroupState) bool {
-	if other == nil {
+	if other == nil || other.Unsent {
 		return false
 	}
 	a := slices.Clone(s.Firing)
@@ -300,9 +303,19 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 			apiErr = err
 			if ov.Retract() {
 				// The push may have reached the devices or not, so the last
-				// push is unknown: an empty one compares as changed, and unlike
-				// no row at all it keeps a "" row from standing in for it.
-				h.setState(ctx, userKey, stateKey, lastSub, &alertGroupState{}, log)
+				// push is marked unsent: it compares as changed, keeps the
+				// alerts acknowledged repeats compare against, and unlike no
+				// row at all keeps a "" row from standing in for it.
+				failed := alertGroupState{Unsent: true}
+				if prev != nil {
+					failed = *prev
+					failed.Unsent = true
+				}
+				// Detached, as a send cut short by the caller leaving ends
+				// with its context already done.
+				wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+				h.setState(wctx, userKey, stateKey, lastSub, &failed, log)
+				cancel()
 			}
 			continue
 		}
