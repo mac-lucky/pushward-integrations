@@ -77,10 +77,12 @@ type alertGroupState struct {
 
 // With ?retract=1 an alert name keeps its state in rows by sub key. lastSub
 // holds the name's last push, which the dedup check and the ack repeats
-// compare against, as the "" row does without retract=1. Each notification
-// group of the name has a row of its own (groupSubPrefix plus its hashed
-// groupKey) with the alerts it reported firing, and a webhook writes only its
-// own group's row, so concurrent groups of one name never overwrite each other.
+// compare against, as the "" row does without retract=1. A push without
+// retract=1 drops it, and the "" row it writes is the last push again. Each
+// notification group of the name has a row of its own (groupSubPrefix plus
+// its hashed groupKey) with the alerts it reported firing, and a webhook
+// writes only its own group's row, so concurrent groups of one name never
+// overwrite each other.
 const (
 	lastSub        = "last"
 	groupSubPrefix = "g-"
@@ -296,6 +298,12 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 		if err := ack.Send(ctx, cl, log, req, identity); err != nil {
 			log.Error("failed to send notification", "alertname", alertname, "error", err)
 			apiErr = err
+			if ov.Retract() {
+				// The push may have reached the devices or not, so the last
+				// push is unknown: an empty one compares as changed, and unlike
+				// no row at all it keeps a "" row from standing in for it.
+				h.setState(ctx, userKey, stateKey, lastSub, &alertGroupState{}, log)
+			}
 			continue
 		}
 		log.Info("notification sent", "alertname", alertname,
@@ -306,6 +314,11 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 			h.saveName(ctx, userKey, stateKey, ownSub, currentState, log)
 		} else {
 			h.updateState(ctx, userKey, stateKey, "", currentState, log)
+			// The "" row is the last push now. Only this row: the g- rows
+			// still show what other groups have firing.
+			if err := h.store.Delete(ctx, "grafana", userKey, stateKey, lastSub); err != nil {
+				log.Warn("failed to delete alert state", "key", stateKey, "error", err)
+			}
 		}
 	}
 

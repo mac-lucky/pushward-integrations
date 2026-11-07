@@ -641,3 +641,73 @@ func TestRetractSkippedResolveDropsItsGroupRow(t *testing.T) {
 		t.Errorf("notifications = %+v, want a and c firing, no Resolved", ns)
 	}
 }
+
+// A Resolved sent without retract=1 is the name's last push as well, so the
+// alert firing again under retract=1 goes out and is not skipped as a repeat
+// of the push before that Resolved.
+func TestRetractedNameFiresAgainAfterAResolveWithoutIt(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	h := handlerAt(t, srv.URL)
+	steps := []struct{ query, status string }{{"retract=1", "firing"}, {"", "resolved"}, {"retract=1", "firing"}}
+	for _, s := range steps {
+		if w := postWith(t, h, s.query, instanceGroup(s.status, "a")); w.Code != http.StatusOK {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	}
+	ns := acktest.Notifications(t, testutil.GetCalls(calls, mu))
+	if len(ns) != 3 || ns[1].Level != pushward.LevelPassive || ns[2].Level != pushward.LevelActive {
+		t.Fatalf("notifications = %+v, want the alert, its Resolved and the alert again", ns)
+	}
+}
+
+// failingPeer is a second handler on store, as another relay pod would be,
+// whose every notification send fails. A 4xx, since the client retries a 5xx
+// with backoff.
+func failingPeer(t *testing.T, store state.Store) http.Handler {
+	t.Helper()
+	srv, _, _ := testutil.MockPushWardServerWith(t, testutil.MockOptions{NotifyStatus: http.StatusForbidden})
+	return handlerWith(t, srv.URL, store)
+}
+
+// A send that failed may still have reached the devices (an answer lost on
+// the way), so it leaves the name's last push unknown. The resolve after it
+// takes the push back instead of being skipped as a repeat of the resolve
+// before the failed send.
+func TestRetractAfterAFailedSend(t *testing.T) {
+	store := state.NewMemoryStore()
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	h, peer := handlerWith(t, srv.URL, store), failingPeer(t, store)
+	steps := []struct {
+		h      http.Handler
+		status string
+	}{{h, "firing"}, {h, "resolved"}, {peer, "firing"}, {h, "resolved"}}
+	for _, s := range steps {
+		postWith(t, s.h, "retract=1", instanceGroup(s.status, "a"))
+	}
+	if rs := testutil.CallsTo(testutil.GetCalls(calls, mu), http.MethodPost, "/notifications/retract"); len(rs) != 2 {
+		t.Errorf("%d retracts, want the second resolve to take the push back too", len(rs))
+	}
+}
+
+// Nor does an older "" row stand in for the last push after a failed send:
+// Grafana's retry of the alert goes out, though that row shows it firing.
+func TestRetractAfterAFailedSendWithAnOlderRow(t *testing.T) {
+	store := state.NewMemoryStore()
+	old, _ := json.Marshal(alertGroupState{Firing: []string{"a"}})
+	if err := store.Set(context.Background(), "grafana", testKey, text.SlugHash("grafana", "DiskFull", 6), "", old, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	h, peer := handlerWith(t, srv.URL, store), failingPeer(t, store)
+	steps := []struct {
+		h      http.Handler
+		status string
+	}{{h, "resolved"}, {peer, "firing"}, {h, "firing"}}
+	for _, s := range steps {
+		postWith(t, s.h, "retract=1", instanceGroup(s.status, "a"))
+	}
+	ns := acktest.Notifications(t, testutil.GetCalls(calls, mu))
+	if len(ns) != 2 || ns[0].Level != pushward.LevelPassive || ns[1].Level != pushward.LevelActive {
+		t.Fatalf("notifications = %+v, want the Resolved and then the retried alert", ns)
+	}
+}
