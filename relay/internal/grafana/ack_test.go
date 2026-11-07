@@ -499,9 +499,9 @@ func TestRetractWithGroupsResolvingAtOnce(t *testing.T) {
 // A row written without retract=1, or by a relay before groups had rows of
 // their own, shows only the group that posted last. While one is there the
 // alert name is resolved with a Resolved push, never a retract.
-// Until a push writes the name's own last push, that row is also the last
-// push: the alert it shows firing is not sent again on its next repeat, and
-// with ack=1 its acknowledged repeats do not start over.
+// Until the name's first push or retract writes its own last push, that row
+// is also the last push: the alert it shows firing is not sent again on its
+// next repeat, and with ack=1 its acknowledged repeats do not start over.
 func TestRetractNotWhileAnOlderRowIsThere(t *testing.T) {
 	for _, query := range []string{"retract=1", "ack=1&retract=1"} {
 		t.Run(query, func(t *testing.T) {
@@ -526,5 +526,118 @@ func TestRetractNotWhileAnOlderRowIsThere(t *testing.T) {
 				t.Errorf("notifications = %+v, want only the Resolved", ns)
 			}
 		})
+	}
+}
+
+// A resolve is the name's last push too, so the alert firing again goes out,
+// with ack=1 repeating, whether or not an older row of the name is still there.
+func TestRetractedNameFiresAgain(t *testing.T) {
+	stateKey := text.SlugHash("grafana", "DiskFull", 6)
+	for _, query := range []string{"retract=1", "ack=1&retract=1"} {
+		for _, older := range []bool{false, true} {
+			name := query
+			if older {
+				name += "/older row"
+			}
+			t.Run(name, func(t *testing.T) {
+				srv, calls, mu := testutil.MockPushWardServer(t)
+				store := state.NewMemoryStore()
+				if older {
+					old, _ := json.Marshal(alertGroupState{Firing: []string{"a"}})
+					if err := store.Set(context.Background(), "grafana", testKey, stateKey, "", old, time.Hour); err != nil {
+						t.Fatal(err)
+					}
+				}
+				h := handlerWith(t, srv.URL, store)
+				for _, status := range []string{"firing", "resolved", "firing"} {
+					if w := postWith(t, h, query, instanceGroup(status, "a")); w.Code != http.StatusOK {
+						t.Fatalf("%d %s", w.Code, w.Body.String())
+					}
+				}
+				ns := acktest.Notifications(t, testutil.GetCalls(calls, mu))
+				if len(ns) != 2 || ns[1].Level != pushward.LevelActive {
+					t.Fatalf("notifications = %+v, want the alert firing again last", ns)
+				}
+				if strings.Contains(query, "ack=1") {
+					acktest.AssertAcked(t, ns[1], "relay."+stateKey, pushward.NotificationAcknowledge{RepeatSeconds: 300, ExpireSeconds: 3600})
+				}
+			})
+		}
+	}
+}
+
+// An older row left by group b: group a's Resolved replaces b's alert under
+// the shared collapse id, so b's next repeat goes out again.
+func TestRetractedNameRepeatsAnotherGroupAfterAResolve(t *testing.T) {
+	for _, q := range [][2]string{{"", "retract=1"}, {"ack=1", "ack=1&retract=1"}} {
+		t.Run(q[1], func(t *testing.T) {
+			srv, calls, mu := testutil.MockPushWardServer(t)
+			h := handlerAt(t, srv.URL)
+			steps := []struct{ query, status, instance string }{
+				{q[0], "firing", "a"}, {q[0], "firing", "b"}, {q[1], "resolved", "a"}, {q[1], "firing", "b"},
+			}
+			for _, s := range steps {
+				if w := postWith(t, h, s.query, instanceGroup(s.status, s.instance)); w.Code != http.StatusOK {
+					t.Fatalf("%d %s", w.Code, w.Body.String())
+				}
+			}
+			ns := acktest.Notifications(t, testutil.GetCalls(calls, mu))
+			if len(ns) != 4 || ns[2].Level != pushward.LevelPassive || ns[3].Level != pushward.LevelActive {
+				t.Fatalf("notifications = %+v, want a's Resolved and then b again", ns)
+			}
+			if q[0] != "" && ns[3].Acknowledge == nil {
+				t.Error("b again: no acknowledge, want its repeats started again")
+			}
+		})
+	}
+}
+
+// A resolve webhook that comes again, as Grafana resends one after an error,
+// repeats the name's last push and sends nothing: a Resolved after the
+// retract would go down with it.
+func TestRetractedResolveSentAgainSendsNothing(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	h := handlerAt(t, srv.URL)
+	for _, status := range []string{"firing", "resolved", "resolved"} {
+		if w := postWith(t, h, "retract=1", instanceGroup(status, "a")); w.Code != http.StatusOK {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	}
+	recorded := testutil.GetCalls(calls, mu)
+	if rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract"); len(rs) != 1 {
+		t.Errorf("%d retracts, want 1", len(rs))
+	}
+	if ns := acktest.Notifications(t, recorded); len(ns) != 1 {
+		t.Errorf("notifications = %+v, want only the alert", ns)
+	}
+}
+
+// An alert in two groups (two policies routing it to one contact point): once
+// one group's resolve took the push back, the other's identical resolve is
+// skipped as a repeat and still drops that group's row. Left there, it would
+// show the alert firing, and the name's next resolve would send a Resolved.
+func TestRetractSkippedResolveDropsItsGroupRow(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	h := handlerAt(t, srv.URL)
+	steps := []struct{ group, status, fp string }{
+		{"A", "firing", "a"},
+		{"B", "firing", "a"},
+		{"A", "resolved", "a"},
+		{"B", "resolved", "a"},
+		{"A", "firing", "c"},
+		{"A", "resolved", "c"},
+	}
+	for _, s := range steps {
+		payload := `{"groupKey": "` + s.group + `", "alerts": [` + diskFullAlert(s.status, s.fp) + `]}`
+		if w := postWith(t, h, "retract=1", payload); w.Code != http.StatusOK {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	}
+	recorded := testutil.GetCalls(calls, mu)
+	if rs := testutil.CallsTo(recorded, http.MethodPost, "/notifications/retract"); len(rs) != 2 {
+		t.Errorf("%d retracts, want one for a and one for c", len(rs))
+	}
+	if ns := acktest.Notifications(t, recorded); len(ns) != 2 {
+		t.Errorf("notifications = %+v, want a and c firing, no Resolved", ns)
 	}
 }

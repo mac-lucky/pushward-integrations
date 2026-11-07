@@ -253,6 +253,11 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 			prev = h.loadState(ctx, userKey, stateKey, log)
 		}
 		if currentState.equals(prev) {
+			if ov.Retract() && !firing {
+				// The name's last push already resolved these alerts, so
+				// this group's row goes as it would after its own resolve.
+				h.updateState(ctx, userKey, stateKey, ownSub, currentState, log)
+			}
 			log.Debug("alert state unchanged, skipping", "alertname", stateKey)
 			continue
 		}
@@ -390,9 +395,10 @@ func decodeState(raw json.RawMessage, stateKey string, log *slog.Logger) *alertG
 // another group's row lists one this webhook does not resolve, a row could not
 // be read, or there is a "" row. That one was written without retract=1 or
 // before groups had rows of their own, and shows only the group that posted
-// last, so other groups may fire unrecorded until it expires. Until a push
-// writes the "last" row it is also the last push, so a name already pushed
-// is not pushed again, nor its acknowledged repeats started over.
+// last, so other groups may fire unrecorded until it expires. Until the
+// name's first push or retract writes the "last" row it is also the last push,
+// so a name already pushed is not pushed again, nor its acknowledged repeats
+// started over.
 func (h *Handler) loadName(ctx context.Context, userKey, stateKey, ownSub string, g *alertGroup, log *slog.Logger) (last *alertGroupState, tracked, elsewhere bool) {
 	rows, err := h.store.GetGroup(ctx, "grafana", userKey, stateKey)
 	if err != nil {
@@ -422,9 +428,11 @@ func (h *Handler) loadName(ctx context.Context, userKey, stateKey, ownSub string
 }
 
 // saveName stores the alert name's last push once it went out or was
-// retracted, and drops this group's row once nothing in it fires.
+// retracted, and drops this group's row once nothing in it fires. A resolve
+// is kept as the last push too: without it a "" row would count as the last
+// push again, and the alert firing anew would be skipped as a repeat of it.
 func (h *Handler) saveName(ctx context.Context, userKey, stateKey, ownSub string, current *alertGroupState, log *slog.Logger) {
-	h.updateState(ctx, userKey, stateKey, lastSub, current, log)
+	h.setState(ctx, userKey, stateKey, lastSub, current, log)
 	if len(current.Firing) == 0 {
 		h.updateState(ctx, userKey, stateKey, ownSub, current, log)
 	}
@@ -468,7 +476,11 @@ func (h *Handler) updateState(ctx context.Context, userKey, stateKey, sub string
 		}
 		return
 	}
+	h.setState(ctx, userKey, stateKey, sub, current, log)
+}
 
+// setState stores current in the row sub of the alert name for StaleTimeout.
+func (h *Handler) setState(ctx context.Context, userKey, stateKey, sub string, current *alertGroupState, log *slog.Logger) {
 	data, err := json.Marshal(current)
 	if err != nil {
 		log.Warn("failed to marshal alert state", "key", stateKey, "error", err)
