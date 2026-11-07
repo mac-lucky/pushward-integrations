@@ -74,7 +74,8 @@ type alertGroupState struct {
 	Firing   []string `json:"firing"`
 	Resolved []string `json:"resolved"`
 	// Unsent marks a last push whose send failed: it equals no state, so the
-	// next webhook goes out, and its alerts are still those of the push before.
+	// next webhook goes out, and its alerts firing are still those of the push
+	// before, or none after a resolve.
 	Unsent bool `json:"unsent,omitempty"`
 }
 
@@ -311,6 +312,11 @@ func (h *Handler) handleWebhook(ctx context.Context, input *struct {
 				// row at all keeps a "" row from standing in for it.
 				failed := *prev
 				failed.Unsent = true
+				// A resolve has stopped the name's repeats already, so its
+				// alerts firing again repeat again.
+				if !firing {
+					failed.Firing = nil
+				}
 				// Detached, as a send cut short by the caller leaving ends
 				// with its context already done.
 				wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)

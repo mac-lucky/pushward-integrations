@@ -736,6 +736,29 @@ func TestRetractAckAfterAFailedSend(t *testing.T) {
 	acktest.AssertPlain(t, ns[1])
 }
 
+// A resolve stops the alert's repeats before it sends, so after its send
+// failed the alert firing again is a new incident and repeats again.
+func TestRetractAckAfterAFailedResolve(t *testing.T) {
+	store := state.NewMemoryStore()
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	zero := 0
+	peerSrv, _, _ := testutil.MockPushWardServerWith(t, testutil.MockOptions{NotifyStatus: http.StatusForbidden, RetractDevices: &zero})
+	h, peer := handlerWith(t, srv.URL, store), handlerWith(t, peerSrv.URL, store)
+	steps := []struct {
+		h      http.Handler
+		status string
+	}{{h, "firing"}, {peer, "resolved"}, {h, "firing"}}
+	for _, s := range steps {
+		postWith(t, s.h, "ack=1&retract=1", instanceGroup(s.status, "a"))
+	}
+	ns := acktest.Notifications(t, testutil.GetCalls(calls, mu))
+	if len(ns) != 2 {
+		t.Fatalf("%d notifications, want the alert and the alert again", len(ns))
+	}
+	acktest.AssertAcked(t, ns[1], "relay."+text.SlugHash("grafana", "DiskFull", 6),
+		pushward.NotificationAcknowledge{RepeatSeconds: 300, ExpireSeconds: 3600})
+}
+
 // ctxStore fails a write on a done context, as PostgresStore does.
 type ctxStore struct{ *state.MemoryStore }
 
