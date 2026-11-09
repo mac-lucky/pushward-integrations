@@ -1,0 +1,34 @@
+{
+  "issue": {
+    "self": "https://jira.example.com/rest/api/2/issue/20417",
+    "id": 20417,
+    "key": "HELP-318",
+    "changelog": {"startAt": 0, "maxResults": 0, "total": 0, "histories": null},
+    "fields": {
+      "issuetype": {
+        "self": "https://jira.example.com/rest/api/2/issuetype/10021",
+        "id": 10021,
+        "name": "[System] Service request",
+        "subtask": false
+      },
+      "project": {
+        "self": "https://jira.example.com/rest/api/2/project/10004",
+        "id": 10004,
+        "key": "HELP",
+        "name": "Harbourline Help Desk"
+      },
+      "summary": "Badge reader at the loading dock is offline",
+      "status": {
+        "self": "https://jira.example.com/rest/api/2/status/10010",
+        "name": "Waiting for support",
+        "id": 10010,
+        "statusCategory": {"id": 2, "key": "new", "name": "To Do"}
+      },
+      "priority": {
+        "self": "https://jira.example.com/rest/api/2/priority/2",
+        "name": "High",
+        "id": 2
+      }
+    }
+  }
+}

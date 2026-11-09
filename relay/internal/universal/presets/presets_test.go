@@ -497,3 +497,41 @@ func TestAzureActivityLogIsNotAnAlertCard(t *testing.T) {
 		t.Error("an activity-log alert matches the azure-monitor alert preset")
 	}
 }
+
+// Jira sites can have more custom fields than Flatten keeps, ahead of the
+// summary.
+func TestJiraCustomFieldsDoNotHideTheSummary(t *testing.T) {
+	var b strings.Builder
+	b.WriteString(`{"issue":{"id":"1","key":"HELP-1","self":"https://jira.example.com/rest/api/2/issue/1","fields":{`)
+	for i := range universal.MaxPaths + 50 {
+		fmt.Fprintf(&b, `"customfield_%d":{"value":"x"},`, 10000+i)
+	}
+	b.WriteString(`"summary":"Printer offline","status":{"name":"Open"}}}}`)
+	fields, _, err := universal.Flatten(strings.NewReader(b.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _, ok := Match("", fields); !ok || p.ID != "jira-issue" {
+		t.Errorf("Match = %q, %v; want jira-issue", p.ID, ok)
+	}
+}
+
+// The news in a comment event is the comment, not the ticket's status.
+func TestJiraCommentIsNotAnIssueEvent(t *testing.T) {
+	var doc map[string]any
+	if err := json.Unmarshal(mustRead(t, filepath.Join("testdata", "jira-issue_webhook.json")), &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["comment"] = map[string]any{"id": "10000", "body": "Rebooted it, still offline"}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fields, _, err := universal.Flatten(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, _, ok := Match("", fields); ok && p.ID == "jira-issue" {
+		t.Error("a comment event matches the jira-issue preset")
+	}
+}

@@ -195,6 +195,8 @@ func TestNormalizeKey(t *testing.T) {
 		"123-45-6789":                        "*",
 		"4111 1111 1111 1111":                "*",
 		"q7Xk-2Vb9_Rt4N-m8Zc3W":              "*",
+		"customfield_10031":                  "*",
+		"customfield":                        "customfield",
 	}
 	for in, want := range cases {
 		if got := NormalizeKey(in); got != want {

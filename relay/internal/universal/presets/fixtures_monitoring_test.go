@@ -5,6 +5,7 @@ import "github.com/mac-lucky/pushward-integrations/relay/internal/universal"
 func init() {
 	const (
 		ogAlert   = "3f1c2a9e-7b4d-4e21-9c55-0a8d6e2b7f13"
+		jsmAlert  = "8e4b1d07-52c6-4a39-b1f7-6d0c9a3e2f84"
 		onCallURL = "https://oncall.example.net/a/grafana-oncall-app/alert-groups/IX7KQ2PLM5N8A"
 		nrIssue   = "5c0d8e21-9a47-4f3b-8c16-2e7a9b40d5f8"
 		nrURL     = "https://radar-api.service.newrelic.com/accounts/7654321/issues/" + nrIssue + "?notifier=WEBHOOK"
@@ -20,6 +21,13 @@ func init() {
 		"opsgenie_close.json": {
 			preset: "opsgenie", title: "db-3 disk almost full",
 			corr: ogAlert, sev: universal.SeverityCritical, life: universal.LifecycleEnded,
+		},
+		// Jira Service Management's Webhook integration sends the Opsgenie shape.
+		"opsgenie_jsm_create.json": {
+			preset: "opsgenie", title: "Checkout API returning 502s", corr: jsmAlert, life: universal.LifecycleOngoing,
+		},
+		"opsgenie_jsm_close.json": {
+			preset: "opsgenie", title: "Checkout API returning 502s", corr: jsmAlert, life: universal.LifecycleEnded,
 		},
 		"grafana-oncall_created.json": {
 			preset: "grafana-oncall", title: "Checkout p95 latency above 2s", body: "Shop alerts",

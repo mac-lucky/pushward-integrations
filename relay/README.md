@@ -407,6 +407,8 @@ A request whose headers name a sender with no route here (the Lidarr, Readarr an
 | Harbor | `harbor-artifact`, `harbor-cloudevents` | - |
 | Honeybadger | `honeybadger-check-in`, `honeybadger-fault`, `honeybadger-uptime` | `honeybadger-check-in` alert, `honeybadger-fault` alert, `honeybadger-uptime` alert |
 | Jenkins Notification plugin | `jenkins-notification` | `jenkins-notification` progress |
+| Jira | `jira-issue` | - |
+| Jira Service Management alerts | `opsgenie` | `opsgenie` alert |
 | Lidarr | `lidarr-download-failure`, `lidarr-download`, `lidarr-grab`, `lidarr-health` (needs `?source=lidarr`), `lidarr-import-failure` | `lidarr-health` alert |
 | Netdata | `netdata-alert`, `netdata-reachability` (needs `?source=netdata`) | - |
 | Netlify | `netlify-deploy` | `netlify-deploy` progress |
@@ -425,6 +427,10 @@ A request whose headers name a sender with no route here (the Lidarr, Readarr an
 | Whisparr | `whisparr-download` (needs `?source=whisparr`), `whisparr-grab` (needs `?source=whisparr`), `whisparr-health` (needs `?source=whisparr`), `whisparr-v3-download`, `whisparr-v3-grab` | `whisparr-health` alert |
 
 For GitHub, subscribe to workflow runs rather than check runs: a check run opens one card per job. Jenkins's default "all" events end a build twice (COMPLETED and FINALIZED); the second is dropped while the card is ending. A preset table can mark a value as `update`: it changes an open card (an Opsgenie note, a Honeybadger comment) and never opens one.
+
+Jira Service Management alerts arrive in the Opsgenie format. Add a Webhook integration under Operations (Premium or Enterprise only), set the URL to `https://relay.pushward.app/?source=jsm`, add the header `Authorization: Bearer hlk_...`, and **Turn on integration**. Post the created, acknowledged, closed and deleted actions: a card ends only on Close or Delete. Leave escalations and custom actions out, because an escalation carries none of the alert's fields and arrives as a separate notification, and a custom action can reopen a closed card. **Add alert description to payload** only covers Create, so the description shows when the alert opens and later events show the action name.
+
+Tickets need a Jira Automation rule, since a Jira admin webhook can't set an `Authorization` header and the relay would answer `401`. Use a **Send web request** action: POST to `https://relay.pushward.app/?source=jira`, body **Work item data (Jira format)**, and the `Authorization` header marked Hidden. Every run of the rule is one notification with the ticket's summary and status, so trigger it on created and transitioned rather than every edit. No link on it: the only URL at a fixed path is a REST API one.
 
 Set `PUSHWARD_UNIVERSAL_PRESETS=false` to send every payload as a plain notification instead.
 

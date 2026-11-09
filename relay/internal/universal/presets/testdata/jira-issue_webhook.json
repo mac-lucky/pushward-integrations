@@ -1,0 +1,32 @@
+{
+  "timestamp": 1790583120000,
+  "webhookEvent": "jira:issue_updated",
+  "issue_event_type_name": "issue_generic",
+  "user": {
+    "self": "https://jira.example.com/rest/api/2/user?accountId=70121:4c8e2f1a",
+    "accountId": "70121:4c8e2f1a",
+    "displayName": "Dock Support"
+  },
+  "issue": {
+    "id": "20417",
+    "self": "https://jira.example.com/rest/api/2/issue/20417",
+    "key": "HELP-318",
+    "fields": {
+      "issuetype": {"id": "10021", "name": "[System] Service request", "subtask": false},
+      "project": {"id": "10004", "key": "HELP", "name": "Harbourline Help Desk"},
+      "summary": "Badge reader at the loading dock is offline",
+      "status": {
+        "name": "In Progress",
+        "id": "10011",
+        "statusCategory": {"id": 4, "key": "indeterminate", "name": "In Progress"}
+      },
+      "priority": {"name": "High", "id": "2"}
+    }
+  },
+  "changelog": {
+    "id": "48211",
+    "items": [
+      {"field": "status", "fieldtype": "jira", "fromString": "Waiting for support", "toString": "In Progress"}
+    ]
+  }
+}

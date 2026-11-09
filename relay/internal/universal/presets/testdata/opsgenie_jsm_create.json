@@ -1,0 +1,21 @@
+{
+  "source": {"name": "web", "type": "API"},
+  "alert": {
+    "updatedAt": 1790583120000000000,
+    "tags": ["checkout"],
+    "teams": ["platform"],
+    "recipients": ["platform_escalation"],
+    "message": "Checkout API returning 502s",
+    "username": "oncall@example.org",
+    "alertId": "8e4b1d07-52c6-4a39-b1f7-6d0c9a3e2f84",
+    "source": "oncall@example.org",
+    "alias": "checkout-502",
+    "tinyId": "23",
+    "createdAt": 1790583120000,
+    "userId": "b7d31c52-9e04-4f6a-8a21-3c5e7f90d1a6",
+    "entity": ""
+  },
+  "action": "Create",
+  "integrationId": "c2f6a904-1b7e-4d38-9f52-8a0e4d7c3b19",
+  "integrationName": "PushWard"
+}

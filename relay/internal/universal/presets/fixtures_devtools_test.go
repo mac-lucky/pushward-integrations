@@ -81,6 +81,14 @@ func init() {
 			corr: "612004583", life: ended,
 		},
 
+		// Jira
+		"jira-issue_automation.json": {
+			preset: "jira-issue", title: "Badge reader at the loading dock is offline", body: "Waiting for support",
+		},
+		"jira-issue_webhook.json": {
+			preset: "jira-issue", title: "Badge reader at the loading dock is offline", body: "In Progress",
+		},
+
 		// Bitbucket Cloud
 		"bitbucket-push_push.json": {
 			preset: "bitbucket-push", title: "northwind-labs/route-planner", body: "Skip closed depots when planning routes",

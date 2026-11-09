@@ -275,19 +275,22 @@ var (
 	digit   = regexp.MustCompile(`[0-9]`)
 )
 
+var jiraCustomKey = regexp.MustCompile(`^customfield_[0-9]+$`)
+
 // NormalizeKey returns "*" for keys that are generated identifiers or
 // personal data rather than schema: uuids, pure numbers, dates, hex strings of
 // 8 or more characters that contain a digit (so a plain word like "deadbeef"
 // survives), keys holding an email address or a phone number, JWTs and API
 // keys, and keys with a generated token in them ("custom.cf_<random>", see
-// randomKey).
+// randomKey). Jira's custom field ids count too: a site can have more of them
+// than MaxPaths, ahead of the summary.
 func NormalizeKey(key string) string {
 	// Too long for any path; Flatten skips such keys before asking.
 	if len(key) > MaxPathBytes || !utf8.ValidString(key) {
 		return "*"
 	}
 	switch {
-	case uuidKey.MatchString(key), numKey.MatchString(key), dateKey.MatchString(key):
+	case uuidKey.MatchString(key), numKey.MatchString(key), dateKey.MatchString(key), jiraCustomKey.MatchString(key):
 		return "*"
 	case hexKey.MatchString(key) && digit.MatchString(key):
 		return "*"
