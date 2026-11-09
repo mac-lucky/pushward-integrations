@@ -286,7 +286,7 @@ Append query parameters to a webhook URL to override how the relay handles that 
 |---|---|---|
 | `channels` | comma-separated subset of `activity`, `notification` | Restricts delivery to the listed surfaces. `channels=notification` never creates or updates a Live Activity (each event is delivered as a one-shot notification where the provider has one); `channels=activity` drops every push notification the handler would send (new and resolved) but keeps the Live Activity flow. |
 | `priority` | integer `0`-`10` | Overrides the provider's `priority` config for the activity it creates. |
-| `level` | `passive`, `active`, `time-sensitive`, `critical` | Overrides the interruption level of every notification the handler sends. |
+| `level` | `passive` or `0`, `active` or `1`, `time-sensitive` or `2`, `critical` or `3` | Overrides the interruption level of every notification the handler sends. |
 | `ack` | `1` or `0` | `1` makes an alert's push repeat until someone taps **Acknowledge** on it, or until `ack_expire` runs out; the resolve stops it. Grafana, Uptime Kuma, Gatus, Komodo and universal-route alerts. See [Acknowledged alerts](#acknowledged-alerts-ack1). |
 | `ack_repeat` | seconds, `30`-`3600` (default `300`) | How often the alert repeats. Needs `ack=1`. |
 | `ack_expire` | seconds, `60`-`10800` (default `3600`) | How long it keeps repeating if nobody acknowledges it. Needs `ack=1`. |

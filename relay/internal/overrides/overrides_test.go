@@ -57,6 +57,25 @@ func TestParseValid(t *testing.T) {
 	}
 }
 
+// The default is not a real level, so level=0 can't pass by matching it.
+func TestParseLevelNumbers(t *testing.T) {
+	for q, want := range map[string]string{
+		"0":    "passive",
+		"1":    "active",
+		"2":    "time-sensitive",
+		"3":    "critical",
+		"%201": "active",
+	} {
+		o, err := Parse(mustQuery(t, "level="+q))
+		if err != nil {
+			t.Fatalf("level=%s: %v", q, err)
+		}
+		if got := o.LevelOr("unset"); got != want {
+			t.Errorf("level=%s: LevelOr = %q, want %q", q, got, want)
+		}
+	}
+}
+
 func TestParseInvalid(t *testing.T) {
 	for _, q := range []string{
 		"channels=",
@@ -69,6 +88,8 @@ func TestParseInvalid(t *testing.T) {
 		"priority=",
 		"level=bogus",
 		"level=",
+		"level=4",
+		"level=-1",
 		"ack=",
 		"ack=yes",
 		"ack=1&ack_repeat=29",
@@ -83,6 +104,7 @@ func TestParseInvalid(t *testing.T) {
 		"ack=0&ack_repeat=60",
 		// A passive notification does not alert, so it cannot repeat.
 		"ack=1&level=passive",
+		"ack=1&level=0",
 		"retract=",
 		"retract=yes",
 	} {

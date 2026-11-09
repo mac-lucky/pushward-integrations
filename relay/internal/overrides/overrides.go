@@ -108,12 +108,17 @@ func (o *Overrides) LevelOr(def string) string {
 	return def
 }
 
-// validLevels matches the pushward.Level* constants.
-var validLevels = map[string]bool{
-	"passive":        true,
-	"active":         true,
-	"time-sensitive": true,
-	"critical":       true,
+// levels maps each accepted value to its name, one of the pushward.Level*
+// constants. The numbers are the same 0-3 the API's level field takes.
+var levels = map[string]string{
+	"passive":        "passive",
+	"0":              "passive",
+	"active":         "active",
+	"1":              "active",
+	"time-sensitive": "time-sensitive",
+	"2":              "time-sensitive",
+	"critical":       "critical",
+	"3":              "critical",
 }
 
 // Parse reads and validates the channels / priority / level / ack / retract query
@@ -153,9 +158,10 @@ func Parse(q url.Values) (*Overrides, error) {
 	}
 
 	if q.Has("level") {
-		l := strings.TrimSpace(q.Get("level"))
-		if !validLevels[l] {
-			return nil, fmt.Errorf("invalid level %q: must be one of passive, active, time-sensitive, critical", l)
+		raw := strings.TrimSpace(q.Get("level"))
+		l, ok := levels[raw]
+		if !ok {
+			return nil, fmt.Errorf("invalid level %q: must be one of passive (0), active (1), time-sensitive (2), critical (3)", raw)
 		}
 		o.Level = l
 	}
