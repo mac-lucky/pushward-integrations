@@ -530,8 +530,9 @@ type Content struct {
 	// replaced as a whole on each update, like Tiles. The server derives
 	// progress (checked/total) and state ("3 of 8") from them for older app
 	// builds. Once every item is checked it ends the activity a few seconds
-	// later. Read the ticks back with Client.GetActivity. The approval, media,
-	// clock, board, log and image fields are a 422 on this template.
+	// later. Read the ticks back with Client.GetActivity. Sending the approval,
+	// media, clock, board, log or image fields with this template is a 422; a
+	// switch to it clears the ones the activity inherited.
 	//
 	// TickURL is the server-signed URL the devices tick through. Read-only:
 	// decoded from responses, stripped by the server from writes, and absent

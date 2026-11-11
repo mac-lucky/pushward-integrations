@@ -1297,6 +1297,32 @@ func TestValidateChecklist(t *testing.T) {
 	}
 }
 
+// TestChecklistSwitchDropsInheritedRows: a board or log slug patched into a
+// checklist loses its stored tiles or lines instead of failing on them, as on
+// the server. Rows sent with the checklist are still rejected (above).
+func TestChecklistSwitchDropsInheritedRows(t *testing.T) {
+	for name, seed := range map[string]string{
+		"board": `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1"}]}}`,
+		"log":   `{"state":"ongoing","content":{"template":"log","progress":0,"lines":[{"text":"x"}]}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "list", "List")
+			if got := patchActivity(t, srv.URL, "list", seed); got != 200 {
+				t.Fatalf("seed: got status %d, want 200", got)
+			}
+			body := `{"content":{"template":"checklist","items":[{"id":"a","label":"A"}]}}`
+			if got := patchActivity(t, srv.URL, "list", body); got != 200 {
+				t.Errorf("switch: got status %d, want 200", got)
+			}
+			// A tick that names no template merges onto the stored checklist.
+			if got := patchActivity(t, srv.URL, "list", `{"content":{"subtitle":"today"}}`); got != 200 {
+				t.Errorf("follow-up: got status %d, want 200", got)
+			}
+		})
+	}
+}
+
 // TestChecklistClient drives a checklist through the client the way a bridge
 // would: create, seed, then a patch that relabels and adds items without
 // touching their ticks. A duplicate id comes back as the server's 400.

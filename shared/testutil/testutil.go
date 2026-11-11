@@ -551,6 +551,15 @@ func mockPushWardServer(t *testing.T, opts MockOptions) (*httptest.Server, *[]AP
 			return
 		}
 		merged := mergePatch(cloneJSON(stored), patch.Content)
+		// Like the server, a checklist drops inherited board tiles and log
+		// lines; validateChecklist rejects only the ones this patch sent.
+		if merged["template"] == pushward.TemplateChecklist {
+			for _, k := range []string{"tiles", "lines"} {
+				if _, sent := patch.Content[k]; !sent {
+					delete(merged, k)
+				}
+			}
+		}
 		var content apiContent
 		if err := reencode(merged, &content); err != nil {
 			respondError(w, http.StatusBadRequest, "invalid content: "+err.Error())
@@ -1315,7 +1324,8 @@ func validateContent(c *apiContent) error {
 
 // validateChecklist re-implements the server's checklist rules: 1-8 items
 // with unique ids of 1-16 [A-Za-z0-9_-] characters and labels of 1-40 runes,
-// and no board tiles or log lines. The approval, media, clock and image gates
+// and no board tiles or log lines sent with it (the PATCH handler has already
+// dropped inherited ones). The approval, media, clock and image gates
 // in validateContent already refuse their fields here.
 func validateChecklist(c *apiContent) error {
 	if len(c.Items) < 1 || len(c.Items) > 8 {
