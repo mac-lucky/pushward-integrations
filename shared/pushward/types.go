@@ -343,7 +343,9 @@ type ApprovalAnswer struct {
 // 1-16 characters of [A-Za-z0-9_-], unique within the list; Label is 1-40
 // runes. Checked is a pointer so a patch can leave it out: on PATCH an item
 // whose ID is already stored keeps the server's checked value when Checked is
-// nil, while an explicit true or false sets it. On create nil means unchecked.
+// nil, while an explicit true or false sets it. On create nil means unchecked,
+// and so it does on an update that sets an ended activity back to ongoing:
+// the server treats that as a new run and keeps no ticks from the last one.
 type ChecklistItem struct {
 	ID      string `json:"id"`
 	Label   string `json:"label"`
