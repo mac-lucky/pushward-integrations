@@ -3,6 +3,7 @@ package testutil_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -1240,5 +1241,94 @@ func TestValidateApprovalRejectsAlarm(t *testing.T) {
 	body := `{"state":"ongoing","content":{"template":"approval","progress":0,"end_date":1800000000,"alarm":true,"options":[{"id":"yes","title":"Yes"},{"id":"no","title":"No"}]}}`
 	if got := patchActivity(t, srv.URL, "approve", body); got != 400 {
 		t.Errorf("got status %d, want 400", got)
+	}
+}
+
+func TestValidateChecklist(t *testing.T) {
+	items := func(n int) string {
+		parts := make([]string, n)
+		for i := range parts {
+			parts[i] = `{"id":"i` + strconv.Itoa(i) + `","label":"Item ` + strconv.Itoa(i) + `"}`
+		}
+		return `[` + strings.Join(parts, ",") + `]`
+	}
+	checklist := func(fields string) string {
+		return `{"state":"ongoing","content":{"template":"checklist","progress":0,` + fields + `}}`
+	}
+	label := func(s string) string { return checklist(`"items":[{"id":"a","label":"` + s + `"}]`) }
+	id := func(s string) string { return checklist(`"items":[{"id":"` + s + `","label":"A"}]`) }
+	tests := []struct {
+		name       string
+		body       string
+		wantStatus int
+	}{
+		{"happy path", checklist(`"icon":"cart","items":[{"id":"milk","label":"Milk","checked":true},{"id":"eggs","label":"Eggs","checked":false},{"id":"bread","label":"Bread"}]`), 200},
+		{"eight items", checklist(`"items":` + items(8)), 200},
+		{"no items", checklist(`"items":[]`), 400},
+		{"items missing", checklist(`"icon":"cart"`), 400},
+		{"nine items", checklist(`"items":` + items(9)), 400},
+		{"tick_url on a write is ignored", checklist(`"items":` + items(1) + `,"tick_url":"https://example.com/t?token=x"`), 200},
+		{"id of 16", id(strings.Repeat("a", 16)), 200},
+		{"id charset", id("A-z_9"), 200},
+		{"id empty", id(""), 400},
+		{"id of 17", id(strings.Repeat("a", 17)), 400},
+		{"id with a dot", id("a.b"), 400},
+		{"id with a space", id("a b"), 400},
+		{"duplicate id", checklist(`"items":[{"id":"a","label":"A"},{"id":"a","label":"B"}]`), 400},
+		{"label empty", label(""), 400},
+		{"label of 40 runes", label(strings.Repeat("\u00e9", 40)), 200},
+		{"label of 41 runes", label(strings.Repeat("\u00e9", 41)), 400},
+		{"checked not a bool", checklist(`"items":[{"id":"a","label":"A","checked":"yes"}]`), 400},
+		{"board tiles", checklist(`"items":` + items(1) + `,"tiles":[{"label":"A","value":"1"}]`), 400},
+		{"log lines", checklist(`"items":` + items(1) + `,"lines":[{"text":"x"}]`), 400},
+		{"approval options", checklist(`"items":` + items(1) + `,"options":[{"id":"yes","title":"Yes"},{"id":"no","title":"No"}]`), 400},
+		{"media field", checklist(`"items":` + items(1) + `,"media_title":"Song"`), 400},
+		{"clock field", checklist(`"items":` + items(1) + `,"direction":"up"`), 400},
+		{"image field", checklist(`"items":` + items(1) + `,"image_url":"https://example.com/a.png"`), 400},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "list", "List")
+			if got := patchActivity(t, srv.URL, "list", tt.body); got != tt.wantStatus {
+				t.Errorf("got status %d, want %d", got, tt.wantStatus)
+			}
+		})
+	}
+}
+
+// TestChecklistClient drives a checklist through the client the way a bridge
+// would: create, seed, then a patch that relabels and adds items without
+// touching their ticks. A duplicate id comes back as the server's 400.
+func TestChecklistClient(t *testing.T) {
+	srv, _, _ := testutil.MockPushWardServer(t)
+	c := pushward.NewClient(srv.URL, "hlk_test")
+	ctx := context.Background()
+	if err := c.CreateActivity(ctx, "groceries", "Groceries", 5, 3600, 0); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	seed := pushward.UpdateRequest{State: pushward.StateOngoing, Content: pushward.Content{
+		Template: pushward.TemplateChecklist,
+		Icon:     "cart",
+		Items: []pushward.ChecklistItem{
+			{ID: "milk", Label: "Milk"},
+			{ID: "eggs", Label: "Eggs", Checked: pushward.BoolPtr(true)},
+		},
+	}}
+	if err := c.UpdateActivity(ctx, "groceries", seed); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	relabel := pushward.PatchRequest{Content: &pushward.ContentPatch{Items: []pushward.ChecklistItem{
+		{ID: "milk", Label: "Oat milk"}, {ID: "eggs", Label: "Eggs"}, {ID: "bread", Label: "Bread"},
+	}}}
+	if err := c.PatchActivity(ctx, "groceries", relabel); err != nil {
+		t.Fatalf("patch: %v", err)
+	}
+	dup := pushward.PatchRequest{Content: &pushward.ContentPatch{Items: []pushward.ChecklistItem{
+		{ID: "milk", Label: "Milk"}, {ID: "milk", Label: "More milk"},
+	}}}
+	var he *pushward.HTTPError
+	if err := c.PatchActivity(ctx, "groceries", dup); !errors.As(err, &he) || he.StatusCode != http.StatusBadRequest {
+		t.Errorf("duplicate id: err = %v, want a 400 *HTTPError", err)
 	}
 }

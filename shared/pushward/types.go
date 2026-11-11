@@ -25,6 +25,7 @@ const (
 	TemplateLog       = "log"
 	TemplateMedia     = "media"
 	TemplateApproval  = "approval"
+	TemplateChecklist = "checklist"
 	// TemplateTimer is the name the docs give the countdown template. The
 	// server accepts it on input only: stored rows and responses still say
 	// TemplateCountdown.
@@ -338,6 +339,17 @@ type ApprovalAnswer struct {
 	By     string `json:"by"`
 }
 
+// ChecklistItem is one row of the checklist template (1-8 per activity). ID is
+// 1-16 characters of [A-Za-z0-9_-], unique within the list; Label is 1-40
+// runes. Checked is a pointer so a patch can leave it out: on PATCH an item
+// whose ID is already stored keeps the server's checked value when Checked is
+// nil, while an explicit true or false sets it. On create nil means unchecked.
+type ChecklistItem struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Checked *bool  `json:"checked,omitempty"`
+}
+
 // Content is the superset of all content fields used across integrations.
 // Unused fields use omitempty and won't appear in JSON.
 type Content struct {
@@ -513,6 +525,19 @@ type Content struct {
 	Answer    *ApprovalAnswer  `json:"answer,omitempty"`
 	Step      *int             `json:"step,omitempty"`
 	StepCount *int             `json:"step_count,omitempty"`
+
+	// Checklist template: 1-8 items the user ticks from the Lock Screen,
+	// replaced as a whole on each update, like Tiles. The server derives
+	// progress (checked/total) and state ("3 of 8") from them for older app
+	// builds. Once every item is checked it ends the activity a few seconds
+	// later. Read the ticks back with Client.GetActivity. The approval, media,
+	// clock, board, log and image fields are a 422 on this template.
+	//
+	// TickURL is the server-signed URL the devices tick through. Read-only:
+	// decoded from responses, stripped by the server from writes, and absent
+	// from ContentPatch.
+	Items   []ChecklistItem `json:"items,omitempty"`
+	TickURL string          `json:"tick_url,omitempty"`
 }
 
 // OrgTargetRequest narrows who an organization key's activity or notification
@@ -706,6 +731,12 @@ type ContentPatch struct {
 	OnExpire  *string          `json:"on_expire,omitempty"`
 	Step      *int             `json:"step,omitempty"`
 	StepCount *int             `json:"step_count,omitempty"`
+
+	// Checklist template. Items replaces the whole list, but an item whose ID
+	// is already stored and whose Checked is nil keeps its stored checked
+	// value, so relabelling or reordering unticks nothing. tick_url is
+	// server-owned and has no patch field.
+	Items []ChecklistItem `json:"items,omitempty"`
 }
 
 // PatchRequest is the typed body for PATCH /activities/{slug}. State is a
@@ -910,8 +941,11 @@ type WidgetContent struct {
 	Periods []SchedulePeriod `json:"periods,omitempty"`
 	// Flow powers the flow template. Required when template == flow.
 	Flow *WidgetFlow `json:"flow,omitempty"`
-	// Cells powers the heatmap template - 7-154 values, one per day, oldest
-	// first; a nil cell is a day without data and goes out as null. Required
+	// Cells powers the heatmap template - 7-154 daily values, oldest first. A
+	// nil element is a day with no data and marshals as JSON null in place, so
+	// every day keeps its position; at least one cell must be a number. The
+	// last cell is the day of EndDate when set, otherwise the day of the
+	// widget's last update. MinValue / MaxValue pin the color bands. Required
 	// when template == heatmap, ignored otherwise.
 	Cells []*float64 `json:"cells,omitempty"`
 	// SubtitleTimer renders the subtitle slot as a live timer on any template;
@@ -1311,7 +1345,8 @@ func (r *SendNotificationRequest) FillSourceDisplayName() {
 // which carry only the fields a producer is allowed to set.
 //
 // Content is the same superset used on the write path, so a read of an
-// approval activity lands its server-recorded Content.Answer here.
+// approval activity lands its server-recorded Content.Answer here, and a read
+// of a checklist its ticks in Content.Items.
 type Activity struct {
 	Kind      string  `json:"kind"`
 	ID        string  `json:"id"`

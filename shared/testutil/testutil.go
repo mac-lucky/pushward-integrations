@@ -30,7 +30,7 @@ type APICall struct {
 var (
 	slugPattern    = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
 	hexColor       = regexp.MustCompile(`^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$`)
-	validTemplates = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "timer": true, "gauge": true, "timeline": true, "board": true, "log": true, "media": true, "approval": true}
+	validTemplates = map[string]bool{"generic": true, "alert": true, "steps": true, "countdown": true, "timer": true, "gauge": true, "timeline": true, "board": true, "log": true, "media": true, "approval": true, "checklist": true}
 	// validDirections includes "" because an omitted direction counts down.
 	validDirections = map[string]bool{"": true, string(pushward.CountdownDown): true, string(pushward.CountdownUp): true}
 	// durationString is the server's string form of duration and goal.
@@ -73,6 +73,7 @@ var (
 		string(pushward.ApprovalStyleSecondary): true,
 		string(pushward.ApprovalStyleDestructive): true,
 	}
+	checklistItemID = regexp.MustCompile(`^[A-Za-z0-9_-]{1,16}$`)
 )
 
 // Media template bounds, mirroring the server's validation. The clock-skew
@@ -176,6 +177,16 @@ type apiContent struct {
 	Answer               map[string]any                     `json:"answer,omitempty"`
 	Step                 *int                               `json:"step,omitempty"`
 	StepCount            *int                               `json:"step_count,omitempty"`
+	// tick_url is left out on purpose: the server strips it from writes.
+	Items []testChecklistItem `json:"items,omitempty"`
+}
+
+// testChecklistItem mirrors pushward.ChecklistItem. Checked is typed so a
+// non-bool value fails the decode, as on the server.
+type testChecklistItem struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Checked *bool  `json:"checked,omitempty"`
 }
 
 // testApprovalOption mirrors pushward.ApprovalOption.
@@ -1181,7 +1192,7 @@ func validateContent(c *apiContent) error {
 	// Under merge-patch, template may be absent on ticks; only per-template
 	// required-field validation is gated on it.
 	if c.Template != "" && !validTemplates[c.Template] {
-		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, timer, gauge, timeline, board, log, media, approval")
+		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, timer, gauge, timeline, board, log, media, approval, checklist")
 	}
 	if c.Progress < 0 || c.Progress > 1 {
 		return fmt.Errorf("progress must be 0.0-1.0")
@@ -1293,8 +1304,39 @@ func validateContent(c *apiContent) error {
 		if err := validateApproval(c); err != nil {
 			return err
 		}
+	case pushward.TemplateChecklist:
+		if err := validateChecklist(c); err != nil {
+			return err
+		}
 	}
 
+	return nil
+}
+
+// validateChecklist re-implements the server's checklist rules: 1-8 items
+// with unique ids of 1-16 [A-Za-z0-9_-] characters and labels of 1-40 runes,
+// and no board tiles or log lines. The approval, media, clock and image gates
+// in validateContent already refuse their fields here.
+func validateChecklist(c *apiContent) error {
+	if len(c.Items) < 1 || len(c.Items) > 8 {
+		return fmt.Errorf("items must have between 1 and 8 entries for checklist template, got %d", len(c.Items))
+	}
+	if len(c.Tiles) > 0 || len(c.Lines) > 0 {
+		return fmt.Errorf("tiles and lines are not valid on the checklist template")
+	}
+	seen := make(map[string]bool, len(c.Items))
+	for i, it := range c.Items {
+		if !checklistItemID.MatchString(it.ID) {
+			return fmt.Errorf("items[%d].id must be 1-16 characters of A-Z, a-z, 0-9, '_' or '-'", i)
+		}
+		if seen[it.ID] {
+			return fmt.Errorf("items[%d].id %q is already used", i, it.ID)
+		}
+		seen[it.ID] = true
+		if n := utf8.RuneCountInString(it.Label); n < 1 || n > 40 {
+			return fmt.Errorf("items[%d].label is required and at most 40 runes", i)
+		}
+	}
 	return nil
 }
 

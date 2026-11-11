@@ -149,6 +149,7 @@ server.ListenAndServe(ctx, cfg.Server.Address, mux) // graceful shutdown on ctx 
 | `CreateWidget(ctx, CreateWidgetRequest)` | `POST /widgets` | Upsert on (user, slug); `409` = `widget.limit_exceeded` |
 | `UpdateWidget(ctx, slug, UpdateWidgetRequest)` | `PATCH /widgets/{slug}` | Sends `Content-Type: application/merge-patch+json` (RFC 7396) |
 | `DeleteWidget(ctx, slug)` | `DELETE /widgets/{slug}` | - |
+| `GetActivity(ctx, slug)` / `GetWidget(ctx, slug)` | `GET /activities/{slug}`, `GET /widgets/{slug}` | Read shapes; an approval's answer and a checklist's ticks come back on `Content`. No `?wait=` long-poll, so poll on your own interval |
 
 ```go
 client.CreateActivity(ctx, "build-42", "CI Build #42", cfg.PushWard.Priority, 900, 1800)
@@ -204,13 +205,59 @@ and `URL` into a `pw1` envelope in `Encrypted` and clears them. Level, collapse 
 source, icon, media, metadata, actions, acknowledge and tags stay readable: the server needs them
 to deliver the push. The bridges and the relay send readable text and never hold a user's key.
 
-**Models & constants:** `Content` (superset for full updates) vs `ContentPatch` (all-pointer, every field keeps `json:",omitempty"` per RFC 7396); template constants `TemplateGeneric` / `Alert` / `Steps` / `Countdown` / `Gauge` / `Timeline` / `Board` / `Log` / `Media` / `Approval`, plus `TemplateTimer`, the docs' name for countdown, which the server accepts and stores as `countdown`; the countdown clock takes `Direction` (`CountdownDown` by default, or `CountdownUp` to count up from `start_date` with no end), `Goal` (up only, in seconds), `ShowRuler` and the write-only `Paused` switch; the `board` template carries `[]BoardTile` (1-4 tiles), `log` carries `[]LogLine` (1-20 lines, newest-first), `media` carries the player fields below, `approval` carries `[]ApprovalOption` (2-4 options) plus the answer fields below; approval style constants `ApprovalStylePrimary` / `Secondary` / `Destructive` and answer constants `ApprovalAnswerNone` / `ByUser` / `ByExpired`; trend constants `TrendUp` / `TrendDown` / `TrendFlat` (board tiles); log-level constants `LogInfo` / `LogWarn` / `LogError`; `TapAction` routing on every template/widget via `tap_action` / `url_action` / `secondary_url_action` (richer than the legacy `url` / `secondary_url` strings - adds method/headers/body for silent webhooks); notification levels `LevelActive` / `LevelPassive`; widget templates `WidgetTemplateValue` / `Progress` / `Status` / `Gauge` / `StatList` / `Trend` / `Countdown` / `Battery` / `Schedule` / `Flow`; severities `SeverityCritical` / `Warning` / `Info`; accent colors `ColorRed` / `Orange` / `Green` / `Blue` (matching iOS system colors). Helpers: `BoolPtr` / `IntPtr` / `Int64Ptr` / `Float64Ptr` / `StringPtr`, `SeverityColor` / `SeverityIcon`, `DisplayNameFor` / `(SendNotificationRequest).FillSourceDisplayName`, `MediaImage(url)`.
+**Models & constants:** `Content` (superset for full updates) vs `ContentPatch` (all-pointer, every field keeps `json:",omitempty"` per RFC 7396); template constants `TemplateGeneric` / `Alert` / `Steps` / `Countdown` / `Gauge` / `Timeline` / `Board` / `Log` / `Media` / `Approval` / `Checklist`, plus `TemplateTimer`, the docs' name for countdown, which the server accepts and stores as `countdown`; the countdown clock takes `Direction` (`CountdownDown` by default, or `CountdownUp` to count up from `start_date` with no end), `Goal` (up only, in seconds), `ShowRuler` and the write-only `Paused` switch; the `board` template carries `[]BoardTile` (1-4 tiles), `log` carries `[]LogLine` (1-20 lines, newest-first), `media` carries the player fields below, `approval` carries `[]ApprovalOption` (2-4 options) plus the answer fields below, `checklist` carries `[]ChecklistItem` (1-8 items) plus the read-only `tick_url`; approval style constants `ApprovalStylePrimary` / `Secondary` / `Destructive` and answer constants `ApprovalAnswerNone` / `ByUser` / `ByExpired`; trend constants `TrendUp` / `TrendDown` / `TrendFlat` (board tiles); log-level constants `LogInfo` / `LogWarn` / `LogError`; `TapAction` routing on every template/widget via `tap_action` / `url_action` / `secondary_url_action` (richer than the legacy `url` / `secondary_url` strings - adds method/headers/body for silent webhooks); notification levels `LevelActive` / `LevelPassive`; widget templates `WidgetTemplateValue` / `Progress` / `Status` / `Gauge` / `StatList` / `Trend` / `Countdown` / `Battery` / `Schedule` / `Flow` / `Heatmap`; severities `SeverityCritical` / `Warning` / `Info`; accent colors `ColorRed` / `Orange` / `Green` / `Blue` (matching iOS system colors). Helpers: `BoolPtr` / `IntPtr` / `Int64Ptr` / `Float64Ptr` / `StringPtr`, `SeverityColor` / `SeverityIcon`, `DisplayNameFor` / `(SendNotificationRequest).FillSourceDisplayName`, `MediaImage(url)`.
 
-**Activity images:** `generic`, `steps` and `media` carry an optional poster image - `image_url` + `image_shape` (`ImageShapePoster` / `Square` / `Circle`, square when omitted) + `image_thumbhash`. The server answers **422 on every other template**, so never set them on `alert`, `countdown`, `gauge`, `timeline`, `board`, `log` or `approval`. Switching *to* one of those templates clears an inherited trio server-side, so a merge-patch never has to null them; a switch between `generic`, `steps` and `media` keeps them, because all three have the slot. `image_url` must be https with a host and no userinfo (max 2048 runes). The **device** fetches it, not the server, and it also refuses private/LAN hosts - so a LAN URL is accepted by the API and never renders. `image_thumbhash` is padded standard-alphabet base64 (max 64 chars) and is the only tier that survives an unreachable URL, so for a self-hosted media server it *is* the image. Widgets have no image support. See the [`poster`](#packages) package for building all three from a provider's artwork URL.
+**Activity images:** `generic`, `steps` and `media` carry an optional poster image - `image_url` + `image_shape` (`ImageShapePoster` / `Square` / `Circle`, square when omitted) + `image_thumbhash`. The server answers **422 on every other template**, so never set them on `alert`, `countdown`, `gauge`, `timeline`, `board`, `log`, `approval` or `checklist`. Switching *to* one of those templates clears an inherited trio server-side, so a merge-patch never has to null them; a switch between `generic`, `steps` and `media` keeps them, because all three have the slot. `image_url` must be https with a host and no userinfo (max 2048 runes). The **device** fetches it, not the server, and it also refuses private/LAN hosts - so a LAN URL is accepted by the API and never renders. `image_thumbhash` is padded standard-alphabet base64 (max 64 chars) and is the only tier that survives an unreachable URL, so for a self-hosted media server it *is* the image. Widgets have no image support. See the [`poster`](#packages) package for building all three from a provider's artwork URL.
 
 **Media template:** a now-playing card. `media_title` (<=128 runes, the big line; the activity `name` is the source device and `subtitle` the artist / show / channel), `playback_state` (`PlaybackPlaying` / `Paused` / `Stopped` / `Buffering`, paused when omitted; only playing ticks on the device), `position_seconds` (>=0) sampled at `position_at` (unix seconds; the server stamps its receipt time when omitted and rejects more than 300s in the future), `duration_seconds` (>0, <=604800; omit for an indeterminate stream - no bar, elapsed still ticks), `volume` (0..1), `favorite`, and `controls` - a `MediaControls` of optional `TapAction` slots (`previous`, `play_pause`, `play`, `pause`, `next`, `stop`, `favorite`, `volume_down`, `volume_up`) plus `extra` (<=3, `icon` required). iOS picks `play` / `pause` by state and falls back to `play_pause`. An http(s) control is always a silent webhook: the server defaults an empty method to `POST` and answers **422 to `foreground: true`**; a custom scheme opens that app. All eight fields are **422 on any other template** and a switch away from `media` clears them. On `ContentPatch`, re-sending `position_seconds` without `position_at` makes the server re-stamp `position_at` (so send both to keep your own clock); `controls` deep-merges per slot while `controls.extra` replaces wholesale. Position-only ticks go out as low-priority coalescable pushes, everything else as structural. `url_action` / `secondary_url_action` are accepted but not rendered on `media`.
 
 **Approval template:** a question card with 2-4 answer buttons. `state` is the question, `options` is `[]ApprovalOption`: `id` (required, unique, `^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$` - it lands in `answer.option`), `title` (required, <=24 runes), `style` (`ApprovalStylePrimary` / `Secondary` / `Destructive`; omitted, the first option renders primary and the rest secondary), `icon` (required with 3+ options), `authentication_required` (the phone asks for an unlock before the option fires; the server cannot enforce it, and Android builds older than the field fire with one tap; a locked iPhone asks for Face ID or the passcode before any button on the card anyway). An option **with** a `url` is a producer webhook and follows the silent-webhook rules above (empty method becomes `POST`, `foreground: true` is 422 on http(s)); an option **without** one gets a server-signed answer URL filled in: the first tap wins, the server records `answer` (`option` + `at` + `by`), pushes the answered card high-priority and ends the activity a few seconds later (`dismissal_ttl` controls how long it lingers). `source` (<=24 runes) labels who is asking; `details` holds up to 2 label/value rows. `end_date` plus `on_expire` (an option id or `ApprovalAnswerNone`) arms a deadline: the sweep records the default with `by: "expired"`; any `on_expire` requires `end_date` on the merged content. `answer` is **server-owned and read-only** - never send it. Re-sending a changed `options` set (any field, `authentication_required` included) or a new `step` starts a new round and clears it; an identical set on the same step keeps it. All of these fields are 422 on other templates, and `approval` rejects `url_action` / `secondary_url_action` (those slots mirror the first two options for older app builds) plus `alarm` / `snooze_seconds`.
+
+**Checklist template:** a short list the user ticks from the Lock Screen, Dynamic Island, watch, Mac or Android notification. `items` is `[]ChecklistItem`, 1-8 of them: `id` (1-16 characters of `[A-Za-z0-9_-]`, unique), `label` (1-40 runes) and `checked`. Every write replaces the whole list, but `checked` is a `*bool` for a reason: on a PATCH an item whose `id` is already stored keeps the server's value when `checked` is nil, so relabelling or adding items never unticks what the user did. Set it only to force a state. The server fills `progress` and `state` ("3 of 8") for older app builds and ends the activity a few seconds after the last tick; unticking before then keeps it alive. `tick_url` is the signed URL the devices tick through - read-only, decoded from responses and stripped from writes. There is no callback and no answers feed: read the ticks back with `GetActivity`. The approval, media, clock, board, log and image fields are 422 on `checklist`.
+
+```go
+client.CreateActivity(ctx, "groceries", "Groceries", 5, 3600, 0)
+client.UpdateActivity(ctx, "groceries", pushward.UpdateRequest{
+    State: pushward.StateOngoing,
+    Content: pushward.Content{
+        Template: pushward.TemplateChecklist,
+        Icon:     "cart",
+        Items: []pushward.ChecklistItem{
+            {ID: "milk", Label: "Milk"},
+            {ID: "eggs", Label: "Eggs"},
+            {ID: "bread", Label: "Bread", Checked: pushward.BoolPtr(true)},
+        },
+    },
+})
+
+a, err := client.GetActivity(ctx, "groceries")
+if err != nil {
+    return err
+}
+for _, it := range a.Content.Items {
+    if it.Checked != nil && *it.Checked {
+        log.Printf("ticked: %s", it.Label)
+    }
+}
+```
+
+**Heatmap widget:** a calendar grid of daily values, like a GitHub contributions graph. `cells` is `[]*float64` with 7-154 entries (one to 22 weeks), oldest first. A nil entry is a day with no data: it goes out as `null` in its own slot and the apps draw it differently from a zero, so map gaps to nil, not 0. At least one cell must be a number. The last cell is the day of `end_date` when set, otherwise the day of the widget's last update. The server keeps the raw values; the apps band them into five levels between `min_value` (default 0) and `max_value` (default the largest cell). `label`, `value` and `unit` fill the header.
+
+```go
+client.CreateWidget(ctx, pushward.CreateWidgetRequest{
+    Slug: "commits",
+    Name: "Commits",
+    Content: pushward.WidgetContent{
+        Template: pushward.WidgetTemplateHeatmap,
+        Label:    "Commits",
+        Value:    pushward.Float64Ptr(15),
+        Cells: []*float64{
+            pushward.Float64Ptr(3), pushward.Float64Ptr(0), nil, // nil: no data that day
+            pushward.Float64Ptr(5), pushward.Float64Ptr(1), pushward.Float64Ptr(2), pushward.Float64Ptr(4),
+        },
+    },
+})
+```
 
 ### Poster images (`poster`)
 

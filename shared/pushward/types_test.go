@@ -337,6 +337,47 @@ func TestCompactTrailingWireNames(t *testing.T) {
 	}
 }
 
+// TestChecklistWireNames: a nil Checked stays off the wire (on PATCH that is
+// what keeps the stored tick), an explicit false still travels, and tick_url
+// is decoded from a read but has no patch field.
+func TestChecklistWireNames(t *testing.T) {
+	items := []ChecklistItem{
+		{ID: "milk", Label: "Milk", Checked: BoolPtr(true)},
+		{ID: "eggs", Label: "Eggs", Checked: BoolPtr(false)},
+		{ID: "bread", Label: "Bread"},
+	}
+	want := `"items":[{"id":"milk","label":"Milk","checked":true},{"id":"eggs","label":"Eggs","checked":false},{"id":"bread","label":"Bread"}]`
+	for name, v := range map[string]any{
+		"Content":      Content{Template: TemplateChecklist, Items: items},
+		"ContentPatch": ContentPatch{Items: items},
+	} {
+		if got := string(mustJSON(t, v)); !strings.Contains(got, want) {
+			t.Errorf("%s = %s, want it to contain %s", name, got, want)
+		}
+	}
+	if jsonKeys(t, ContentPatch{})["items"] || jsonKeys(t, Content{})["items"] {
+		t.Error("an unset items list must stay off the wire")
+	}
+
+	var back Content
+	raw := `{"template":"checklist","items":[{"id":"milk","label":"Milk","checked":true},{"id":"bread","label":"Bread"}],"tick_url":"https://api.example/t?token=abc"}`
+	if err := json.Unmarshal([]byte(raw), &back); err != nil {
+		t.Fatal(err)
+	}
+	wantItems := []ChecklistItem{{ID: "milk", Label: "Milk", Checked: BoolPtr(true)}, {ID: "bread", Label: "Bread"}}
+	if !reflect.DeepEqual(back.Items, wantItems) {
+		t.Errorf("items = %+v, want %+v", back.Items, wantItems)
+	}
+	if back.TickURL != "https://api.example/t?token=abc" {
+		t.Errorf("tick_url = %q", back.TickURL)
+	}
+	for _, f := range reflect.VisibleFields(reflect.TypeOf(ContentPatch{})) {
+		if strings.HasPrefix(f.Tag.Get("json"), "tick_url") {
+			t.Error("ContentPatch must not carry tick_url: it is server-owned")
+		}
+	}
+}
+
 func mustJSON(t *testing.T, v any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)

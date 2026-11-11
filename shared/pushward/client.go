@@ -1104,7 +1104,8 @@ func (c *Client) DeleteWidget(ctx context.Context, slug string) error {
 // own gets a server-minted answer URL, and the tap is recorded on
 // Content.Answer rather than delivered to the producer. Polling this call
 // until Answer is non-nil is how a bridge with no inbound endpoint learns the
-// outcome. A missing slug returns a typed *HTTPError with Code
+// outcome. It is also how a producer reads a checklist's ticks: each item's
+// Checked in Content.Items is what the server recorded. A missing slug returns a typed *HTTPError with Code
 // ErrCodeActivityNotFound, so a caller can tell "no such round" from "round
 // still open" without string matching.
 func (c *Client) GetActivity(ctx context.Context, slug string) (*Activity, error) {
