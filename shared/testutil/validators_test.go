@@ -1292,6 +1292,9 @@ func TestValidateChecklist(t *testing.T) {
 		{"alarm", checklist(`"items":` + items(1) + `,"alarm":false`), 400},
 		{"tap_action", checklist(`"items":` + items(1) + `,"tap_action":{"url":"https://example.com"}`), 200},
 		{"items on another template", `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1"}],"items":` + items(1) + `}}`, 400},
+		{"auto_end false", checklist(`"items":` + items(1) + `,"auto_end":false`), 200},
+		{"auto_end not a bool", checklist(`"items":` + items(1) + `,"auto_end":"no"`), 400},
+		{"auto_end on another template", `{"state":"ongoing","content":{"template":"generic","progress":0.5,"auto_end":false}}`, 400},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1338,12 +1341,12 @@ func TestChecklistSwitchDropsInheritedRows(t *testing.T) {
 }
 
 // TestChecklistSwitchAwayDropsItems: a checklist patched into another template
-// loses its stored items, as on the server, while items sent with that other
-// template are rejected (TestValidateChecklist).
+// loses its stored items and auto_end, as on the server, while the same fields
+// sent with that other template are rejected (TestValidateChecklist).
 func TestChecklistSwitchAwayDropsItems(t *testing.T) {
 	srv, _, _ := testutil.MockPushWardServer(t)
 	createActivity(t, srv.URL, "list", "List")
-	seed := `{"state":"ongoing","content":{"template":"checklist","progress":0,"items":[{"id":"a","label":"A"}]}}`
+	seed := `{"state":"ongoing","content":{"template":"checklist","progress":0,"items":[{"id":"a","label":"A"}],"auto_end":false}}`
 	if got := patchActivity(t, srv.URL, "list", seed); got != 200 {
 		t.Fatalf("seed: got status %d, want 200", got)
 	}

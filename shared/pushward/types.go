@@ -532,17 +532,21 @@ type Content struct {
 	// replaced as a whole on each update, like Tiles. The server derives
 	// progress (checked/total) and state ("3 of 8") from them for older app
 	// builds. Once every item is checked it ends the activity a few seconds
-	// later. Read the ticks back with Client.GetActivity. Every item is a tap
+	// later, unless AutoEnd is false: then the card stays ongoing at "All done"
+	// until you end it. Read the ticks back with Client.GetActivity. Every item is a tap
 	// target, so sending URL, SecondaryURL, URLAction, SecondaryURLAction or
 	// Alarm with this template is a 422, as are the approval, media, clock,
 	// board, log and image fields; a switch to it clears the ones the activity
-	// inherited. Items on any other template are a 422 too.
+	// inherited. Items and AutoEnd on any other template are a 422 too.
+	//
+	// AutoEnd nil means the server default (true).
 	//
 	// TickURL is the server-signed URL the devices tick through. Read-only:
 	// decoded from responses, stripped by the server from writes, and absent
 	// from ContentPatch.
 	Items   []ChecklistItem `json:"items,omitempty"`
 	TickURL string          `json:"tick_url,omitempty"`
+	AutoEnd *bool           `json:"auto_end,omitempty"`
 }
 
 // OrgTargetRequest narrows who an organization key's activity or notification
@@ -740,8 +744,10 @@ type ContentPatch struct {
 	// Checklist template. Items replaces the whole list, but an item whose ID
 	// is already stored and whose Checked is nil keeps its stored checked
 	// value, so relabelling or reordering unticks nothing. tick_url is
-	// server-owned and has no patch field.
-	Items []ChecklistItem `json:"items,omitempty"`
+	// server-owned and has no patch field. AutoEnd nil keeps the stored
+	// value; the null that resets it to true is unreachable here.
+	Items   []ChecklistItem `json:"items,omitempty"`
+	AutoEnd *bool           `json:"auto_end,omitempty"`
 }
 
 // PatchRequest is the typed body for PATCH /activities/{slug}. State is a

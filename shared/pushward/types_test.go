@@ -358,6 +358,18 @@ func TestChecklistWireNames(t *testing.T) {
 	if jsonKeys(t, ContentPatch{})["items"] || jsonKeys(t, Content{})["items"] {
 		t.Error("an unset items list must stay off the wire")
 	}
+	// auto_end: nil is the server default and stays off; false must travel.
+	if jsonKeys(t, ContentPatch{})["auto_end"] || jsonKeys(t, Content{})["auto_end"] {
+		t.Error("an unset auto_end must stay off the wire")
+	}
+	for name, v := range map[string]any{
+		"Content":      Content{Template: TemplateChecklist, Items: items, AutoEnd: BoolPtr(false)},
+		"ContentPatch": ContentPatch{AutoEnd: BoolPtr(false)},
+	} {
+		if got := string(mustJSON(t, v)); !strings.Contains(got, `"auto_end":false`) {
+			t.Errorf("%s = %s, want auto_end false on the wire", name, got)
+		}
+	}
 
 	var back Content
 	raw := `{"template":"checklist","items":[{"id":"milk","label":"Milk","checked":true},{"id":"bread","label":"Bread"}],"tick_url":"https://api.example/t?token=abc"}`

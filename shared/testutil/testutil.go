@@ -178,7 +178,8 @@ type apiContent struct {
 	Step                 *int                               `json:"step,omitempty"`
 	StepCount            *int                               `json:"step_count,omitempty"`
 	// tick_url is left out on purpose: the server strips it from writes.
-	Items []testChecklistItem `json:"items,omitempty"`
+	Items   []testChecklistItem `json:"items,omitempty"`
+	AutoEnd *bool               `json:"auto_end,omitempty"`
 }
 
 // testChecklistItem mirrors pushward.ChecklistItem. Checked is typed so a
@@ -555,7 +556,7 @@ func mockPushWardServer(t *testing.T, opts MockOptions) (*httptest.Server, *[]AP
 		// inherited fields the new template refuses; validateContent rejects
 		// only the ones this patch sent. Other switches keep what they
 		// inherit here, though the server clears those too.
-		drop := []string{"items"}
+		drop := []string{"items", "auto_end"}
 		if merged["template"] == pushward.TemplateChecklist {
 			drop = []string{
 				"tiles", "lines", "url", "secondary_url", "url_action", "secondary_url_action", "alarm",
@@ -1287,8 +1288,8 @@ func validateContent(c *apiContent) error {
 	if err := validateClockFields(c); err != nil {
 		return err
 	}
-	if len(c.Items) > 0 && c.Template != "" && c.Template != pushward.TemplateChecklist {
-		return fmt.Errorf("items are only valid on the checklist template, got %q", c.Template)
+	if (len(c.Items) > 0 || c.AutoEnd != nil) && c.Template != "" && c.Template != pushward.TemplateChecklist {
+		return fmt.Errorf("items and auto_end are only valid on the checklist template, got %q", c.Template)
 	}
 	if err := validateWindow(c); err != nil {
 		return err
