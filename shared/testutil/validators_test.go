@@ -1305,15 +1305,19 @@ func TestValidateChecklist(t *testing.T) {
 }
 
 // TestChecklistSwitchDropsInheritedRows: a slug patched into a checklist loses
-// its stored tiles, lines, button slots and alarm instead of failing on them,
-// as on the server. The same fields sent with the checklist are still
-// rejected (above).
+// its stored tiles, lines, button slots, alarm and image, media, approval and
+// clock fields instead of failing on them, as on the server. The same fields
+// sent with the checklist are still rejected (above).
 func TestChecklistSwitchDropsInheritedRows(t *testing.T) {
 	for name, seed := range map[string]string{
-		"board":   `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1"}]}}`,
-		"log":     `{"state":"ongoing","content":{"template":"log","progress":0,"lines":[{"text":"x"}]}}`,
-		"buttons": `{"state":"ongoing","content":{"template":"generic","progress":0,"url":"https://example.com","secondary_url":"https://example.com/2","url_action":{"url":"https://example.com"},"secondary_url_action":{"url":"https://example.com/2"}}}`,
-		"alarm":   `{"state":"ongoing","content":{"template":"countdown","progress":0,"end_date":1800000000,"alarm":true}}`,
+		"board":    `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1"}]}}`,
+		"log":      `{"state":"ongoing","content":{"template":"log","progress":0,"lines":[{"text":"x"}]}}`,
+		"buttons":  `{"state":"ongoing","content":{"template":"generic","progress":0,"url":"https://example.com","secondary_url":"https://example.com/2","url_action":{"url":"https://example.com"},"secondary_url_action":{"url":"https://example.com/2"}}}`,
+		"alarm":    `{"state":"ongoing","content":{"template":"countdown","progress":0,"end_date":1800000000,"alarm":true}}`,
+		"image":    `{"state":"ongoing","content":{"template":"generic","progress":0,"end_date":1800000000,"live_progress":true,"image_url":"https://example.com/a.png","image_shape":"circle","image_thumbhash":"1QcSHQRnh493V4dIh4eXh1h4kJUI"}}`,
+		"media":    `{"state":"ongoing","content":{"template":"media","progress":0,"media_title":"Song","playback_state":"playing","position_seconds":12,"duration_seconds":200,"volume":0.5,"favorite":true,"controls":{"next":{"url":"https://example.com/next"}}}}`,
+		"approval": `{"state":"ongoing","content":{"template":"approval","progress":0,"state":"Ship it?","source":"CI","options":[{"id":"yes","title":"Yes"},{"id":"no","title":"No"}],"details":[{"label":"Branch","value":"main"}]}}`,
+		"clock":    `{"state":"ongoing","content":{"template":"countdown","progress":0,"start_date":1700000000,"direction":"up","goal":3600,"show_ruler":true}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv, _, _ := testutil.MockPushWardServer(t)

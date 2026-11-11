@@ -551,12 +551,19 @@ func mockPushWardServer(t *testing.T, opts MockOptions) (*httptest.Server, *[]AP
 			return
 		}
 		merged := mergePatch(cloneJSON(stored), patch.Content)
-		// Like the server, a template switch drops the inherited fields the
-		// new template refuses; validateContent rejects only the ones this
-		// patch sent.
+		// Like the server on a switch into or out of a checklist, drop the
+		// inherited fields the new template refuses; validateContent rejects
+		// only the ones this patch sent. Other switches keep what they
+		// inherit here, though the server clears those too.
 		drop := []string{"items"}
 		if merged["template"] == pushward.TemplateChecklist {
-			drop = []string{"tiles", "lines", "url", "secondary_url", "url_action", "secondary_url_action", "alarm"}
+			drop = []string{
+				"tiles", "lines", "url", "secondary_url", "url_action", "secondary_url_action", "alarm",
+				"image_url", "image_shape", "image_thumbhash", "live_progress",
+				"media_title", "playback_state", "position_seconds", "duration_seconds", "position_at", "volume", "favorite", "controls",
+				"options", "source", "details", "on_expire", "answer", "step", "step_count",
+				"direction", "show_ruler", "goal", "paused_at", "paused_seconds",
+			}
 		}
 		for _, k := range drop {
 			if _, sent := patch.Content[k]; !sent {
