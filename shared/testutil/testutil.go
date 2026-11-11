@@ -551,13 +551,16 @@ func mockPushWardServer(t *testing.T, opts MockOptions) (*httptest.Server, *[]AP
 			return
 		}
 		merged := mergePatch(cloneJSON(stored), patch.Content)
-		// Like the server, a checklist drops inherited board tiles and log
-		// lines; validateChecklist rejects only the ones this patch sent.
+		// Like the server, a template switch drops the inherited fields the
+		// new template refuses; validateContent rejects only the ones this
+		// patch sent.
+		drop := []string{"items"}
 		if merged["template"] == pushward.TemplateChecklist {
-			for _, k := range []string{"tiles", "lines"} {
-				if _, sent := patch.Content[k]; !sent {
-					delete(merged, k)
-				}
+			drop = []string{"tiles", "lines", "url", "secondary_url", "url_action", "secondary_url_action", "alarm"}
+		}
+		for _, k := range drop {
+			if _, sent := patch.Content[k]; !sent {
+				delete(merged, k)
 			}
 		}
 		var content apiContent
@@ -1245,7 +1248,8 @@ func validateContent(c *apiContent) error {
 		return err
 	}
 	// url / secondary_url (and the structured tap-action slots) are accepted on
-	// every template - the server no longer gates tap routing to steps/alert.
+	// every template but approval and checklist, whose validators refuse them -
+	// the server no longer gates tap routing to steps/alert.
 	if err := validateColor(c.AccentColor, "accent_color"); err != nil {
 		return err
 	}
@@ -1275,6 +1279,9 @@ func validateContent(c *apiContent) error {
 	}
 	if err := validateClockFields(c); err != nil {
 		return err
+	}
+	if len(c.Items) > 0 && c.Template != "" && c.Template != pushward.TemplateChecklist {
+		return fmt.Errorf("items are only valid on the checklist template, got %q", c.Template)
 	}
 	if err := validateWindow(c); err != nil {
 		return err
@@ -1324,15 +1331,21 @@ func validateContent(c *apiContent) error {
 
 // validateChecklist re-implements the server's checklist rules: 1-8 items
 // with unique ids of 1-16 [A-Za-z0-9_-] characters and labels of 1-40 runes,
-// and no board tiles or log lines sent with it (the PATCH handler has already
-// dropped inherited ones). The approval, media, clock and image gates
-// in validateContent already refuse their fields here.
+// and no board tiles, log lines, button slots or alarm sent with it (the PATCH
+// handler has already dropped inherited ones). The approval, media, clock and
+// image gates in validateContent already refuse their fields here.
 func validateChecklist(c *apiContent) error {
 	if len(c.Items) < 1 || len(c.Items) > 8 {
 		return fmt.Errorf("items must have between 1 and 8 entries for checklist template, got %d", len(c.Items))
 	}
 	if len(c.Tiles) > 0 || len(c.Lines) > 0 {
 		return fmt.Errorf("tiles and lines are not valid on the checklist template")
+	}
+	if c.URL != "" || c.SecondaryURL != "" || c.URLAction != nil || c.SecondaryURLAction != nil {
+		return fmt.Errorf("url, secondary_url, url_action and secondary_url_action are not valid on the checklist template; every item is a tap target")
+	}
+	if c.Alarm != nil {
+		return fmt.Errorf("alarm is not valid on the checklist template")
 	}
 	seen := make(map[string]bool, len(c.Items))
 	for i, it := range c.Items {

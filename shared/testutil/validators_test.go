@@ -1285,6 +1285,13 @@ func TestValidateChecklist(t *testing.T) {
 		{"media field", checklist(`"items":` + items(1) + `,"media_title":"Song"`), 400},
 		{"clock field", checklist(`"items":` + items(1) + `,"direction":"up"`), 400},
 		{"image field", checklist(`"items":` + items(1) + `,"image_url":"https://example.com/a.png"`), 400},
+		{"url", checklist(`"items":` + items(1) + `,"url":"https://example.com"`), 400},
+		{"secondary_url", checklist(`"items":` + items(1) + `,"secondary_url":"https://example.com"`), 400},
+		{"url_action", checklist(`"items":` + items(1) + `,"url_action":{"url":"https://example.com"}`), 400},
+		{"secondary_url_action", checklist(`"items":` + items(1) + `,"secondary_url_action":{"url":"https://example.com"}`), 400},
+		{"alarm", checklist(`"items":` + items(1) + `,"alarm":false`), 400},
+		{"tap_action", checklist(`"items":` + items(1) + `,"tap_action":{"url":"https://example.com"}`), 200},
+		{"items on another template", `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1"}],"items":` + items(1) + `}}`, 400},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1297,13 +1304,16 @@ func TestValidateChecklist(t *testing.T) {
 	}
 }
 
-// TestChecklistSwitchDropsInheritedRows: a board or log slug patched into a
-// checklist loses its stored tiles or lines instead of failing on them, as on
-// the server. Rows sent with the checklist are still rejected (above).
+// TestChecklistSwitchDropsInheritedRows: a slug patched into a checklist loses
+// its stored tiles, lines, button slots and alarm instead of failing on them,
+// as on the server. The same fields sent with the checklist are still
+// rejected (above).
 func TestChecklistSwitchDropsInheritedRows(t *testing.T) {
 	for name, seed := range map[string]string{
-		"board": `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1"}]}}`,
-		"log":   `{"state":"ongoing","content":{"template":"log","progress":0,"lines":[{"text":"x"}]}}`,
+		"board":   `{"state":"ongoing","content":{"template":"board","progress":0,"tiles":[{"label":"A","value":"1"}]}}`,
+		"log":     `{"state":"ongoing","content":{"template":"log","progress":0,"lines":[{"text":"x"}]}}`,
+		"buttons": `{"state":"ongoing","content":{"template":"generic","progress":0,"url":"https://example.com","secondary_url":"https://example.com/2","url_action":{"url":"https://example.com"},"secondary_url_action":{"url":"https://example.com/2"}}}`,
+		"alarm":   `{"state":"ongoing","content":{"template":"countdown","progress":0,"end_date":1800000000,"alarm":true}}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			srv, _, _ := testutil.MockPushWardServer(t)
@@ -1320,6 +1330,21 @@ func TestChecklistSwitchDropsInheritedRows(t *testing.T) {
 				t.Errorf("follow-up: got status %d, want 200", got)
 			}
 		})
+	}
+}
+
+// TestChecklistSwitchAwayDropsItems: a checklist patched into another template
+// loses its stored items, as on the server, while items sent with that other
+// template are rejected (TestValidateChecklist).
+func TestChecklistSwitchAwayDropsItems(t *testing.T) {
+	srv, _, _ := testutil.MockPushWardServer(t)
+	createActivity(t, srv.URL, "list", "List")
+	seed := `{"state":"ongoing","content":{"template":"checklist","progress":0,"items":[{"id":"a","label":"A"}]}}`
+	if got := patchActivity(t, srv.URL, "list", seed); got != 200 {
+		t.Fatalf("seed: got status %d, want 200", got)
+	}
+	if got := patchActivity(t, srv.URL, "list", `{"content":{"template":"generic"}}`); got != 200 {
+		t.Errorf("switch: got status %d, want 200", got)
 	}
 }
 
