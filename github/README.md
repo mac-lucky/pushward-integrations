@@ -37,7 +37,7 @@ GitHub Actions API --poll--> pushward-github --POST/PATCH /activities--> PushWar
 - **Accent colors & deep links** - green while running, red on failure; each update carries the workflow-run URL and a secondary link to the repository.
 - **Eviction guards** - a tracked run is evicted if its jobs endpoint goes silent for longer than `stale_timeout + 30s`, and any run wedged `in_progress` is reclaimed after an absolute 12-hour lifetime so it never blocks new-run detection.
 - **Two polling tiers** - detecting a new run costs a request per watched repo, while advancing one already in flight costs a request per *run*. They are separate knobs because of that: `idle_interval` buys detection latency and sets the idle request rate, `interval` is what someone watching the card sees and stays cheap however many repos there are.
-- **Conditional requests and a workflow filter** - the detection probe sends `If-None-Match`, and GitHub does not charge a `304` against the primary rate limit, so polling an idle repo is effectively free. Repos with no workflows at all (or with Actions disabled) are written off for half an hour at a time rather than probed every pass.
+- **Conditional requests and a workflow filter** - every read sends `If-None-Match`, and GitHub does not charge a `304` against the primary rate limit, so polling an idle repo is effectively free, and a run in flight costs a request only on the ticks where one of its jobs moved. Repos with no workflows at all (or with Actions disabled) are written off for half an hour at a time rather than probed every pass.
 - **GitHub rate-limit handling** - detection paces itself to fit the allowance left in the current window, dropping repo discovery first and never the runs it is already tracking, so a card on your lock screen keeps moving even when the budget is thin. Rate-limited responses (`429`, or `403` with rate-limit headers) are retried honoring `Retry-After` / `X-RateLimit-Reset`; only a rate-limit response carrying no usable timing at all backs off exponentially from a minute, which is what GitHub's own guidance prescribes for a secondary limit. Other 4xx fail fast.
 - **Server-managed cleanup** - `cleanup_delay` and `stale_timeout` are passed to the server as `ended_ttl` / `stale_ttl`, so finished and stalled activities are auto-deleted server-side.
 
@@ -158,9 +158,10 @@ repos x 3600 / idle_interval        detection
 
 At the 60s default that is 44 repos x 60 = 2,640 an hour, or 53% of the budget. **The arithmetic scales with your repo count, and it is easy to walk past the ceiling without noticing** - the same 44 repos at a 30s interval is 5,280 an hour, over the limit. The bridge logs the figure it computes at startup and warns when it exceeds the budget, so check the first few lines of the log after changing either interval or adding repos.
 
-That figure is a sanity check on the configuration, not an accounting of the window: it counts only what the poll loop itself issues, and three things move the real number below it.
+That figure is a sanity check on the configuration, not an accounting of the window: it counts only what the poll loop itself issues, and four things move the real number below it.
 
 - The detection probe is conditional, and GitHub does not charge a `304` against the primary rate limit. Once each repo has been seen, an idle pass costs close to nothing.
+- Every other read is conditional too: the jobs of a run in flight are billed only on a tick where something in them changed, and repo discovery only when the repo list did.
 - Repos with no workflows are not polled at all. On a typical account that is a large share of everything discovery finds. The presence check that establishes this is conditional too, so a skipped repo costs one request ever rather than one per re-check.
 - If the allowance does run short anyway, detection stretches itself to fit what is left of the window instead of spending it. Discovery stops first, then detection. Runs already being tracked are never dropped - the reserve held back for them is sized from how many are in flight and how long until the window refills - so cards on screen keep updating.
 

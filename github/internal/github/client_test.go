@@ -57,6 +57,9 @@ func TestGetInProgressRuns_Success(t *testing.T) {
 		if r.URL.Query().Get("status") != "in_progress" {
 			t.Errorf("expected status=in_progress query param")
 		}
+		if r.URL.Query().Get("exclude_pull_requests") != "true" {
+			t.Errorf("expected exclude_pull_requests=true query param")
+		}
 		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{
 			TotalCount: 1,
 			WorkflowRuns: []WorkflowRun{
@@ -315,6 +318,86 @@ func TestGetJobs_Success(t *testing.T) {
 	}
 	if jobs[0].Name != "Build" {
 		t.Errorf("expected first job Build, got %s", jobs[0].Name)
+	}
+}
+
+// The loop re-reads a tracked run's jobs every tick; between step changes the
+// answer is a 304, which GitHub does not bill.
+func TestGetJobs_ConditionalRequestAnswersFromCache(t *testing.T) {
+	const etag = `W/"jobs1"`
+	var calls atomic.Int32
+	var sawIfNoneMatch atomic.Value
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, r *http.Request) {
+		n := calls.Add(1)
+		sawIfNoneMatch.Store(r.Header.Get("If-None-Match"))
+		w.Header().Set("ETag", etag)
+		if n > 1 {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(JobsResponse{
+			TotalCount: 1,
+			Jobs:       []Job{{ID: 1, Name: "Build", Status: "in_progress"}},
+		})
+	})
+	c := testClient(t, mux)
+
+	if _, err := c.GetJobs(context.Background(), "owner/repo", 42); err != nil {
+		t.Fatal(err)
+	}
+	if got := sawIfNoneMatch.Load(); got != "" {
+		t.Errorf("first read sent If-None-Match %q, want none", got)
+	}
+
+	jobs, err := c.GetJobs(context.Background(), "owner/repo", 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sawIfNoneMatch.Load(); got != etag {
+		t.Errorf("second read sent If-None-Match %q, want %q", got, etag)
+	}
+	if len(jobs) != 1 || jobs[0].Name != "Build" {
+		t.Fatalf("304 answered %+v, want the cached job", jobs)
+	}
+}
+
+func TestStoreBody_SkipsUncacheableAndStaysBounded(t *testing.T) {
+	c := NewClient("token")
+
+	c.storeBody("u1", "", []byte("no etag"))
+	c.storeBody("u2", `"e"`, make([]byte, maxBodyLimit))
+	c.mu.Lock()
+	if len(c.bodies) != 0 || c.bodyBytes != 0 {
+		t.Errorf("stored %d bodies (%d bytes), want none: no ETag, or possibly cut short", len(c.bodies), c.bodyBytes)
+	}
+	c.mu.Unlock()
+
+	// A refreshed answer without an ETag drops the stale one rather than keeping it.
+	c.storeBody("u3", `"a"`, []byte("old"))
+	c.storeBody("u3", "", []byte("new"))
+	c.mu.Lock()
+	if _, ok := c.bodies["u3"]; ok || c.bodyBytes != 0 {
+		t.Errorf("kept a body the server stopped tagging (bytes %d)", c.bodyBytes)
+	}
+	c.mu.Unlock()
+
+	chunk := make([]byte, maxBodyLimit-1)
+	for i := range maxBodyBytes/len(chunk) + 1 {
+		c.storeBody("big"+strconv.Itoa(i), `"b"`, chunk)
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.bodyBytes > maxBodyBytes {
+		t.Errorf("cache holds %d bytes, cap is %d", c.bodyBytes, maxBodyBytes)
+	}
+	total := 0
+	for _, e := range c.bodies {
+		total += len(e.body)
+	}
+	if total != c.bodyBytes {
+		t.Errorf("bodyBytes = %d, bodies hold %d", c.bodyBytes, total)
 	}
 }
 
@@ -899,6 +982,9 @@ func TestPruneCaches_DropsReposNothingAsksAbout(t *testing.T) {
 	c.workflows["owner/live"] = workflowPresence{has: true, usedAt: fresh}
 	c.runCache["owner/gone#1"] = runProbe{etag: `"z"`, usedAt: stale}
 	c.runCache["owner/live#2"] = runProbe{etag: `"w"`, usedAt: fresh}
+	c.bodies["gone"] = bodyProbe{etag: `"v"`, body: []byte("abc"), usedAt: stale}
+	c.bodies["live"] = bodyProbe{etag: `"u"`, body: []byte("de"), usedAt: fresh}
+	c.bodyBytes = 5
 	c.mu.Unlock()
 
 	// Discovery is where the sweep runs.
@@ -925,6 +1011,12 @@ func TestPruneCaches_DropsReposNothingAsksAbout(t *testing.T) {
 	}
 	if _, ok := c.runCache["owner/live#2"]; !ok {
 		t.Error("runCache dropped a live run")
+	}
+	if _, ok := c.bodies["gone"]; ok {
+		t.Error("bodies kept an entry nothing has asked about")
+	}
+	if _, ok := c.bodies["live"]; !ok || c.bodyBytes != 2 {
+		t.Errorf("bodies dropped a live entry or miscounted (bytes %d, want 2)", c.bodyBytes)
 	}
 }
 

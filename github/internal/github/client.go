@@ -47,6 +47,15 @@ const cacheRetention = 2 * time.Hour
 // on the dot.
 const pruneInterval = 10 * time.Minute
 
+// maxBodyLimit is how much of a response body is read. A body that fills it may be
+// cut short, so it is never cached.
+const maxBodyLimit = 4 << 20
+
+// maxBodyBytes bounds the URL-keyed response cache (bodies). Jobs pages and repo
+// pages are its bulk; a handful of tracked runs and an owner's repo list fit many
+// times over.
+const maxBodyBytes = 16 << 20
+
 // runsProbe is the cached answer to one repo's in-progress-runs probe. GitHub
 // does not count a conditional request that answers 304 against the primary rate
 // limit, so caching the decoded runs alongside the ETag turns the poll every idle
@@ -65,6 +74,17 @@ type runsProbe struct {
 type runProbe struct {
 	etag string
 	run  WorkflowRun
+	// usedAt is when this entry was last read or written, for cacheRetention.
+	usedAt time.Time
+}
+
+// bodyProbe is the cached answer to any other GET, keyed by its full URL: the
+// jobs of a tracked run, which the loop re-reads every tick, the repo pages
+// discovery walks, and the prior-run lookup. Each goes out conditional, and an
+// unchanged answer is a 304 that costs no rate limit.
+type bodyProbe struct {
+	etag string
+	body []byte
 	// usedAt is when this entry was last read or written, for cacheRetention.
 	usedAt time.Time
 }
@@ -104,6 +124,9 @@ type Client struct {
 	runsCache map[string]runsProbe
 	workflows map[string]workflowPresence
 	runCache  map[string]runProbe
+	// bodies is keyed by request URL; bodyBytes is the sum of its bodies' sizes.
+	bodies    map[string]bodyProbe
+	bodyBytes int
 	// prunedAt is when pruneCaches last swept, for pruneInterval.
 	prunedAt time.Time
 }
@@ -117,6 +140,7 @@ func NewClient(token string) *Client {
 		runsCache:  make(map[string]runsProbe),
 		workflows:  make(map[string]workflowPresence),
 		runCache:   make(map[string]runProbe),
+		bodies:     make(map[string]bodyProbe),
 	}
 }
 
@@ -177,12 +201,53 @@ type apiResponse struct {
 	notModified bool
 }
 
+// doWithRetry is a GET answered through the URL-keyed response cache: it sends
+// the ETag of the last answer for url, and a 304 hands that answer back without
+// touching the rate limit. The returned body may be shared with the cache, so
+// callers must only read it.
 func (c *Client) doWithRetry(ctx context.Context, url, operation string) ([]byte, error) {
-	resp, err := c.doConditional(ctx, url, operation, "")
+	c.mu.Lock()
+	cached := c.bodies[url]
+	c.mu.Unlock()
+
+	resp, err := c.doConditional(ctx, url, operation, cached.etag)
 	if err != nil {
 		return nil, err
 	}
+	if resp.notModified {
+		c.mu.Lock()
+		if e, ok := c.bodies[url]; ok {
+			e.usedAt = time.Now()
+			c.bodies[url] = e
+		}
+		c.mu.Unlock()
+		return cached.body, nil
+	}
+	c.storeBody(url, resp.etag, resp.body)
 	return resp.body, nil
+}
+
+// storeBody replaces the cached answer for url. A response without an ETag, or one
+// that filled the read limit and may be cut short, drops the entry instead, so the
+// next request goes out unconditional.
+func (c *Client) storeBody(url, etag string, body []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if old, ok := c.bodies[url]; ok {
+		c.bodyBytes -= len(old.body)
+		delete(c.bodies, url)
+	}
+	if etag == "" || len(body) >= maxBodyLimit {
+		return
+	}
+	// shortcut: clears everything past the cap rather than evicting the oldest; move
+	// to LRU if the cap is ever hit in practice.
+	if c.bodyBytes+len(body) > maxBodyBytes {
+		clear(c.bodies)
+		c.bodyBytes = 0
+	}
+	c.bodies[url] = bodyProbe{etag: etag, body: body, usedAt: time.Now()}
+	c.bodyBytes += len(body)
 }
 
 // doConditional is doWithRetry with an If-None-Match. An empty etag makes it an
@@ -277,7 +342,7 @@ func (c *Client) doRequest(ctx context.Context, url, ifNoneMatch string) (apiRes
 		return apiResponse{notModified: true}, nil
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxBodyLimit))
 	if err != nil {
 		return apiResponse{}, err
 	}
@@ -481,8 +546,9 @@ func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]Workflow
 	// The poller selects only the most recent run, so ordering is stable. Do not add
 	// a sort parameter: GitHub reorders such a list whenever any item in it changes,
 	// which would stop the ETag from ever matching and put this request back on the
-	// bill every pass.
-	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?status=in_progress&per_page=50", c.baseURL, owner, name)
+	// bill every pass. exclude_pull_requests drops a field nothing here reads, and with
+	// it the reason a PR head moving would change the answer.
+	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?status=in_progress&per_page=50&exclude_pull_requests=true", c.baseURL, owner, name)
 	resp, err := c.doConditional(ctx, url, "requesting workflow runs", cached.etag)
 	if err != nil {
 		return nil, err
@@ -629,6 +695,12 @@ func (c *Client) pruneCaches() {
 			delete(c.runCache, key)
 		}
 	}
+	for url, e := range c.bodies {
+		if e.usedAt.Before(cutoff) {
+			c.bodyBytes -= len(e.body)
+			delete(c.bodies, url)
+		}
+	}
 }
 
 // GetRun fetches a single workflow run so callers can consult the run's own
@@ -694,7 +766,7 @@ func (c *Client) GetLatestWorkflowRun(ctx context.Context, repo string, workflow
 		return nil, err
 	}
 
-	q := url.Values{"per_page": {"1"}}
+	q := url.Values{"per_page": {"1"}, "exclude_pull_requests": {"true"}}
 	if status != "" {
 		q.Set("status", status)
 	}
