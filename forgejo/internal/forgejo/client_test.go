@@ -598,6 +598,28 @@ func TestListReposOwnLoginKeepsEverything(t *testing.T) {
 	}
 }
 
+// A repo with Actions turned off would only 404 the runs probe, so discovery drops
+// it. A server that does not report the field keeps the repo.
+func TestListReposSkipsReposWithActionsOff(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/user", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"login":"acme"}`))
+	})
+	mux.HandleFunc("/api/v1/user/repos", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[{"full_name":"acme/app","has_actions":true},` +
+			`{"full_name":"acme/docs","has_actions":false},{"full_name":"acme/old"}]`))
+	})
+	c := testClient(t, mux)
+
+	repos, err := c.ListRepos(context.Background(), "acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"acme/app", "acme/old"}; !reflect.DeepEqual(repos, want) {
+		t.Errorf("repos = %v, want %v", repos, want)
+	}
+}
+
 func TestFilterByOwner(t *testing.T) {
 	in := []string{"acme/app", "acme/infra", "other/thing"}
 	if got := filterByOwner(in, "acme"); len(got) != 2 {

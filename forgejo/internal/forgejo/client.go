@@ -559,7 +559,8 @@ func (c *Client) GetVersion(ctx context.Context) (string, error) {
 }
 
 // ListRepos discovers the repos to watch for an owner, skipping archived and
-// empty ones.
+// empty ones, and ones with Actions turned off, which would only 404 the runs
+// probe every noActions TTL.
 //
 // /user/repos is tried first and unconditionally. It lists every repo the token
 // can reach - including repos owned by someone else, which is the normal shape
@@ -643,7 +644,7 @@ func (c *Client) listReposPaged(ctx context.Context, endpoint string) ([]string,
 			return nil, fmt.Errorf("decode repos: %w", err)
 		}
 		for _, r := range repos {
-			if r.Archived || r.Empty || r.FullName == "" {
+			if r.Archived || r.Empty || r.FullName == "" || (r.HasActions != nil && !*r.HasActions) {
 				continue
 			}
 			out = append(out, r.FullName)

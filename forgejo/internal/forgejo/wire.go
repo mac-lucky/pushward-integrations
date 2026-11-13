@@ -61,6 +61,9 @@ type wireRepository struct {
 	HTMLURL  string `json:"html_url"`
 	Archived bool   `json:"archived"`
 	Empty    bool   `json:"empty"`
+	// HasActions is nil where the server does not report it; only an explicit false
+	// drops the repo.
+	HasActions *bool `json:"has_actions"`
 }
 
 type wireUser struct {
