@@ -209,6 +209,21 @@ timeline:
 #         title: "Dashboard"
 #         icon: "chart.xyaxis.line"
 #
+# content.style picks the look on any template: standard, bold or classic.
+# style_by_size sets it for one size (small, medium, large, lock_screen).
+# density and density_by_size set the row density, stat_list only: auto,
+# compact or comfortable. Anything else fails at startup. Each overrides the
+# matching pick made for the widget in the PushWard app; leave it out and the
+# app's pick applies (standard and auto if none).
+#
+#     content:
+#       style: "classic"
+#       style_by_size:
+#         lock_screen: "bold"
+#       density: "compact"            # stat_list only
+#       density_by_size:
+#         large: "comfortable"
+#
 # battery, schedule and flow are server widget templates this bridge does not
 # offer: each needs several independent readings in a single push, and the
 # poller runs one query per widget. Create those through the API or the app.

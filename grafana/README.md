@@ -171,6 +171,8 @@ Server-mirrored validation runs at config load: `interval` defaults to `60s` and
 
 `content.subtitle_timer` renders the subtitle as a live timer on any template, and `stat_rows[].timer` does the same for one stat_list row's trailing text. Both take `date` (RFC 3339, required) and `style` (`timer`, the default, or `relative`); the static `subtitle` / `value_template` stays as the fallback for clients that do not render a timer.
 
+`content.style` picks the look on any template: `standard`, `bold` or `classic`. `content.style_by_size` sets it for one size, with the keys `small`, `medium`, `large` and `lock_screen` (every Lock Screen size; Android has none). On `stat_list`, `content.density` (`auto`, `compact` or `comfortable`) and `content.density_by_size` (same keys) set the row density; on any other template they fail at config load, and so does any value or size not listed here, with the allowed ones in the error. Case doesn't matter. Each of these overrides the matching pick the user made for that widget in the PushWard app; leave it out and their pick applies (Standard and auto if they never picked one). The bridge sends them on the create and on every update, so removing one from the config hands that choice back to the app on the next start.
+
 Any widget can carry tap targets: `content.tap_action` retargets the whole widget, while `content.url_action` and `content.secondary_url_action` draw buttons, which iOS renders on the Home Screen families only. Tap-action URLs are validated at config load against the same rules the server applies - a scheme is required, `javascript:`/`data:`/`file:`/`vbscript:` are rejected, http(s) needs a host, and `method`/`headers`/`body` are only valid on an http(s) URL - so a typo fails at startup rather than on the first push.
 
 ```yaml
@@ -184,6 +186,9 @@ widgets:
     content:
       icon: "person.3.fill"
       unit: "users"
+      style: "bold"   # optional; overrides the style picked in the app
+      style_by_size:
+        lock_screen: "classic"
 
   # Gauge (requires min/max)
   - slug: "node-cpu"

@@ -1,7 +1,12 @@
 package widgets
 
 import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -71,6 +76,63 @@ func TestBuildSpecsAttachesTrendAndCountdownSources(t *testing.T) {
 	}
 	if specs[1].StaleAfter != nil {
 		t.Error("expected no stale_after on the countdown")
+	}
+}
+
+// A configured style has to reach the create and every PATCH after it: the
+// create replaces the whole content, so one write without it would drop it.
+// Density rides the same content; shared/widgets covers it on stat_list.
+func TestBuildSpecs_StyleOnEveryWrite(t *testing.T) {
+	mc, closeProm := newPromStub(instantPayload)
+	defer closeProm()
+	var mu sync.Mutex
+	var bodies []string
+	pw := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		bodies = append(bodies, r.Method+" "+string(b))
+		mu.Unlock()
+	}))
+	defer pw.Close()
+
+	specs, err := BuildSpecs([]config.WidgetConfig{{
+		Slug: "up", Template: "status", Query: "up", Interval: 10 * time.Millisecond, UpdateMode: "always",
+		Content: config.WidgetContentConfig{
+			Style:       pushward.WidgetStyleClassic,
+			StyleBySize: map[string]pushward.WidgetStyle{"lock_screen": pushward.WidgetStyleBold},
+		},
+	}}, mc)
+	if err != nil {
+		t.Fatalf("BuildSpecs: %v", err)
+	}
+	m, err := sharedwidgets.New(pushward.NewClient(pw.URL, "hlk_test"), specs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		mu.Lock()
+		n := len(bodies)
+		mu.Unlock()
+		if n >= 3 || time.Now().After(deadline) {
+			break
+		}
+	}
+	cancel()
+	m.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(bodies) < 3 || !strings.HasPrefix(bodies[0], "POST ") || !strings.HasPrefix(bodies[1], "PATCH ") {
+		t.Fatalf("want a POST then PATCHes, got %q", bodies)
+	}
+	for _, b := range bodies {
+		if !strings.Contains(b, `"style":"classic"`) || !strings.Contains(b, `"style_by_size":{"lock_screen":"bold"}`) {
+			t.Errorf("write without the style: %s", b)
+		}
 	}
 }
 

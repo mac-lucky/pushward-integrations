@@ -157,6 +157,15 @@ type WidgetContentConfig struct {
 	// Trend is the directional arrow on value/gauge/trend widgets: up|down|flat.
 	Trend string `yaml:"trend" json:"trend,omitempty"`
 
+	// Style is standard|bold|classic on any template, and StyleBySize sets it
+	// per size (small|medium|large|lock_screen). Density and DensityBySize are
+	// the stat_list row density, auto|compact|comfortable. Each overrides the
+	// matching pick in the app; empty leaves that pick in charge.
+	Style         pushward.WidgetStyle            `yaml:"style" json:"style,omitempty"`
+	StyleBySize   map[string]pushward.WidgetStyle `yaml:"style_by_size" json:"style_by_size,omitempty"`
+	Density       string                          `yaml:"density" json:"density,omitempty"`
+	DensityBySize map[string]string               `yaml:"density_by_size" json:"density_by_size,omitempty"`
+
 	// SubtitleTimer renders the subtitle as a live timer on any template.
 	// Subtitle stays as the static fallback.
 	SubtitleTimer *TimerConfig `yaml:"subtitle_timer" json:"subtitle_timer,omitempty"`
@@ -192,6 +201,11 @@ func (w WidgetContentConfig) ToWidgetContent() pushward.WidgetContent {
 		ExpiredText:   w.ExpiredText,
 		Trend:         w.Trend,
 		SubtitleTimer: w.subtitleTimer,
+
+		Style:         w.Style,
+		StyleBySize:   w.StyleBySize,
+		Density:       w.Density,
+		DensityBySize: w.DensityBySize,
 
 		TapAction:          w.TapAction.toTapAction(),
 		URLAction:          w.URLAction.toTapAction(),
@@ -459,6 +473,9 @@ func (w *WidgetConfig) validateContent(idx int) error {
 	}
 	if !validTrends[c.Trend] {
 		return fail(fmt.Errorf("content.trend must be one of up, down, flat (got %q)", c.Trend))
+	}
+	if err := pushward.ValidateWidgetLooks(pushward.WidgetTemplate(w.Template), c.ToWidgetContent()); err != nil {
+		return fail(fmt.Errorf("content.%w", err))
 	}
 	// The server rejects an empty or inverted range, and gauge/progress require
 	// both ends, so a min == max slips past the required-pair check above.

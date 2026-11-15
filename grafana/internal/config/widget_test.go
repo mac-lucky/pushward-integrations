@@ -1,6 +1,9 @@
 package config
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -161,6 +164,52 @@ func TestValidateWidgets_RejectsEmpty(t *testing.T) {
 			name:    "bad trend",
 			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{Trend: "sideways"}},
 			wantErr: "trend must be one of",
+		},
+		{
+			name:    "unknown style",
+			input:   WidgetConfig{Slug: "x", Query: "up", Template: "status", Content: WidgetContentConfig{Style: "Retro"}},
+			wantErr: `widgets[0] "x": content.style must be one of standard, bold, classic, got "retro"`,
+		},
+		{
+			// a name from before the rename gets no alias outside the server
+			name:    "pre-rename style",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{Style: "refined", StyleBySize: map[string]pushward.WidgetStyle{"small": "bold"}}},
+			wantErr: `content.style must be one of standard, bold, classic, got "refined"`,
+		},
+		{
+			name:    "style_by_size unknown size",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{StyleBySize: map[string]pushward.WidgetStyle{"xl": "bold"}}},
+			wantErr: `content.style_by_size key must be one of small, medium, large, lock_screen, got "xl"`,
+		},
+		{
+			name:    "style_by_size unknown style",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{StyleBySize: map[string]pushward.WidgetStyle{"Small": "loud"}}},
+			wantErr: `content.style_by_size.small must be one of standard, bold, classic, got "loud"`,
+		},
+		{
+			name:    "unknown density",
+			input:   WidgetConfig{Slug: "s", Template: "stat_list", StatRows: []StatRowConfig{{Label: "L", Query: "up", ValueTemplate: "{{.Value}}"}}, Content: WidgetContentConfig{Density: "dense"}},
+			wantErr: `content.density must be one of auto, compact, comfortable, got "dense"`,
+		},
+		{
+			name:    "density_by_size unknown size",
+			input:   WidgetConfig{Slug: "s", Template: "stat_list", StatRows: []StatRowConfig{{Label: "L", Query: "up", ValueTemplate: "{{.Value}}"}}, Content: WidgetContentConfig{DensityBySize: map[string]string{"watch": "auto"}}},
+			wantErr: `content.density_by_size key must be one of small, medium, large, lock_screen, got "watch"`,
+		},
+		{
+			name:    "density_by_size unknown density",
+			input:   WidgetConfig{Slug: "s", Template: "stat_list", StatRows: []StatRowConfig{{Label: "L", Query: "up", ValueTemplate: "{{.Value}}"}}, Content: WidgetContentConfig{DensityBySize: map[string]string{"large": "tight"}}},
+			wantErr: `content.density_by_size.large must be one of auto, compact, comfortable, got "tight"`,
+		},
+		{
+			name:    "density off stat_list",
+			input:   WidgetConfig{Slug: "x", Query: "up", Content: WidgetContentConfig{Density: "compact"}},
+			wantErr: `content.density is only available for template "stat_list", not "value"`,
+		},
+		{
+			name:    "density_by_size off stat_list",
+			input:   WidgetConfig{Slug: "x", Query: "up", Template: "status", Content: WidgetContentConfig{DensityBySize: map[string]string{"small": "compact"}}},
+			wantErr: `content.density_by_size is only available for template "stat_list", not "status"`,
 		},
 		{
 			name:    "tap action without a url",
@@ -483,19 +532,107 @@ func TestValidateWidgets_ContentExtrasReachTheWire(t *testing.T) {
 	}
 }
 
+// Unset looks must stay off the wire so the picks made in the app apply; set
+// ones reach the content the manager sends on every create and PATCH, in the
+// case they were written in (the server folds it).
+func TestValidateWidgets_Looks(t *testing.T) {
+	widgets := []WidgetConfig{
+		{Slug: "plain", Query: "up"},
+		{Slug: "gauge", Template: "gauge", Query: "up", Content: WidgetContentConfig{
+			MinValue: pushward.Float64Ptr(0), MaxValue: pushward.Float64Ptr(1),
+			Style: "classic", StyleBySize: map[string]pushward.WidgetStyle{"lock_screen": "bold"},
+		}},
+		{Slug: "launch", Template: "countdown", Content: WidgetContentConfig{EndDate: soonRFC3339(), Style: "Bold"}},
+		{Slug: "rows", Template: "stat_list", StatRows: []StatRowConfig{{Label: "L", Query: "up", ValueTemplate: "{{.Value}}"}}, Content: WidgetContentConfig{
+			Density: "comfortable", DensityBySize: map[string]string{"Small": "Compact"},
+		}},
+	}
+	if err := validateWidgets(widgets); err != nil {
+		t.Fatalf("validateWidgets: %v", err)
+	}
+	want := [][]string{
+		nil,
+		{`"style":"classic"`, `"style_by_size":{"lock_screen":"bold"}`},
+		{`"style":"Bold"`},
+		{`"density":"comfortable"`, `"density_by_size":{"Small":"Compact"}`},
+	}
+	for i, w := range widgets {
+		b, err := json.Marshal(w.Content.ToWidgetContent())
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := string(b)
+		if want[i] == nil && (strings.Contains(got, `"style`) || strings.Contains(got, `"density`)) {
+			t.Errorf("%s content = %s, want no style or density keys", w.Slug, got)
+		}
+		for _, key := range want[i] {
+			if !strings.Contains(got, key) {
+				t.Errorf("%s content = %s, want %s", w.Slug, got, key)
+			}
+		}
+	}
+}
+
+// The YAML keys are what an operator writes, so Load has to take all four and
+// stop at a value the server would refuse.
+func TestLoad_WidgetLooks(t *testing.T) {
+	clearDurationVars(t)
+	t.Setenv("PUSHWARD_WIDGETS_JSON", "")
+	t.Setenv("PUSHWARD_METRICS_URL", "http://victoria:8428")
+	t.Setenv("PUSHWARD_URL", "https://api.pushward.app")
+	t.Setenv("PUSHWARD_API_KEY", "hlk_test")
+	load := func(yml string) (*Config, error) {
+		path := filepath.Join(t.TempDir(), "config.yml")
+		if err := os.WriteFile(path, []byte(yml), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return Load(path)
+	}
+
+	cfg, err := load(`widgets:
+  - slug: rows
+    template: stat_list
+    stat_rows:
+      - {label: L, query: up, value_template: "{{.Value}}"}
+    content:
+      style: bold
+      style_by_size: {lock_screen: classic}
+      density: compact
+      density_by_size: {large: comfortable}
+`)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	c := cfg.Widgets[0].Content
+	if c.Style != "bold" || c.StyleBySize["lock_screen"] != "classic" || c.Density != "compact" || c.DensityBySize["large"] != "comfortable" {
+		t.Errorf("content = %+v, want the four looks from the file", c)
+	}
+
+	_, err = load(`widgets:
+  - slug: up
+    query: up
+    content:
+      density: compact
+`)
+	if err == nil || !strings.Contains(err.Error(), `content.density is only available for template "stat_list", not "value"`) {
+		t.Errorf("err = %v, want density refused on value", err)
+	}
+}
+
 // parseWidgetsJSON uses DisallowUnknownFields, so every new key needs a decode
 // test or it stays a YAML-only field that silently 400s the env-var form.
 func TestParseWidgetsJSON_ContentExtras(t *testing.T) {
 	raw := `[{"slug":"x","query":"up","stale_after":600,"interval":"1m","content":{
 		"start_date":"` + soonRFC3339() + `","end_date":"` + laterRFC3339() + `",
-		"expired_text":"done","trend":"flat",
+		"expired_text":"done","trend":"flat","style":"bold","style_by_size":{"small":"classic"},
 		"subtitle_timer":{"date":"` + soonRFC3339() + `","style":"relative"},
 		"tap_action":{"url":"pushward://widgets"},
 		"url_action":{"url":"https://example.com","foreground":true,"title":"Open"},
 		"secondary_url_action":{"url":"https://example.com/2","foreground":true}}},
 		{"slug":"s","template":"stat_list","stat_rows":[
 			{"label":"Next","query":"next","value_template":"{{.Value}}",
-			 "timer":{"date":"` + laterRFC3339() + `","style":"relative"}}]}]`
+			 "timer":{"date":"` + laterRFC3339() + `","style":"relative"}}],
+		 "content":{"density":"compact","density_by_size":{"lock_screen":"auto"}}}]`
 	widgets, err := parseWidgetsJSON(raw)
 	if err != nil {
 		t.Fatalf("parseWidgetsJSON: %v", err)
@@ -512,6 +649,12 @@ func TestParseWidgetsJSON_ContentExtras(t *testing.T) {
 	}
 	if c.SecondaryURLAction == nil || c.SecondaryURLAction.URL != "https://example.com/2" {
 		t.Errorf("expected the secondary url action, got %+v", c.SecondaryURLAction)
+	}
+	if c.Style != pushward.WidgetStyleBold || c.StyleBySize["small"] != pushward.WidgetStyleClassic {
+		t.Errorf("expected style bold and classic on small, got %q %v", c.Style, c.StyleBySize)
+	}
+	if rows := widgets[1].Content.ToWidgetContent(); rows.Density != "compact" || rows.DensityBySize["lock_screen"] != "auto" {
+		t.Errorf("expected density compact and auto on lock_screen, got %q %v", rows.Density, rows.DensityBySize)
 	}
 	// stat_rows[].timer rides a different parse path from content.subtitle_timer
 	// and reaches the wire through StatListRow rather than WidgetContent.
