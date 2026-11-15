@@ -624,6 +624,114 @@ func TestNew_AcceptsAllFalseStatChangeMask(t *testing.T) {
 	}
 }
 
+// The template default is applied first, so a bare spec is checked as value.
+func TestNew_ChecksLooks(t *testing.T) {
+	_, client, closeSrv := newStubServer(t)
+	defer closeSrv()
+	src := ValueSourceFunc(func(_ context.Context) (float64, error) { return 0, nil })
+	rows := StatListSourceFunc(func(_ context.Context) ([]pushward.StatRow, error) { return nil, nil })
+	dense := pushward.WidgetContent{Density: pushward.WidgetDensityCompact}
+
+	_, err := New(client, []Spec{{Slug: "x", Source: src, Content: dense}}, quietLogger())
+	if err == nil || !strings.Contains(err.Error(), `density is only available for template "stat_list", not "value"`) {
+		t.Fatalf("err = %v, want density refused on value", err)
+	}
+	_, err = New(client, []Spec{{Slug: "x", Source: src, Content: pushward.WidgetContent{Style: "fancy"}}}, quietLogger())
+	if err == nil || !strings.Contains(err.Error(), "style must be one of standard, bold, classic") {
+		t.Fatalf("err = %v, want the styles named", err)
+	}
+	classic := pushward.WidgetContent{Style: pushward.WidgetStyleClassic}
+	if _, err := New(client, []Spec{{Slug: "x", Template: pushward.WidgetTemplateGauge, Source: src, Content: classic}}, quietLogger()); err != nil {
+		t.Fatalf("every template offers classic, got %v", err)
+	}
+	if _, err := New(client, []Spec{{Slug: "x", StatListSource: rows, Content: dense}}, quietLogger()); err != nil {
+		t.Fatalf("stat_list takes a density, got %v", err)
+	}
+}
+
+// looks keeps only the style and density fields of c.
+func looks(c pushward.WidgetContent) pushward.WidgetContent {
+	return pushward.WidgetContent{Style: c.Style, StyleBySize: c.StyleBySize, Density: c.Density, DensityBySize: c.DensityBySize}
+}
+
+// A create replaces the whole content, so set style and density fields have
+// to ride the create and every PATCH after it, heartbeat included, and unset
+// ones must never appear. One spec per source shape: each loop builds its own
+// payload.
+func TestManager_LooksRideEveryWrite(t *testing.T) {
+	shapes := map[string]func() Spec{
+		"scalar heartbeat": func() Spec {
+			return Spec{
+				Template:  pushward.WidgetTemplateStatus,
+				Source:    ValueSourceFunc(func(_ context.Context) (float64, error) { return 1, nil }),
+				Heartbeat: 30 * time.Millisecond,
+			}
+		},
+		"multi": func() Spec {
+			return Spec{
+				MultiSource: MultiValueSourceFunc(func(_ context.Context) ([]LabeledValue, error) {
+					return []LabeledValue{{Labels: map[string]string{"instance": "a"}, Value: 1}}, nil
+				}),
+				SlugTemplate: "w-{{.instance}}",
+				UpdateMode:   UpdateAlways,
+			}
+		},
+		"stat_list": func() Spec {
+			return Spec{
+				StatListSource: StatListSourceFunc(func(_ context.Context) ([]pushward.StatRow, error) {
+					return []pushward.StatRow{{Label: "x", Value: "1"}}, nil
+				}),
+				UpdateMode: UpdateAlways,
+			}
+		},
+	}
+	for name, mk := range shapes {
+		for _, mode := range []string{"unset", "set"} {
+			t.Run(name+"/"+mode, func(t *testing.T) {
+				stub, client, closeSrv := newStubServer(t)
+				defer closeSrv()
+				spec := mk()
+				spec.Slug, spec.Interval = "w", 10*time.Millisecond
+				if mode == "set" {
+					spec.Content.Style = pushward.WidgetStyleBold
+					spec.Content.StyleBySize = map[string]pushward.WidgetStyle{"lock_screen": pushward.WidgetStyleClassic}
+					if spec.StatListSource != nil {
+						spec.Content.Density = pushward.WidgetDensityCompact
+						spec.Content.DensityBySize = map[string]string{"large": pushward.WidgetDensityComfortable}
+					}
+				}
+				want := looks(spec.Content)
+				m, err := New(client, []Spec{spec}, quietLogger())
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, cancel := context.WithCancel(context.Background())
+				if err := m.Start(ctx); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, 2*time.Second, func() bool { return stub.updates.Load() >= 2 })
+				cancel()
+				m.Wait()
+
+				stub.mu.Lock()
+				defer stub.mu.Unlock()
+				for i, c := range stub.gotCreate {
+					if got := looks(c.Content); !reflect.DeepEqual(got, want) {
+						t.Errorf("create %d looks = %+v, want %+v", i, got, want)
+					}
+				}
+				for i, p := range stub.gotPatch {
+					if p.Content == nil {
+						t.Errorf("patch %d has no content", i)
+					} else if got := looks(*p.Content); !reflect.DeepEqual(got, want) {
+						t.Errorf("patch %d looks = %+v, want %+v", i, got, want)
+					}
+				}
+			})
+		}
+	}
+}
+
 func TestStart_FailsFastOnWidgetLimit(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost {

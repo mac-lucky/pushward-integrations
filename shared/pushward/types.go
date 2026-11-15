@@ -744,6 +744,7 @@ const (
 	WidgetTemplateBattery   WidgetTemplate = "battery"
 	WidgetTemplateSchedule  WidgetTemplate = "schedule"
 	WidgetTemplateFlow      WidgetTemplate = "flow"
+	WidgetTemplateHeatmap   WidgetTemplate = "heatmap"
 )
 
 // Timer style constants pick how a TimerValue renders. Mirrors the server's
@@ -873,6 +874,14 @@ type WidgetContent struct {
 	// Trend annotates value/gauge widgets with a directional arrow. One of
 	// "up" / "down" / "flat". Ignored for other templates.
 	Trend string `json:"trend,omitempty"`
+	// Style is the look on any template (see WidgetStyle); StyleBySize sets it
+	// for one size, keyed small, medium, large or lock_screen. Density and
+	// DensityBySize are the stat_list row density the same way, one of the
+	// WidgetDensity values. ValidateWidgetLooks checks all four.
+	Style         WidgetStyle            `json:"style,omitempty"`
+	StyleBySize   map[string]WidgetStyle `json:"style_by_size,omitempty"`
+	Density       string                 `json:"density,omitempty"`
+	DensityBySize map[string]string      `json:"density_by_size,omitempty"`
 	// StatRows powers the stat_list template - a 1-6 row label/value list.
 	// Required when template == stat_list, ignored otherwise.
 	StatRows []StatRow `json:"stat_rows,omitempty"`
@@ -901,6 +910,10 @@ type WidgetContent struct {
 	Periods []SchedulePeriod `json:"periods,omitempty"`
 	// Flow powers the flow template. Required when template == flow.
 	Flow *WidgetFlow `json:"flow,omitempty"`
+	// Cells powers the heatmap template - 7-154 values, one per day, oldest
+	// first; a nil cell is a day without data and goes out as null. Required
+	// when template == heatmap, ignored otherwise.
+	Cells []*float64 `json:"cells,omitempty"`
 	// SubtitleTimer renders the subtitle slot as a live timer on any template;
 	// the static Subtitle is what older clients fall back to.
 	SubtitleTimer *TimerValue `json:"subtitle_timer,omitempty"`

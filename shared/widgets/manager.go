@@ -215,6 +215,12 @@ func prepare(s *Spec) error {
 	if s.StatListSource != nil && s.Template != pushward.WidgetTemplateStatList {
 		return fmt.Errorf("StatListSource only valid with template stat_list, got %q", s.Template)
 	}
+	// The style and density fields ride every create and PATCH, so one the
+	// server refuses would be a 422 on every write; refuse it before anything
+	// is sent.
+	if err := pushward.ValidateWidgetLooks(s.Template, s.Content); err != nil {
+		return err
+	}
 	// Points reach the payload only through attachPoints, which reads the
 	// scalar Source. Left unchecked, a trend spec on any other source shape
 	// would build a pointless payload, get a 422 on create and fail Start -

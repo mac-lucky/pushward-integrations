@@ -147,6 +147,7 @@ func TestWidgetContent_TemplateFieldsRoundTrip(t *testing.T) {
 			Storage:  &FlowNode{Rate: Float64Ptr(-300), Level: Float64Ptr(78)},
 			Exchange: &FlowNode{Rate: Float64Ptr(-1200)},
 		},
+		Cells: []*float64{Float64Ptr(3), nil, Float64Ptr(0), nil, nil, Float64Ptr(1.5), Float64Ptr(7)},
 	}
 
 	first, err := json.Marshal(in)
@@ -169,10 +170,14 @@ func TestWidgetContent_TemplateFieldsRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(first, &keys); err != nil {
 		t.Fatalf("key decode: %v", err)
 	}
-	for _, k := range []string{"points", "start_date", "end_date", "expired_text", "subtitle_timer", "devices", "periods", "flow"} {
+	for _, k := range []string{"points", "start_date", "end_date", "expired_text", "subtitle_timer", "devices", "periods", "flow", "cells"} {
 		if _, ok := keys[k]; !ok {
 			t.Errorf("missing wire key %q in %s", k, first)
 		}
+	}
+	// A day without data is a null cell, not a dropped one: the cell index is the day.
+	if got := string(keys["cells"]); got != "[3,null,0,null,null,1.5,7]" {
+		t.Errorf("cells = %s, want [3,null,0,null,null,1.5,7]", got)
 	}
 	if d := out.BatteryDevices[0].Level; d == nil || *d != 64 {
 		t.Errorf("devices[0].level = %v, want 64", d)
