@@ -149,7 +149,7 @@ server.ListenAndServe(ctx, cfg.Server.Address, mux) // graceful shutdown on ctx 
 | `CreateWidget(ctx, CreateWidgetRequest)` | `POST /widgets` | Upsert on (user, slug); `409` = `widget.limit_exceeded` |
 | `UpdateWidget(ctx, slug, UpdateWidgetRequest)` | `PATCH /widgets/{slug}` | Sends `Content-Type: application/merge-patch+json` (RFC 7396) |
 | `DeleteWidget(ctx, slug)` | `DELETE /widgets/{slug}` | - |
-| `GetActivity(ctx, slug)` / `GetWidget(ctx, slug)` | `GET /activities/{slug}`, `GET /widgets/{slug}` | Read shapes; an approval's answer and a checklist's ticks come back on `Content`. No `?wait=` long-poll, so poll on your own interval |
+| `GetActivity(ctx, slug)` / `GetWidget(ctx, slug)` | `GET /activities/{slug}`, `GET /widgets/{slug}` | Read shapes; an approval's answer and a checklist's ticks come back on `Content`. `GetActivity` does not pass the server's `?wait=` long-poll, so poll on your own interval |
 
 ```go
 client.CreateActivity(ctx, "build-42", "CI Build #42", cfg.PushWard.Priority, 900, 1800)
