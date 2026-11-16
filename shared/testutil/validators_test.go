@@ -1295,6 +1295,7 @@ func TestValidateChecklist(t *testing.T) {
 		{"auto_end false", checklist(`"items":` + items(1) + `,"auto_end":false`), 200},
 		{"auto_end not a bool", checklist(`"items":` + items(1) + `,"auto_end":"no"`), 400},
 		{"auto_end on another template", `{"state":"ongoing","content":{"template":"generic","progress":0.5,"auto_end":false}}`, 400},
+		{"progress and state are the server's", `{"state":"ongoing","content":{"template":"checklist","progress":5,"state":"` + strings.Repeat("s", 300) + `","items":` + items(1) + `}}`, 200},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

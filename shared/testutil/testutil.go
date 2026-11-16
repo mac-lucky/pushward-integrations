@@ -1214,6 +1214,11 @@ func validateContent(c *apiContent) error {
 	if c.Template != "" && !validTemplates[c.Template] {
 		return fmt.Errorf("template must be one of: generic, alert, steps, countdown, timer, gauge, timeline, board, log, media, approval, checklist")
 	}
+	// The server overwrites progress and state on a checklist with the
+	// checked count before their caps, whatever the caller sent.
+	if c.Template == pushward.TemplateChecklist {
+		c.Progress, c.State = 0, ""
+	}
 	if c.Progress < 0 || c.Progress > 1 {
 		return fmt.Errorf("progress must be 0.0-1.0")
 	}
@@ -1343,9 +1348,6 @@ func validateContent(c *apiContent) error {
 // handler has already dropped inherited ones). The approval, media, clock and
 // image gates in validateContent already refuse their fields here.
 func validateChecklist(c *apiContent) error {
-	if len(c.Items) < 1 || len(c.Items) > 8 {
-		return fmt.Errorf("items must have between 1 and 8 entries for checklist template, got %d", len(c.Items))
-	}
 	if len(c.Tiles) > 0 || len(c.Lines) > 0 {
 		return fmt.Errorf("tiles and lines are not valid on the checklist template")
 	}
@@ -1354,6 +1356,9 @@ func validateChecklist(c *apiContent) error {
 	}
 	if c.Alarm != nil {
 		return fmt.Errorf("alarm is not valid on the checklist template")
+	}
+	if len(c.Items) < 1 || len(c.Items) > 8 {
+		return fmt.Errorf("items must have between 1 and 8 entries for checklist template, got %d", len(c.Items))
 	}
 	seen := make(map[string]bool, len(c.Items))
 	for i, it := range c.Items {
