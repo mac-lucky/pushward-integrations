@@ -539,7 +539,8 @@ type Content struct {
 	// board, log and image fields; a switch to it clears the ones the activity
 	// inherited. Items and AutoEnd on any other template are a 422 too.
 	//
-	// AutoEnd nil means the server default (true).
+	// AutoEnd nil is left out of the merge-patch, so it keeps the stored value
+	// (true on an activity that never set it); send true to restore the default.
 	//
 	// TickURL is the server-signed URL the devices tick through. Read-only:
 	// decoded from responses, stripped by the server from writes, and absent
