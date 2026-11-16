@@ -1356,9 +1356,32 @@ func TestChecklistSwitchAwayDropsItems(t *testing.T) {
 	}
 }
 
+// TestChecklistStoresDerivedSummary: a checklist stores the checked count as
+// progress and state, as on the server, so out-of-range values the caller sent
+// are not inherited by a later switch to another template.
+func TestChecklistStoresDerivedSummary(t *testing.T) {
+	for name, field := range map[string]string{
+		"progress": `"progress":5`,
+		"state":    `"progress":0,"state":"` + strings.Repeat("x", 257) + `"`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, _, _ := testutil.MockPushWardServer(t)
+			createActivity(t, srv.URL, "list", "List")
+			seed := `{"state":"ongoing","content":{"template":"checklist",` + field + `,"items":[{"id":"a","label":"A"}]}}`
+			if got := patchActivity(t, srv.URL, "list", seed); got != 200 {
+				t.Fatalf("seed: got status %d, want 200", got)
+			}
+			if got := patchActivity(t, srv.URL, "list", `{"content":{"template":"generic"}}`); got != 200 {
+				t.Errorf("switch: got status %d, want 200", got)
+			}
+		})
+	}
+}
+
 // TestChecklistClient drives a checklist through the client the way a bridge
 // would: create, seed, then a patch that relabels and adds items without
-// touching their ticks. A duplicate id comes back as the server's 400.
+// touching their ticks. A duplicate id is refused (the server's 422, the
+// mock's 400), and the client fails fast on either.
 func TestChecklistClient(t *testing.T) {
 	srv, _, _ := testutil.MockPushWardServer(t)
 	c := pushward.NewClient(srv.URL, "hlk_test")

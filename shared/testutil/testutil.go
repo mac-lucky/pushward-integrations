@@ -596,6 +596,9 @@ func mockPushWardServer(t *testing.T, opts MockOptions) (*httptest.Server, *[]AP
 				merged[k] = v
 			}
 		}
+		if merged["template"] == pushward.TemplateChecklist {
+			merged["progress"], merged["state"] = content.Progress, content.State
+		}
 		activities[slug] = merged
 
 		w.WriteHeader(http.StatusOK)
@@ -1218,6 +1221,15 @@ func validateContent(c *apiContent) error {
 	// checked count before their caps, whatever the caller sent.
 	if c.Template == pushward.TemplateChecklist {
 		c.Progress, c.State = 0, ""
+		if n := len(c.Items); n > 0 {
+			done := 0
+			for _, it := range c.Items {
+				if it.Checked != nil && *it.Checked {
+					done++
+				}
+			}
+			c.Progress, c.State = float64(done)/float64(n), fmt.Sprintf("%d of %d", done, n)
+		}
 	}
 	if c.Progress < 0 || c.Progress > 1 {
 		return fmt.Errorf("progress must be 0.0-1.0")
