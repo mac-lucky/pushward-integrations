@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 // Job statuses. Any value other than these two is treated as not-yet-running,
@@ -85,9 +87,31 @@ func JobFailed(conclusion string) bool {
 // the server's bounds at the wire, by pushward.ClampStepShape.
 const QueuedStepName = "Queued"
 
+// StepsOption tunes a single ComputeSteps call; the jobs parameter is frozen.
+type StepsOption func(*stepsConfig)
+
+type stepsConfig struct {
+	runConclusion string
+}
+
+// WithRunConclusion passes the conclusion of the run the jobs belong to. Under a
+// run that concluded success, a failed job was allowed to fail (job-level
+// continue-on-error): its group's step colour is pushward.ColorOrange and it does
+// not count toward AnyFailed. Without it, or with any other conclusion, every
+// failed job counts.
+func WithRunConclusion(conclusion string) StepsOption {
+	return func(c *stepsConfig) { c.runConclusion = conclusion }
+}
+
 // ComputeSteps groups jobs by base name (folding matrix strategies into one
 // group) and computes step progress.
-func ComputeSteps(jobs []Job) StepInfo {
+func ComputeSteps(jobs []Job, opts ...StepsOption) StepInfo {
+	var cfg stepsConfig
+	for _, o := range opts {
+		o(&cfg)
+	}
+	allowFailures := cfg.runConclusion == ConclusionSuccess
+
 	type step struct {
 		name      string
 		count     int
@@ -123,7 +147,7 @@ func ComputeSteps(jobs []Job) StepInfo {
 			steps[si].completed++
 			if JobFailed(job.Conclusion) {
 				steps[si].failed = true
-				anyFailed = true
+				anyFailed = anyFailed || !allowFailures
 			}
 		case StatusInProgress:
 			steps[si].active = true
@@ -144,6 +168,9 @@ func ComputeSteps(jobs []Job) StepInfo {
 		stepRows[i] = s.count
 		stepLabels[i] = s.name
 		stepColors[i] = StepColor(s.name)
+		if s.failed && allowFailures {
+			stepColors[i] = pushward.ColorOrange
+		}
 		if s.active && currentStepName == "" {
 			currentStepName = s.name
 			currentStep = i + 1

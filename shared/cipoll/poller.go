@@ -58,7 +58,7 @@ type Options struct {
 	// Repos are watched in addition to whatever Owner discovers.
 	Repos []string
 	// Polling is the two-tier cadence, taken whole from the bridge's config. The
-	// expensive idle tier costs one request per watched repo per pass and buys only
+	// expensive idle tier costs IdleRequestsPerRepo per watched repo per pass and buys only
 	// detection latency; the cheap active tier costs one request per run actually in
 	// flight and is what a user watching a card sees. Kept separate because the two
 	// have opposite cost profiles: tying them together means a smoother card can only
@@ -73,6 +73,10 @@ type Options struct {
 	// budget, which disables both. The number is the adapter's to supply because
 	// it is forge-specific, the same reason Outcome and DiscoveryRequired are.
 	HourlyRequestBudget int
+	// IdleRequestsPerRepo is what Forge.ActiveRuns can cost one repo, for the same
+	// arithmetic: a forge whose run filter takes one status at a time asks twice.
+	// Zero means one.
+	IdleRequestsPerRepo int
 
 	PushWard sharedconfig.PushWardConfig
 	Render   sharedconfig.RenderConfig
@@ -404,12 +408,18 @@ func (p *Poller) effectiveIdleInterval(repos int) time.Duration {
 		return untilReset
 	}
 	// What the configured rate would spend before the window refills.
-	needed := float64(repos) * untilReset.Seconds() / configured.Seconds()
+	perPass := float64(p.idleRequests(repos))
+	needed := perPass * untilReset.Seconds() / configured.Seconds()
 	if needed <= float64(spendable) {
 		return configured
 	}
-	paced := time.Duration(float64(repos)*untilReset.Seconds()/float64(spendable)) * time.Second
+	paced := time.Duration(perPass*untilReset.Seconds()/float64(spendable)) * time.Second
 	return min(max(paced, configured), untilReset)
+}
+
+// idleRequests is what one detection pass over repos can cost.
+func (p *Poller) idleRequests(repos int) int {
+	return repos * max(p.opts.IdleRequestsPerRepo, 1)
 }
 
 // claimIdlePass reports whether a detection pass is due and, when it is, records
@@ -450,9 +460,9 @@ func (p *Poller) claimIdlePass() bool {
 // what says a repo count and an interval do not fit; without it the only symptom
 // is the bridge quietly running out of allowance mid-window.
 //
-// It counts only the requests this loop issues, at one per repo per pass and one
-// per tracked run per tick, so it is an estimate in both directions: an adapter
-// that spends extra requests per repo is not represented, and conditional
+// It counts only the requests this loop issues, at IdleRequestsPerRepo per repo
+// per pass and one per tracked run per tick, so it is an estimate in both
+// directions: an adapter's other requests are not represented, and conditional
 // requests mean an idle repo may cost nothing at all. It is a sanity check on the
 // configuration, not an accounting of the window - Forge.Budget is what the
 // pacing actually reads.
@@ -467,7 +477,7 @@ func (p *Poller) logRequestBudget() {
 		}
 		return int(time.Hour / d)
 	}
-	estimate := repos*perHour(p.opts.Polling.IdleInterval) + perHour(p.opts.Polling.Interval)
+	estimate := p.idleRequests(repos)*perHour(p.opts.Polling.IdleInterval) + perHour(p.opts.Polling.Interval)
 	if p.opts.Owner != "" {
 		estimate += perHour(repoRefreshInterval)
 	}
@@ -766,12 +776,28 @@ func betweenWaves(info, observed ci.StepInfo, lastProgress float64) ci.StepInfo 
 // shape computes the step shape and drops the opt-in pill fields the config
 // disables. step_colors is omitempty, so a nil slice reproduces the payload a
 // bridge sent before the field existed.
-func (p *Poller) shape(jobs []ci.Job) ci.StepInfo {
-	info := ci.ComputeSteps(jobs)
+func (p *Poller) shape(jobs []ci.Job, opts ...ci.StepsOption) ci.StepInfo {
+	info := ci.ComputeSteps(jobs, opts...)
 	if !p.opts.Render.StepColors {
 		info.StepColors = nil
 	}
 	return info
+}
+
+// endColors is info's pill colours with every group the final scan names
+// recoloured from it. info may carry the seed's longer label list; a group this
+// run never had keeps its seeded colour.
+func endColors(info, final ci.StepInfo) []string {
+	if info.StepColors == nil {
+		return nil
+	}
+	colors := slices.Clone(info.StepColors)
+	for i, label := range info.StepLabels {
+		if j := slices.Index(final.StepLabels, label); j >= 0 && i < len(colors) {
+			colors[i] = final.StepColors[j]
+		}
+	}
+	return colors
 }
 
 // liveAnchor returns the unix window iOS animates the current step's pill
@@ -1094,9 +1120,13 @@ func (p *Poller) pollActive(ctx context.Context) error {
 					shape: observed, weights: measured, duration: length, runID: tRunID,
 					success: run.Conclusion == ci.ConclusionSuccess,
 				})
+				// The ladder again, knowing how the run ended: a job that failed under
+				// a successful run was allowed to. Only the end frame shows it; the
+				// seed filed above keeps the plain shape.
+				final := p.shape(jobs, ci.WithRunConclusion(run.Conclusion))
 				// The run's own outcome is authoritative; the ladder's AnyFailed only
 				// covers a run that reports nothing usable of its own.
-				state, color := p.forge.Outcome(*run, info.AnyFailed)
+				state, color := p.forge.Outcome(*run, final.AnyFailed)
 				endRows, endLabels := pushward.ClampStepShape(info.StepRows, info.StepLabels)
 				p.log.Info("workflow completed",
 					"repo", repo, "run_id", tRunID, "slug", tSlug,
@@ -1112,7 +1142,7 @@ func (p *Poller) pollActive(ctx context.Context) error {
 					TotalSteps:  pushward.IntPtr(info.TotalSteps),
 					StepRows:    endRows,
 					StepLabels:  endLabels,
-					StepColors:  info.StepColors,
+					StepColors:  endColors(info, final),
 					StepWeights: stepWeights,
 					// Stop the animation on the result frames. Content updates are
 					// merge-patches, so the last step's window survives otherwise, and

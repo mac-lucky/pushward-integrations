@@ -669,6 +669,58 @@ func TestNewEndToEnd(t *testing.T) {
 	}
 }
 
+// A job with job-level continue-on-error fails under a run that succeeds. Only
+// the end frame knows the run's conclusion, so only it paints the group orange;
+// the frames sent while the run went on keep the group's own colour.
+func TestEndFrame_AllowedFailureIsOrange(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/repos/acme/app/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("workflow_id") != "" {
+			_, _ = w.Write([]byte(`{"total_count":0,"workflow_runs":[]}`))
+			return
+		}
+		_, _ = w.Write([]byte(runsJSON(runJSON(1, 33, "running", "ci.yml", "main"))))
+	})
+	mux.HandleFunc("/api/v1/repos/acme/app/actions/runs/1", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(runJSON(1, 33, "success", "ci.yml", "main")))
+	})
+	mux.HandleFunc("/api/v1/repos/acme/app/actions/runs/1/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(jobsJSON(
+			jobJSON(10, 100, "build", "success"),
+			jobJSON(11, 101, "e2e", "failure"),
+		)))
+	})
+	mux.HandleFunc("/api/v1/repos/acme/app/actions/tasks", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"total_count":0,"workflow_runs":[]}`))
+	})
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	cfg.Render.StepColors = true
+	p := New(cfg, mockForgejoClient(t, mux), pushward.NewClient(pwSrv.URL, "hlk_test"))
+	if err := p.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// create, seed, end phase 1 (the result frame), end phase 2.
+	got := testutil.WaitForCalls(t, calls, mu, 4, 2*time.Second)
+	if len(got) < 3 {
+		t.Fatalf("expected the run to end, got %d calls", len(got))
+	}
+	var seed, end pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &seed)
+	testutil.UnmarshalBody(t, got[2].Body, &end)
+	if want := []string{"blue", "yellow"}; !reflect.DeepEqual(seed.Content.StepColors, want) {
+		t.Errorf("seed step_colors = %v, want %v", seed.Content.StepColors, want)
+	}
+	if want := []string{"blue", pushward.ColorOrange}; !reflect.DeepEqual(end.Content.StepColors, want) {
+		t.Errorf("end step_colors = %v, want %v", end.Content.StepColors, want)
+	}
+	if end.Content.State != cipoll.OutcomeSuccess || end.Content.AccentColor != pushward.ColorGreen {
+		t.Errorf("end = %q / %q, want a green %q", end.Content.State, end.Content.AccentColor, cipoll.OutcomeSuccess)
+	}
+}
+
 // The jobs lookup failing AFTER a prior run was found is a distinct path from the
 // run lookup failing, and it is the one that leaves a run identified but unusable.
 func TestBaselineJobs_JobsLookupFails(t *testing.T) {

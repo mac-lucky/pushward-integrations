@@ -295,11 +295,11 @@ func TestBaselineJobs_RejectsAMalformedWorkflowKey(t *testing.T) {
 func TestActiveRunsAndLiveJobs(t *testing.T) {
 	mux := http.NewServeMux()
 	hasWorkflowsRoute(mux)
-	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(runsResponse(ghclient.WorkflowRun{
+	runsByStatus(mux, map[string][]ghclient.WorkflowRun{
+		ci.StatusInProgress: {{
 			ID: 42, Name: "CI", Status: ci.StatusInProgress, HeadBranch: "main", WorkflowID: 99,
 			HTMLURL: "https://github.com/owner/repo/actions/runs/42",
-		}))
+		}},
 	})
 	mux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(jobsResponse(
@@ -410,11 +410,11 @@ func TestNewEndToEnd(t *testing.T) {
 	mux := http.NewServeMux()
 	hasWorkflowsRoute(mux)
 	// The live run has revealed only its first wave.
-	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(runsResponse(ghclient.WorkflowRun{
+	runsByStatus(mux, map[string][]ghclient.WorkflowRun{
+		ci.StatusInProgress: {{
 			ID: 42, Name: "CI", Status: ci.StatusInProgress, HeadBranch: "main", WorkflowID: 99,
 			HTMLURL: "https://github.com/owner/repo/actions/runs/42",
-		}))
+		}},
 	})
 	// Build started 10s ago against a 300s estimate, so its window is still well
 	// open and the active tick can anchor it.
@@ -540,6 +540,108 @@ func TestNewEndToEnd(t *testing.T) {
 	}
 	if got := *tick.Content.EndDate - *tick.Content.StartDate; got != 300 {
 		t.Errorf("window = %ds, want Build's prior 300s", got)
+	}
+}
+
+// runsByStatus answers the idle probe per status filter, the way GitHub does.
+func runsByStatus(mux *http.ServeMux, byStatus map[string][]ghclient.WorkflowRun) {
+	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(runsResponse(byStatus[r.URL.Query().Get("status")]...))
+	})
+}
+
+// A job with job-level continue-on-error fails under a run that succeeds. Only
+// the end frame knows the run's conclusion, so only it paints the group orange;
+// the frames sent while the run went on keep the group's own colour.
+func TestEndFrame_AllowedFailureIsOrange(t *testing.T) {
+	mux := http.NewServeMux()
+	hasWorkflowsRoute(mux)
+	runsByStatus(mux, map[string][]ghclient.WorkflowRun{
+		ci.StatusInProgress: {{ID: 42, Name: "CI", Status: ci.StatusInProgress, HeadBranch: "main", WorkflowID: 99}},
+	})
+	mux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(runsResponse())
+	})
+	mux.HandleFunc("/repos/owner/repo/actions/runs/42/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(jobsResponse(
+			ghclient.Job{ID: 1, Name: "Build", Status: ci.StatusCompleted, Conclusion: ci.ConclusionSuccess},
+			ghclient.Job{ID: 2, Name: "Test (windows)", Status: ci.StatusCompleted, Conclusion: ci.ConclusionFailure},
+		))
+	})
+	mux.HandleFunc("/repos/owner/repo/actions/runs/42", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(ghclient.WorkflowRun{
+			ID: 42, Status: ci.StatusCompleted, Conclusion: ci.ConclusionSuccess, WorkflowID: 99,
+		})
+	})
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig()
+	cfg.Render.StepColors = true
+	p := New(cfg, mockGitHubClient(t, mux), pushward.NewClient(pwSrv.URL, "hlk_test"))
+	if err := p.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// create, seed, end phase 1 (the result frame), end phase 2.
+	got := testutil.WaitForCalls(t, calls, mu, 4, 2*time.Second)
+	if len(got) < 3 {
+		t.Fatalf("expected the run to end, got %d calls", len(got))
+	}
+	var seed, end pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[1].Body, &seed)
+	testutil.UnmarshalBody(t, got[2].Body, &end)
+	if want := []string{"blue", "yellow"}; !reflect.DeepEqual(seed.Content.StepColors, want) {
+		t.Errorf("seed step_colors = %v, want %v", seed.Content.StepColors, want)
+	}
+	if want := []string{"blue", pushward.ColorOrange}; !reflect.DeepEqual(end.Content.StepColors, want) {
+		t.Errorf("end step_colors = %v, want %v", end.Content.StepColors, want)
+	}
+	if end.Content.State != cipoll.OutcomeSuccess || end.Content.AccentColor != pushward.ColorGreen {
+		t.Errorf("end = %q / %q, want a green %q", end.Content.State, end.Content.AccentColor, cipoll.OutcomeSuccess)
+	}
+}
+
+// A run waiting for a runner is listed only under status=queued. Its card opens
+// on the queued placeholder and stays open: nothing has run, so nothing ends.
+func TestQueuedRunOpensACard(t *testing.T) {
+	mux := http.NewServeMux()
+	hasWorkflowsRoute(mux)
+	runsByStatus(mux, map[string][]ghclient.WorkflowRun{
+		ci.StatusQueued: {{ID: 50, Name: "CI", Status: ci.StatusQueued, HeadBranch: "main", WorkflowID: 99}},
+	})
+	mux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(runsResponse())
+	})
+	mux.HandleFunc("/repos/owner/repo/actions/runs/50/jobs", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(jobsResponse(
+			ghclient.Job{ID: 1, Name: "Build", Status: ci.StatusQueued},
+			ghclient.Job{ID: 2, Name: "Test", Status: ci.StatusQueued},
+		))
+	})
+	mux.HandleFunc("/repos/owner/repo/actions/runs/50", func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("a queued run's visible jobs are not done, so its completion must not be checked")
+	})
+
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	p := New(testConfig(), mockGitHubClient(t, mux), pushward.NewClient(pwSrv.URL, "hlk_test"))
+	if err := p.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := testutil.GetCalls(calls, mu)
+	if len(got) != 3 {
+		t.Fatalf("expected create + seed + tick, got %d calls", len(got))
+	}
+	var tick pushward.UpdateRequest
+	testutil.UnmarshalBody(t, got[2].Body, &tick)
+	if tick.State != pushward.StateOngoing || tick.Content.State != ci.QueuedStepName {
+		t.Errorf("tick = %q / %q, want an ongoing %q", tick.State, tick.Content.State, ci.QueuedStepName)
+	}
+	if tick.Content.Progress != 0 {
+		t.Errorf("progress = %v, want 0 before anything ran", tick.Content.Progress)
+	}
+	if got := tick.Content.CurrentStep; got == nil || *got != 1 {
+		t.Errorf("current_step = %v, want the first group", got)
 	}
 }
 

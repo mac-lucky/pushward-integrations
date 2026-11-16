@@ -1,8 +1,11 @@
 package ci
 
 import (
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
 func TestBaseJobName(t *testing.T) {
@@ -153,6 +156,38 @@ func TestComputeSteps_StepColors(t *testing.T) {
 		if info.StepColors[i] != w {
 			t.Errorf("StepColors[%d] = %q, want %q", i, info.StepColors[i], w)
 		}
+	}
+}
+
+// A job with job-level continue-on-error concludes failure while its run
+// concludes success. Only the run's conclusion tells the two apart, so without it
+// (and during the run) every failed job still counts.
+func TestComputeSteps_AllowedFailure(t *testing.T) {
+	jobs := []Job{
+		{Name: "Build", Status: StatusCompleted, Conclusion: ConclusionSuccess},
+		{Name: "Test (linux)", Status: StatusCompleted, Conclusion: ConclusionSuccess},
+		{Name: "Test (windows)", Status: StatusCompleted, Conclusion: ConclusionFailure},
+	}
+	tests := []struct {
+		name      string
+		opts      []StepsOption
+		wantColor string
+		wantFail  bool
+	}{
+		{name: "no conclusion", wantColor: "yellow", wantFail: true},
+		{name: "run failed", opts: []StepsOption{WithRunConclusion(ConclusionFailure)}, wantColor: "yellow", wantFail: true},
+		{name: "run succeeded", opts: []StepsOption{WithRunConclusion(ConclusionSuccess)}, wantColor: pushward.ColorOrange, wantFail: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			info := ComputeSteps(jobs, tc.opts...)
+			if want := []string{"blue", tc.wantColor}; !slices.Equal(info.StepColors, want) {
+				t.Errorf("StepColors = %v, want %v", info.StepColors, want)
+			}
+			if info.AnyFailed != tc.wantFail {
+				t.Errorf("AnyFailed = %v, want %v", info.AnyFailed, tc.wantFail)
+			}
+		})
 	}
 }
 
