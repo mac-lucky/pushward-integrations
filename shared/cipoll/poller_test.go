@@ -510,6 +510,34 @@ func TestPollIdle_DiscoversAndTracksRun(t *testing.T) {
 	}
 }
 
+// A newer run still waiting for a runner does not take the card from the one
+// already executing.
+func TestPollIdle_RunningRunBeatsANewerQueuedOne(t *testing.T) {
+	f := newFakeForge(t)
+	f.activeRuns = func(string) ([]Run, error) {
+		running := activeRun(42, "CI", "main")
+		running.CreatedAt = time.Now().Add(-time.Minute)
+		queued := activeRun(43, "CI", "main")
+		queued.Status, queued.RawStatus = ci.StatusQueued, ci.StatusQueued
+		queued.CreatedAt = time.Now()
+		return []Run{queued, running}, nil
+	}
+	f.liveJobs = func(string, int64) ([]ci.Job, error) {
+		return []ci.Job{job("Build", ci.StatusInProgress, "")}, nil
+	}
+	p, _, _ := newTestPoller(t, testOptions(), f)
+
+	if err := p.pollIdle(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	p.mu.Lock()
+	tracked := p.tracked[testRepo]
+	p.mu.Unlock()
+	if tracked == nil || tracked.RunID != 42 {
+		t.Fatalf("tracked = %+v, want the running run 42", tracked)
+	}
+}
+
 // The title names the forge, so two bridges watching the same repo produce cards
 // a user can tell apart.
 func TestPollIdle_TitleAndSlugCarryTheForgePrefix(t *testing.T) {

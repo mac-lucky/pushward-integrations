@@ -422,6 +422,16 @@ func (p *Poller) idleRequests(repos int) int {
 	return repos * max(p.opts.IdleRequestsPerRepo, 1)
 }
 
+// preferred reports whether a should get the repo's card over b: a running run
+// beats a queued one, so a queue on a busy repo cannot hide the run executing,
+// then the newer one wins.
+func preferred(a, b Run) bool {
+	if aRuns, bRuns := a.Status == ci.StatusInProgress, b.Status == ci.StatusInProgress; aRuns != bRuns {
+		return aRuns
+	}
+	return a.CreatedAt.After(b.CreatedAt)
+}
+
 // claimIdlePass reports whether a detection pass is due and, when it is, records
 // it as taken. Combined because "due" and "claimed" are one transition: the
 // caller has no reason to ask without acting on the answer.
@@ -544,7 +554,7 @@ func (p *Poller) pollIdle(ctx context.Context) error {
 				p.log.Debug("ignoring a run the loop already ended", "repo", repo, "run_id", r.ID)
 				continue
 			}
-			if !found || r.CreatedAt.After(run.CreatedAt) {
+			if !found || preferred(r, run) {
 				run, found = r, true
 			}
 		}
