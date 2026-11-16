@@ -95,7 +95,6 @@ func TestEffectiveIdleInterval(t *testing.T) {
 		idle      time.Duration
 		active    time.Duration
 		tracked   int
-		perRepo   int
 		want      time.Duration
 	}{
 		{
@@ -143,13 +142,6 @@ func TestEffectiveIdleInterval(t *testing.T) {
 			want: time.Minute,
 		},
 		{
-			// GitHub's probe asks queued and in_progress separately: 44 repos a minute
-			// is then 5,280 an hour against 4,000 left, so 88 * 3600 / 4000.
-			name:  "a second request per repo doubles what detection needs",
-			known: true, remaining: 4000, resetIn: time.Hour, idle: time.Minute, perRepo: 2,
-			want: 79 * time.Second,
-		},
-		{
 			// Pacing only ever slows detection down, never speeds it up.
 			name:  "a huge budget does not shorten the configured interval",
 			known: true, remaining: 5000, resetIn: time.Hour, idle: 5 * time.Minute,
@@ -169,7 +161,6 @@ func TestEffectiveIdleInterval(t *testing.T) {
 				opts.Polling.Interval = tc.active
 			}
 			opts.HourlyRequestBudget = 5000
-			opts.IdleRequestsPerRepo = tc.perRepo
 			p := New(f, nil, opts)
 			for i := range tc.tracked {
 				p.tracked["owner/tracked"+strconv.Itoa(i)] = &trackedRun{}

@@ -56,7 +56,7 @@ const maxBodyLimit = 4 << 20
 // times over.
 const maxBodyBytes = 16 << 20
 
-// runsProbe is the cached answer to one of a repo's active-runs probes. GitHub
+// runsProbe is the cached answer to one repo's in-progress-runs probe. GitHub
 // does not count a conditional request that answers 304 against the primary rate
 // limit, so caching the decoded runs alongside the ETag turns the poll every idle
 // repo pays every pass into something free.
@@ -119,7 +119,7 @@ type Client struct {
 	remaining int
 	resetAt   time.Time
 	login     string // cached login of the token's user (lazy)
-	// workflows is keyed by "owner/repo", runsCache by "owner/repo?status", runCache by
+	// runsCache and workflows are keyed by "owner/repo"; runCache by
 	// "owner/repo#runID".
 	runsCache map[string]runsProbe
 	workflows map[string]workflowPresence
@@ -522,9 +522,9 @@ func decodeWorkflowRuns(body []byte) ([]WorkflowRun, error) {
 	return result.WorkflowRuns, nil
 }
 
-// GetInProgressRuns returns the repo's queued-or-running workflow runs.
+// GetInProgressRuns returns the repo's running workflow runs; queued ones open no card.
 //
-// This is the request the bridge makes most by a wide margin - twice per watched
+// This is the request the bridge makes most by a wide margin - once per watched
 // repo per detection pass, whether or not anything is running - so it is the one
 // place worth spending code to keep cheap. Two things do that: repos with no
 // workflows are not polled at all, and everything else goes out as a conditional
@@ -545,25 +545,8 @@ func (c *Client) GetInProgressRuns(ctx context.Context, repo string) ([]Workflow
 		return nil, nil
 	}
 
-	// The status filter takes one value, so queued and running are two probes, each
-	// conditional on its own ETag. Queued goes first: a run that starts between the
-	// two is then listed twice rather than missed, and the poller's newest-run pick
-	// does not mind a duplicate.
-	var runs []WorkflowRun
-	for _, status := range []string{"queued", "in_progress"} {
-		got, err := c.probeRuns(ctx, owner, name, repo+"?"+status, status)
-		if err != nil {
-			return nil, err
-		}
-		runs = append(runs, got...)
-	}
-	return runs, nil
-}
-
-// probeRuns is one status-filtered runs probe, cached under key.
-func (c *Client) probeRuns(ctx context.Context, owner, name, key, status string) ([]WorkflowRun, error) {
 	c.mu.Lock()
-	cached := c.runsCache[key]
+	cached := c.runsCache[repo]
 	c.mu.Unlock()
 
 	// per_page=50 caps memory while covering concurrent workflows on busy repos.
@@ -572,7 +555,7 @@ func (c *Client) probeRuns(ctx context.Context, owner, name, key, status string)
 	// which would stop the ETag from ever matching and put this request back on the
 	// bill every pass. exclude_pull_requests drops a field nothing here reads, and with
 	// it the reason a PR head moving would change the answer.
-	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?status=%s&per_page=50&exclude_pull_requests=true", c.baseURL, owner, name, status)
+	url := fmt.Sprintf("%s/repos/%s/%s/actions/runs?status=in_progress&per_page=50&exclude_pull_requests=true", c.baseURL, owner, name)
 	resp, err := c.doConditional(ctx, url, "requesting workflow runs", cached.etag)
 	if err != nil {
 		return nil, err
@@ -583,9 +566,9 @@ func (c *Client) probeRuns(ctx context.Context, owner, name, key, status string)
 		// Restamp usedAt in place for the cache sweep; the one clone is the
 		// caller's copy.
 		c.mu.Lock()
-		if e, ok := c.runsCache[key]; ok {
+		if e, ok := c.runsCache[repo]; ok {
 			e.usedAt = time.Now()
-			c.runsCache[key] = e
+			c.runsCache[repo] = e
 		}
 		c.mu.Unlock()
 		return slices.Clone(cached.runs), nil
@@ -595,18 +578,18 @@ func (c *Client) probeRuns(ctx context.Context, owner, name, key, status string)
 	if err != nil {
 		return nil, err
 	}
-	c.storeRunsProbe(key, resp.etag, runs)
+	c.storeRunsProbe(repo, resp.etag, runs)
 	return runs, nil
 }
 
-// storeRunsProbe replaces the cached answer for one probe. An empty etag is stored
-// as such: a response without one simply means the next request is unconditional.
+// storeRunsProbe replaces the cached answer for a repo. An empty etag is stored as
+// such: a response without one simply means the next request is unconditional.
 //
 // The runs are cloned rather than aliased, so a caller that reorders what it was
 // handed cannot corrupt every later answer for that repo.
-func (c *Client) storeRunsProbe(key, etag string, runs []WorkflowRun) {
+func (c *Client) storeRunsProbe(repo, etag string, runs []WorkflowRun) {
 	c.mu.Lock()
-	c.runsCache[key] = runsProbe{etag: etag, runs: slices.Clone(runs), usedAt: time.Now()}
+	c.runsCache[repo] = runsProbe{etag: etag, runs: slices.Clone(runs), usedAt: time.Now()}
 	c.mu.Unlock()
 }
 

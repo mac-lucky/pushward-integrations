@@ -46,8 +46,6 @@ func New(cfg *config.Config, gh *ghclient.Client, pw *pushward.Client) *cipoll.P
 		// loop paces detection against, and what the startup line compares the
 		// configured rate to.
 		HourlyRequestBudget: ghclient.HourlyRateLimit,
-		// The runs probe asks queued and in_progress separately.
-		IdleRequestsPerRepo: 2,
 		PushWard:            cfg.PushWard,
 		Render:              cfg.Render,
 		TitlePrefix:         "GitHub",

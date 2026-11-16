@@ -601,50 +601,6 @@ func TestEndFrame_AllowedFailureIsOrange(t *testing.T) {
 	}
 }
 
-// A run waiting for a runner is listed only under status=queued. Its card opens
-// on the queued placeholder and stays open: nothing has run, so nothing ends.
-func TestQueuedRunOpensACard(t *testing.T) {
-	mux := http.NewServeMux()
-	hasWorkflowsRoute(mux)
-	runsByStatus(mux, map[string][]ghclient.WorkflowRun{
-		ci.StatusQueued: {{ID: 50, Name: "CI", Status: ci.StatusQueued, HeadBranch: "main", WorkflowID: 99}},
-	})
-	mux.HandleFunc("/repos/owner/repo/actions/workflows/99/runs", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(runsResponse())
-	})
-	mux.HandleFunc("/repos/owner/repo/actions/runs/50/jobs", func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(jobsResponse(
-			ghclient.Job{ID: 1, Name: "Build", Status: ci.StatusQueued},
-			ghclient.Job{ID: 2, Name: "Test", Status: ci.StatusQueued},
-		))
-	})
-	mux.HandleFunc("/repos/owner/repo/actions/runs/50", func(w http.ResponseWriter, _ *http.Request) {
-		t.Error("a queued run's visible jobs are not done, so its completion must not be checked")
-	})
-
-	pwSrv, calls, mu := testutil.MockPushWardServer(t)
-	p := New(testConfig(), mockGitHubClient(t, mux), pushward.NewClient(pwSrv.URL, "hlk_test"))
-	if err := p.Poll(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-
-	got := testutil.GetCalls(calls, mu)
-	if len(got) != 3 {
-		t.Fatalf("expected create + seed + tick, got %d calls", len(got))
-	}
-	var tick pushward.UpdateRequest
-	testutil.UnmarshalBody(t, got[2].Body, &tick)
-	if tick.State != pushward.StateOngoing || tick.Content.State != ci.QueuedStepName {
-		t.Errorf("tick = %q / %q, want an ongoing %q", tick.State, tick.Content.State, ci.QueuedStepName)
-	}
-	if tick.Content.Progress != 0 {
-		t.Errorf("progress = %v, want 0 before anything ran", tick.Content.Progress)
-	}
-	if got := tick.Content.CurrentStep; got == nil || *got != 1 {
-		t.Errorf("current_step = %v, want the first group", got)
-	}
-}
-
 // The adapter's error returns are load-bearing: they are what make the loop defer
 // the end, skip the tick and skip the repo rather than acting on nothing.
 func TestForgeErrorsPropagate(t *testing.T) {

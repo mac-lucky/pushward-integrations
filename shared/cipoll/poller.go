@@ -58,7 +58,7 @@ type Options struct {
 	// Repos are watched in addition to whatever Owner discovers.
 	Repos []string
 	// Polling is the two-tier cadence, taken whole from the bridge's config. The
-	// expensive idle tier costs IdleRequestsPerRepo per watched repo per pass and buys only
+	// expensive idle tier costs one request per watched repo per pass and buys only
 	// detection latency; the cheap active tier costs one request per run actually in
 	// flight and is what a user watching a card sees. Kept separate because the two
 	// have opposite cost profiles: tying them together means a smoother card can only
@@ -73,10 +73,6 @@ type Options struct {
 	// budget, which disables both. The number is the adapter's to supply because
 	// it is forge-specific, the same reason Outcome and DiscoveryRequired are.
 	HourlyRequestBudget int
-	// IdleRequestsPerRepo is what Forge.ActiveRuns can cost one repo, for the same
-	// arithmetic: a forge whose run filter takes one status at a time asks twice.
-	// Zero means one.
-	IdleRequestsPerRepo int
 
 	PushWard sharedconfig.PushWardConfig
 	Render   sharedconfig.RenderConfig
@@ -408,18 +404,12 @@ func (p *Poller) effectiveIdleInterval(repos int) time.Duration {
 		return untilReset
 	}
 	// What the configured rate would spend before the window refills.
-	perPass := float64(p.idleRequests(repos))
-	needed := perPass * untilReset.Seconds() / configured.Seconds()
+	needed := float64(repos) * untilReset.Seconds() / configured.Seconds()
 	if needed <= float64(spendable) {
 		return configured
 	}
-	paced := time.Duration(perPass*untilReset.Seconds()/float64(spendable)) * time.Second
+	paced := time.Duration(float64(repos)*untilReset.Seconds()/float64(spendable)) * time.Second
 	return min(max(paced, configured), untilReset)
-}
-
-// idleRequests is what one detection pass over repos can cost.
-func (p *Poller) idleRequests(repos int) int {
-	return repos * max(p.opts.IdleRequestsPerRepo, 1)
 }
 
 // preferred reports whether a should get the repo's card over b: a running run
@@ -470,9 +460,9 @@ func (p *Poller) claimIdlePass() bool {
 // what says a repo count and an interval do not fit; without it the only symptom
 // is the bridge quietly running out of allowance mid-window.
 //
-// It counts only the requests this loop issues, at IdleRequestsPerRepo per repo
-// per pass and one per tracked run per tick, so it is an estimate in both
-// directions: an adapter's other requests are not represented, and conditional
+// It counts only the requests this loop issues, at one per repo per pass and one
+// per tracked run per tick, so it is an estimate in both directions: an adapter
+// that spends extra requests per repo is not represented, and conditional
 // requests mean an idle repo may cost nothing at all. It is a sanity check on the
 // configuration, not an accounting of the window - Forge.Budget is what the
 // pacing actually reads.
@@ -487,7 +477,7 @@ func (p *Poller) logRequestBudget() {
 		}
 		return int(time.Hour / d)
 	}
-	estimate := p.idleRequests(repos)*perHour(p.opts.Polling.IdleInterval) + perHour(p.opts.Polling.Interval)
+	estimate := repos*perHour(p.opts.Polling.IdleInterval) + perHour(p.opts.Polling.Interval)
 	if p.opts.Owner != "" {
 		estimate += perHour(repoRefreshInterval)
 	}

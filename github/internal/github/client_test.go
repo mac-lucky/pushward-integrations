@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -52,23 +51,21 @@ func TestSetBaseURL(t *testing.T) {
 	}
 }
 
-// The status filter takes one value, so a queued run (waiting for a runner) is
-// only found by its own probe.
 func TestGetInProgressRuns_Success(t *testing.T) {
-	byStatus := map[string]WorkflowRun{
-		"in_progress": {ID: 42, Name: "CI", Status: "in_progress", HeadBranch: "main"},
-		"queued":      {ID: 43, Name: "CI", Status: "queued", HeadBranch: "main"},
-	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("status") != "in_progress" {
+			t.Errorf("expected status=in_progress query param")
+		}
 		if r.URL.Query().Get("exclude_pull_requests") != "true" {
 			t.Errorf("expected exclude_pull_requests=true query param")
 		}
-		run, ok := byStatus[r.URL.Query().Get("status")]
-		if !ok {
-			t.Errorf("unexpected status filter %q", r.URL.Query().Get("status"))
-		}
-		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{TotalCount: 1, WorkflowRuns: []WorkflowRun{run}})
+		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{
+			TotalCount: 1,
+			WorkflowRuns: []WorkflowRun{
+				{ID: 42, Name: "CI", Status: "in_progress", HeadBranch: "main"},
+			},
+		})
 	})
 	workflowsRoute(mux, "owner/repo")
 	c := testClient(t, mux)
@@ -77,13 +74,14 @@ func TestGetInProgressRuns_Success(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(runs) != 2 {
-		t.Fatalf("expected the queued and the running run, got %+v", runs)
+	if len(runs) != 1 {
+		t.Fatalf("expected 1 run, got %d", len(runs))
 	}
-	for _, r := range runs {
-		if want := byStatus[r.Status]; r.ID != want.ID || r.Name != "CI" {
-			t.Errorf("run %+v, want %+v", r, want)
-		}
+	if runs[0].ID != 42 {
+		t.Errorf("expected run ID 42, got %d", runs[0].ID)
+	}
+	if runs[0].Name != "CI" {
+		t.Errorf("expected run name CI, got %s", runs[0].Name)
 	}
 }
 
@@ -109,77 +107,59 @@ func TestGetInProgressRuns_Empty(t *testing.T) {
 // against the primary rate limit, which is what makes polling every repo every
 // pass affordable at all.
 func TestGetInProgressRuns_ConditionalRequestAnswersFromCache(t *testing.T) {
-	// Each status probe has its own ETag and cache entry: one answer must never be
-	// handed back for the other.
-	etags := map[string]string{"in_progress": `W/"abc123"`, "queued": `W/"q456"`}
-	ids := map[string]int64{"in_progress": 7, "queued": 8}
-	var mu sync.Mutex
-	sawIfNoneMatch := map[string]string{}
+	const etag = `W/"abc123"`
+	var calls atomic.Int32
+	var sawIfNoneMatch atomic.Value
 
 	mux := http.NewServeMux()
 	workflowsRoute(mux, "owner/repo")
 	mux.HandleFunc("/repos/owner/repo/actions/runs", func(w http.ResponseWriter, r *http.Request) {
-		status := r.URL.Query().Get("status")
-		mu.Lock()
-		sawIfNoneMatch[status] = r.Header.Get("If-None-Match")
-		mu.Unlock()
-		w.Header().Set("ETag", etags[status])
-		if r.Header.Get("If-None-Match") != "" {
+		n := calls.Add(1)
+		sawIfNoneMatch.Store(r.Header.Get("If-None-Match"))
+		w.Header().Set("ETag", etag)
+		if n > 1 {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(WorkflowRunsResponse{
 			TotalCount:   1,
-			WorkflowRuns: []WorkflowRun{{ID: ids[status], Name: "CI", Status: status}},
+			WorkflowRuns: []WorkflowRun{{ID: 7, Name: "CI", Status: "in_progress"}},
 		})
 	})
 	c := testClient(t, mux)
-	checkSent := func(probe string, want map[string]string) {
-		t.Helper()
-		mu.Lock()
-		defer mu.Unlock()
-		for status, w := range want {
-			if got := sawIfNoneMatch[status]; got != w {
-				t.Errorf("%s %s probe sent If-None-Match %q, want %q", probe, status, got, w)
-			}
-		}
-	}
-	checkRuns := func(probe string, runs []WorkflowRun) {
-		t.Helper()
-		if len(runs) != 2 {
-			t.Fatalf("%s probe = %+v, want the queued and the running run", probe, runs)
-		}
-		for _, r := range runs {
-			if r.ID != ids[r.Status] {
-				t.Errorf("%s probe answered %+v for %s, want ID %d", probe, r, r.Status, ids[r.Status])
-			}
-		}
-	}
 
 	first, err := c.GetInProgressRuns(context.Background(), "owner/repo")
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkRuns("first", first)
-	checkSent("first", map[string]string{"in_progress": "", "queued": ""})
+	if len(first) != 1 || first[0].ID != 7 {
+		t.Fatalf("first probe = %+v, want one run with ID 7", first)
+	}
+	if got := sawIfNoneMatch.Load(); got != "" {
+		t.Errorf("first probe sent If-None-Match %q, want none", got)
+	}
 
 	second, err := c.GetInProgressRuns(context.Background(), "owner/repo")
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkSent("second", etags)
-	checkRuns("second", second)
+	if got := sawIfNoneMatch.Load(); got != etag {
+		t.Errorf("second probe sent If-None-Match %q, want %q", got, etag)
+	}
+	if len(second) != 1 || second[0].ID != 7 {
+		t.Fatalf("304 answered %+v, want the cached run", second)
+	}
 
 	// The cached slice must not be handed out directly, or a caller reordering it
 	// would corrupt every later answer.
-	for i := range second {
-		second[i].ID = 999
-	}
+	second[0].ID = 999
 	third, err := c.GetInProgressRuns(context.Background(), "owner/repo")
 	if err != nil {
 		t.Fatal(err)
 	}
-	checkRuns("third", third)
+	if third[0].ID != 7 {
+		t.Errorf("cache was mutated through a returned slice: ID %d", third[0].ID)
+	}
 }
 
 // A repo with no workflow files answers the runs probe with an empty 200, exactly
