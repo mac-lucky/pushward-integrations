@@ -1,4 +1,11 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["github>mac-lucky/actions-shared-workflows"]
+  "extends": ["github>mac-lucky/actions-shared-workflows"],
+  "packageRules": [
+    {
+      "description": "Every module here builds shared from ../shared through its replace, so the v0.0.0 in require is a placeholder. A bump to a shared/v* tag would change every go.mod and auto-tag.yml would then release six bridges",
+      "matchPackageNames": ["github.com/mac-lucky/pushward-integrations/shared"],
+      "enabled": false
+    }
+  ]
 }

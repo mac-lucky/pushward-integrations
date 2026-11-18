@@ -14,6 +14,13 @@ name: Auto Tag
 # queued or a tag job that failed is caught up by the next qualifying push. A
 # bridge with no such tag yet is skipped: its first release is cut by hand.
 #
+# shared/ gets a patch tag too (`shared/vX.Y.Z`) when a non-test Go file or
+# its go.mod changed since its newest tag, and v0.1.0 when it has none. Nothing
+# builds from it (release.yml does not match the prefix); it is the version
+# other repos import, so Renovate offers them shared only when shared changed,
+# not a new pseudo-version for every commit to main. Never move or delete one:
+# sum.golang.org has its hash.
+#
 # A dispatch with `images` (GHCR package names, e.g. "pushward-github
 # pushward-grafana") cuts a patch tag of those bridges whatever changed: a
 # rebuild picks up base packages and the newest Go patch. The nightly GHCR
@@ -33,6 +40,7 @@ on:
       - '*/Dockerfile'
       - '*/go.mod'
       - '*/go.sum'
+      - 'shared/**.go'
   workflow_dispatch:
     inputs:
       images:
@@ -97,6 +105,14 @@ jobs:
                 picked+=("$b")
               fi
             done
+            last=$(git tag --list 'shared/v*' | grep -E '^shared/v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1 || true)
+            if [ -z "$last" ]; then
+              echo "shared has no shared/v* tag yet; cutting shared/v0.1.0"
+              picked+=(shared)
+            elif [ -n "$(git diff --name-only "$last" HEAD -- 'shared/*.go' ':!shared/*_test.go' shared/go.mod)" ]; then
+              echo "shared changed since $last"
+              picked+=(shared)
+            fi
           fi
           bridges=$(printf '%s\n' "${picked[@]}" | sort -u | jq -Rnc '[inputs | select(length > 0)]')
           echo "bridges=$bridges"
