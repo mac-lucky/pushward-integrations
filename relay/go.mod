@@ -5,7 +5,7 @@ go 1.27.2
 require (
 	github.com/danielgtaylor/huma/v2 v2.40.0
 	github.com/fsnotify/fsnotify v1.10.1
-	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jackc/pgx/v5 v5.13.0
 	github.com/mac-lucky/pushward-integrations/shared v0.0.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/testcontainers/testcontainers-go v0.45.0
