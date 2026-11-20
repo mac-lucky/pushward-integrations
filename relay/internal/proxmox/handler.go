@@ -146,7 +146,7 @@ func (h *Handler) handleReplication(ctx context.Context, userKey string, log *sl
 // request. The message is no signal: the vzdump body carries the job log, which
 // always says "Starting Backup of VM ...". Only a title with "start" in it,
 // which PVE never sends but a hook script might, opens a running card for a
-// later outcome to end.
+// later outcome on the same node and job ID to end.
 func (h *Handler) handleJob(ctx context.Context, userKey string, log *slog.Logger, p *proxmoxPayload, kind jobKind, id string) error {
 	ov := overrides.FromContext(ctx)
 	// Proxmox is Live-Activity-only with no notification path, so
@@ -160,7 +160,10 @@ func (h *Handler) handleJob(ctx context.Context, userKey string, log *slog.Logge
 	mapKey := fmt.Sprintf("%s:%s:%s", kind.mapPrefix, p.Hostname, id)
 
 	title := strings.ToLower(p.Title)
-	failed := strings.EqualFold(p.Severity, "error") || strings.Contains(title, "fail")
+	// The severity is PVE's outcome signal. The title also names the node
+	// ("pve-failover"), so it decides only when a body sends no severity.
+	severity := strings.TrimSpace(p.Severity)
+	failed := strings.EqualFold(severity, "error") || (severity == "" && strings.Contains(title, "fail"))
 	starting := !failed && !strings.Contains(title, "success") && strings.Contains(title, "start")
 
 	content := pushward.Content{

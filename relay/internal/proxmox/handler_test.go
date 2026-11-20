@@ -57,6 +57,10 @@ func send(t *testing.T, h http.Handler, payload string) *httptest.ResponseRecord
 	return w
 }
 
+// The vzdump_* and replication_failure fixtures follow PVE's own notification
+// templates. backup_start, backup_success and backup_failure are an older
+// synthetic shape PVE never sends; they stay only because the universal
+// ranker's golden (written by pushward-classifier) reads them by name.
 func fixture(t *testing.T, name string) string {
 	t.Helper()
 	b, err := os.ReadFile(filepath.Join("../../testdata/proxmox", name)) // #nosec G304 -- fixture path under relay/testdata
@@ -149,7 +153,7 @@ func TestReplicationFailureOpensAndEndsCard(t *testing.T) {
 func TestManualBackupKeysOnNode(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 	for _, vmid := range []string{"100", "205"} {
-		send(t, h, `{
+		w := send(t, h, `{
 			"type": "vzdump",
 			"title": "vzdump backup status (pve1.home.arpa): backup successful",
 			"message": "INFO: Starting Backup of VM `+vmid+` (qemu)",
@@ -157,17 +161,50 @@ func TestManualBackupKeysOnNode(t *testing.T) {
 			"hostname": "pve1",
 			"job_id": ""
 		}`)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
 		time.Sleep(100 * time.Millisecond)
 	}
 	want := text.SlugHash("proxmox-backup", "pve1:", 4)
+	creates := 0
 	for _, c := range testutil.GetCalls(calls, mu) {
 		if c.Method == "POST" {
+			creates++
 			var create pushward.CreateActivityRequest
 			testutil.UnmarshalBody(t, c.Body, &create)
 			if create.Slug != want {
 				t.Errorf("expected slug %s, got %s", want, create.Slug)
 			}
 		}
+	}
+	if creates != 2 {
+		t.Errorf("expected 2 creates, got %d", creates)
+	}
+}
+
+// The severity decides the outcome; the title, which also names the node, only
+// when a body sends no severity.
+func TestBackupSeverityDecidesOverTitle(t *testing.T) {
+	for _, tc := range []struct {
+		name, title, severity, state, accent string
+	}{
+		{"node name with fail", "vzdump backup status (pve1.failover.lan): backup successful", "info", "Backup Complete", pushward.ColorGreen},
+		{"no severity", "vzdump backup status (pve1): backup failed", "", "Backup Failed", pushward.ColorRed},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, calls, mu := newHandler(t, testConfig())
+			body, _ := json.Marshal(map[string]string{
+				"type": "vzdump", "title": tc.title, "severity": tc.severity,
+				"hostname": "pve1", "job_id": "backup-1",
+			})
+			if w := send(t, h, string(body)); w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", w.Code)
+			}
+			time.Sleep(100 * time.Millisecond)
+			assertOpenedAndEnded(t, testutil.GetCalls(calls, mu),
+				text.SlugHash("proxmox-backup", "pve1:backup-1", 4), tc.title, tc.state, tc.accent)
+		})
 	}
 }
 
