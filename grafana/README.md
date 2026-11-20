@@ -163,7 +163,7 @@ Widgets are **independent of alerts**. Each entry in the `widgets:` list (or `PU
 
 `battery`, `schedule` and `flow` are server widget templates this bridge does not offer: each needs several independent readings in one push, and the poller runs one query per widget.
 
-Multi-series fan-out: set `query_all` instead of `query` plus a required `slug_template` to publish one widget per result series.
+Multi-series fan-out: set `query_all` instead of `query` plus a required `slug_template` to publish one widget per result series. Label values go into the template raw, so a rendered slug the server would refuse is cleaned up first: it is lower-cased, each run of characters other than `a-z`, `0-9`, `_` and `-` becomes `-`, and leading and trailing `-` are trimmed. `node-mem-{{.instance}}` with `instance="host.lan:9100"` publishes `node-mem-host-lan-9100`; a result that comes out empty or longer than 128 characters becomes `<slug>-<hash>`. When several series end up on one slug, the series whose labels sort first feeds the widget and the others are skipped with a warning. A series whose slug is still invalid (one starting with `_`, say) or that lacks a label the template uses is skipped the same way; the other series and the rest of the bridge keep running.
 
 Server-mirrored validation runs at config load: `interval` defaults to `60s` and must be `>= 5s`; `update_mode` is `on_change` (default) or `always`; slug must match `^[a-z0-9_-]{1,128}$`; `stat_list` allows at most 6 rows, with row label <= 32 chars and row unit <= 16 chars. The per-user widget cap on the server is 50.
 

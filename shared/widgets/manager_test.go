@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // --- valueChanged ---
@@ -71,6 +73,12 @@ func newStubServer(t *testing.T) (*stubServer, *pushward.Client, func()) {
 			s.mu.Lock()
 			s.gotCreate = append(s.gotCreate, req)
 			s.mu.Unlock()
+			// pushward-server's pattern, spelled out here rather than taken
+			// from the code under test.
+			if !regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`).MatchString(req.Slug) {
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				return
+			}
 			w.WriteHeader(http.StatusCreated)
 		case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/widgets/"):
 			s.updates.Add(1)
@@ -1062,4 +1070,88 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool) {
 		time.Sleep(5 * time.Millisecond)
 	}
 	t.Fatalf("condition not met within %v", timeout)
+}
+
+func TestSanitizeSlug(t *testing.T) {
+	long := "node-mem-" + strings.Repeat("a", 200)
+	for raw, want := range map[string]string{
+		// The grafana README example against a stock node_exporter target.
+		"node-mem-host.lan:9100": "node-mem-host-lan-9100",
+		"node-mem-Host.LAN:9100": "node-mem-host-lan-9100",
+		"g-a":                    "g-a",
+		// Already valid: kept, case and all, so no working widget moves.
+		"g-HostA": "g-HostA",
+		"::":      text.SlugHash("base", "::", 4),
+		"":        text.SlugHash("base", "", 4),
+		long:      text.SlugHash("base", long, 4),
+		"x (a b)": "x-a-b",
+	} {
+		got, err := sanitizeSlug("base", raw)
+		if err != nil || got != want {
+			t.Errorf("sanitizeSlug(%q) = %q, %v; want %q", raw, got, err, want)
+		}
+	}
+	// A leading "_" survives the trim and the server refuses it.
+	if got, err := sanitizeSlug("base", "_x"); err == nil {
+		t.Errorf("sanitizeSlug(%q) = %q, want an error", "_x", got)
+	}
+}
+
+// The README's slug_template against raw Prometheus labels used to render
+// "node-mem-host.lan:9100", which the server refuses with a 422 that failed
+// Start. Now every renderable series gets a valid slug, one that sanitizes
+// onto a slug an earlier series (in label order) took is skipped, and so are a
+// series the template cannot render and one whose slug cannot be made valid;
+// Start succeeds either way.
+func TestManager_MultiSanitizesRenderedSlugs(t *testing.T) {
+	series := []LabeledValue{
+		{Labels: map[string]string{"instance": "host.lan:9100"}, Value: 2},
+		// Sorts before "host.lan:9100" ('H' < 'h'), so it feeds the shared slug
+		// whichever order the source returns them in.
+		{Labels: map[string]string{"instance": "Host.LAN:9100"}, Value: 1},
+		{Labels: map[string]string{"job": "no-instance"}, Value: 4},
+	}
+	for _, reversed := range []bool{false, true} {
+		vals := slices.Clone(series)
+		if reversed {
+			slices.Reverse(vals)
+		}
+		stub, client, closeSrv := newStubServer(t)
+		src := MultiValueSourceFunc(func(_ context.Context) ([]LabeledValue, error) { return vals, nil })
+		// A leading "_" survives sanitizing and the server refuses it.
+		bad := MultiValueSourceFunc(func(_ context.Context) ([]LabeledValue, error) {
+			return []LabeledValue{{Labels: map[string]string{"job": "_internal"}, Value: 5}}, nil
+		})
+		m, err := New(client, []Spec{{
+			Slug:         "node-mem-base",
+			MultiSource:  src,
+			SlugTemplate: "node-mem-{{.instance}}",
+			Interval:     time.Hour,
+		}, {
+			Slug:         "jobs",
+			MultiSource:  bad,
+			SlugTemplate: "{{.job}}",
+			Interval:     time.Hour,
+		}}, quietLogger())
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		if err := m.Start(ctx); err != nil {
+			t.Fatalf("reversed=%v: Start: %v", reversed, err)
+		}
+		cancel()
+		m.Wait()
+		closeSrv()
+
+		stub.mu.Lock()
+		if len(stub.gotCreate) != 1 {
+			t.Fatalf("reversed=%v: creates = %d, want 1", reversed, len(stub.gotCreate))
+		}
+		got := stub.gotCreate[0]
+		stub.mu.Unlock()
+		if got.Slug != "node-mem-host-lan-9100" || got.Content.Value == nil || *got.Content.Value != 1 {
+			t.Errorf("reversed=%v: created %q with %v, want node-mem-host-lan-9100 with 1", reversed, got.Slug, got.Content.Value)
+		}
+	}
 }

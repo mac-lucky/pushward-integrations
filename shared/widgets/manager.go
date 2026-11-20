@@ -8,6 +8,8 @@ import (
 	"log/slog"
 	"math"
 	"math/rand/v2"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 // UpdateMode controls when a tick produces a PATCH.
@@ -691,6 +694,13 @@ func (m *Manager) runMulti(ctx context.Context, spec *Spec, logger *slog.Logger)
 
 func (m *Manager) applyMulti(ctx context.Context, spec *Spec, logger *slog.Logger, values []LabeledValue, firstTime bool) error {
 	seen := make(map[string]struct{}, len(values))
+	// Label order, not the source's, decides which series keeps a slug that
+	// several sanitize to, and which new series the cap admits. fmt prints a
+	// map with its keys sorted.
+	values = slices.Clone(values)
+	slices.SortStableFunc(values, func(a, b LabeledValue) int {
+		return strings.Compare(fmt.Sprint(a.Labels), fmt.Sprint(b.Labels))
+	})
 	for _, lv := range values {
 		if math.IsNaN(lv.Value) || math.IsInf(lv.Value, 0) {
 			continue
@@ -698,6 +708,10 @@ func (m *Manager) applyMulti(ctx context.Context, spec *Spec, logger *slog.Logge
 		slug, name, err := renderSlugName(spec, lv.Labels)
 		if err != nil {
 			logger.Warn("failed to render slug/name template", "error", err, "labels", lv.Labels)
+			continue
+		}
+		if _, dup := seen[slug]; dup {
+			logger.Warn("series renders to a slug an earlier series took, skipping", "slug", slug, "labels", lv.Labels)
 			continue
 		}
 		state, exists := spec.seriesState[slug]
@@ -882,9 +896,37 @@ func renderContent(base pushward.WidgetContent, labelTpl *template.Template, dat
 	return out
 }
 
+// widgetSlugRe is pushward-server's widget slug pattern.
+var widgetSlugRe = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$`)
+
+var slugJunkRe = regexp.MustCompile(`[^a-z0-9_-]+`)
+
+// sanitizeSlug makes a rendered slug one the server accepts. Raw label values
+// rarely are (instance="host.lan:9100"), so a slug the server would refuse is
+// lower-cased, each run of other characters becomes "-" and the ends are
+// trimmed; one that comes out empty or too long becomes "<base>-<hash>". A slug
+// the server already accepts is kept as is, so no working widget changes slug.
+func sanitizeSlug(base, raw string) (string, error) {
+	if widgetSlugRe.MatchString(raw) {
+		return raw, nil
+	}
+	s := strings.Trim(slugJunkRe.ReplaceAllString(strings.ToLower(raw), "-"), "-")
+	if s == "" || len(s) > 128 {
+		s = text.SlugHash(base, raw, 4)
+	}
+	if !widgetSlugRe.MatchString(s) {
+		return "", fmt.Errorf("rendered slug %q is not a valid widget slug", raw)
+	}
+	return s, nil
+}
+
 func renderSlugName(spec *Spec, labels map[string]string) (string, string, error) {
-	var slug bytes.Buffer
-	if err := spec.parsedSlugTpl.Execute(&slug, labels); err != nil {
+	var buf bytes.Buffer
+	if err := spec.parsedSlugTpl.Execute(&buf, labels); err != nil {
+		return "", "", err
+	}
+	slug, err := sanitizeSlug(spec.Slug, buf.String())
+	if err != nil {
 		return "", "", err
 	}
 	name := spec.Name
@@ -906,7 +948,7 @@ func renderSlugName(spec *Spec, labels map[string]string) (string, string, error
 		}
 		name = strings.Join(parts, " ")
 	}
-	return slug.String(), name, nil
+	return slug, name, nil
 }
 
 type seriesState struct {
