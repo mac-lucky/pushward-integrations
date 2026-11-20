@@ -1,0 +1,8 @@
+{
+  "type": "vzdump",
+  "title": "vzdump backup status (pve1.home.arpa): backup successful",
+  "message": "\nDetails\n=======\nVMID    Name     Status    Time    Size        Filename                                                        \n100     web01    ok        43s     2.31 GiB    /var/lib/vz/dump/vzdump-qemu-100-2026_11_20-01_00_02.vma.zst    \n\nTotal running time: 43s\nTotal size: 2.31 GiB\n\nLogs\n====\nvzdump 100 --storage local --mode snapshot --compress zstd --node pve1\n\n100: 2026-11-20 01:00:02 INFO: Starting Backup of VM 100 (qemu)\n100: 2026-11-20 01:00:02 INFO: Backup started at 2026-11-20 01:00:02\n100: 2026-11-20 01:00:02 INFO: status = running\n100: 2026-11-20 01:00:02 INFO: VM Name: web01\n100: 2026-11-20 01:00:02 INFO: include disk 'scsi0' 'local-lvm:vm-100-disk-0' 32G\n100: 2026-11-20 01:00:02 INFO: backup mode: snapshot\n100: 2026-11-20 01:00:02 INFO: ionice priority: 7\n100: 2026-11-20 01:00:02 INFO: creating vzdump archive '/var/lib/vz/dump/vzdump-qemu-100-2026_11_20-01_00_02.vma.zst'\n100: 2026-11-20 01:00:03 INFO: started backup task '6f1c2a9e-0d4b-4c8e-9a71-3b5d2e8f4c10'\n100: 2026-11-20 01:00:03 INFO: resuming VM again\n100: 2026-11-20 01:00:43 INFO: 100% (32.0 GiB of 32.0 GiB) in 40s, read: 819.2 MiB/s, write: 59.1 MiB/s\n100: 2026-11-20 01:00:43 INFO: backup is sparse: 29.6 GiB (92%) total zero data\n100: 2026-11-20 01:00:43 INFO: transferred 32.00 GiB in 40 seconds (819.2 MiB/s)\n100: 2026-11-20 01:00:45 INFO: archive file size: 2.31GB\n100: 2026-11-20 01:00:45 INFO: Finished Backup of VM 100 (00:00:43)\n100: 2026-11-20 01:00:45 INFO: Backup finished at 2026-11-20 01:00:45\n\n\n",
+  "severity": "info",
+  "hostname": "pve1",
+  "job_id": "backup-6d2f0a1c-4b3e"
+}

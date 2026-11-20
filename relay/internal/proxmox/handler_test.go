@@ -1,8 +1,11 @@
 package proxmox
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -15,6 +18,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/testutil"
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 func testConfig() *config.ProxmoxConfig {
@@ -53,162 +57,162 @@ func send(t *testing.T, h http.Handler, payload string) *httptest.ResponseRecord
 	return w
 }
 
-func TestBackupLifecycle(t *testing.T) {
-	h, calls, mu := newHandler(t, testConfig())
+func fixture(t *testing.T, name string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join("../../testdata/proxmox", name)) // #nosec G304 -- fixture path under relay/testdata
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
 
-	// Send backup start
-	w := send(t, h, `{
-		"type": "vzdump",
-		"title": "Backup of VM 100 started",
-		"message": "Starting backup of VM 100 (pbs-full)",
-		"severity": "info",
-		"hostname": "pve1"
-	}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	// Wait for async operations from start
-	time.Sleep(50 * time.Millisecond)
-
-	// Verify start: create + ONGOING = 2 calls
-	recorded := testutil.GetCalls(calls, mu)
-	if len(recorded) != 2 {
-		t.Fatalf("expected 2 calls after start, got %d", len(recorded))
-	}
-
-	// Verify create
-	if recorded[0].Method != "POST" || recorded[0].Path != "/activities" {
-		t.Errorf("expected POST /activities, got %s %s", recorded[0].Method, recorded[0].Path)
-	}
-	var createReq pushward.CreateActivityRequest
-	testutil.UnmarshalBody(t, recorded[0].Body, &createReq)
-	if createReq.Priority != 2 {
-		t.Errorf("expected priority 2, got %d", createReq.Priority)
-	}
-
-	// Verify ONGOING update
-	var update pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[1].Body, &update)
-	if update.State != pushward.StateOngoing {
-		t.Errorf("expected ONGOING, got %s", update.State)
-	}
-	if update.Content.State != "Backing up..." {
-		t.Errorf("expected state 'Backing up...', got %s", update.Content.State)
-	}
-	if update.Content.Template != "steps" {
-		t.Errorf("expected template 'steps', got %s", update.Content.Template)
-	}
-	if update.Content.AccentColor != pushward.ColorBlue {
-		t.Errorf("expected blue accent, got %s", update.Content.AccentColor)
-	}
-	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 1 {
-		t.Errorf("expected current_step 1")
-	}
-	if update.Content.TotalSteps == nil || *update.Content.TotalSteps != 2 {
-		t.Errorf("expected total_steps 2")
-	}
-
-	// Send backup success
-	w = send(t, h, `{
-		"type": "vzdump",
-		"title": "Backup of VM 100 finished",
-		"message": "Backup of VM 100 finished successfully",
-		"severity": "info",
-		"hostname": "pve1"
-	}`)
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d", w.Code)
-	}
-
-	// Wait for two-phase end
-	time.Sleep(100 * time.Millisecond)
-
-	recorded = testutil.GetCalls(calls, mu)
-	// create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 4
+// assertOpenedAndEnded checks the four calls a job outcome makes on its own:
+// create, the outcome frame at once, then the ender's two phases.
+func assertOpenedAndEnded(t *testing.T, recorded []testutil.APICall, slug, name, state, accent string) {
+	t.Helper()
 	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls total, got %d", len(recorded))
+		t.Fatalf("expected create + ONGOING + phase1 + phase2 = 4 calls, got %d", len(recorded))
 	}
-
-	// Phase 1: ONGOING with final content
-	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
-	if phase1.State != pushward.StateOngoing {
-		t.Errorf("expected ONGOING (phase 1), got %s", phase1.State)
+	var create pushward.CreateActivityRequest
+	testutil.UnmarshalBody(t, recorded[0].Body, &create)
+	if recorded[0].Method != "POST" || recorded[0].Path != "/activities" || create.Slug != slug {
+		t.Errorf("expected POST /activities for %s, got %s %s slug %s", slug, recorded[0].Method, recorded[0].Path, create.Slug)
 	}
-	if phase1.Content.State != "Backup Complete" {
-		t.Errorf("expected state 'Backup Complete', got %s", phase1.Content.State)
+	if create.Name != name {
+		t.Errorf("expected name %q, got %q", name, create.Name)
 	}
-	if phase1.Content.AccentColor != pushward.ColorGreen {
-		t.Errorf("expected green accent, got %s", phase1.Content.AccentColor)
-	}
-	if phase1.Content.CurrentStep == nil || *phase1.Content.CurrentStep != 2 {
-		t.Errorf("expected current_step 2")
-	}
-
-	// Phase 2: ENDED
-	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
-	if phase2.State != pushward.StateEnded {
-		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
-	}
-	if phase2.Content.State != "Backup Complete" {
-		t.Errorf("expected state 'Backup Complete', got %s", phase2.Content.State)
+	for i, want := range []string{pushward.StateOngoing, pushward.StateOngoing, pushward.StateEnded} {
+		c := recorded[i+1]
+		if c.Path != "/activities/"+slug {
+			t.Errorf("call %d: expected PATCH /activities/%s, got %s %s", i+1, slug, c.Method, c.Path)
+		}
+		var u pushward.UpdateRequest
+		testutil.UnmarshalBody(t, c.Body, &u)
+		if u.State != want || u.Content.State != state || u.Content.AccentColor != accent {
+			t.Errorf("call %d: got %s %q %s, want %s %q %s", i+1, u.State, u.Content.State, u.Content.AccentColor, want, state, accent)
+		}
+		if u.Content.Template != "steps" || u.Content.CurrentStep == nil || *u.Content.CurrentStep != 2 {
+			t.Errorf("call %d: expected steps template at step 2", i+1)
+		}
 	}
 }
 
-func TestBackupFailure(t *testing.T) {
+// PVE sends one vzdump notification when a job ends and none when it starts,
+// so each outcome opens its card and ends it. The job log in the message says
+// "Starting Backup of VM ..." every time; it must not reopen a running card.
+func TestBackupOutcomeOpensAndEndsCard(t *testing.T) {
+	for _, tc := range []struct {
+		file, jobID, name, state, accent string
+	}{
+		{"vzdump_success.json", "backup-6d2f0a1c-4b3e", "vzdump backup status (pve1.home.arpa): backup successful", "Backup Complete", pushward.ColorGreen},
+		{"vzdump_failure.json", "backup-0b7e93d4-a1f2", "vzdump backup status (pve1.home.arpa): backup failed", "Backup Failed", pushward.ColorRed},
+		// One notification for three guests: one card, keyed on the job.
+		{"vzdump_multi_guest.json", "backup-a91c3e57-02d8", "vzdump backup status (pve1.home.arpa): backup successful", "Backup Complete", pushward.ColorGreen},
+	} {
+		t.Run(tc.file, func(t *testing.T) {
+			h, calls, mu := newHandler(t, testConfig())
+			if w := send(t, h, fixture(t, tc.file)); w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", w.Code)
+			}
+			time.Sleep(100 * time.Millisecond)
+			assertOpenedAndEnded(t, testutil.GetCalls(calls, mu),
+				text.SlugHash("proxmox-backup", "pve1:"+tc.jobID, 4), tc.name, tc.state, tc.accent)
+		})
+	}
+}
+
+func TestReplicationFailureOpensAndEndsCard(t *testing.T) {
+	body := fixture(t, "replication_failure.json")
+	// A body template without job_id still finds the job in the message.
+	var m map[string]any
+	if err := json.Unmarshal([]byte(body), &m); err != nil {
+		t.Fatal(err)
+	}
+	delete(m, "job_id")
+	noJobID, _ := json.Marshal(m)
+
+	for name, payload := range map[string]string{"job_id": body, "no job_id": string(noJobID)} {
+		t.Run(name, func(t *testing.T) {
+			h, calls, mu := newHandler(t, testConfig())
+			if w := send(t, h, payload); w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d", w.Code)
+			}
+			time.Sleep(100 * time.Millisecond)
+			assertOpenedAndEnded(t, testutil.GetCalls(calls, mu), text.SlugHash("proxmox-repl", "pve1:100-0", 4),
+				"Replication Job: '100-0' failed", "Replication Failed", pushward.ColorRed)
+		})
+	}
+}
+
+// A manual backup carries no job-id; it is keyed on the node, whatever guest
+// the log names first.
+func TestManualBackupKeysOnNode(t *testing.T) {
+	h, calls, mu := newHandler(t, testConfig())
+	for _, vmid := range []string{"100", "205"} {
+		send(t, h, `{
+			"type": "vzdump",
+			"title": "vzdump backup status (pve1.home.arpa): backup successful",
+			"message": "INFO: Starting Backup of VM `+vmid+` (qemu)",
+			"severity": "info",
+			"hostname": "pve1",
+			"job_id": ""
+		}`)
+		time.Sleep(100 * time.Millisecond)
+	}
+	want := text.SlugHash("proxmox-backup", "pve1:", 4)
+	for _, c := range testutil.GetCalls(calls, mu) {
+		if c.Method == "POST" {
+			var create pushward.CreateActivityRequest
+			testutil.UnmarshalBody(t, c.Body, &create)
+			if create.Slug != want {
+				t.Errorf("expected slug %s, got %s", want, create.Slug)
+			}
+		}
+	}
+}
+
+// PVE never sends a start, but a hook script posting a title with "start" in
+// it opens a running card, and the outcome on the same key ends it.
+func TestStartTitleOpensRunningCard(t *testing.T) {
 	h, calls, mu := newHandler(t, testConfig())
 
-	// Send backup start
-	send(t, h, `{
+	w := send(t, h, `{
 		"type": "vzdump",
-		"title": "Backup of VM 100 started",
-		"message": "Starting backup of VM 100 (pbs-full)",
+		"title": "vzdump backup starting on pve1",
+		"message": "",
 		"severity": "info",
 		"hostname": "pve1"
 	}`)
-
-	// Wait for start
-	time.Sleep(50 * time.Millisecond)
-
-	// Send backup failure
-	send(t, h, `{
-		"type": "vzdump",
-		"title": "Backup of VM 100 failed",
-		"message": "Backup of VM 100 failed: connection error",
-		"severity": "error",
-		"hostname": "pve1"
-	}`)
-
-	// Wait for two-phase end
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
 	time.Sleep(100 * time.Millisecond)
 
 	recorded := testutil.GetCalls(calls, mu)
-	// create + ONGOING + phase1(ONGOING) + phase2(ENDED) = 4
-	if len(recorded) != 4 {
-		t.Fatalf("expected 4 calls total, got %d", len(recorded))
+	if len(recorded) != 2 {
+		t.Fatalf("expected create + ONGOING and no end, got %d calls", len(recorded))
+	}
+	var update pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[1].Body, &update)
+	if update.State != pushward.StateOngoing || update.Content.State != "Backing up..." || update.Content.AccentColor != pushward.ColorBlue {
+		t.Errorf("expected ONGOING 'Backing up...' blue, got %s %q %s", update.State, update.Content.State, update.Content.AccentColor)
+	}
+	if update.Content.CurrentStep == nil || *update.Content.CurrentStep != 1 || update.Content.TotalSteps == nil || *update.Content.TotalSteps != 2 {
+		t.Errorf("expected step 1 of 2")
 	}
 
-	// Phase 1: ONGOING with failure content
-	var phase1 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[2].Body, &phase1)
-	if phase1.Content.State != "Backup Failed" {
-		t.Errorf("expected state 'Backup Failed', got %s", phase1.Content.State)
-	}
-	if phase1.Content.AccentColor != pushward.ColorRed {
-		t.Errorf("expected red accent, got %s", phase1.Content.AccentColor)
-	}
+	send(t, h, `{
+		"type": "vzdump",
+		"title": "vzdump backup status (pve1.home.arpa): backup successful",
+		"message": "INFO: Starting Backup of VM 100 (qemu)",
+		"severity": "info",
+		"hostname": "pve1"
+	}`)
+	time.Sleep(100 * time.Millisecond)
 
-	// Phase 2: ENDED
-	var phase2 pushward.UpdateRequest
-	testutil.UnmarshalBody(t, recorded[3].Body, &phase2)
-	if phase2.State != pushward.StateEnded {
-		t.Errorf("expected ENDED (phase 2), got %s", phase2.State)
-	}
-	if phase2.Content.State != "Backup Failed" {
-		t.Errorf("expected state 'Backup Failed', got %s", phase2.Content.State)
-	}
+	recorded = testutil.GetCalls(calls, mu)
+	assertOpenedAndEnded(t, recorded[2:], text.SlugHash("proxmox-backup", "pve1:", 4),
+		"vzdump backup status (pve1.home.arpa): backup successful", "Backup Complete", pushward.ColorGreen)
 }
 
 func TestFencingAlert(t *testing.T) {

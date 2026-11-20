@@ -654,16 +654,16 @@ Receives Proxmox VE notification webhooks for backup, replication, fencing, pack
 
 | Event | State | Icon | Color |
 |---|---|---|---|
-| `vzdump` (start) | Backing up... | `externaldrive.fill.badge.timemachine` | blue |
-| `vzdump` (complete) | Backup Complete | `checkmark.circle.fill` | green |
-| `vzdump` (failed) | Backup Failed | `xmark.circle.fill` | red |
-| `replication` (start) | Replicating... | `arrow.triangle.2.circlepath` | blue |
-| `replication` (complete) | Replication Complete | `checkmark.circle.fill` | green |
-| `replication` (failed) | Replication Failed | `xmark.circle.fill` | red |
+| `vzdump`, backup successful | Backup Complete | `checkmark.circle.fill` | green |
+| `vzdump`, backup failed | Backup Failed | `xmark.circle.fill` | red |
+| `replication`, job failed | Replication Failed | `xmark.circle.fill` | red |
+| `vzdump` / `replication` with "start" in the title | Backing up... / Replicating... | `externaldrive.fill.badge.timemachine` / `arrow.triangle.2.circlepath` | blue |
 | `fencing` | (title) | `exclamationmark.octagon.fill` | red |
 | `package-updates` | (title) | `arrow.down.circle` | blue |
 | `system-mail` | (title) | `bell.fill` / `exclamationmark.triangle.fill` | by severity (blue/orange/red) |
 | test button (empty `type`) | test notification | varies | varies |
+
+Proxmox sends a backup notification once, when the job ends, and a replication notification only when a job fails; neither has a start event. Each one opens a card that already shows the outcome and ends it after `end_display_time`. The outcome comes from the severity and the title, never the message: a backup's message carries the job log, which always says "Starting Backup of VM". One card covers a whole backup job, however many guests it backed up: it is keyed on the node and `job_id`, and a manual backup, which has no job ID, on the node alone. A title with "start" in it, which Proxmox itself never sends (a hook script might), opens a running card that the job's outcome then ends.
 
 **Setup:** In Proxmox VE, go to **Datacenter > Notifications** and add a webhook target:
 
@@ -674,8 +674,10 @@ Receives Proxmox VE notification webhooks for backup, replication, fencing, pack
 - **Body:**
 
 ```
-{"type":"{{ fields.type }}","title":"{{ escape title }}","message":"{{ escape message }}","severity":"{{ severity }}","hostname":"{{ fields.hostname }}"}
+{"type":"{{ fields.type }}","title":"{{ escape title }}","message":"{{ escape message }}","severity":"{{ severity }}","hostname":"{{ fields.hostname }}","job_id":"{{ fields.job-id }}"}
 ```
+
+`job_id` is optional. A target whose body lacks it keeps working, but then every backup on a node shares one card.
 
 A target on its own does nothing: Proxmox only calls it when a **matcher** selects a notification and lists that target. Add `PushWard` as a target on a matcher, either the built-in `default-matcher` or a dedicated one. In the UI go to **Datacenter > Notifications**, edit a matcher, and add `PushWard` under the targets to notify (a matcher can list several, so mail and PushWard both fire). Or from the shell:
 

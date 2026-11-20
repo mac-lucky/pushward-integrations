@@ -166,8 +166,6 @@ func registerUniversal(_ *testing.T, api huma.API, store state.Store, pool *clie
 // here does anything: a resolve or finish event for a subject the handler
 // never saw is dropped. Only the calls made after the prime are recorded.
 var primes = map[string]string{
-	"proxmox/backup_failure.json":             "proxmox/backup_start.json",
-	"proxmox/backup_success.json":             "proxmox/backup_start.json",
 	"uptimekuma/up.json":                      "uptimekuma/down.json",
 	"gatus/resolved.json":                     "gatus/triggered.json",
 	"komodo/server_unreachable_resolved.json": "komodo/server_unreachable.json",

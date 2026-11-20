@@ -1,0 +1,8 @@
+{
+  "type": "vzdump",
+  "title": "vzdump backup status (pve1.home.arpa): backup failed",
+  "message": "\nDetails\n=======\nVMID    Name    Status    Time    Size    Filename    \n101     db01    err       4s      0 B                 \n\nTotal running time: 4s\nTotal size: 0 B\n\nLogs\n====\nvzdump 101 --storage nas --mode snapshot --compress zstd --node pve1\n\n101: 2026-11-20 02:00:01 INFO: Starting Backup of VM 101 (lxc)\n101: 2026-11-20 02:00:01 INFO: Backup started at 2026-11-20 02:00:01\n101: 2026-11-20 02:00:01 INFO: status = running\n101: 2026-11-20 02:00:01 INFO: CT Name: db01\n101: 2026-11-20 02:00:01 INFO: including mount point rootfs ('/') in backup\n101: 2026-11-20 02:00:01 INFO: backup mode: snapshot\n101: 2026-11-20 02:00:01 INFO: ionice priority: 7\n101: 2026-11-20 02:00:01 INFO: create storage snapshot 'vzdump'\n101: 2026-11-20 02:00:02 INFO: creating vzdump archive '/mnt/pve/nas/dump/vzdump-lxc-101-2026_11_20-02_00_01.tar.zst'\n101: 2026-11-20 02:00:05 INFO: cleanup temporary 'vzdump' snapshot\n101: 2026-11-20 02:00:05 ERROR: Backup of VM 101 failed - zstd: error 70 : Write error : cannot write block : No space left on device\n101: 2026-11-20 02:00:05 INFO: Failed at 2026-11-20 02:00:05\n\n\n",
+  "severity": "error",
+  "hostname": "pve1",
+  "job_id": "backup-0b7e93d4-a1f2"
+}

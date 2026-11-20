@@ -1,0 +1,8 @@
+{
+  "type": "replication",
+  "title": "Replication Job: '100-0' failed",
+  "message": "Replication job '100-0' with target 'pve2' and schedule '*/15' failed!\n\nLast successful sync: 2026-11-20 00:45:00\nNext sync try: 2026-11-20 01:05:00\nFailure count: 1\n\nError:\ncommand '/usr/bin/ssh -e none -o 'BatchMode=yes' -o 'HostKeyAlias=pve2' root@192.0.2.12 -- pvesr prepare-local-job 100-0 --scan local-zfs local-zfs:vm-100-disk-0 --last_sync 1763599500' failed: exit code 255\n",
+  "severity": "error",
+  "hostname": "pve1",
+  "job_id": "100-0"
+}
