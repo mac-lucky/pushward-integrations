@@ -912,7 +912,11 @@ func sanitizeSlug(base, raw string) (string, error) {
 	}
 	s := strings.Trim(slugJunkRe.ReplaceAllString(strings.ToLower(raw), "-"), "-")
 	if s == "" || len(s) > 128 {
-		s = text.SlugHash(base, raw, 4)
+		// Config allows a base of 128 characters that starts with "_" or "-":
+		// cut it so "<base>-<8 hex>" still fits and starts with a letter or digit.
+		b := strings.TrimLeft(base, "_-")
+		b = b[:min(len(b), 128-9)]
+		s = strings.TrimPrefix(text.SlugHash(b, raw, 4), "-")
 	}
 	if !widgetSlugRe.MatchString(s) {
 		return "", fmt.Errorf("rendered slug %q is not a valid widget slug", raw)

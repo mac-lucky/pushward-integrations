@@ -1095,6 +1095,17 @@ func TestSanitizeSlug(t *testing.T) {
 	if got, err := sanitizeSlug("base", "_x"); err == nil {
 		t.Errorf("sanitizeSlug(%q) = %q, want an error", "_x", got)
 	}
+	// The hash fallback stays valid for any base config accepts: one of 128
+	// characters is cut, a leading "_" or "-" dropped.
+	for base, want := range map[string]string{
+		strings.Repeat("a", 128): text.SlugHash(strings.Repeat("a", 119), "::", 4),
+		"_mem":                   text.SlugHash("mem", "::", 4),
+		"__":                     text.HashHex("::", 4),
+	} {
+		if got, err := sanitizeSlug(base, "::"); err != nil || got != want {
+			t.Errorf("sanitizeSlug(%q, \"::\") = %q, %v; want %q", base, got, err, want)
+		}
+	}
 }
 
 // The README's slug_template against raw Prometheus labels used to render
