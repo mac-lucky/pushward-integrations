@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
 
 func TestQueryRange(t *testing.T) {
@@ -346,8 +348,8 @@ func TestSeriesKey(t *testing.T) {
 		{"prefer label hit", map[string]string{"instance": "10.0.0.1:9100", "job": "node"}, "instance", "10.0.0.1:9100"},
 		{"prefer label miss", map[string]string{"job": "node"}, "instance", "node"},
 		{"multiple labels no prefer", map[string]string{"instance": "X", "job": "Y"}, "", "instance=X, job=Y"},
-		{"truncated multi-label key", map[string]string{"instance": "192.168.1.100:9100", "job": "node-exporter", "namespace": "monitoring"}, "", "instance=192.168.1.100:9100, jo\u2026"},
-		{"truncated single label", map[string]string{"instance": "very-long-hostname-that-exceeds-the-thirty-two-rune-limit.example.com:9100"}, "", "very-long-hostname-that-exceeds\u2026"},
+		{"truncated multi-label key", map[string]string{"instance": "192.168.1.100:9100", "job": "node-exporter", "namespace": "monitoring"}, "", "instance=192.168.1.100:9100\u2026" + text.HashHex("instance=192.168.1.100:9100, job=node-exporter, namespace=monitoring", 2)},
+		{"truncated single label", map[string]string{"instance": "very-long-hostname-that-exceeds-the-thirty-two-rune-limit.example.com:9100"}, "", "very-long-hostname-that-exc\u2026" + text.HashHex("very-long-hostname-that-exceeds-the-thirty-two-rune-limit.example.com:9100", 2)},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -356,5 +358,19 @@ func TestSeriesKey(t *testing.T) {
 				t.Errorf("SeriesKey(%v, %q) = %q, want %q", tt.labels, tt.preferLabel, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestSeriesKeyLongKeysStayApart covers two series whose joined labels share
+// more than the key limit: each keeps its own key, stable across calls.
+func TestSeriesKeyLongKeysStayApart(t *testing.T) {
+	p0 := map[string]string{"namespace": "monitoring", "pod": "prometheus-0"}
+	p1 := map[string]string{"namespace": "monitoring", "pod": "prometheus-1"}
+	k0, k1 := SeriesKey(p0, ""), SeriesKey(p1, "")
+	if k0 == k1 {
+		t.Fatalf("both series keyed %q", k0)
+	}
+	if again := SeriesKey(map[string]string{"pod": "prometheus-0", "namespace": "monitoring"}, ""); again != k0 {
+		t.Errorf("same labels keyed %q, then %q", k0, again)
 	}
 }
