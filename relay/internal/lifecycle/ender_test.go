@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -206,5 +207,117 @@ func TestEndIfTrackedDoesNotRearmAPendingEnd(t *testing.T) {
 	if got := patches.Load(); got != 1 {
 		t.Fatalf("expected phase 1 to have fired once on the original schedule after %v, got %d PATCHes",
 			time.Since(start), got)
+	}
+}
+
+// Two Enders on one store stand in for two replicas: a StopTimer on the one
+// that holds no timer must still cancel the other's end and report it.
+func TestStopTimerCancelsAnEndArmedOnAnotherReplica(t *testing.T) {
+	var patches atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patches.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	store := state.NewMemoryStore()
+	cfg := EndConfig{EndDelay: 50 * time.Millisecond, EndDisplayTime: 10 * time.Millisecond}
+	a := NewEnder(client.NewPool(srv.URL, nil), store, "test", cfg)
+	b := NewEnder(client.NewPool(srv.URL, nil), store, "test", cfg)
+
+	a.ScheduleEnd("hlk_test", "map-1", "slug-1", pushward.Content{State: "Resolved"})
+	if !b.StopTimer("hlk_test", "map-1") {
+		t.Fatal("StopTimer on the other replica should report the pending end")
+	}
+	time.Sleep(150 * time.Millisecond)
+	a.Wait()
+
+	if got := patches.Load(); got != 0 {
+		t.Fatalf("cancelled end still sent %d PATCHes", got)
+	}
+	if a.Pending("hlk_test", "map-1") {
+		t.Fatal("cancelled end still pending on the replica that armed it")
+	}
+	if b.StopTimer("hlk_test", "map-1") {
+		t.Fatal("a second StopTimer should find nothing pending")
+	}
+}
+
+// A StopTimer while phase 2 is already sending must keep the row the next
+// alert writes: the finishing phase 2 no longer owns the key.
+func TestPhase2KeepsTheRowOfAnAlertThatCancelledIt(t *testing.T) {
+	ended := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if strings.Contains(string(body), `"state":"`+pushward.StateEnded+`"`) {
+			once.Do(func() { close(ended) })
+			<-release
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	store := state.NewMemoryStore()
+	e := NewEnder(client.NewPool(srv.URL, nil), store, "test", EndConfig{
+		EndDelay:       10 * time.Millisecond,
+		EndDisplayTime: 10 * time.Millisecond,
+	})
+	ctx := context.Background()
+	_ = store.Set(ctx, "test", "hlk_test", "map-1", "", json.RawMessage(`{"Slug":"old"}`), time.Hour)
+
+	e.ScheduleEnd("hlk_test", "map-1", "slug-1", pushward.Content{State: "Resolved"})
+	select {
+	case <-ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("phase 2 never sent ENDED")
+	}
+	e.StopTimer("hlk_test", "map-1")
+	_ = store.Set(ctx, "test", "hlk_test", "map-1", "", json.RawMessage(`{"Slug":"new"}`), time.Hour)
+	close(release)
+	e.Wait()
+
+	got, _ := store.Get(ctx, "test", "hlk_test", "map-1", "")
+	if string(got) != `{"Slug":"new"}` {
+		t.Fatalf("row after phase 2 = %s, want the new alert's row", got)
+	}
+}
+
+// failingTokenStore fails every read of the end token row.
+type failingTokenStore struct{ state.Store }
+
+func (s failingTokenStore) Get(ctx context.Context, provider, userKey, key, subKey string) (json.RawMessage, error) {
+	if subKey == endTokenSubKey {
+		return nil, io.ErrUnexpectedEOF
+	}
+	return s.Store.Get(ctx, provider, userKey, key, subKey)
+}
+
+// A store that cannot read the token must not leave the card ONGOING.
+func TestEndGoesAheadWhenTheTokenCannotBeRead(t *testing.T) {
+	var patches atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patches.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	e := NewEnder(client.NewPool(srv.URL, nil), failingTokenStore{state.NewMemoryStore()}, "test", EndConfig{
+		EndDelay:       10 * time.Millisecond,
+		EndDisplayTime: 10 * time.Millisecond,
+	})
+	e.ScheduleEnd("hlk_test", "map-1", "slug-1", pushward.Content{State: "Resolved"})
+	deadline := time.Now().Add(2 * time.Second)
+	for patches.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	e.Wait()
+	if got := patches.Load(); got != 2 {
+		t.Fatalf("expected both phases to send, got %d PATCHes", got)
 	}
 }

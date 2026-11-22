@@ -2,6 +2,9 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"log/slog"
 	"sync"
 	"time"
@@ -13,6 +16,16 @@ import (
 )
 
 const defaultRetryDelay = 5 * time.Second
+
+// endTokenSubKey is the state row a pending two-phase end keeps next to the
+// provider's own row (sub_key ""). The timers live on one replica; the token
+// lets every replica see and cancel the end: StopTimer deletes it, a newer
+// ScheduleEnd overwrites it, and each phase checks it is still its own.
+const endTokenSubKey = "end"
+
+// endTokenSlack bounds the token row past the two phase delays, covering the
+// retries of both phases.
+const endTokenSlack = 10 * time.Minute
 
 var (
 	retryDelayMu      sync.RWMutex
@@ -59,6 +72,7 @@ type timerPair struct {
 	mapKey  string
 	slug    string
 	content pushward.Content
+	token   string // end token this sequence wrote; "" when the write failed
 }
 
 // Ender manages two-phase activity end scheduling.
@@ -73,6 +87,7 @@ type Ender struct {
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 	mu             sync.Mutex
+	tokenMu        sync.Mutex // orders this replica's end token writes and deletes; taken before mu
 	timers         map[string]*timerPair
 	nextGen        uint64
 	wg             sync.WaitGroup
@@ -157,12 +172,18 @@ func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 	timerKey := auth.MapKeyPrefix(userKey) + ":" + mapKey
 	cl := e.clients.Get(userKey)
 
+	// Only scheduleEnd adds timers, under tokenMu, so the pending check holds
+	// until the arm below and a skipped call never overwrites the token of
+	// the end it leaves alone.
+	e.tokenMu.Lock()
+	defer e.tokenMu.Unlock()
+	if skipIfPending && e.Pending(userKey, mapKey) {
+		return
+	}
+	token := e.writeToken(userKey, mapKey)
+
 	e.mu.Lock()
 	if existing, ok := e.timers[timerKey]; ok {
-		if skipIfPending {
-			e.mu.Unlock()
-			return
-		}
 		if existing.phase1.Stop() {
 			e.wg.Done()
 		}
@@ -177,11 +198,16 @@ func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 		mapKey:  mapKey,
 		slug:    slug,
 		content: content,
+		token:   token,
 	}
 	myGen := tp.gen
 	e.wg.Add(1)
 	tp.phase1 = time.AfterFunc(e.config.EndDelay, func() {
 		defer e.wg.Done()
+		if !e.ownsEnd(tp) {
+			e.dropCancelled(timerKey, myGen, onComplete)
+			return
+		}
 		// Phase 1: ONGOING with final content
 		ongoingReq := pushward.UpdateRequest{
 			State:   pushward.StateOngoing,
@@ -203,6 +229,10 @@ func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 		e.wg.Add(1)
 		tp.phase2 = time.AfterFunc(e.config.EndDisplayTime, func() {
 			defer e.wg.Done()
+			if !e.ownsEnd(tp) {
+				e.dropCancelled(timerKey, myGen, onComplete)
+				return
+			}
 			endedReq := pushward.UpdateRequest{
 				State:   pushward.StateEnded,
 				Content: content,
@@ -213,18 +243,27 @@ func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 				slog.Info("ended activity", "slug", slug, "state", content.State)
 			}
 
-			// Clean up state store.
+			// Clean up the state store, but only while the end is still
+			// OURS: a StopTimer (here or on another replica) followed by a
+			// new alert has written a row this sequence no longer owns.
 			// Detached from any request ctx on purpose: the phase-2 timer
 			// fires EndDisplayTime after phase-1 completes, which is well
-			// beyond any sensible request/trace lifetime. Using a fresh
-			// background ctx with a bounded timeout keeps the cleanup
-			// budget consistent with the updateWithRetry calls above.
+			// beyond any sensible request/trace lifetime.
 			if e.store != nil {
-				delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer delCancel()
-				if err := e.store.Delete(delCtx, e.provider, userKey, mapKey, ""); err != nil {
-					slog.Warn("state store delete failed", "error", err, "provider", e.provider)
+				e.tokenMu.Lock()
+				e.mu.Lock()
+				cur, ok := e.timers[timerKey]
+				mine := ok && cur.gen == myGen
+				e.mu.Unlock()
+				if mine && e.ownsEnd(tp) {
+					delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					if err := e.store.Delete(delCtx, e.provider, userKey, mapKey, ""); err != nil {
+						slog.Warn("state store delete failed", "error", err, "provider", e.provider)
+					}
+					e.deleteToken(delCtx, userKey, mapKey)
+					delCancel()
 				}
+				e.tokenMu.Unlock()
 			}
 
 			// Clean up timer, but only if it is still OURS. A superseding
@@ -249,6 +288,68 @@ func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 	e.mu.Unlock()
 }
 
+// writeToken stores a fresh end token for the key and returns it, or "" when
+// there is no store or the write failed: a sequence without a token never
+// checks one, so a DB blip cannot leave a card stuck ONGOING.
+func (e *Ender) writeToken(userKey, mapKey string) string {
+	if e.store == nil {
+		return ""
+	}
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	token := hex.EncodeToString(b[:])
+	data, _ := json.Marshal(token)
+	ttl := e.config.EndDelay + e.config.EndDisplayTime + endTokenSlack
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := e.store.Set(ctx, e.provider, userKey, mapKey, endTokenSubKey, data, ttl); err != nil {
+		slog.Warn("end token write failed", "error", err, "provider", e.provider)
+		return ""
+	}
+	return token
+}
+
+// ownsEnd reports whether the store still holds tp's end token. It fails open:
+// with no token or on a read error the sequence goes ahead as it always did.
+func (e *Ender) ownsEnd(tp *timerPair) bool {
+	if e.store == nil || tp.token == "" {
+		return true
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	raw, err := e.store.Get(ctx, e.provider, tp.userKey, tp.mapKey, endTokenSubKey)
+	if err != nil {
+		slog.Warn("end token read failed, ending anyway", "error", err, "provider", e.provider, "slug", tp.slug)
+		return true
+	}
+	var cur string
+	if raw == nil || json.Unmarshal(raw, &cur) != nil || cur != tp.token {
+		slog.Info("end cancelled or superseded elsewhere", "provider", e.provider, "slug", tp.slug)
+		return false
+	}
+	return true
+}
+
+func (e *Ender) deleteToken(ctx context.Context, userKey, mapKey string) {
+	if err := e.store.Delete(ctx, e.provider, userKey, mapKey, endTokenSubKey); err != nil {
+		slog.Warn("end token delete failed", "error", err, "provider", e.provider)
+	}
+}
+
+// dropCancelled forgets a sequence whose token another replica took away.
+// The activity and its row now belong to whoever did that, so only the local
+// timer entry and the local onComplete cleanup run.
+func (e *Ender) dropCancelled(timerKey string, gen uint64, onComplete []func()) {
+	e.mu.Lock()
+	if cur, ok := e.timers[timerKey]; ok && cur.gen == gen {
+		delete(e.timers, timerKey)
+	}
+	e.mu.Unlock()
+	for _, fn := range onComplete {
+		fn()
+	}
+}
+
 // Pending reports whether an end is scheduled for the given key and has not
 // finished. It holds only on this replica: another one may be ending the
 // same activity.
@@ -260,11 +361,17 @@ func (e *Ender) Pending(userKey, mapKey string) bool {
 	return ok
 }
 
-// StopTimer cancels a pending end timer if one exists for the given key.
-func (e *Ender) StopTimer(userKey, mapKey string) {
+// StopTimer cancels a pending end for the given key, on this replica and,
+// through the end token, on any other. It reports whether an end was pending
+// anywhere, so an alert arriving inside the end window can treat the card as
+// new. A store error counts only the local timer.
+func (e *Ender) StopTimer(userKey, mapKey string) bool {
 	timerKey := auth.MapKeyPrefix(userKey) + ":" + mapKey
+	e.tokenMu.Lock()
+	defer e.tokenMu.Unlock()
 	e.mu.Lock()
-	if tp, ok := e.timers[timerKey]; ok {
+	tp, pending := e.timers[timerKey]
+	if pending {
 		if tp.phase1.Stop() {
 			e.wg.Done()
 		}
@@ -274,6 +381,21 @@ func (e *Ender) StopTimer(userKey, mapKey string) {
 		delete(e.timers, timerKey)
 	}
 	e.mu.Unlock()
+
+	if e.store == nil {
+		return pending
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	raw, err := e.store.Get(ctx, e.provider, userKey, mapKey, endTokenSubKey)
+	if err != nil {
+		slog.Warn("end token read failed", "error", err, "provider", e.provider)
+		return pending
+	}
+	if raw != nil {
+		e.deleteToken(ctx, userKey, mapKey)
+	}
+	return pending || raw != nil
 }
 
 // StopAll cancels all pending ender timers.
@@ -328,6 +450,9 @@ func (e *Ender) FlushAll() {
 			slog.Warn("flush timed out, dropping remaining enders", "remaining", len(pending)-i)
 			break
 		}
+		if !e.ownsEnd(tp) {
+			continue // another replica cancelled or took over this end
+		}
 		cl := e.clients.Get(tp.userKey)
 		endReq := pushward.UpdateRequest{
 			State:   pushward.StateEnded,
@@ -341,6 +466,9 @@ func (e *Ender) FlushAll() {
 		if e.store != nil {
 			if err := e.store.Delete(ctx, e.provider, tp.userKey, tp.mapKey, ""); err != nil {
 				slog.Warn("flush: state store delete failed", "error", err, "provider", e.provider)
+			}
+			if tp.token != "" {
+				e.deleteToken(ctx, tp.userKey, tp.mapKey)
 			}
 		}
 	}
