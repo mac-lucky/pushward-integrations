@@ -19,7 +19,10 @@ import (
 
 const maxRetries = 3
 
-const maxRateLimitRetries = 3
+// shortRateLimitWait is the longest rate-limit wait spent in place, once per
+// call. Anything longer is refused as a BudgetError so the poller's goroutine
+// stays free and shutdown stays prompt.
+const shortRateLimitWait = 5 * time.Second
 
 const requestTimeout = 10 * time.Second
 
@@ -118,7 +121,12 @@ type Client struct {
 	mu        sync.Mutex
 	remaining int
 	resetAt   time.Time
-	login     string // cached login of the token's user (lazy)
+	// blockedUntil holds requests back after a secondary rate limit, which
+	// leaves remaining untouched; limitStreak counts those limits in a row so
+	// a header-less one backs off further each time.
+	blockedUntil time.Time
+	limitStreak  int
+	login        string // cached login of the token's user (lazy)
 	// runsCache and workflows are keyed by "owner/repo"; runCache by
 	// "owner/repo#runID".
 	runsCache map[string]runsProbe
@@ -185,12 +193,32 @@ func (c *Client) checkBudget() error {
 	c.mu.Lock()
 	remaining := c.remaining
 	resetAt := c.resetAt
+	blockedUntil := c.blockedUntil
 	c.mu.Unlock()
 
-	if remaining == 0 && time.Now().Before(resetAt) {
+	now := time.Now()
+	if remaining == 0 && now.Before(resetAt) {
 		return &BudgetError{ResetAt: resetAt}
 	}
+	if now.Before(blockedUntil) {
+		return &BudgetError{ResetAt: blockedUntil}
+	}
 	return nil
+}
+
+// holdOff records a rate limit that cannot be waited out in place and returns
+// the BudgetError refusing requests until it lifts. A primary limit with a
+// reset time is already recorded as remaining=0 by recordRateLimit; any other
+// is held back through blockedUntil.
+func (c *Client) holdOff(rle *rateLimitError) *BudgetError {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if rle.primaryReset && c.remaining == 0 && time.Now().Before(c.resetAt) {
+		return &BudgetError{ResetAt: c.resetAt}
+	}
+	c.limitStreak++
+	c.blockedUntil = time.Now().Add(rle.wait(c.limitStreak))
+	return &BudgetError{ResetAt: c.blockedUntil}
 }
 
 // apiResponse is one successful GitHub read. notModified says the server answered
@@ -288,17 +316,21 @@ func (c *Client) doConditional(ctx context.Context, url, operation, etag string)
 			var rle *rateLimitError
 			if errors.As(err, &rle) {
 				rateLimitRetries++
-				if rateLimitRetries > maxRateLimitRetries {
-					return apiResponse{}, fmt.Errorf("%s: rate limit retries exceeded: %w", operation, err)
+				// A Retry-After of a few seconds is waited out once, in place.
+				if wait := rle.wait(1); rateLimitRetries == 1 && !rle.primaryReset && rle.fromHeader && wait <= shortRateLimitWait {
+					slog.Warn("rate limited by GitHub, retrying shortly", "operation", operation, "wait", wait.Round(time.Millisecond))
+					if err := sleepCtx(ctx, wait); err != nil {
+						return apiResponse{}, err
+					}
+					attempt-- // don't consume a normal retry slot
+					continue
 				}
-				wait := rle.wait(rateLimitRetries)
-				slog.Warn("rate limited by GitHub, waiting", "operation", operation,
-					"wait", wait.Round(time.Second), "attempt", rateLimitRetries, "from_header", rle.fromHeader)
-				if err := sleepCtx(ctx, wait); err != nil {
-					return apiResponse{}, err
-				}
-				attempt-- // don't consume a normal retry slot
-				continue
+				// Anything longer is refused at once: sleeping here would hold the
+				// poller's only goroutine and freeze every tracked card.
+				be := c.holdOff(rle)
+				slog.Warn("rate limited by GitHub, holding requests", "operation", operation,
+					"until", be.ResetAt, "from_header", rle.fromHeader)
+				return apiResponse{}, fmt.Errorf("%s: %w", operation, be)
 			}
 
 			// Don't retry client errors (4xx).
@@ -312,6 +344,9 @@ func (c *Client) doConditional(ctx context.Context, url, operation, etag string)
 			}
 			continue
 		}
+		c.mu.Lock()
+		c.limitStreak = 0
+		c.mu.Unlock()
 		return resp, nil
 	}
 	return apiResponse{}, fmt.Errorf("max retries exceeded: %w", lastErr)
@@ -364,7 +399,8 @@ func (c *Client) doRequest(ctx context.Context, url, ifNoneMatch string) (apiRes
 	if resp.StatusCode == 429 ||
 		(resp.StatusCode == 403 && (resp.Header.Get("Retry-After") != "" || resp.Header.Get("X-RateLimit-Remaining") == "0")) {
 		wait, fromHeader := rateLimitRetryAfter(resp)
-		return apiResponse{}, &rateLimitError{retryAfter: wait, fromHeader: fromHeader, url: url}
+		primaryReset := resp.Header.Get("X-RateLimit-Remaining") == "0" && resp.Header.Get("X-RateLimit-Reset") != ""
+		return apiResponse{}, &rateLimitError{retryAfter: wait, fromHeader: fromHeader, primaryReset: primaryReset, url: url}
 	}
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 {
 		return apiResponse{}, &clientError{status: resp.StatusCode, url: url}
@@ -460,7 +496,9 @@ type rateLimitError struct {
 	retryAfter time.Duration
 	// fromHeader records whether GitHub said when to resume at all.
 	fromHeader bool
-	url        string
+	// primaryReset marks the primary limit: remaining 0 with a reset time.
+	primaryReset bool
+	url          string
 }
 
 func (e *rateLimitError) Error() string {

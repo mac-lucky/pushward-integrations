@@ -1353,3 +1353,48 @@ func TestGetRun_ConditionalRequestAnswersFromCache(t *testing.T) {
 		t.Errorf("read after a terminal answer sent If-None-Match %q, want none", got)
 	}
 }
+
+// A rate limit longer than a few seconds is refused at once as a BudgetError,
+// and later calls are refused without reaching GitHub until it lifts: sleeping
+// in place held the poller's only goroutine for up to 15 minutes.
+func TestDoRequest_LongRateLimitRefusesAtOnce(t *testing.T) {
+	reset := strconv.FormatInt(time.Now().Add(10*time.Minute).Unix(), 10)
+	cases := map[string]http.Header{
+		"primary limit":   {"X-Ratelimit-Remaining": {"0"}, "X-Ratelimit-Reset": {reset}},
+		"secondary limit": {"Retry-After": {"60"}},
+		"no timing":       {},
+	}
+	for name, headers := range cases {
+		t.Run(name, func(t *testing.T) {
+			var calls atomic.Int32
+			mux := http.NewServeMux()
+			mux.HandleFunc("/test", func(w http.ResponseWriter, _ *http.Request) {
+				calls.Add(1)
+				for k, v := range headers {
+					w.Header()[k] = v
+				}
+				w.WriteHeader(http.StatusTooManyRequests)
+			})
+			c := testClient(t, mux)
+
+			start := time.Now()
+			_, err := c.doWithRetry(context.Background(), c.baseURL+"/test", "test")
+			var be *BudgetError
+			if !errors.As(err, &be) {
+				t.Fatalf("err = %v, want a BudgetError", err)
+			}
+			if time.Since(start) > 2*time.Second {
+				t.Fatalf("refusal took %v, want immediate", time.Since(start))
+			}
+			if !be.ResetAt.After(time.Now()) {
+				t.Errorf("ResetAt %v is not in the future", be.ResetAt)
+			}
+			if _, err := c.doWithRetry(context.Background(), c.baseURL+"/test", "test"); !errors.As(err, &be) {
+				t.Fatalf("second call err = %v, want a BudgetError", err)
+			}
+			if got := calls.Load(); got != 1 {
+				t.Errorf("GitHub saw %d requests, want 1: the second must be held back", got)
+			}
+		})
+	}
+}
