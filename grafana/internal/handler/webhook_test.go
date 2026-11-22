@@ -594,6 +594,42 @@ func TestWebhook_ResolveFallsBackToLastValues(t *testing.T) {
 	}
 }
 
+// TestFinalValuesKeepsToTheCardsKeys pins the ENDED values to the series the
+// card already carries: a fresh series the poller kept off a full card would
+// merge in as an extra key and take the card past the server's series cap.
+func TestFinalValuesKeepsToTheCardsKeys(t *testing.T) {
+	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"vector","result":[` +
+			`{"metric":{"instance":"a"},"value":[1700000030,"1"]},` +
+			`{"metric":{"instance":"new"},"value":[1700000030,"2"]}]}}`))
+	}))
+	defer promSrv.Close()
+	h := NewHandler(nil, metrics.NewClient(promSrv.URL), nil, nil, Config{})
+
+	for _, tc := range []struct {
+		name string
+		last map[string]float64
+		want map[string]float64
+	}{
+		{"no keys known", nil, map[string]float64{"a": 1, "new": 2}},
+		{"some fresh keys on the card", map[string]float64{"a": 9, "b": 9}, map[string]float64{"a": 1}},
+		{"no fresh key on the card", map[string]float64{"b": 9}, map[string]float64{"b": 9}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := h.finalValues(context.Background(), "up", "instance", tc.last)
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for k, v := range tc.want {
+				if got[k] != v {
+					t.Errorf("got %v, want %v", got, tc.want)
+				}
+			}
+		})
+	}
+}
+
 // alertmanagerRecorder is a Grafana alertmanager stub that records the
 // `alertname=...` filters it was queried with and always reports "not firing"
 // (empty alert list).

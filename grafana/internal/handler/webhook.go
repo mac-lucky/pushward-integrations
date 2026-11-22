@@ -498,6 +498,12 @@ func (h *Handler) StopRetries() {
 // keyed by the same series keys the poller was using so the server
 // preserves history. Prefers a fresh instant query; falls back to the
 // last values recorded from the poller / firing update.
+//
+// Once lastValues holds the card's keys, the fresh result is cut to them:
+// merge-patch adds every other key, and one the poller held off a full card
+// (or a replacement for keys still in their miss grace) would take the ENDED
+// past the server's series cap. With no fresh key on the card, lastValues
+// goes out as it is.
 func (h *Handler) finalValues(ctx context.Context, expr, seriesLabel string, lastValues map[string]float64) map[string]float64 {
 	if expr != "" && h.metricsClient != nil {
 		points, err := h.metricsClient.QueryInstantAll(ctx, expr, time.Now())
@@ -505,9 +511,13 @@ func (h *Handler) finalValues(ctx context.Context, expr, seriesLabel string, las
 			values := make(map[string]float64, len(points))
 			for _, lp := range points {
 				key := metrics.SeriesKey(lp.Labels, seriesLabel)
-				values[key] = lp.Point.Value
+				if _, onCard := lastValues[key]; onCard || len(lastValues) == 0 {
+					values[key] = lp.Point.Value
+				}
 			}
-			return values
+			if len(values) > 0 {
+				return values
+			}
 		}
 	}
 	return lastValues
