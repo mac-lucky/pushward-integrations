@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"time"
+	"unicode/utf8"
 
 	"github.com/danielgtaylor/huma/v2"
 
@@ -261,7 +262,10 @@ func (h *Handler) clear(ctx context.Context, userKey string, log *slog.Logger, p
 	// Resolved still goes out when the retract reached no device.
 	if ov.AllowsNotification() && (!ov.Retract() || !h.clients.Retract(ctx, userKey, log, rec.Slug)) {
 		notif := notification(alias, rec.Title, rec.Slug)
-		notif.Body = "Resolved" + text.SepDot + rec.Title
+		// The stored title is the full alert message; the server caps a body
+		// at maxBodyRunes.
+		prefix := "Resolved" + text.SepDot
+		notif.Body = prefix + text.TruncateHard(rec.Title, maxBodyRunes-utf8.RuneCountInString(prefix))
 		notif.Level = ov.LevelOr(pushward.LevelPassive)
 		if err := pwClient.SendNotification(ctx, notif); err != nil {
 			log.Error("failed to send notification", "slug", rec.Slug, "error", err)
@@ -270,6 +274,9 @@ func (h *Handler) clear(ctx context.Context, userKey string, log *slog.Logger, p
 	log.Info("truenas alert cleared", "slug", rec.Slug, "alias", alias)
 	return nil
 }
+
+// maxBodyRunes is pushward-server's limit on a notification body.
+const maxBodyRunes = 4096
 
 func notification(alias, title, slug string) pushward.SendNotificationRequest {
 	return pushward.SendNotificationRequest{

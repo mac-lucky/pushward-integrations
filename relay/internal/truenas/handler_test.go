@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/config"
@@ -264,4 +265,33 @@ func TestOverrideChannelsNotificationClearDropsDedup(t *testing.T) {
 	if n := testutil.CountPath(recorded, "/notifications"); n != 3 {
 		t.Fatalf("expected 3 notifications (alert, cleared, alert again), got %d", n)
 	}
+}
+
+// An alert message past the server's body limit must still clear with a
+// Resolved push: the body is cut to the limit, the start of the text kept.
+func TestDeleteLongMessageFitsTheBodyLimit(t *testing.T) {
+	h, calls, mu := newHandler(t)
+	long := strings.Repeat("x", maxBodyRunes+500)
+	if w := sendCreate(t, h, `{"message":"`+long+`","alias":"`+alias+`"}`); w.Code != http.StatusOK {
+		t.Fatalf("create: expected 200, got %d", w.Code)
+	}
+	if w := sendDelete(t, h, alias); w.Code != http.StatusOK {
+		t.Fatalf("delete: expected 200, got %d", w.Code)
+	}
+
+	for _, c := range testutil.GetCalls(calls, mu) {
+		if c.Path != "/notifications" {
+			continue
+		}
+		var n pushward.SendNotificationRequest
+		testutil.UnmarshalBody(t, c.Body, &n)
+		if !strings.HasPrefix(n.Body, "Resolved") {
+			continue
+		}
+		if got := utf8.RuneCountInString(n.Body); got != maxBodyRunes {
+			t.Fatalf("Resolved body is %d runes, want exactly the %d limit", got, maxBodyRunes)
+		}
+		return
+	}
+	t.Fatal("no Resolved notification sent")
 }
