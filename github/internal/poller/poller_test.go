@@ -3,11 +3,13 @@ package poller
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -396,6 +398,53 @@ func TestListRepos(t *testing.T) {
 	}
 	if len(repos) != 2 {
 		t.Errorf("expected 2 repos, got %d: %v", len(repos), repos)
+	}
+}
+
+// A rate limit before the first repo listing is waited out, since startup
+// discovery is fatal and nothing is tracked yet. Once a listing has worked the
+// limit comes back at once, so the poll loop never sleeps on it.
+func TestListReposWaitsOutARateLimitOnlyAtStartup(t *testing.T) {
+	var limitedUntil atomic.Int64 // unix seconds; the next request is refused while set
+	mux := http.NewServeMux()
+	limit := func(w http.ResponseWriter) bool {
+		reset := limitedUntil.Swap(0)
+		if reset == 0 {
+			return false
+		}
+		w.Header().Set("X-RateLimit-Remaining", "0")
+		w.Header().Set("X-RateLimit-Reset", strconv.FormatInt(reset, 10))
+		w.WriteHeader(http.StatusForbidden)
+		return true
+	}
+	mux.HandleFunc("/user", func(w http.ResponseWriter, _ *http.Request) {
+		if !limit(w) {
+			_ = json.NewEncoder(w).Encode(ghclient.User{Login: "testowner"})
+		}
+	})
+	mux.HandleFunc("/user/repos", func(w http.ResponseWriter, _ *http.Request) {
+		if !limit(w) {
+			_ = json.NewEncoder(w).Encode([]ghclient.Repository{{FullName: "testowner/one"}})
+		}
+	})
+	f := testForge(t, mux)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	limitedUntil.Store(time.Now().Add(time.Second).Unix())
+	repos, err := f.ListRepos(ctx, "testowner")
+	if err != nil || len(repos) != 1 {
+		t.Fatalf("startup listing = %v, %v; want the repo once the limit lifted", repos, err)
+	}
+
+	limitedUntil.Store(time.Now().Add(time.Hour).Unix())
+	start := time.Now()
+	var be *ghclient.BudgetError
+	if _, err := f.ListRepos(ctx, "testowner"); !errors.As(err, &be) {
+		t.Fatalf("later listing error = %v, want a BudgetError", err)
+	}
+	if waited := time.Since(start); waited > 2*time.Second {
+		t.Fatalf("later listing waited %v on the rate limit", waited)
 	}
 }
 

@@ -8,8 +8,11 @@ package poller
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/github/internal/config"
@@ -33,6 +36,10 @@ var seedStatuses = []string{ci.ConclusionSuccess, ci.StatusCompleted}
 // forge is the GitHub side of cipoll.Forge.
 type forge struct {
 	gh *ghclient.Client
+	// listed is set once a repo listing has worked. Until then nothing is
+	// tracked, so ListRepos waits a rate limit out rather than failing the
+	// startup discovery, which DiscoveryRequired makes fatal.
+	listed atomic.Bool
 }
 
 // New wires the GitHub client into a shared poller.
@@ -58,7 +65,26 @@ func New(cfg *config.Config, gh *ghclient.Client, pw *pushward.Client) *cipoll.P
 }
 
 func (f *forge) ListRepos(ctx context.Context, owner string) ([]string, error) {
-	return f.gh.ListRepos(ctx, owner)
+	for {
+		repos, err := f.gh.ListRepos(ctx, owner)
+		if err == nil {
+			f.listed.Store(true)
+			return repos, nil
+		}
+		var be *ghclient.BudgetError
+		if f.listed.Load() || !errors.As(err, &be) {
+			return nil, err
+		}
+		wait := max(time.Until(be.ResetAt), time.Second)
+		slog.Warn("rate limited by GitHub before the first repo listing, waiting", "wait", wait.Round(time.Second))
+		timer := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 
 // Budget passes GitHub's rate-limit headers, as the client last saw them, up to
