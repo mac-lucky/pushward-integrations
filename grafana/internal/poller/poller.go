@@ -3,12 +3,58 @@ package poller
 import (
 	"context"
 	"log/slog"
+	"maps"
+	"slices"
 	"sync"
 	"time"
 
 	"github.com/mac-lucky/pushward-integrations/grafana/internal/metrics"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
+
+// maxSeries is pushward-server's MaxTimelineSeries: a merge patch that leaves
+// more series keys on the card than this is refused.
+const maxSeries = 10
+
+// missGrace is how many successful ticks in a row a series may be missing
+// before the poller deletes it from the card (a JSON null in the merge patch),
+// so one missed scrape does not wipe the series' history.
+const missGrace = 3
+
+// seriesKeys holds the series keys the card carries, each with the number of
+// successful ticks in a row it has been missing from the query result.
+type seriesKeys map[string]int
+
+// next returns what to send for values: sent (the series with a value) and
+// patch, which adds the series gone for missGrace ticks as null. New keys join
+// in sorted order while the card has room for them. The receiver is not
+// changed; the caller keeps the returned keys once the send succeeded.
+func (s seriesKeys) next(values map[string]float64) (sent map[string]float64, patch map[string]any, keys seriesKeys) {
+	keys = maps.Clone(s)
+	if keys == nil {
+		keys = seriesKeys{}
+	}
+	sent = make(map[string]float64, len(values))
+	patch = make(map[string]any, len(values))
+	for k := range keys {
+		if _, ok := values[k]; ok {
+			continue
+		}
+		if keys[k]++; keys[k] >= missGrace {
+			delete(keys, k)
+			patch[k] = nil
+		}
+	}
+	for _, k := range slices.Sorted(maps.Keys(values)) {
+		if _, ok := keys[k]; !ok && len(keys) >= maxSeries {
+			continue
+		}
+		keys[k] = 0
+		sent[k] = values[k]
+		patch[k] = values[k]
+	}
+	return sent, patch, keys
+}
 
 // UpdateCallback is invoked after each successful poll with the values sent.
 // Used by the handler to track the last series keys and values per slug so
@@ -121,6 +167,7 @@ func (p *Poller) run(ctx context.Context, slug, expr, seriesLabel string, seed *
 	// seeded is false only when the firing webhook couldn't seed the activity
 	// (no values); the first successful tick then sends the full timeline seed.
 	seeded := seed == nil
+	keys := seriesKeys{}
 
 	for {
 		select {
@@ -128,14 +175,14 @@ func (p *Poller) run(ctx context.Context, slug, expr, seriesLabel string, seed *
 			logger.Info("poller stopped")
 			return
 		case <-ticker.C:
-			seeded = p.poll(ctx, logger, slug, expr, seriesLabel, seed, seeded)
+			seeded = p.poll(ctx, logger, slug, expr, seriesLabel, seed, seeded, &keys)
 		}
 	}
 }
 
 // poll queries the metric and pushes an update, returning the (possibly updated)
-// seeded state.
-func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seriesLabel string, seed *pushward.Content, seeded bool) bool {
+// seeded state. keys tracks the series on the card across ticks.
+func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seriesLabel string, seed *pushward.Content, seeded bool, keys *seriesKeys) bool {
 	points, err := p.metricsClient.QueryInstantAll(ctx, expr, time.Now())
 	if err != nil {
 		if ctx.Err() != nil {
@@ -154,13 +201,14 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seri
 		key := metrics.SeriesKey(lp.Labels, seriesLabel)
 		values[key] = lp.Point.Value
 	}
+	sent, patch, nextKeys := keys.next(values)
 
 	if !seeded {
 		// The firing webhook had no values, so establish the timeline
 		// template/styling now via a full UpdateActivity before switching to
 		// value-only patches. Leave seeded=false on failure so we retry.
 		content := *seed
-		content.Value = values
+		content.Value = sent
 		if err := p.pwClient.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 			State:   pushward.StateOngoing,
 			Content: content,
@@ -178,7 +226,7 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seri
 		// config were seeded already and are preserved server-side.
 		if err := p.pwClient.PatchActivity(ctx, slug, pushward.PatchRequest{
 			State:   pushward.StateOngoing,
-			Content: &pushward.ContentPatch{Value: values},
+			Content: &pushward.ContentPatch{Value: patch},
 		}); err != nil {
 			if ctx.Err() != nil {
 				return seeded
@@ -188,11 +236,13 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seri
 		}
 	}
 
+	*keys = nextKeys
+
 	p.mu.Lock()
 	cb := p.callback
 	p.mu.Unlock()
 	if cb != nil {
-		cb(slug, values)
+		cb(slug, sent)
 	}
 	return seeded
 }

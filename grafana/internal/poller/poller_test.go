@@ -3,6 +3,7 @@ package poller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -163,7 +164,7 @@ func TestPoll_SeedThenPatch(t *testing.T) {
 	ctx := context.Background()
 
 	// First tick: seeded=false -> full UpdateActivity establishing the template.
-	seeded := p.poll(ctx, logger, "grafana-abc", "up", "instance", seed, false)
+	seeded := p.poll(ctx, logger, "grafana-abc", "up", "instance", seed, false, &seriesKeys{})
 	if !seeded {
 		t.Fatal("first poll should return seeded=true after a successful seed")
 	}
@@ -186,7 +187,7 @@ func TestPoll_SeedThenPatch(t *testing.T) {
 	assertValueKey(t, seedContent, "node-1", 42.5)
 
 	// Second tick: seeded=true -> value-only merge-patch (template NOT re-sent).
-	seeded = p.poll(ctx, logger, "grafana-abc", "up", "instance", seed, true)
+	seeded = p.poll(ctx, logger, "grafana-abc", "up", "instance", seed, true, &seriesKeys{})
 	if !seeded {
 		t.Fatal("second poll should keep seeded=true")
 	}
@@ -217,7 +218,7 @@ func TestPoll_SeedFailureKeepsSeededFalse(t *testing.T) {
 	p := New(mc, pwClient, 1*time.Hour)
 	seed := &pushward.Content{Template: pushward.TemplateTimeline, Subtitle: "Grafana"}
 
-	seeded := p.poll(context.Background(), slog.Default(), "grafana-abc", "up", "instance", seed, false)
+	seeded := p.poll(context.Background(), slog.Default(), "grafana-abc", "up", "instance", seed, false, &seriesKeys{})
 	if seeded {
 		t.Fatal("poll must leave seeded=false when the seed UpdateActivity errors")
 	}
@@ -228,5 +229,61 @@ func TestPoll_SeedFailureKeepsSeededFalse(t *testing.T) {
 	}
 	if calls[0].method != http.MethodPatch {
 		t.Errorf("method = %q, want PATCH", calls[0].method)
+	}
+}
+
+// A series missing from a tick keeps its place (and history) on the card for
+// missGrace successful ticks, then goes out as a null so merge-patch deletes it.
+func TestSeriesKeys_NullsASeriesOnlyAfterTheGrace(t *testing.T) {
+	keys := seriesKeys{}
+	_, patch, keys := keys.next(map[string]float64{"a": 1, "b": 2})
+	if len(patch) != 2 {
+		t.Fatalf("first patch = %v, want both series", patch)
+	}
+	for tick := 1; tick < missGrace; tick++ {
+		_, patch, keys = keys.next(map[string]float64{"a": 1})
+		if _, ok := patch["b"]; ok {
+			t.Fatalf("tick %d: b sent as %v before the grace ran out", tick, patch["b"])
+		}
+	}
+	_, patch, keys = keys.next(map[string]float64{"a": 1})
+	if v, ok := patch["b"]; !ok || v != nil {
+		t.Fatalf("after %d misses patch[b] = %v (present %v), want null", missGrace, v, ok)
+	}
+	if _, ok := keys["b"]; ok {
+		t.Fatal("b still tracked after its null")
+	}
+	_, patch, _ = keys.next(map[string]float64{"a": 1, "b": 3})
+	if patch["b"] != 3.0 {
+		t.Fatalf("a returning series = %v, want re-added", patch["b"])
+	}
+}
+
+// A churning query never leaves more than maxSeries keys on the card: a new
+// key waits for a slot, and the slots go to keys in sorted order.
+func TestSeriesKeys_CapsTheCardAtMaxSeries(t *testing.T) {
+	values := map[string]float64{}
+	for i := range maxSeries + 2 {
+		values[fmt.Sprintf("s%02d", i)] = float64(i)
+	}
+	sent, _, keys := seriesKeys{}.next(values)
+	if len(sent) != maxSeries || len(keys) != maxSeries {
+		t.Fatalf("sent %d series, tracking %d, want %d", len(sent), len(keys), maxSeries)
+	}
+	if _, ok := sent[fmt.Sprintf("s%02d", maxSeries)]; ok {
+		t.Fatal("slots should go to the lowest keys first")
+	}
+
+	// The whole set churns: old keys hold their slots through the grace.
+	churned := map[string]float64{"z1": 1, "z2": 2}
+	for range missGrace - 1 {
+		sent, _, keys = keys.next(churned)
+		if len(sent) != 0 || len(keys) > maxSeries {
+			t.Fatalf("during the grace sent %v with %d keys tracked", sent, len(keys))
+		}
+	}
+	sent, _, keys = keys.next(churned)
+	if len(sent) != 2 || len(keys) != 2 {
+		t.Fatalf("after the grace sent %v, tracking %d keys, want the two new ones", sent, len(keys))
 	}
 }
