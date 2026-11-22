@@ -1095,3 +1095,18 @@ func TestPresetSecondEndIsDropped(t *testing.T) {
 		t.Errorf("%d notifications, want the one end push", n)
 	}
 }
+
+// The same with FINALIZED landing on another replica: it must not take over
+// the first replica's end or push the outcome again.
+func TestPresetSecondEndOnAnotherReplicaIsDropped(t *testing.T) {
+	a, b := newReplicas(t)
+	a.post(t, "/universal", presetFixture(t, "jenkins-notification_started.json"))
+	a.post(t, "/universal", presetFixture(t, "jenkins-notification_completed.json"))
+	finalized := withValue(t, "jenkins-notification_completed.json", `"phase": "COMPLETED"`, `"phase": "FINALIZED"`)
+	if w := b.post(t, "/universal", finalized); w.Code != http.StatusOK {
+		t.Fatalf("%d %s", w.Code, w.Body.String())
+	}
+	if n := len(notifications(t, a.snapshot())); n != 1 {
+		t.Errorf("%d notifications, want the one end push", n)
+	}
+}

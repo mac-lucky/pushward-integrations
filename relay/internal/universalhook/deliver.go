@@ -328,9 +328,11 @@ func (h *Handler) end(ctx context.Context, r *request, ev universal.Event, a act
 		if err != nil {
 			r.log.Warn("state store read failed, not ending an activity", "slug", a.slug, "error", err)
 		}
-		if ok && h.ender.Pending(r.key, a.mapKey) {
+		if ok && h.ender.Ending(ctx, r.key, a.mapKey) {
 			// A second end for a card already ending, such as Jenkins's
-			// FINALIZED after COMPLETED: the first one said it all.
+			// FINALIZED after COMPLETED: the first one said it all. Ending,
+			// not Pending: re-arming here would take over another replica's
+			// end and push the outcome again.
 			return nil
 		}
 		if ok {
