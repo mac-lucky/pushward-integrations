@@ -23,6 +23,11 @@ type mockPWServer struct {
 	mu      sync.Mutex
 	creates []pushward.CreateActivityRequest
 	updates []pushward.UpdateRequest
+
+	failEnded   atomic.Int32  // ENDED updates still to refuse with a 400
+	createGate  chan struct{} // when set, POST /activities waits for it to close
+	createdOnce sync.Once
+	created     chan struct{} // closed when the first POST /activities arrives
 }
 
 func newMockPWServer() *mockPWServer {
@@ -32,6 +37,10 @@ func newMockPWServer() *mockPWServer {
 		case r.Method == http.MethodPost && r.URL.Path == "/activities":
 			var req pushward.CreateActivityRequest
 			_ = json.NewDecoder(r.Body).Decode(&req)
+			if m.createGate != nil {
+				m.createdOnce.Do(func() { close(m.created) })
+				<-m.createGate
+			}
 			m.mu.Lock()
 			m.creates = append(m.creates, req)
 			m.mu.Unlock()
@@ -43,6 +52,10 @@ func newMockPWServer() *mockPWServer {
 			m.mu.Lock()
 			m.updates = append(m.updates, req)
 			m.mu.Unlock()
+			if req.State == pushward.StateEnded && m.failEnded.Add(-1) >= 0 {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 
 		default:
@@ -738,5 +751,131 @@ func TestMakeSlug(t *testing.T) {
 	}
 	if !strings.HasPrefix(s1, "grafana-") {
 		t.Errorf("slug should start with grafana-: %q", s1)
+	}
+}
+
+const (
+	retryFire    = `{"status":"firing","alerts":[{"status":"firing","labels":{"alertname":"Flaky"},"annotations":{},"values":{"A":1},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"f1"}]}`
+	retryResolve = `{"status":"resolved","alerts":[{"status":"resolved","labels":{"alertname":"Flaky"},"annotations":{},"values":{"A":0},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"f1"}]}`
+)
+
+// A failed ENDED is sent again in the background instead of leaving the card
+// ONGOING until its stale timeout.
+func TestWebhook_FailedEndIsRetried(t *testing.T) {
+	pw := newMockPWServer()
+	defer pw.close()
+	pw.failEnded.Store(1)
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	h := NewHandler(pwClient, metrics.NewClient("http://unused:9090"), nil, poller.New(nil, pwClient, time.Hour), Config{})
+	h.endRetryDelays = []time.Duration{10 * time.Millisecond, 10 * time.Millisecond}
+
+	fireWebhook(t, h, retryFire)
+	fireWebhook(t, h, retryResolve)
+	h.WaitBackground()
+
+	updates := pw.getUpdates()
+	if got := countEnded(updates); got != 2 {
+		t.Fatalf("ENDED sends = %d, want the failed one and its retry", got)
+	}
+	last := updates[len(updates)-1]
+	if last.State != pushward.StateEnded || last.Content.Icon != resolvedIcon {
+		t.Errorf("retry sent %+v, want the same resolved content", last)
+	}
+}
+
+// A new firing for the alert inside the retry window owns the card again: the
+// stale ENDED must not end it.
+func TestWebhook_EndRetryStopsWhenTheAlertFiresAgain(t *testing.T) {
+	pw := newMockPWServer()
+	defer pw.close()
+	pw.failEnded.Store(100)
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	h := NewHandler(pwClient, metrics.NewClient("http://unused:9090"), nil, poller.New(nil, pwClient, time.Hour), Config{})
+	h.endRetryDelays = []time.Duration{100 * time.Millisecond, 100 * time.Millisecond}
+
+	fireWebhook(t, h, retryFire)
+	fireWebhook(t, h, retryResolve)
+	fireWebhook(t, h, retryFire)
+	h.WaitBackground()
+
+	if got := countEnded(pw.getUpdates()); got != 1 {
+		t.Fatalf("ENDED sends = %d, want only the first one", got)
+	}
+}
+
+// A repeat firing of an alert the poller feeds updates the card without
+// values, so merge-patch keeps the poller's series and no ref-ID key lands on
+// the chart as a phantom series. Threshold and unit still update.
+func TestWebhook_RepeatFiringKeepsThePollerSeries(t *testing.T) {
+	pw := newMockPWServer()
+	defer pw.close()
+	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{"instance":"a"},"values":[[1700000000,"10"]]}]}}`))
+	}))
+	defer promSrv.Close()
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	mc := metrics.NewClient(promSrv.URL)
+	p := poller.New(mc, pwClient, time.Hour)
+	defer p.StopAll()
+	h := NewHandler(pwClient, mc, nil, p, Config{})
+
+	fire := func(threshold string) {
+		fireWebhook(t, h, `{"status":"firing","alerts":[{"status":"firing","labels":{"alertname":"Disk"},"annotations":{"pushward_query":"disk","pushward_series_label":"instance","pushward_threshold":"`+threshold+`","pushward_unit":"%"},"values":{"B":91,"C":1},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"f1"}]}`)
+	}
+	fire("80")
+	fire("90")
+
+	updates := pw.getUpdates()
+	if len(updates) != 2 {
+		t.Fatalf("updates = %d, want 2", len(updates))
+	}
+	re := updates[1]
+	if re.Content.Value != nil {
+		t.Errorf("repeat firing sent value %v, want none", re.Content.Value)
+	}
+	if len(re.Content.Thresholds) != 1 || re.Content.Thresholds[0].Value != 90 || re.Content.Unit != "%" {
+		t.Errorf("repeat firing thresholds %+v unit %q, want 90 and %%", re.Content.Thresholds, re.Content.Unit)
+	}
+}
+
+// A resolve that lands while the firing call is still creating the activity
+// ends the alert; the firing call must not then reopen it or start a poller
+// nobody stops.
+func TestWebhook_ResolveDuringCreateLeavesNoPoller(t *testing.T) {
+	pw := newMockPWServer()
+	pw.createGate = make(chan struct{})
+	pw.created = make(chan struct{})
+	defer pw.close()
+	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"status":"success","data":{"resultType":"matrix","result":[{"metric":{},"values":[[1700000000,"10"]]}]}}`))
+	}))
+	defer promSrv.Close()
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	mc := metrics.NewClient(promSrv.URL)
+	p := poller.New(mc, pwClient, time.Hour)
+	defer p.StopAll()
+	h := NewHandler(pwClient, mc, nil, p, Config{})
+
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(
+		`{"status":"firing","alerts":[{"status":"firing","labels":{"alertname":"Race"},"annotations":{"pushward_query":"up"},"values":{"A":1},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"f1"}]}`)))
+	<-pw.created
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/webhook", strings.NewReader(
+		`{"status":"resolved","alerts":[{"status":"resolved","labels":{"alertname":"Race"},"annotations":{},"values":{"A":0},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"f1"}]}`)))
+	deadline := time.Now().Add(2 * time.Second)
+	for countEnded(pw.getUpdates()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	close(pw.createGate)
+	h.WaitIdle()
+
+	if n := p.ActiveCount(); n != 0 {
+		t.Errorf("poller active = %d after the resolve, want 0", n)
+	}
+	for _, u := range pw.getUpdates() {
+		if u.State == pushward.StateOngoing {
+			t.Errorf("the firing call reopened the resolved card: %+v", u)
+		}
 	}
 }

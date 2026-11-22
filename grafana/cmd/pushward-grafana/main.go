@@ -125,6 +125,7 @@ func main() {
 	// pollers (consumers): a webhook still in flight can call poller.Start,
 	// and a Start that wins the race after StopAll would insert a cancel that
 	// nothing invokes again, leaving p.Wait() blocked forever.
+	h.StopRetries()
 	h.WaitIdle()
 	p.StopAll()
 	p.Wait()

@@ -27,7 +27,14 @@ const (
 	resolvedIcon       = "checkmark.circle.fill"
 
 	activeAlertCap = 500 // max concurrent tracked alerts; new entries are dropped when full
+
+	alertTimeout = 30 * time.Second // budget for one alert's Prometheus and PushWard calls
 )
+
+// defaultEndRetryDelays space the re-sends of an ENDED update that failed:
+// three more attempts over about five minutes, then the server's stale
+// timeout is left to end the card.
+var defaultEndRetryDelays = []time.Duration{30 * time.Second, 90 * time.Second, 3 * time.Minute}
 
 // Config holds timeline display and lifecycle settings for the handler.
 type Config struct {
@@ -56,11 +63,18 @@ type Handler struct {
 	poller        *poller.Poller
 	cfg           Config
 
-	mu       sync.Mutex
-	active   map[string]*alertState
-	wg       sync.WaitGroup // tracks in-flight async webhook processing
-	bgWg     sync.WaitGroup // tracks sweeper/checker background goroutines
+	mu     sync.Mutex
+	active map[string]*alertState
+	wg     sync.WaitGroup // tracks in-flight async webhook processing
+	bgWg   sync.WaitGroup // tracks sweeper/checker background goroutines
+	// retryWg tracks ENDED retries. They start from webhook goroutines and the
+	// alert checker, so it is waited only once both are drained (WaitBackground).
+	retryWg  sync.WaitGroup
 	capDrops *syncx.DropCounter
+
+	endRetryDelays []time.Duration
+	stopRetries    chan struct{} // closed by StopRetries
+	stopOnce       sync.Once
 }
 
 type alertState struct {
@@ -102,6 +116,9 @@ func NewHandler(
 		cfg:           cfg,
 		active:        make(map[string]*alertState),
 		capDrops:      syncx.NewDropCounter(100),
+
+		endRetryDelays: defaultEndRetryDelays,
+		stopRetries:    make(chan struct{}),
 	}
 	if p != nil {
 		p.SetUpdateCallback(h.recordPollerValues)
@@ -160,17 +177,18 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.wg.Add(1)
 	go func() {
 		defer h.wg.Done()
-		// Use a bounded background context so slow Prometheus/PushWard calls
-		// can still be interrupted on shutdown rather than blocking indefinitely.
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		// A bounded background context per alert, so slow Prometheus/PushWard
+		// calls can still be interrupted, and one slow alert does not use up
+		// the budget of the alerts after it in the same payload.
 		for _, a := range payload.Alerts {
+			ctx, cancel := context.WithTimeout(context.Background(), alertTimeout)
 			switch a.Status {
 			case alertStatusFiring:
 				h.handleFiring(ctx, a)
 			case alertStatusResolved:
 				h.handleResolved(ctx, a)
 			}
+			cancel()
 		}
 	}()
 }
@@ -199,6 +217,8 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	h.mu.Lock()
 	existing := h.active[mapKey]
 	isNew := existing == nil
+	mine := existing // the entry this call works for; see owns
+	var polledExpr string
 	if isNew {
 		if len(h.active) >= activeAlertCap {
 			h.mu.Unlock()
@@ -208,15 +228,37 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 			}
 			return
 		}
-		h.active[mapKey] = &alertState{
+		mine = &alertState{
 			slug: slug, alertname: a.Labels["alertname"], seriesLabel: seriesLabel, lastSeen: time.Now(),
 			fingerprints: map[string]struct{}{a.Fingerprint: {}},
 		}
+		h.active[mapKey] = mine
 	} else {
 		existing.lastSeen = time.Now()
 		existing.fingerprints[a.Fingerprint] = struct{}{}
+		polledExpr = existing.expr
 	}
 	h.mu.Unlock()
+
+	severity := h.resolveSeverity(a)
+
+	// A repeat firing of an alert the poller already feeds: the poller owns
+	// the series, so update everything but the values (nil Value is omitted
+	// and merge-patch keeps the stored ones). The webhook's own values carry
+	// alertname or ref-ID keys that would add a phantom series to the chart.
+	if polledExpr != "" {
+		if !h.owns(mapKey, mine) {
+			return
+		}
+		err := h.pwClient.UpdateActivity(ctx, slug, pushward.UpdateRequest{
+			State:   pushward.StateOngoing,
+			Content: h.buildContent(a, severity, nil),
+		})
+		if err != nil {
+			logger.Error("failed to update activity", "error", err)
+		}
+		return
+	}
 
 	expr, refID := h.resolveQuery(ctx, a)
 
@@ -225,7 +267,9 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 			int(h.cfg.CleanupDelay.Seconds()), int(h.cfg.StaleTimeout.Seconds()), h.cfg.CreateOptions...)
 		if err != nil {
 			h.mu.Lock()
-			delete(h.active, mapKey)
+			if h.active[mapKey] == mine {
+				delete(h.active, mapKey)
+			}
 			h.mu.Unlock()
 			logger.Error("failed to create activity", "error", err)
 			return
@@ -235,14 +279,12 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 		// Re-check entry exists before writing - a concurrent resolved webhook
 		// could have deleted the entry between the unlock above and this lock.
 		h.mu.Lock()
-		if state, ok := h.active[mapKey]; ok {
-			state.expr = expr
-			state.refID = refID
+		if h.active[mapKey] == mine {
+			mine.expr = expr
+			mine.refID = refID
 		}
 		h.mu.Unlock()
 	}
-
-	severity := h.resolveSeverity(a)
 
 	// For new alerts, fetch history first so we can derive current values
 	// with proper metric labels instead of Grafana expression ref IDs (B, C).
@@ -268,8 +310,9 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 			// (A timeline seed with empty values would be rejected 422, so we
 			// can't seed here.)
 			seed := h.buildContent(a, severity, nil)
-			h.poller.StartWithSeed(slug, expr, seriesLabel, &seed)
-			logger.Info("poller started (will seed on first values)")
+			if h.startPoller(mapKey, mine, func() { h.poller.StartWithSeed(slug, expr, seriesLabel, &seed) }) {
+				logger.Info("poller started (will seed on first values)")
+			}
 		}
 		return
 	}
@@ -277,6 +320,11 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	content := h.buildContent(a, severity, values)
 	content.History = history
 
+	// A resolve that ran since the reservation has ended this card (or a new
+	// firing reserved a fresh entry that does its own work): do not reopen it.
+	if !h.owns(mapKey, mine) {
+		return
+	}
 	err := h.pwClient.UpdateActivity(ctx, slug, pushward.UpdateRequest{
 		State:   pushward.StateOngoing,
 		Content: content,
@@ -298,10 +346,30 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 		h.mu.Unlock()
 	}
 
-	if isNew && expr != "" {
-		h.poller.Start(slug, expr, seriesLabel)
+	if isNew && expr != "" && h.startPoller(mapKey, mine, func() { h.poller.Start(slug, expr, seriesLabel) }) {
 		logger.Info("poller started")
 	}
+}
+
+// owns reports whether h.active[mapKey] is still the entry a firing call
+// reserved or refreshed.
+func (h *Handler) owns(mapKey string, mine *alertState) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.active[mapKey] == mine
+}
+
+// startPoller runs start only while the entry is still mine, under h.mu so a
+// resolve cannot delete it in between: the resolve's poller.Stop then runs
+// after the start and stops it. Lock order h.mu -> poller.mu, as in sweepStale.
+func (h *Handler) startPoller(mapKey string, mine *alertState, start func()) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.active[mapKey] != mine {
+		return false
+	}
+	start()
+	return true
 }
 
 func (h *Handler) handleResolved(ctx context.Context, a alert) {
@@ -359,16 +427,67 @@ func (h *Handler) handleResolved(ctx context.Context, a alert) {
 	content.Icon = resolvedIcon
 	content.AccentColor = pushward.ColorGreen
 
-	err := h.pwClient.UpdateActivity(ctx, slug, pushward.UpdateRequest{
-		State:   pushward.StateEnded,
-		Content: content,
-	})
-	if err != nil {
-		logger.Error("failed to end activity", "error", err)
-		return
+	if h.end(ctx, logger, mapKey, slug, content) {
+		logger.Info("activity ended")
 	}
+}
 
-	logger.Info("activity ended")
+// end sends the ENDED update for an alert already dropped from h.active. On
+// failure it retries in the background (see retryEnd) and reports false.
+func (h *Handler) end(ctx context.Context, logger *slog.Logger, mapKey, slug string, content pushward.Content) bool {
+	req := pushward.UpdateRequest{State: pushward.StateEnded, Content: content}
+	if err := h.pwClient.UpdateActivity(ctx, slug, req); err != nil {
+		logger.Error("failed to end activity, retrying in the background", "error", err)
+		h.retryEnd(logger, mapKey, slug, req)
+		return false
+	}
+	return true
+}
+
+// retryEnd re-sends a failed ENDED after each of h.endRetryDelays. It gives up
+// when a new firing has reserved the alert again (that card is live and the
+// new entry owns it). StopRetries cuts the wait short for one last attempt.
+func (h *Handler) retryEnd(logger *slog.Logger, mapKey, slug string, req pushward.UpdateRequest) {
+	h.retryWg.Add(1)
+	go func() {
+		defer h.retryWg.Done()
+		for i, d := range h.endRetryDelays {
+			stopping := false
+			timer := time.NewTimer(d)
+			select {
+			case <-timer.C:
+			case <-h.stopRetries:
+				timer.Stop()
+				stopping = true
+			}
+			h.mu.Lock()
+			_, refired := h.active[mapKey]
+			h.mu.Unlock()
+			if refired {
+				logger.Info("alert fired again, dropping the ENDED retry")
+				return
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), alertTimeout)
+			err := h.pwClient.UpdateActivity(ctx, slug, req)
+			cancel()
+			if err == nil {
+				logger.Info("activity ended on retry", "attempt", i+1)
+				return
+			}
+			if stopping {
+				logger.Error("failed to end activity before shutdown", "error", err)
+				return
+			}
+			logger.Warn("ENDED retry failed", "attempt", i+1, "error", err)
+		}
+		logger.Error("giving up on ENDED, the stale timeout will end the card")
+	}()
+}
+
+// StopRetries makes pending ENDED retries, and any started later, try once
+// more now and exit, so shutdown does not wait out their delays.
+func (h *Handler) StopRetries() {
+	h.stopOnce.Do(func() { close(h.stopRetries) })
 }
 
 // finalValues returns the values to send on the terminal ENDED update,
@@ -644,12 +763,13 @@ func (h *Handler) checkAlertStates(ctx context.Context) {
 		}
 
 		h.poller.Stop(e.state.slug)
-		h.endAlertActivity(ctx, e.state.alertname, &e.state)
+		h.endAlertActivity(ctx, e.name, &e.state)
 	}
 }
 
 // endAlertActivity sends an ENDED update for an alert that is no longer firing.
-func (h *Handler) endAlertActivity(ctx context.Context, alertname string, state *alertState) {
+func (h *Handler) endAlertActivity(ctx context.Context, mapKey string, state *alertState) {
+	alertname := state.alertname
 	logger := slog.With("alertname", alertname, "slug", state.slug)
 
 	values := h.finalValues(ctx, state.expr, state.seriesLabel, state.lastValues)
@@ -668,23 +788,21 @@ func (h *Handler) endAlertActivity(ctx context.Context, alertname string, state 
 		content.Value = any(values)
 	}
 
-	err := h.pwClient.UpdateActivity(ctx, state.slug, pushward.UpdateRequest{
-		State:   pushward.StateEnded,
-		Content: content,
-	})
-	if err != nil {
-		logger.Error("failed to end resolved activity", "error", err)
-		return
+	if h.end(ctx, logger, mapKey, state.slug, content) {
+		logger.Info("activity ended (alert no longer firing)")
 	}
-	logger.Info("activity ended (alert no longer firing)")
 }
 
 // WaitIdle blocks until all in-flight async webhook goroutines complete.
 func (h *Handler) WaitIdle() { h.wg.Wait() }
 
-// WaitBackground blocks until the sweeper and alert-checker goroutines exit.
-// Call after the shutdown context is cancelled.
-func (h *Handler) WaitBackground() { h.bgWg.Wait() }
+// WaitBackground blocks until the sweeper and alert-checker goroutines exit,
+// then until the ENDED retries they or the webhooks started are done. Call
+// after the shutdown context is cancelled, StopRetries and WaitIdle.
+func (h *Handler) WaitBackground() {
+	h.bgWg.Wait()
+	h.retryWg.Wait()
+}
 
 func (h *Handler) activeAlerts() []string {
 	h.mu.Lock()
