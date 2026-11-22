@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mac-lucky/pushward-integrations/relay/internal/auth"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/client"
 	"github.com/mac-lucky/pushward-integrations/relay/internal/state"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
@@ -340,5 +342,124 @@ func TestFlushAll_HonoursTheCallersDeadline(t *testing.T) {
 	e.Wait()
 	if got := patches.Load(); got != 0 {
 		t.Fatalf("flush past its deadline sent %d updates, want 0", got)
+	}
+}
+
+// A redelivery of a terminal webhook that lands on another replica must not
+// take over the end: that would cancel the first replica's end and start the
+// wait over, so a sender retrying across replicas holds the card forever.
+func TestEndIfTrackedOnAnotherReplicaDoesNotRearm(t *testing.T) {
+	var patches atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			patches.Add(1)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	const endDelay = 150 * time.Millisecond
+	store := state.NewMemoryStore()
+	cfg := EndConfig{EndDelay: endDelay, EndDisplayTime: time.Hour}
+	a := NewEnder(client.NewPool(srv.URL, nil), store, "test", cfg)
+	b := NewEnder(client.NewPool(srv.URL, nil), store, "test", cfg)
+	defer a.StopAll()
+	defer b.StopAll()
+
+	ctx := context.Background()
+	if err := store.Set(ctx, "test", "hlk_test", "map-1", "", json.RawMessage(`{}`), time.Hour); err != nil {
+		t.Fatalf("seeding state: %v", err)
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	content := pushward.Content{Template: pushward.TemplateGeneric, State: "Done"}
+
+	a.EndIfTracked(ctx, log, "hlk_test", "map-1", "slug-1", content)
+	time.Sleep(endDelay / 2)
+	if !b.EndIfTracked(ctx, log, "hlk_test", "map-1", "slug-1", content) {
+		t.Fatal("redelivery on the other replica should report an end in flight")
+	}
+	if b.Pending("hlk_test", "map-1") {
+		t.Fatal("the other replica armed an end of its own")
+	}
+	time.Sleep(endDelay/2 + 60*time.Millisecond)
+	if got := patches.Load(); got != 1 {
+		t.Fatalf("expected the first replica's phase 1 on its own schedule, got %d PATCHes", got)
+	}
+}
+
+// Ending sees an end armed on another replica; Pending does not.
+func TestEndingSeesAnEndOnAnotherReplica(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	store := state.NewMemoryStore()
+	a := newTestEnder(client.NewPool(srv.URL, nil), store)
+	b := newTestEnder(client.NewPool(srv.URL, nil), store)
+	defer a.StopAll()
+
+	ctx := context.Background()
+	if b.Ending(ctx, "hlk_test", "map-1") {
+		t.Fatal("Ending before any end was armed")
+	}
+	a.ScheduleEnd("hlk_test", "map-1", "slug-1", pushward.Content{State: "Resolved"})
+	if b.Pending("hlk_test", "map-1") || !b.Ending(ctx, "hlk_test", "map-1") {
+		t.Fatal("the other replica should see the end through Ending only")
+	}
+	b.StopTimer("hlk_test", "map-1")
+	if b.Ending(ctx, "hlk_test", "map-1") {
+		t.Fatal("Ending after the end was cancelled")
+	}
+}
+
+// slowTokenStore holds every end token read for one key until released.
+type slowTokenStore struct {
+	state.Store
+	slowKey string
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (s *slowTokenStore) Get(ctx context.Context, provider, userKey, key, subKey string) (json.RawMessage, error) {
+	if subKey == endTokenSubKey && key == s.slowKey {
+		s.once.Do(func() { close(s.entered) })
+		<-s.release
+	}
+	return s.Store.Get(ctx, provider, userKey, key, subKey)
+}
+
+// A store call stalled for one card must not hold up the end token calls of
+// another card.
+func TestStalledTokenCallBlocksOnlyItsOwnKey(t *testing.T) {
+	store := &slowTokenStore{Store: state.NewMemoryStore(), slowKey: "slow", entered: make(chan struct{}), release: make(chan struct{})}
+	e := newTestEnder(client.NewPool("http://unused", nil), store)
+	timerKey := func(mapKey string) string { return auth.MapKeyPrefix("hlk_test") + ":" + mapKey }
+	fast := ""
+	for i := 0; fast == ""; i++ {
+		if k := fmt.Sprintf("fast-%d", i); e.tokenLock(timerKey(k)) != e.tokenLock(timerKey("slow")) {
+			fast = k
+		}
+	}
+
+	stalled := make(chan struct{})
+	go func() {
+		e.StopTimer("hlk_test", "slow")
+		close(stalled)
+	}()
+	defer func() {
+		close(store.release)
+		<-stalled
+	}()
+	<-store.entered
+	done := make(chan struct{})
+	go func() {
+		e.StopTimer("hlk_test", fast)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("StopTimer for another card waited on the stalled one")
 	}
 }

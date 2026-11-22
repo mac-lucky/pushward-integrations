@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"hash/maphash"
 	"log/slog"
 	"sync"
 	"time"
@@ -26,6 +27,13 @@ const endTokenSubKey = "end"
 // endTokenSlack bounds the token row past the two phase delays, covering the
 // retries of both phases.
 const endTokenSlack = 10 * time.Minute
+
+// tokenStripes is how many locks order the end token store calls. A key always
+// takes the same one, so calls for one card stay ordered, while a slow store
+// call holds up only the keys that share its stripe, not every tenant.
+const tokenStripes = 64
+
+var tokenSeed = maphash.MakeSeed()
 
 var (
 	retryDelayMu      sync.RWMutex
@@ -87,10 +95,15 @@ type Ender struct {
 	shutdownCtx    context.Context
 	shutdownCancel context.CancelFunc
 	mu             sync.Mutex
-	tokenMu        sync.Mutex // orders this replica's end token writes and deletes; taken before mu
+	tokenMu        [tokenStripes]sync.Mutex // orders this replica's end token store calls per key (tokenLock); taken before mu
 	timers         map[string]*timerPair
 	nextGen        uint64
 	wg             sync.WaitGroup
+}
+
+// tokenLock returns the lock that orders the end token store calls for timerKey.
+func (e *Ender) tokenLock(timerKey string) *sync.Mutex {
+	return &e.tokenMu[maphash.String(tokenSeed, timerKey)%tokenStripes]
 }
 
 // NewEnder creates a new Ender. Pass nil for store if no state cleanup is needed.
@@ -122,9 +135,9 @@ func NewEnder(clients *client.Pool, store state.Store, provider string, cfg EndC
 // already opened an activity, which would otherwise hang on the lock screen
 // until its stale TTL expires.
 //
-// It is idempotent: calling it again while an end is already pending is a
-// no-op that still reports true, so a redelivered webhook cannot postpone the
-// end it asked for.
+// It is idempotent: calling it again while an end is already pending, on this
+// replica or another, is a no-op that still reports true, so a redelivered
+// webhook cannot postpone the end it asked for.
 //
 // Only sound where the provider writes its state row below its own
 // AllowsActivity gate, so a row implies the activity exists. Where the row
@@ -172,12 +185,15 @@ func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 	timerKey := auth.MapKeyPrefix(userKey) + ":" + mapKey
 	cl := e.clients.Get(userKey)
 
-	// Only scheduleEnd adds timers, under tokenMu, so the pending check holds
-	// until the arm below and a skipped call never overwrites the token of
-	// the end it leaves alone.
-	e.tokenMu.Lock()
-	defer e.tokenMu.Unlock()
-	if skipIfPending && e.Pending(userKey, mapKey) {
+	// Only scheduleEnd adds timers, under the key's token lock, so the pending
+	// check holds until the arm below and a skipped call never overwrites the
+	// token of the end it leaves alone. The check takes in other replicas'
+	// ends too: overwriting their token would cancel that end and start the
+	// wait over.
+	tokenMu := e.tokenLock(timerKey)
+	tokenMu.Lock()
+	defer tokenMu.Unlock()
+	if skipIfPending && e.Ending(context.Background(), userKey, mapKey) {
 		return
 	}
 	token := e.writeToken(userKey, mapKey)
@@ -250,7 +266,7 @@ func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 			// fires EndDisplayTime after phase-1 completes, which is well
 			// beyond any sensible request/trace lifetime.
 			if e.store != nil {
-				e.tokenMu.Lock()
+				tokenMu.Lock()
 				e.mu.Lock()
 				cur, ok := e.timers[timerKey]
 				mine := ok && cur.gen == myGen
@@ -263,7 +279,7 @@ func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 					e.deleteToken(delCtx, userKey, mapKey)
 					delCancel()
 				}
-				e.tokenMu.Unlock()
+				tokenMu.Unlock()
 			}
 
 			// Clean up timer, but only if it is still OURS. A superseding
@@ -352,7 +368,7 @@ func (e *Ender) dropCancelled(timerKey string, gen uint64, onComplete []func()) 
 
 // Pending reports whether an end is scheduled for the given key and has not
 // finished. It holds only on this replica: another one may be ending the
-// same activity.
+// same activity (Ending sees those too).
 func (e *Ender) Pending(userKey, mapKey string) bool {
 	timerKey := auth.MapKeyPrefix(userKey) + ":" + mapKey
 	e.mu.Lock()
@@ -361,14 +377,35 @@ func (e *Ender) Pending(userKey, mapKey string) bool {
 	return ok
 }
 
+// Ending reports whether an end is in flight for the key on this replica or,
+// through the end token, on another one. A failed token read counts only this
+// replica, as Pending does.
+func (e *Ender) Ending(ctx context.Context, userKey, mapKey string) bool {
+	if e.Pending(userKey, mapKey) {
+		return true
+	}
+	if e.store == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	raw, err := e.store.Get(ctx, e.provider, userKey, mapKey, endTokenSubKey)
+	if err != nil {
+		slog.Warn("end token read failed", "error", err, "provider", e.provider)
+		return false
+	}
+	return raw != nil
+}
+
 // StopTimer cancels a pending end for the given key, on this replica and,
 // through the end token, on any other. It reports whether an end was pending
 // anywhere, so an alert arriving inside the end window can treat the card as
 // new. A store error counts only the local timer.
 func (e *Ender) StopTimer(userKey, mapKey string) bool {
 	timerKey := auth.MapKeyPrefix(userKey) + ":" + mapKey
-	e.tokenMu.Lock()
-	defer e.tokenMu.Unlock()
+	tokenMu := e.tokenLock(timerKey)
+	tokenMu.Lock()
+	defer tokenMu.Unlock()
 	e.mu.Lock()
 	tp, pending := e.timers[timerKey]
 	if pending {

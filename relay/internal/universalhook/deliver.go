@@ -204,7 +204,9 @@ func (h *Handler) deliverActivity(ctx context.Context, r *request, m universal.M
 		if !overrides.FromContext(ctx).AllowsActivity() {
 			return ignored(humautil.StatusIgnored, "an update to a card, and cards are off for this request"), nil
 		}
-		if h.ender.Pending(r.key, a.mapKey) {
+		// Ending, not Pending: an update that cancelled an end armed on
+		// another replica would reopen the closed card.
+		if h.ender.Ending(ctx, r.key, a.mapKey) {
 			return ignored(humautil.StatusIgnored, "an update to a card that is ending"), nil
 		}
 		if _, tracked, err := h.card(ctx, r, a); err == nil && !tracked {

@@ -966,6 +966,65 @@ func TestPresetUpdateNeverOpensACard(t *testing.T) {
 	}
 }
 
+// newReplicas is two universal routes on one store and one PushWard mock,
+// standing in for two relay replicas, with an end window wide enough to land
+// an event inside it.
+func newReplicas(t *testing.T) (a, b *harness) {
+	t.Helper()
+	lifecycle.SetRetryDelay(10 * time.Millisecond)
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	store := state.NewMemoryStore()
+	cfg := testConfig()
+	cfg.Presets = true
+	cfg.EndDelay = 150 * time.Millisecond
+	replica := func() *harness {
+		mux, api := humautil.NewTestAPI()
+		h := RegisterRoutes(api, state.KeyHashing(store), client.NewPool(srv.URL, nil), cfg, nil)
+		t.Cleanup(func() {
+			h.ender.StopAll()
+			h.ender.Wait()
+		})
+		return &harness{mux: mux, calls: calls, mu: mu, store: store, h: h}
+	}
+	return replica(), replica()
+}
+
+// A note that lands on the other replica while a closed alert's card is
+// ending is dropped there too: it must not cancel the end and reopen the card
+// with a new alert push.
+func TestPresetUpdateOnAnotherReplicaLeavesTheEndingCard(t *testing.T) {
+	a, b := newReplicas(t)
+	a.post(t, "/universal", presetFixture(t, "opsgenie_create.json"))
+	a.post(t, "/universal", presetFixture(t, "opsgenie_close.json"))
+	note := withValue(t, "opsgenie_create.json", `"action": "Create"`, `"action": "AddNote"`)
+	if w := b.post(t, "/universal", note); w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "ending") {
+		t.Fatalf("note on the ending card: %d %s", w.Code, w.Body.String())
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	var calls []testutil.APICall
+	for {
+		calls = a.snapshot()
+		last := calls[len(calls)-1]
+		if strings.Contains(string(last.Body), `"state":"`+pushward.StateEnded+`"`) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	creates := 0
+	for _, c := range calls {
+		if c.Method == http.MethodPost && c.Path == "/activities" {
+			creates++
+		}
+	}
+	if creates != 1 {
+		t.Errorf("%d creates, want only the alert's own", creates)
+	}
+	if end := calls[len(calls)-1]; !strings.Contains(string(end.Body), `"state":"`+pushward.StateEnded+`"`) {
+		t.Errorf("the card did not end, last call %s %s %s", end.Method, end.Path, end.Body)
+	}
+}
+
 // Jenkins's FINALIZED after COMPLETED ends a card that is already ending: no
 // second end, no second push.
 func TestPresetSecondEndIsDropped(t *testing.T) {
