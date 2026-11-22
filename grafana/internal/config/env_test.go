@@ -163,3 +163,40 @@ func TestApplyEnvOverridesRejectsUnparseableDurations(t *testing.T) {
 		})
 	}
 }
+
+// A poll interval <= 0 would panic the poller's ticker on the first alert and a
+// negative history window makes no sense, so Load refuses both. A sub-second
+// interval works and still boots.
+func TestLoadValidatesTimelineDurations(t *testing.T) {
+	cases := map[string]struct {
+		poll, history string
+		wantErr       string
+	}{
+		"zero poll interval":      {poll: "0s", wantErr: "timeline.poll_interval"},
+		"negative poll interval":  {poll: "-5s", wantErr: "timeline.poll_interval"},
+		"negative history window": {history: "-1m", wantErr: "timeline.history_window"},
+		"sub-second poll":         {poll: "500ms"},
+		"zero history window":     {history: "0s"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			clearDurationVars(t)
+			t.Setenv("PUSHWARD_METRICS_URL", "http://victoria:8428")
+			t.Setenv("PUSHWARD_URL", "https://api.pushward.app")
+			t.Setenv("PUSHWARD_API_KEY", "hlk_test")
+			if tc.poll != "" {
+				t.Setenv("PUSHWARD_POLL_INTERVAL", tc.poll)
+			}
+			if tc.history != "" {
+				t.Setenv("PUSHWARD_HISTORY_WINDOW", tc.history)
+			}
+			_, err := Load(filepath.Join(t.TempDir(), "absent.yml"))
+			switch {
+			case tc.wantErr == "" && err != nil:
+				t.Fatalf("Load: %v", err)
+			case tc.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tc.wantErr)):
+				t.Fatalf("Load error = %v, want one naming %s", err, tc.wantErr)
+			}
+		})
+	}
+}

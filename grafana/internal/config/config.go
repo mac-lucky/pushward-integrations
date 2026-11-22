@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"regexp"
 	"strings"
@@ -611,6 +612,18 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Metrics.URL == "" {
 		return nil, fmt.Errorf("metrics.url is required (set PUSHWARD_METRICS_URL)")
+	}
+
+	// A poll interval <= 0 panics the poller's ticker on the first alert.
+	if cfg.Timeline.PollInterval <= 0 {
+		return nil, fmt.Errorf("timeline.poll_interval must be positive (got %s)", cfg.Timeline.PollInterval)
+	}
+	if cfg.Timeline.PollInterval < time.Second {
+		slog.Warn("timeline.poll_interval under 1s polls the metrics backend and PushWard on every tick",
+			"poll_interval", cfg.Timeline.PollInterval)
+	}
+	if cfg.Timeline.HistoryWindow < 0 {
+		return nil, fmt.Errorf("timeline.history_window must not be negative (got %s)", cfg.Timeline.HistoryWindow)
 	}
 
 	if err := validateWidgets(cfg.Widgets); err != nil {
