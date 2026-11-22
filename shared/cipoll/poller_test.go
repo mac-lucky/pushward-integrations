@@ -1649,6 +1649,13 @@ func TestPollActive_EvictsRunExceedingMaxLifetime(t *testing.T) {
 	if stillTracked {
 		t.Error("expected the run exceeding max lifetime to be evicted")
 	}
+	// Closed, so the next idle pass does not track the hung attempt again.
+	p.mu.Lock()
+	got := p.lastEnded[testRepo]
+	p.mu.Unlock()
+	if got.id != 42 {
+		t.Errorf("lastEnded = %+v, want run 42 closed", got)
+	}
 	// Eviction is silent: no ongoing tick, no two-phase end.
 	if got := testutil.GetCalls(calls, mu); len(got) != 0 {
 		t.Errorf("expected 0 PushWard calls on lifetime eviction, got %d", len(got))

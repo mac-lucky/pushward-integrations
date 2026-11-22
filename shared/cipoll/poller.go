@@ -967,6 +967,9 @@ func (p *Poller) pollActive(ctx context.Context) error {
 		// and the bridge would track it - and block new-run detection for the
 		// repo - forever. Reclaim it past a generous lifetime ceiling.
 		if !t.trackedAt.IsZero() && time.Since(t.trackedAt) > maxRunLifetime {
+			// Closed like an ended run, or the next idle pass would track the
+			// same hung attempt again. A re-run starts later, so it still opens.
+			p.lastEnded[repo] = endedRun{id: t.RunID, startedAt: t.startedAt}
 			delete(p.tracked, repo)
 			p.log.Warn("evicted run exceeding max lifetime", "repo", repo, "run_id", t.RunID, "age", time.Since(t.trackedAt).Round(time.Minute))
 			p.mu.Unlock()
