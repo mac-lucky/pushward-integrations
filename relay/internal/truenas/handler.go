@@ -119,8 +119,9 @@ func (h *Handler) create(ctx context.Context, userKey string, log *slog.Logger, 
 	ov := overrides.FromContext(ctx)
 
 	// Cancel any pending end from a prior clear so ENDED can't land after this
-	// new ONGOING update (re-fired alert reusing the alias).
-	h.ender.StopTimer(userKey, mapKey)
+	// new ONGOING update (re-fired alert reusing the alias). A card that was
+	// being ended still holds its row, so ending makes this alert new again.
+	ending := h.ender.StopTimer(userKey, mapKey)
 
 	// Degrade to best-effort delivery on store errors: dropping a new alert on a
 	// transient DB blip is worse than a possible duplicate.
@@ -139,7 +140,7 @@ func (h *Handler) create(ctx context.Context, userKey string, log *slog.Logger, 
 		log.Error("failed to store state, continuing", "alias", p.Alias, "error", err)
 	}
 
-	isNew := existing == nil
+	isNew := existing == nil || ending
 	// channels=notification suppresses the Live Activity; the isNew notification
 	// below still fires so the alert reaches the user as a one-shot.
 	if isNew && ov.AllowsActivity() {

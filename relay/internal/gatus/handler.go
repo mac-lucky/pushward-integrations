@@ -135,8 +135,9 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 	slug, mapKey := h.slugAndKey(p)
 	ov := overrides.FromContext(ctx)
 
-	// Cancel any pending end timer from a previous RESOLVED event
-	h.ender.StopTimer(userKey, mapKey)
+	// Cancel any pending end timer from a previous RESOLVED event. A card that
+	// was being ended still holds its row, so ending makes this alert new again.
+	ending := h.ender.StopTimer(userKey, mapKey)
 
 	// Degrade to best-effort delivery on store errors: dropping a new outage
 	// alert on a transient DB blip is worse than a possible duplicate, and
@@ -152,7 +153,7 @@ func (h *Handler) handleTriggered(ctx context.Context, userKey string, log *slog
 		log.Error("failed to store state, continuing", "endpoint", p.EndpointName, "error", err)
 	}
 
-	isNew := existing == nil
+	isNew := existing == nil || ending
 	// channels=notification suppresses the Live Activity; the isNew notification
 	// below still fires so the outage reaches the user as a one-shot.
 	if isNew && ov.AllowsActivity() {

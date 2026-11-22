@@ -462,3 +462,49 @@ func TestSeverityLabel(t *testing.T) {
 		t.Errorf("expected the label truncated to %d runes, got %d", pushward.MaxSeverityLabelRunes, len([]rune(got)))
 	}
 }
+
+// A DOWN inside the end window of the previous UP is a new outage: it must
+// re-open the card and push again, on this replica and on another one that
+// shares the store.
+func TestMonitorDownInsideEndWindowIsNew(t *testing.T) {
+	down := `{
+		"monitor": {"id": 7, "name": "Flappy", "url": "https://example.com", "type": "http"},
+		"heartbeat": {"status": 0, "time": "2024-01-15T10:30:00.000Z", "msg": "Timeout", "ping": null, "duration": 0, "important": true},
+		"msg": "Flappy is DOWN"
+	}`
+	up := `{
+		"monitor": {"id": 7, "name": "Flappy", "url": "https://example.com", "type": "http"},
+		"heartbeat": {"status": 1, "time": "2024-01-15T10:31:00.000Z", "msg": "", "ping": 5, "duration": 60, "important": true},
+		"msg": "Flappy is UP"
+	}`
+	for _, replicas := range []int{1, 2} {
+		t.Run(map[int]string{1: "same replica", 2: "other replica"}[replicas], func(t *testing.T) {
+			cfg := testConfig()
+			cfg.EndDelay = time.Hour
+			srv, calls, mu := testutil.MockPushWardServer(t)
+			store := state.NewMemoryStore()
+			var hs []http.Handler
+			for range replicas {
+				mux, api := humautil.NewTestAPI()
+				RegisterRoutes(api, store, client.NewPool(srv.URL, nil), cfg)
+				hs = append(hs, mux)
+			}
+			send(t, hs[0], down)
+			send(t, hs[0], up)
+			send(t, hs[len(hs)-1], down)
+
+			var creates, downPushes int
+			for _, c := range testutil.GetCalls(calls, mu) {
+				switch {
+				case c.Method == http.MethodPost && c.Path == "/activities":
+					creates++
+				case c.Method == http.MethodPost && c.Path == "/notifications" && strings.Contains(string(c.Body), "Timeout"):
+					downPushes++
+				}
+			}
+			if creates != 2 || downPushes != 2 {
+				t.Fatalf("creates = %d, DOWN pushes = %d, want 2 and 2", creates, downPushes)
+			}
+		})
+	}
+}

@@ -226,8 +226,9 @@ func (h *Handler) ongoing(ctx context.Context, r *request, m universal.Mapping, 
 		return nil
 	}
 
-	// A new event cancels an end still pending from a resolved one.
-	h.ender.StopTimer(r.key, a.mapKey)
+	// A new event cancels an end still pending from a resolved one. The
+	// ending card still holds its row, so this event opens a new one.
+	ending := h.ender.StopTimer(r.key, a.mapKey)
 
 	// On a store error the card is treated as new: a duplicate create is an
 	// upsert, while a dropped alert is lost.
@@ -235,7 +236,10 @@ func (h *Handler) ongoing(ctx context.Context, r *request, m universal.Mapping, 
 	if err != nil {
 		r.log.Warn("state store read failed, treating the activity as new", "slug", a.slug, "error", err)
 	}
-	isNew := !tracked
+	if ending {
+		card = cardState{} // the ended run's progress is not this one's
+	}
+	isNew := !tracked || ending
 	cl := h.clients.Get(r.key)
 	if isNew {
 		err := cl.CreateActivity(ctx, a.slug, text.TruncateHard(ev.Title, maxTitleRunes),
