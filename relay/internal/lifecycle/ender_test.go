@@ -412,6 +412,54 @@ func TestEndingSeesAnEndOnAnotherReplica(t *testing.T) {
 	}
 }
 
+// The replica whose end another one cancelled keeps its timer until a phase
+// fires and notices; Ending must not count it in the meantime, or a real end
+// for the reopened card is dropped as a second one.
+func TestEndingIgnoresALocalEndCancelledElsewhere(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	store := state.NewMemoryStore()
+	a := newTestEnder(client.NewPool(srv.URL, nil), store)
+	b := newTestEnder(client.NewPool(srv.URL, nil), store)
+	defer a.StopAll()
+	defer b.StopAll()
+
+	ctx := context.Background()
+	a.ScheduleEnd("hlk_test", "map-1", "slug-1", pushward.Content{State: "Resolved"})
+	b.StopTimer("hlk_test", "map-1")
+	if !a.Pending("hlk_test", "map-1") {
+		t.Fatal("precondition: the cancelled end's timer is still on its replica")
+	}
+	if a.Ending(ctx, "hlk_test", "map-1") {
+		t.Fatal("Ending counts an end another replica cancelled")
+	}
+	b.ScheduleEnd("hlk_test", "map-1", "slug-1", pushward.Content{State: "Resolved"})
+	if !a.Ending(ctx, "hlk_test", "map-1") {
+		t.Fatal("Ending misses the other replica's new end")
+	}
+}
+
+// Without a readable token the local timer is the only answer left.
+func TestEndingCountsTheLocalEndWhenTheTokenCannotBeRead(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	e := newTestEnder(client.NewPool(srv.URL, nil), failingTokenStore{state.NewMemoryStore()})
+	defer e.StopAll()
+
+	ctx := context.Background()
+	if e.Ending(ctx, "hlk_test", "map-1") {
+		t.Fatal("Ending before any end was armed")
+	}
+	e.ScheduleEnd("hlk_test", "map-1", "slug-1", pushward.Content{State: "Resolved"})
+	if !e.Ending(ctx, "hlk_test", "map-1") {
+		t.Fatal("Ending drops the local end on a token read error")
+	}
+}
+
 // slowTokenStore holds every end token read for one key until released.
 type slowTokenStore struct {
 	state.Store

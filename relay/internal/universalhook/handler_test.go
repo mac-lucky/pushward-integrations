@@ -1110,3 +1110,41 @@ func TestPresetSecondEndOnAnotherReplicaIsDropped(t *testing.T) {
 		t.Errorf("%d notifications, want the one end push", n)
 	}
 }
+
+// An alert reopened on another replica cancels the first replica's end there,
+// while that replica's timer still waits to notice. A close for the reopened
+// card landing on the first replica in that window is a real end, not a
+// second one: it ends the card and pushes Resolved.
+func TestPresetCloseAfterAReopenOnAnotherReplicaEnds(t *testing.T) {
+	a, b := newReplicas(t)
+	for _, step := range []struct {
+		hs   *harness
+		body []byte
+	}{
+		{a, presetFixture(t, "opsgenie_create.json")},
+		{a, presetFixture(t, "opsgenie_close.json")},
+		{b, presetFixture(t, "opsgenie_create.json")},
+		{a, presetFixture(t, "opsgenie_close.json")},
+	} {
+		if w := step.hs.post(t, "/universal", step.body); w.Code != http.StatusOK {
+			t.Fatalf("%d %s", w.Code, w.Body.String())
+		}
+	}
+
+	ended := `"state":"` + pushward.StateEnded + `"`
+	deadline := time.Now().Add(5 * time.Second)
+	var calls []testutil.APICall
+	for {
+		calls = a.snapshot()
+		if strings.Contains(string(calls[len(calls)-1].Body), ended) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if end := calls[len(calls)-1]; !strings.Contains(string(end.Body), ended) {
+		t.Errorf("the reopened card did not end, last call %s %s %s", end.Method, end.Path, end.Body)
+	}
+	if n := len(notifications(t, calls)); n != 4 {
+		t.Errorf("%d notifications, want create, resolve, create, resolve", n)
+	}
+}

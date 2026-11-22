@@ -378,21 +378,24 @@ func (e *Ender) Pending(userKey, mapKey string) bool {
 }
 
 // Ending reports whether an end is in flight for the key on this replica or,
-// through the end token, on another one. A failed token read counts only this
-// replica, as Pending does.
+// through the end token, on another one. A local timer whose sequence wrote a
+// token counts only while a token is still stored: another replica's StopTimer
+// deletes it, and the timer lingers until a phase fires and notices. A failed
+// token read counts only this replica, as Pending does.
 func (e *Ender) Ending(ctx context.Context, userKey, mapKey string) bool {
-	if e.Pending(userKey, mapKey) {
-		return true
-	}
-	if e.store == nil {
-		return false
+	timerKey := auth.MapKeyPrefix(userKey) + ":" + mapKey
+	e.mu.Lock()
+	tp, local := e.timers[timerKey]
+	e.mu.Unlock()
+	if e.store == nil || (local && tp.token == "") {
+		return local
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	raw, err := e.store.Get(ctx, e.provider, userKey, mapKey, endTokenSubKey)
 	if err != nil {
 		slog.Warn("end token read failed", "error", err, "provider", e.provider)
-		return false
+		return local
 	}
 	return raw != nil
 }
