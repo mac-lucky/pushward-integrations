@@ -1025,6 +1025,58 @@ func TestPresetUpdateOnAnotherReplicaLeavesTheEndingCard(t *testing.T) {
 	}
 }
 
+// An event inside the end window of a finished card opens a new one: it is
+// created again, an alert pushes again, and the ended run's progress is not
+// carried into the new card. On this replica and on another one that shares
+// the store.
+func TestEventInsideEndWindowIsNew(t *testing.T) {
+	noValue := bytes.Replace(fixture(t, "ci_progress_running.json"), []byte(`"progress": 45,`), nil, 1)
+	for _, other := range []bool{false, true} {
+		t.Run(map[bool]string{false: "same replica", true: "other replica"}[other], func(t *testing.T) {
+			a, b := newReplicas(t)
+			next := a
+			if other {
+				next = b
+			}
+			for _, step := range []struct {
+				hs   *harness
+				src  string
+				body []byte
+			}{
+				{a, "alertmanager", fixture(t, "alertmanager_firing.json")},
+				{a, "alertmanager", fixture(t, "alertmanager_resolved.json")},
+				{next, "alertmanager", fixture(t, "alertmanager_firing.json")},
+				{a, "ci", fixture(t, "ci_progress_running.json")},
+				{a, "ci", fixture(t, "ci_progress_done.json")},
+				{next, "ci", noValue},
+			} {
+				if err := step.hs.deliverAs(t, step.src, "", step.body); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			calls := a.snapshot()
+			creates, alerts := 0, 0
+			for _, c := range calls {
+				if c.Method == http.MethodPost && c.Path == "/activities" {
+					creates++
+				}
+			}
+			for _, n := range notifications(t, calls) {
+				if n.Level == pushward.LevelTimeSensitive {
+					alerts++
+				}
+			}
+			if creates != 4 || alerts != 2 {
+				t.Errorf("creates = %d, alert pushes = %d, want 4 and 2", creates, alerts)
+			}
+			if c := testutil.LastActivityUpdate(t, calls); c.Progress != 0 {
+				t.Errorf("new run's card shows progress %v carried from the ended run", c.Progress)
+			}
+		})
+	}
+}
+
 // Jenkins's FINALIZED after COMPLETED ends a card that is already ending: no
 // second end, no second push.
 func TestPresetSecondEndIsDropped(t *testing.T) {

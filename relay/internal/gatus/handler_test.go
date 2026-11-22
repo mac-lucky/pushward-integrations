@@ -466,3 +466,38 @@ func TestSeverityLabel(t *testing.T) {
 		t.Errorf("expected truncation to %d runes, got %d", pushward.MaxSeverityLabelRunes, len([]rune(got)))
 	}
 }
+
+// A TRIGGERED inside the end window of the previous RESOLVED is a new outage:
+// it must re-open the card and push again, on this replica and on another one
+// that shares the store.
+func TestTriggeredInsideEndWindowIsNew(t *testing.T) {
+	resolved := strings.Replace(triggeredBody, `"status": "TRIGGERED"`, `"status": "RESOLVED"`, 1)
+	for _, replicas := range []int{1, 2} {
+		t.Run(map[int]string{1: "same replica", 2: "other replica"}[replicas], func(t *testing.T) {
+			cfg := testConfig()
+			cfg.EndDelay = time.Hour
+			srv, calls, mu := testutil.MockPushWardServer(t)
+			store := state.NewMemoryStore()
+			var hs []http.Handler
+			for range replicas {
+				hs = append(hs, newHandlerWithStore(t, cfg, store, srv.URL))
+			}
+			send(t, hs[0], triggeredBody)
+			send(t, hs[0], resolved)
+			send(t, hs[len(hs)-1], triggeredBody)
+
+			var creates, pushes int
+			for _, c := range testutil.GetCalls(calls, mu) {
+				switch {
+				case c.Method == http.MethodPost && c.Path == "/activities":
+					creates++
+				case c.Method == http.MethodPost && c.Path == "/notifications" && strings.Contains(string(c.Body), "503"):
+					pushes++
+				}
+			}
+			if creates != 2 || pushes != 2 {
+				t.Fatalf("creates = %d, TRIGGERED pushes = %d, want 2 and 2", creates, pushes)
+			}
+		})
+	}
+}

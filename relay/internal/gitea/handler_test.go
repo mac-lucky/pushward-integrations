@@ -404,3 +404,37 @@ func TestGiteaJobFrameIncludesAConcurrentSibling(t *testing.T) {
 		t.Fatalf("total_steps = %v, want both jobs in the frame", last.Content.TotalSteps)
 	}
 }
+
+// A run completion must summarise every job, including one a concurrent job
+// event wrote after the completion first read the run's state.
+func TestGiteaCompletionIncludesAConcurrentSibling(t *testing.T) {
+	lifecycle.SetRetryDelay(10 * time.Millisecond)
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	store := &racingStore{Store: state.NewMemoryStore()}
+	mux, api := humautil.NewTestAPI()
+	RegisterRoutes(api, store, client.NewPool(srv.URL, nil), testConfig())
+
+	send(t, mux, "/gitea", runBody("requested", "queued", "", 42))
+	send(t, mux, "/gitea", jobBody("completed", "completed", "success", "Build", 100, 42))
+	sibling, _ := json.Marshal(jobRecord{ID: 101, Name: "Test", Status: "completed", Conclusion: "success"})
+	store.mu.Lock()
+	store.inject = func() {
+		_ = store.Set(context.Background(), "gitea", "hlk_test", giteaSlug("acme/app"), "job:101", sibling, time.Hour)
+	}
+	store.mu.Unlock()
+	send(t, mux, "/gitea", runBody("completed", "completed", "success", 42))
+
+	recorded := testutil.WaitForCalls(t, calls, mu, 5, 5*time.Second)
+	var last pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[len(recorded)-1].Body, &last)
+	if last.State != pushward.StateEnded {
+		t.Fatalf("last call is %s, want the ENDED summary", last.State)
+	}
+	steps := 0
+	if last.Content.TotalSteps != nil {
+		steps = *last.Content.TotalSteps
+	}
+	if steps != 2 {
+		t.Fatalf("total_steps = %d, want both jobs in the summary", steps)
+	}
+}

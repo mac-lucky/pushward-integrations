@@ -440,3 +440,40 @@ func TestSeverityLabelsCoverResolvableTypes(t *testing.T) {
 		}
 	}
 }
+
+// An alert inside the end window of its resolve is new again: it must re-open
+// the card and push again, on this replica and on another one that shares the
+// store.
+func TestAlertInsideEndWindowIsNew(t *testing.T) {
+	for _, replicas := range []int{1, 2} {
+		t.Run(map[int]string{1: "same replica", 2: "other replica"}[replicas], func(t *testing.T) {
+			lifecycle.SetRetryDelay(10 * time.Millisecond)
+			cfg := testConfig()
+			cfg.EndDelay = time.Hour
+			srv, calls, mu := testutil.MockPushWardServer(t)
+			store := state.NewMemoryStore()
+			var hs []http.Handler
+			for range replicas {
+				mux, api := humautil.NewTestAPI()
+				RegisterRoutes(api, store, client.NewPool(srv.URL, nil), cfg)
+				hs = append(hs, mux)
+			}
+			send(t, hs[0], bodyUnreachable)
+			send(t, hs[0], bodyUnreachableResolved)
+			send(t, hs[len(hs)-1], bodyUnreachable)
+
+			var creates, pushes int
+			for _, c := range testutil.GetCalls(calls, mu) {
+				switch {
+				case c.Method == http.MethodPost && c.Path == "/activities":
+					creates++
+				case c.Method == http.MethodPost && c.Path == "/notifications" && strings.Contains(string(c.Body), `"level":"active"`):
+					pushes++
+				}
+			}
+			if creates != 2 || pushes != 2 {
+				t.Fatalf("creates = %d, alert pushes = %d, want 2 and 2", creates, pushes)
+			}
+		})
+	}
+}
