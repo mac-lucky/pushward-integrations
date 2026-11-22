@@ -1111,11 +1111,12 @@ type SendNotificationRequest struct {
 	// URL, or until it expires; SentNotification.Receipt then tracks it.
 	// Not with Push false or level passive.
 	//
-	// SendNotification retries after a network error or a 5xx, and a send
-	// the server took before the connection dropped then goes out twice,
-	// each copy repeating on its own. Set CollapseID with it: a newer
+	// SendNotification retries after a network error or a 5xx under one
+	// Idempotency-Key, so a send the server took before the connection
+	// dropped is not sent again by those retries. Calling it twice still sends
+	// twice, each copy repeating on its own: set CollapseID with it, so a newer
 	// acknowledged send from the same key with the same collapse id cancels
-	// the older receipt (ReceiptCancelSuperseded), so only one keeps
+	// the older receipt (ReceiptCancelSuperseded) and only one keeps
 	// repeating. Tags at least let CancelNotificationReceiptsByTag reach both.
 	Acknowledge *NotificationAcknowledge `json:"acknowledge,omitempty"`
 	// Tags label an acknowledged notification so

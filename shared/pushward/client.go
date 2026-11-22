@@ -3,6 +3,7 @@ package pushward
 import (
 	"bytes"
 	"context"
+	crand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -178,6 +179,17 @@ func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 // If contentType is empty, "application/json" is used. Widget PATCH requests
 // must pass "application/merge-patch+json" to satisfy RFC 7396 content
 // negotiation enforced by pushward-server.
+// idempotencyKeyCtx carries the Idempotency-Key of one call into
+// doWithRetryInto, which sends it on every attempt.
+type idempotencyKeyCtx struct{}
+
+// withIdempotencyKey gives one send call a fresh random Idempotency-Key, so a
+// retry of a POST the server already took returns that first send instead of
+// sending it again. Two calls still make two sends.
+func withIdempotencyKey(ctx context.Context) context.Context {
+	return context.WithValue(ctx, idempotencyKeyCtx{}, crand.Text())
+}
+
 // doWithRetry runs a request whose success body is not needed. It is the
 // common case: every write in this client discards the 2xx body.
 func (c *Client) doWithRetry(ctx context.Context, operation, method, url, contentType string, body interface{}, handleConflict func([]byte) (bool, error)) error {
@@ -271,6 +283,9 @@ func (c *Client) doWithRetryInto(ctx context.Context, operation, method, url, co
 			httpReq.Header.Set("Content-Type", ct)
 		}
 		httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+		if key, ok := ctx.Value(idempotencyKeyCtx{}).(string); ok {
+			httpReq.Header.Set("Idempotency-Key", key)
+		}
 
 		resp, err := c.httpClient.Do(httpReq)
 		if err != nil {
@@ -810,7 +825,7 @@ func (c *Client) SendNotificationResult(ctx context.Context, req SendNotificatio
 // cannot turn a delivered notification into an error.
 func (c *Client) sendNotification(ctx context.Context, req SendNotificationRequest, out any) error {
 	req.FillSourceDisplayName()
-	return c.doWithRetryInto(ctx, "notify", http.MethodPost,
+	return c.doWithRetryInto(withIdempotencyKey(ctx), "notify", http.MethodPost,
 		fmt.Sprintf("%s/notifications", c.baseURL), "", req, nil, out)
 }
 
@@ -963,7 +978,7 @@ func (c *Client) withLongerTimeout(d time.Duration) *Client {
 func (c *Client) ScheduleNotification(ctx context.Context, req ScheduleNotificationRequest) (*ScheduledNotification, error) {
 	req.FillSourceDisplayName()
 	var sn ScheduledNotification
-	if err := c.doWithRetryInto(ctx, "notify.schedule", http.MethodPost,
+	if err := c.doWithRetryInto(withIdempotencyKey(ctx), "notify.schedule", http.MethodPost,
 		fmt.Sprintf("%s/notifications/scheduled", c.baseURL), "", req, nil, &sn); err != nil {
 		return nil, err
 	}

@@ -2493,3 +2493,51 @@ func TestWithTarget_Copies(t *testing.T) {
 		t.Error("two requests share one target")
 	}
 }
+
+// A notification POST retried after a 5xx carries the same Idempotency-Key on
+// every attempt, so a send the server already took is not sent twice; a new
+// call gets a new key.
+func TestNotificationSendsReuseOneIdempotencyKeyAcrossRetries(t *testing.T) {
+	sends := map[string]func(*Client) error{
+		"send": func(c *Client) error {
+			return c.SendNotification(context.Background(), SendNotificationRequest{Title: "t", Body: "b"})
+		},
+		"schedule": func(c *Client) error {
+			_, err := c.ScheduleNotification(context.Background(), ScheduleNotificationRequest{
+				SendNotificationRequest: SendNotificationRequest{Title: "t", Body: "b"},
+				SendAt:                  time.Now().Add(time.Hour),
+			})
+			return err
+		},
+	}
+	for name, send := range sends {
+		t.Run(name, func(t *testing.T) {
+			var keys []string
+			var calls atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				keys = append(keys, r.Header.Get("Idempotency-Key"))
+				if calls.Add(1) == 1 {
+					w.WriteHeader(http.StatusBadGateway)
+					return
+				}
+				w.WriteHeader(http.StatusCreated)
+				_, _ = w.Write([]byte(`{"id":1}`))
+			}))
+			defer srv.Close()
+			c := NewClient(srv.URL, "hlk_test")
+
+			if err := send(c); err != nil {
+				t.Fatal(err)
+			}
+			if len(keys) != 2 || keys[0] == "" || keys[0] != keys[1] {
+				t.Fatalf("keys across one call's attempts = %q, want one non-empty key twice", keys)
+			}
+			if err := send(c); err != nil {
+				t.Fatal(err)
+			}
+			if keys[2] == keys[0] {
+				t.Fatal("a second call reused the first call's key")
+			}
+		})
+	}
+}
