@@ -170,15 +170,6 @@ func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 	return c
 }
 
-// doWithRetry executes an HTTP request with exponential backoff and jitter.
-// It handles 429 rate limiting (Retry-After header), retries on 5xx and network
-// errors, and returns immediately on 2xx or non-retryable 4xx errors.
-// The handleConflict callback, if non-nil, is invoked on 409 responses; it
-// receives the response body and returns (done bool, err error). If done is
-// true, doWithRetry returns err immediately.
-// If contentType is empty, "application/json" is used. Widget PATCH requests
-// must pass "application/merge-patch+json" to satisfy RFC 7396 content
-// negotiation enforced by pushward-server.
 // idempotencyKeyCtx carries the Idempotency-Key of one call into
 // doWithRetryInto, which sends it on every attempt.
 type idempotencyKeyCtx struct{}
@@ -190,8 +181,18 @@ func withIdempotencyKey(ctx context.Context) context.Context {
 	return context.WithValue(ctx, idempotencyKeyCtx{}, crand.Text())
 }
 
-// doWithRetry runs a request whose success body is not needed. It is the
-// common case: every write in this client discards the 2xx body.
+// doWithRetry executes an HTTP request with exponential backoff and jitter.
+// It handles 429 rate limiting (Retry-After header), retries on 5xx and network
+// errors, and returns immediately on 2xx or non-retryable 4xx errors.
+// The handleConflict callback, if non-nil, is invoked on 409 responses; it
+// receives the response body and returns (done bool, err error). If done is
+// true, doWithRetry returns err immediately.
+// If contentType is empty, "application/json" is used. Widget PATCH requests
+// must pass "application/merge-patch+json" to satisfy RFC 7396 content
+// negotiation enforced by pushward-server.
+//
+// It runs a request whose success body is not needed. It is the common case:
+// every write in this client discards the 2xx body.
 func (c *Client) doWithRetry(ctx context.Context, operation, method, url, contentType string, body interface{}, handleConflict func([]byte) (bool, error)) error {
 	return c.doWithRetryInto(ctx, operation, method, url, contentType, body, handleConflict, nil)
 }
