@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -2134,5 +2135,90 @@ func TestTrackPostProcessing_GivesUpOnAHistoryThatNeverAnswers(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("post-processing kept waiting on a history that never answers")
+	}
+}
+
+// pwStates lists the content.state of every PATCH the tracker sent, with the
+// activity state of the last one.
+func pwStates(t *testing.T, calls []testutil.APICall) (states []string, last string) {
+	t.Helper()
+	for _, c := range calls {
+		if c.Method != http.MethodPatch {
+			continue
+		}
+		var req pushward.UpdateRequest
+		testutil.UnmarshalBody(t, c.Body, &req)
+		states = append(states, req.Content.State)
+		last = req.State
+	}
+	return states, last
+}
+
+// A SABnzbd that is unreachable when a session starts is asked again until it
+// answers. Once its history shows nothing processing, the session ends as
+// "No downloads" without showing an unpack that never ran.
+func TestTrack_UnreachableAtStartEndsOnceHistoryAnswers(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	var reads int
+	sabMk.mu.Lock()
+	sabMk.queueErr = true
+	sabMk.historyErrFn = func() bool {
+		reads++
+		return reads <= 3
+	}
+	sabMk.mu.Unlock()
+
+	tr := New(testConfig(), sabnzbd.NewClient(sabSrv.URL, "test-key"), pushward.NewClient(pwSrv.URL, "hlk_test"))
+	done := make(chan struct{})
+	go func() {
+		tr.track(context.Background(), false)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the session never ended")
+	}
+
+	states, last := pwStates(t, testutil.GetCalls(calls, mu))
+	if slices.Contains(states, "Unpacking...") {
+		t.Errorf("card showed an unpack that never ran: %v", states)
+	}
+	if len(states) == 0 || states[len(states)-1] != "No downloads" || last != pushward.StateEnded {
+		t.Errorf("updates %v ending %s, want a final No downloads ENDED", states, last)
+	}
+	sabMk.mu.Lock()
+	defer sabMk.mu.Unlock()
+	if reads < 4 {
+		t.Errorf("history read %d times, want it asked again until it answered", reads)
+	}
+}
+
+// A SABnzbd that never answers at session start releases the session after
+// the stale timeout instead of holding it.
+func TestTrack_UnreachableAtStartGivesUp(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	pwSrv, calls, mu := testutil.MockPushWardServer(t)
+	sabMk.mu.Lock()
+	sabMk.queueErr = true
+	sabMk.historyErr = true
+	sabMk.mu.Unlock()
+
+	cfg := testConfig()
+	cfg.PushWard.StaleTimeout = 100 * time.Millisecond
+	tr := New(cfg, sabnzbd.NewClient(sabSrv.URL, "test-key"), pushward.NewClient(pwSrv.URL, "hlk_test"))
+	done := make(chan struct{})
+	go func() {
+		tr.track(context.Background(), false)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the session kept waiting on a SABnzbd that never answers")
+	}
+	if states, last := pwStates(t, testutil.GetCalls(calls, mu)); last != pushward.StateEnded || slices.Contains(states, "Unpacking...") {
+		t.Errorf("updates %v ending %s, want an ENDED with no unpack", states, last)
 	}
 }

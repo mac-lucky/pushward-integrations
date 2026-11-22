@@ -397,15 +397,13 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		// give up when there is also no active post-processing - otherwise fall
 		// through to the main loop, which tracks the unpack and ends with the
 		// real completion summary.
-		// A failed history read is not "no post-processing": fall through and
-		// let trackPostProcessing find out.
-		if pp, _, err := t.getPPStatus(ctx); pp == "" && err == nil {
+		if !t.workAtStart(ctx) {
 			slog.Warn("SABnzbd never started downloading, giving up")
 			// Nothing happened, so there is nothing to come back and read.
 			_ = t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", pushward.ColorGreen, nil, "", pushward.StateEnded, nil, dismissImmediately)
 			return
 		}
-		slog.Info("queue idle but post-processing active, tracking post-processing")
+		slog.Info("work found after an idle queue, tracking it")
 	}
 
 	var totalPPElapsed time.Duration
@@ -544,6 +542,38 @@ func (t *Tracker) waitForQueueActive(ctx context.Context, maxPolls int) bool {
 		timer.Reset(interval)
 	}
 	return false
+}
+
+// workAtStart reports whether a session whose queue stayed idle has anything
+// to track: post-processing in history, or a queue that became active. A
+// failed history read is not "no post-processing", so it is retried, checking
+// the queue too, until either answers; a SABnzbd that stays unreachable for
+// the stale timeout releases the session.
+func (t *Tracker) workAtStart(ctx context.Context) bool {
+	interval := t.cfg.Polling.Interval
+	since := time.Now()
+	for errs := 1; ; errs++ {
+		pp, _, err := t.getPPStatus(ctx)
+		if err == nil {
+			return pp != ""
+		}
+		if ctx.Err() != nil || time.Since(since) >= t.historyGiveUp() {
+			slog.Warn("history unreachable at session start, giving up", "error", err, "since", since)
+			return false
+		}
+		backoff := backoffDuration(errs, interval, 5*interval)
+		slog.Warn("failed to fetch history at session start", "error", err, "backoff", backoff)
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return false
+		case <-timer.C:
+		}
+		if t.waitForQueueActive(ctx, 1) {
+			return true
+		}
+	}
 }
 
 // trackDownloads polls the queue until it goes idle.
