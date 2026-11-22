@@ -218,7 +218,7 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	existing := h.active[mapKey]
 	isNew := existing == nil
 	mine := existing // the entry this call works for; see owns
-	var polledExpr string
+	var polled bool
 	if isNew {
 		if len(h.active) >= activeAlertCap {
 			h.mu.Unlock()
@@ -236,7 +236,9 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	} else {
 		existing.lastSeen = time.Now()
 		existing.fingerprints[a.Fingerprint] = struct{}{}
-		polledExpr = existing.expr
+		// lastValues is set only by a history fetch or a poll that worked, so
+		// it tells a query the metrics backend runs from one it cannot.
+		polled = len(existing.lastValues) > 0
 	}
 	h.mu.Unlock()
 
@@ -246,7 +248,9 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 	// the series, so update everything but the values (nil Value is omitted
 	// and merge-patch keeps the stored ones). The webhook's own values carry
 	// alertname or ref-ID keys that would add a phantom series to the chart.
-	if polledExpr != "" {
+	// A card whose query never produced values keeps the webhook's values,
+	// under the same keys its first firing set.
+	if polled {
 		if !h.owns(mapKey, mine) {
 			return
 		}
@@ -346,7 +350,7 @@ func (h *Handler) handleFiring(ctx context.Context, a alert) {
 		h.mu.Unlock()
 	}
 
-	if isNew && expr != "" && h.startPoller(mapKey, mine, func() { h.poller.Start(slug, expr, seriesLabel) }) {
+	if isNew && expr != "" && h.startPoller(mapKey, mine, func() { h.poller.Start(slug, expr, seriesLabel, values) }) {
 		logger.Info("poller started")
 	}
 }

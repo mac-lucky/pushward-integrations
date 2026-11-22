@@ -56,6 +56,20 @@ func (s seriesKeys) next(values map[string]float64) (sent map[string]float64, pa
 	return sent, patch, keys
 }
 
+// missed returns s after a tick whose send failed: no key joins or leaves, but
+// the miss counters still move, so a key past the grace is nulled again on the
+// next tick and a refused patch cannot hold the card's dead series forever.
+func (s seriesKeys) missed(values map[string]float64) seriesKeys {
+	keys := make(seriesKeys, len(s))
+	for k, n := range s {
+		if _, ok := values[k]; ok {
+			n = -1
+		}
+		keys[k] = n + 1
+	}
+	return keys
+}
+
 // UpdateCallback is invoked after each successful poll with the values sent.
 // Used by the handler to track the last series keys and values per slug so
 // they can be reused on alert resolve (keeping keys stable prevents the
@@ -88,9 +102,11 @@ func New(metricsClient *metrics.Client, pwClient *pushward.Client, interval time
 // Start begins polling for the given slug and PromQL expression.
 // seriesLabel is the preferred metric label to use as series key (can be empty for auto-detect).
 // No-op if already polling for this slug. Use Start when the firing webhook has
-// already seeded the activity's timeline template/styling.
-func (p *Poller) Start(slug, expr, seriesLabel string) {
-	p.StartWithSeed(slug, expr, seriesLabel, nil)
+// already seeded the activity's timeline template/styling; onCard is the values
+// that update put on the card, so their keys count toward the series cap and
+// leave through the same grace as the poller's own.
+func (p *Poller) Start(slug, expr, seriesLabel string, onCard map[string]float64) {
+	p.start(slug, expr, seriesLabel, nil, onCard)
 }
 
 // StartWithSeed is like Start but, when seed is non-nil, the poller sends a full
@@ -99,6 +115,10 @@ func (p *Poller) Start(slug, expr, seriesLabel string) {
 // webhook had no values to seed with, so the activity would otherwise be left on
 // the generic template while ONGOING.
 func (p *Poller) StartWithSeed(slug, expr, seriesLabel string, seed *pushward.Content) {
+	p.start(slug, expr, seriesLabel, seed, nil)
+}
+
+func (p *Poller) start(slug, expr, seriesLabel string, seed *pushward.Content, onCard map[string]float64) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
@@ -109,7 +129,11 @@ func (p *Poller) StartWithSeed(slug, expr, seriesLabel string, seed *pushward.Co
 	ctx, cancel := context.WithCancel(context.Background()) // #nosec G118 -- cancel is stored in p.active and called in Stop/StopAll
 	p.active[slug] = cancel
 	p.wg.Add(1)
-	go p.run(ctx, slug, expr, seriesLabel, seed)
+	keys := make(seriesKeys, len(onCard))
+	for k := range onCard {
+		keys[k] = 0
+	}
+	go p.run(ctx, slug, expr, seriesLabel, seed, keys)
 }
 
 // Stop cancels the polling goroutine for the given slug.
@@ -157,7 +181,7 @@ func (p *Poller) SetUpdateCallback(cb UpdateCallback) {
 	p.mu.Unlock()
 }
 
-func (p *Poller) run(ctx context.Context, slug, expr, seriesLabel string, seed *pushward.Content) {
+func (p *Poller) run(ctx context.Context, slug, expr, seriesLabel string, seed *pushward.Content, keys seriesKeys) {
 	defer p.wg.Done()
 
 	logger := slog.With("slug", slug)
@@ -167,7 +191,6 @@ func (p *Poller) run(ctx context.Context, slug, expr, seriesLabel string, seed *
 	// seeded is false only when the firing webhook couldn't seed the activity
 	// (no values); the first successful tick then sends the full timeline seed.
 	seeded := seed == nil
-	keys := seriesKeys{}
 
 	for {
 		select {
@@ -216,6 +239,7 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seri
 			if ctx.Err() != nil {
 				return seeded
 			}
+			*keys = keys.missed(values)
 			logger.Warn("poll seed update failed", "error", err)
 			return seeded
 		}
@@ -231,6 +255,7 @@ func (p *Poller) poll(ctx context.Context, logger *slog.Logger, slug, expr, seri
 			if ctx.Err() != nil {
 				return seeded
 			}
+			*keys = keys.missed(values)
 			logger.Warn("poll update failed", "error", err)
 			return seeded
 		}

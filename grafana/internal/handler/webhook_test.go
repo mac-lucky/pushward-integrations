@@ -839,6 +839,40 @@ func TestWebhook_RepeatFiringKeepsThePollerSeries(t *testing.T) {
 	}
 }
 
+// A query the metrics backend cannot run (a Grafana macro, a Loki expression)
+// never gives the poller values, so a repeat firing keeps refreshing the card
+// from the webhook's values, under the key the first firing set.
+func TestWebhook_RepeatFiringWithoutPolledValuesSendsWebhookValues(t *testing.T) {
+	pw := newMockPWServer()
+	defer pw.close()
+	promSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"status":"error","errorType":"bad_data","error":"parse error"}`))
+	}))
+	defer promSrv.Close()
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	mc := metrics.NewClient(promSrv.URL)
+	p := poller.New(mc, pwClient, time.Hour)
+	defer p.StopAll()
+	h := NewHandler(pwClient, mc, nil, p, Config{})
+
+	fire := func(v string) {
+		fireWebhook(t, h, `{"status":"firing","alerts":[{"status":"firing","labels":{"alertname":"Rate"},"annotations":{"pushward_query":"rate(x[$__rate_interval]) > 5"},"values":{"A":`+v+`},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"f1"}]}`)
+	}
+	fire("7")
+	fire("12")
+
+	updates := pw.getUpdates()
+	if len(updates) != 2 {
+		t.Fatalf("updates = %d, want 2", len(updates))
+	}
+	got, _ := json.Marshal(updates[1].Content.Value)
+	if string(got) != `{"Rate":12}` {
+		t.Errorf("repeat firing sent value %s, want {\"Rate\":12}", got)
+	}
+}
+
 // A resolve that lands while the firing call is still creating the activity
 // ends the alert; the firing call must not then reopen it or start a poller
 // nobody stops.
