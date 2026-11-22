@@ -1,6 +1,8 @@
 package gitea
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -354,5 +356,51 @@ func TestGiteaOmitsColorsWeightsAndLiveProgress(t *testing.T) {
 	}
 	if !sawSteps {
 		t.Fatal("no steps frame was sent, so the assertion above proved nothing")
+	}
+}
+
+// racingStore writes a sibling job's row right after the next GetGroup, as a
+// job event handled at the same moment would.
+type racingStore struct {
+	state.Store
+	mu     sync.Mutex
+	inject func()
+}
+
+func (s *racingStore) GetGroup(ctx context.Context, provider, userKey, key string) (map[string]json.RawMessage, error) {
+	g, err := s.Store.GetGroup(ctx, provider, userKey, key)
+	s.mu.Lock()
+	inject := s.inject
+	s.inject = nil
+	s.mu.Unlock()
+	if inject != nil {
+		inject()
+	}
+	return g, err
+}
+
+// Two job events for one run handled at once must not drop each other from
+// the frame: each builds it from a read taken after its own write.
+func TestGiteaJobFrameIncludesAConcurrentSibling(t *testing.T) {
+	lifecycle.SetRetryDelay(10 * time.Millisecond)
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	store := &racingStore{Store: state.NewMemoryStore()}
+	mux, api := humautil.NewTestAPI()
+	RegisterRoutes(api, store, client.NewPool(srv.URL, nil), testConfig())
+
+	send(t, mux, "/gitea", runBody("requested", "queued", "", 42))
+	sibling, _ := json.Marshal(jobRecord{ID: 101, Name: "Test", Status: "in_progress"})
+	store.mu.Lock()
+	store.inject = func() {
+		_ = store.Set(context.Background(), "gitea", "hlk_test", giteaSlug("acme/app"), "job:101", sibling, time.Hour)
+	}
+	store.mu.Unlock()
+	send(t, mux, "/gitea", jobBody("in_progress", "in_progress", "", "Build", 100, 42))
+
+	recorded := testutil.GetCalls(calls, mu)
+	var last pushward.UpdateRequest
+	testutil.UnmarshalBody(t, recorded[len(recorded)-1].Body, &last)
+	if last.Content.TotalSteps == nil || *last.Content.TotalSteps != 2 {
+		t.Fatalf("total_steps = %v, want both jobs in the frame", last.Content.TotalSteps)
 	}
 }

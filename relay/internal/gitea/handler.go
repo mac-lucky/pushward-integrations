@@ -204,6 +204,10 @@ func (h *Handler) runCompleted(ctx context.Context, userKey string, log *slog.Lo
 		log.Warn("failed to store completed run tombstone", "slug", slug, "error", err)
 	}
 
+	// Re-read so job rows a concurrent event wrote since the first read count.
+	if fresh := h.getGroup(ctx, log, userKey, slug); fresh != nil {
+		group = fresh
+	}
 	content := h.completedContent(p.Repository.FullName, &rec, run.Conclusion, parseJobs(group))
 	h.ender.ScheduleEnd(userKey, slug, slug, content)
 	log.Info("gitea run completed", "slug", slug, "run_id", run.ID, "conclusion", run.Conclusion)
@@ -251,6 +255,11 @@ func (h *Handler) handleJob(ctx context.Context, userKey string, log *slog.Logge
 	jr := jobRecord{ID: job.ID, Name: job.Name, Status: job.Status, Conclusion: job.Conclusion}
 	if err := h.putJob(ctx, userKey, slug, jr); err != nil {
 		log.Error("failed to store job, continuing", "slug", slug, "error", err)
+	}
+	// Build the frame from a read taken after this job's write, so a sibling
+	// job event handled at the same time is not shown at its older status.
+	if fresh := h.getGroup(ctx, log, userKey, slug); fresh != nil {
+		group = fresh
 	}
 	jobs := upsertJob(parseJobs(group), jr)
 
