@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
-	"net/http"
 	"strings"
 )
 
@@ -81,21 +80,4 @@ func ExtractKey(authHeader string) string {
 	}
 
 	return ""
-}
-
-// Middleware extracts the hlk_ integration key from the request.
-// Returns 401 if no valid key is found.
-func Middleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		key := ExtractKey(r.Header.Get("Authorization"))
-		if key == "" {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusUnauthorized)
-			_, _ = w.Write([]byte(`{"error":"missing or invalid integration key"}`))
-			return
-		}
-
-		ctx := context.WithValue(r.Context(), contextKey{}, key)
-		next.ServeHTTP(w, r.WithContext(ctx))
-	})
 }
