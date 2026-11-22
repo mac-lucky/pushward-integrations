@@ -204,7 +204,7 @@ func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 	e.wg.Add(1)
 	tp.phase1 = time.AfterFunc(e.config.EndDelay, func() {
 		defer e.wg.Done()
-		if !e.ownsEnd(tp) {
+		if !e.ownsEnd(context.Background(), tp) {
 			e.dropCancelled(timerKey, myGen, onComplete)
 			return
 		}
@@ -229,7 +229,7 @@ func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 		e.wg.Add(1)
 		tp.phase2 = time.AfterFunc(e.config.EndDisplayTime, func() {
 			defer e.wg.Done()
-			if !e.ownsEnd(tp) {
+			if !e.ownsEnd(context.Background(), tp) {
 				e.dropCancelled(timerKey, myGen, onComplete)
 				return
 			}
@@ -255,7 +255,7 @@ func (e *Ender) scheduleEnd(userKey, mapKey, slug string, content pushward.Conte
 				cur, ok := e.timers[timerKey]
 				mine := ok && cur.gen == myGen
 				e.mu.Unlock()
-				if mine && e.ownsEnd(tp) {
+				if mine && e.ownsEnd(context.Background(), tp) {
 					delCtx, delCancel := context.WithTimeout(context.Background(), 5*time.Second)
 					if err := e.store.Delete(delCtx, e.provider, userKey, mapKey, ""); err != nil {
 						slog.Warn("state store delete failed", "error", err, "provider", e.provider)
@@ -311,11 +311,11 @@ func (e *Ender) writeToken(userKey, mapKey string) string {
 
 // ownsEnd reports whether the store still holds tp's end token. It fails open:
 // with no token or on a read error the sequence goes ahead as it always did.
-func (e *Ender) ownsEnd(tp *timerPair) bool {
+func (e *Ender) ownsEnd(ctx context.Context, tp *timerPair) bool {
 	if e.store == nil || tp.token == "" {
 		return true
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	raw, err := e.store.Get(ctx, e.provider, tp.userKey, tp.mapKey, endTokenSubKey)
 	if err != nil {
@@ -414,9 +414,9 @@ func (e *Ender) StopAll() {
 }
 
 // FlushAll stops all pending ender timers and immediately sends an ENDED
-// update for each. Use this during graceful shutdown instead of StopAll to
-// ensure activities are properly ended before the process exits.
-func (e *Ender) FlushAll() {
+// update for each, within ctx. Use this during graceful shutdown instead of
+// StopAll to ensure activities are properly ended before the process exits.
+func (e *Ender) FlushAll(ctx context.Context) {
 	e.shutdownCancel() // signal in-flight retry sleeps to bail early
 
 	e.mu.Lock()
@@ -442,15 +442,12 @@ func (e *Ender) FlushAll() {
 	// landing after our ENDED update.
 	e.wg.Wait()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	for i, tp := range pending {
 		if ctx.Err() != nil {
 			slog.Warn("flush timed out, dropping remaining enders", "remaining", len(pending)-i)
 			break
 		}
-		if !e.ownsEnd(tp) {
+		if !e.ownsEnd(ctx, tp) {
 			continue // another replica cancelled or took over this end
 		}
 		cl := e.clients.Get(tp.userKey)

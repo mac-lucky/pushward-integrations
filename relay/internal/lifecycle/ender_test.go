@@ -119,7 +119,7 @@ func TestFlushAll_SendsEndedPush(t *testing.T) {
 	e.ScheduleEnd("user1", "key1", "slug-a", pushward.Content{State: "done"})
 	e.ScheduleEnd("user1", "key2", "slug-b", pushward.Content{State: "done"})
 
-	e.FlushAll()
+	e.FlushAll(context.Background())
 	e.Wait()
 
 	if got := endedCalls.Load(); got != 2 {
@@ -147,7 +147,7 @@ func TestFlushAll_CleansStateStore(t *testing.T) {
 	e.ScheduleEnd("user1", "key1", "slug-a", pushward.Content{State: "done"})
 	e.ScheduleEnd("user1", "key2", "slug-b", pushward.Content{State: "done"})
 
-	e.FlushAll()
+	e.FlushAll(context.Background())
 	e.Wait()
 
 	// Verify state store entries were deleted.
@@ -319,5 +319,26 @@ func TestEndGoesAheadWhenTheTokenCannotBeRead(t *testing.T) {
 	e.Wait()
 	if got := patches.Load(); got != 2 {
 		t.Fatalf("expected both phases to send, got %d PATCHes", got)
+	}
+}
+
+// FlushAll spends the caller's deadline, shared by every ender at shutdown,
+// instead of a budget of its own.
+func TestFlushAll_HonoursTheCallersDeadline(t *testing.T) {
+	var patches atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		patches.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	e := newTestEnder(client.NewPool(srv.URL, nil), nil)
+	e.ScheduleEnd("user1", "key1", "slug-a", pushward.Content{State: "done"})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	e.FlushAll(ctx)
+	e.Wait()
+	if got := patches.Load(); got != 0 {
+		t.Fatalf("flush past its deadline sent %d updates, want 0", got)
 	}
 }

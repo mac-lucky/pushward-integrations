@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -30,6 +31,10 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/server"
 	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 )
+
+// flushBudget bounds the shutdown flush of every ender together. With the
+// HTTP drain's 5s it stays well inside the default 30s termination grace.
+const flushBudget = 15 * time.Second
 
 func main() {
 	configPath := flag.String("config", "config.yml", "path to config file")
@@ -260,10 +265,15 @@ func main() {
 		providers.argocd.StopAll()
 	}
 
-	// Flush all pending ender timers (send ENDED immediately), then wait for in-flight callbacks.
+	// Flush all pending ender timers (send ENDED immediately), side by side
+	// under one deadline, then wait for in-flight callbacks.
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), flushBudget)
+	var flushes sync.WaitGroup
 	for _, e := range providers.enders {
-		e.FlushAll()
+		flushes.Go(func() { e.FlushAll(flushCtx) })
 	}
+	flushes.Wait()
+	flushCancel()
 	for _, e := range providers.enders {
 		e.Wait()
 	}
