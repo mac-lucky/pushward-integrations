@@ -2,7 +2,10 @@ package tracker
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -837,8 +840,9 @@ func TestProcess_DebounceSuppressAndRelease(t *testing.T) {
 	// Content-based suppression must hold even once the poll interval has fully
 	// elapsed: a byte-identical frame is never re-pushed. This fails if the
 	// debounce reverts to a pure time-based check.
+	// (Inside the stale heartbeat, which re-sends an identical frame.)
 	cfg.Polling.UpdateInterval = time.Millisecond
-	tr.lastTickAt = time.Now().Add(-time.Hour)
+	tr.lastTickAt = time.Now().Add(-time.Minute)
 	tr.process(ctx)
 	if got := patchCount(); got != base+1 {
 		t.Fatalf("identical frame past interval: PATCH count = %d, want %d (suppressed)", got, base+1)
@@ -1054,5 +1058,87 @@ func TestEndActivity_Immediate(t *testing.T) {
 	}
 	if req.Content.State != "Cancelled" {
 		t.Errorf("content state = %q, want Cancelled", req.Content.State)
+	}
+}
+
+// A pause longer than the stale timeout sends no changing frame, so the
+// heartbeat must re-send the identical one before the server ends the card.
+func TestProcess_HeartbeatKeepsALongPauseAlive(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig() // stale_timeout 60m: heartbeat every 30m
+	printer := newMockPrinter()
+	tr := newTestTracker(printer, pushward.NewClient(srv.URL, "hlk_test"), cfg)
+	ctx := context.Background()
+
+	printer.SetState(bambulab.MergedState{GcodeState: bambulab.StatePause, SubtaskName: "Part.3mf", Percent: 40})
+	tr.process(ctx)
+	patches := func() int {
+		n := 0
+		for _, c := range testutil.GetCalls(calls, mu) {
+			if c.Method == "PATCH" {
+				n++
+			}
+		}
+		return n
+	}
+	base := patches()
+
+	tr.lastTickAt = time.Now().Add(-29 * time.Minute)
+	tr.process(ctx)
+	if got := patches(); got != base {
+		t.Fatalf("identical frame inside the heartbeat: %d PATCHes, want %d", got, base)
+	}
+	tr.lastTickAt = time.Now().Add(-31 * time.Minute)
+	tr.process(ctx)
+	if got := patches(); got != base+1 {
+		t.Fatalf("identical frame past the heartbeat: %d PATCHes, want %d", got, base+1)
+	}
+}
+
+// A refused CreateActivity is retried after a growing pause, not on every
+// MQTT report, and a success resets the pause.
+func TestProcess_FailedStartBacksOff(t *testing.T) {
+	var creates atomic.Int32
+	var refuse atomic.Bool
+	refuse.Store(true)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			creates.Add(1)
+			if refuse.Load() {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	cfg := testConfig()
+	printer := newMockPrinter()
+	tr := newTestTracker(printer, pushward.NewClient(srv.URL, "hlk_test"), cfg)
+	ctx := context.Background()
+	printer.SetState(bambulab.MergedState{GcodeState: bambulab.StateRunning, Percent: 10})
+
+	for range 5 {
+		tr.process(ctx)
+	}
+	if got := creates.Load(); got != 1 {
+		t.Fatalf("creates after 5 reports = %d, want 1", got)
+	}
+	if d := time.Until(tr.nextStartAttempt); d <= 0 || d > cfg.Polling.UpdateInterval {
+		t.Fatalf("first retry in %v, want within the poll interval %v", d, cfg.Polling.UpdateInterval)
+	}
+
+	tr.nextStartAttempt = time.Now().Add(-time.Second)
+	tr.process(ctx)
+	if d := time.Until(tr.nextStartAttempt); d <= cfg.Polling.UpdateInterval {
+		t.Fatalf("second retry in %v, want the pause doubled", d)
+	}
+
+	refuse.Store(false)
+	tr.nextStartAttempt = time.Now().Add(-time.Second)
+	tr.process(ctx)
+	if !tr.tracking || tr.startFailures != 0 {
+		t.Fatalf("tracking=%v failures=%d after a successful start", tr.tracking, tr.startFailures)
 	}
 }

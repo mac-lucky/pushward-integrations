@@ -11,6 +11,7 @@ import (
 
 	"github.com/mac-lucky/pushward-integrations/bambulab/internal/bambulab"
 	"github.com/mac-lucky/pushward-integrations/bambulab/internal/config"
+	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/syncx"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
@@ -22,6 +23,14 @@ const slugPrefix = "bambu"
 // two-phase-end phases and the shutdown-path final ENDED send - so a stuck
 // PushWard call cannot block endTimers.Wait at shutdown indefinitely.
 const detachedEndTimeout = 30 * time.Second
+
+// maxStartBackoff caps the pause between attempts to open a print's activity
+// after the server refused it (account limit, revoked key).
+const maxStartBackoff = 5 * time.Minute
+
+// minHeartbeat floors the identical-frame heartbeat that keeps a long pause
+// inside the server's stale timeout.
+const minHeartbeat = 30 * time.Second
 
 // frame is the comparable projection of a derived Live-Activity frame, used to
 // suppress re-pushing byte-identical content (e.g. the constant "Preparing..."
@@ -55,6 +64,11 @@ type Tracker struct {
 	lastState  string    // last gcode_state we acted on
 	lastTickAt time.Time // last progress PATCH; debounces same-state ticks driven by MQTT updates
 	lastFrame  frame     // last frame sent; suppresses re-pushing identical content
+
+	// nextStartAttempt and startFailures back off a failing CreateActivity or
+	// seed, which would otherwise be retried on every MQTT report.
+	nextStartAttempt time.Time
+	startFailures    int
 
 	endTimers syncx.TimerGroup // two-phase end scheduling
 
@@ -163,7 +177,10 @@ func (t *Tracker) process(ctx context.Context) {
 		// cadence while entirely suppressing the constant PREPARE frame
 		// (deriveFrame ignores progress for PREPARE) instead of re-pushing
 		// byte-identical content every interval.
-		if state.GcodeState != t.lastState || (f != t.lastFrame && time.Since(t.lastTickAt) >= t.cfg.Polling.UpdateInterval) {
+		// The heartbeat re-sends an unchanged frame (a long pause) before the
+		// server's stale timeout ends the activity mid-print.
+		sinceTick := time.Since(t.lastTickAt)
+		if state.GcodeState != t.lastState || (f != t.lastFrame && sinceTick >= t.cfg.Polling.UpdateInterval) || sinceTick >= t.heartbeat() {
 			t.lastTickAt = time.Now()
 			t.lastFrame = f
 			t.send(ctx, f, pushward.StateOngoing)
@@ -173,7 +190,20 @@ func (t *Tracker) process(ctx context.Context) {
 	t.lastState = state.GcodeState
 }
 
+// heartbeat is half the stale timeout (the shared default when unset), at
+// least minHeartbeat.
+func (t *Tracker) heartbeat() time.Duration {
+	stale := t.cfg.PushWard.StaleTimeout
+	if stale <= 0 {
+		stale = sharedconfig.DefaultPushWardConfig().StaleTimeout
+	}
+	return max(stale/2, minHeartbeat)
+}
+
 func (t *Tracker) startTracking(ctx context.Context, state *bambulab.MergedState) {
+	if time.Now().Before(t.nextStartAttempt) {
+		return
+	}
 	t.endTimers.Stop()
 	// Invalidate any in-flight two-phase-end callback from the previous
 	// session so it cannot end this new print's activity (the slug is constant
@@ -184,22 +214,35 @@ func (t *Tracker) startTracking(ctx context.Context, state *bambulab.MergedState
 	staleTTL := int(t.cfg.PushWard.StaleTimeout.Seconds())
 
 	if err := t.pw.CreateActivity(ctx, t.slug, printName(state), t.cfg.PushWard.Priority, endedTTL, staleTTL, t.cfg.PushWard.CreateOptions()...); err != nil {
-		slog.Error("failed to create activity", "error", err)
+		slog.Error("failed to create activity", "error", err, "retry_in", t.backOffStart())
 		return
 	}
 
 	f := deriveFrame(state)
 	if err := t.sendSeed(ctx, f, pushward.StateOngoing); err != nil {
-		slog.Error("failed to seed activity", "error", err)
+		slog.Error("failed to seed activity", "error", err, "retry_in", t.backOffStart())
 		return
 	}
 
+	t.nextStartAttempt, t.startFailures = time.Time{}, 0
 	t.tracking = true
 	t.lastState = state.GcodeState
 	// Seed the debounce baseline so the next same-state tick is deferred one poll
 	// interval past the seed and identical content isn't immediately re-pushed.
 	t.lastTickAt = time.Now()
 	t.lastFrame = f
+}
+
+// backOffStart pushes the next start attempt out: the poll interval, doubled
+// on each consecutive failure up to maxStartBackoff. It returns the delay.
+func (t *Tracker) backOffStart() time.Duration {
+	t.startFailures++
+	d := t.cfg.Polling.UpdateInterval << min(t.startFailures-1, 10)
+	if d <= 0 || d > maxStartBackoff {
+		d = maxStartBackoff
+	}
+	t.nextStartAttempt = time.Now().Add(d)
+	return d
 }
 
 // printName is the activity title: the sliced file's base name. subtask_name is
