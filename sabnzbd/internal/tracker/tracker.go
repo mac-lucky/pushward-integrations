@@ -17,6 +17,7 @@ import (
 	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/config"
 	"github.com/mac-lucky/pushward-integrations/sabnzbd/internal/sabnzbd"
 	sharedauth "github.com/mac-lucky/pushward-integrations/shared/auth"
+	sharedconfig "github.com/mac-lucky/pushward-integrations/shared/config"
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 	"github.com/mac-lucky/pushward-integrations/shared/text"
 )
@@ -134,7 +135,10 @@ func (t *Tracker) ResumeIfActive(ctx context.Context) bool {
 		return true
 	}
 
-	ppStatus, _ := t.getPPStatus(ctx)
+	ppStatus, _, err := t.getPPStatus(ctx)
+	if err != nil {
+		slog.Warn("failed to fetch history", "error", err)
+	}
 	if ppStatus != "" {
 		slog.Info("active post-processing found on startup, resuming tracking", "status", ppStatus)
 		t.mu.Lock()
@@ -393,7 +397,9 @@ func (t *Tracker) track(ctx context.Context, resumed bool) {
 		// give up when there is also no active post-processing - otherwise fall
 		// through to the main loop, which tracks the unpack and ends with the
 		// real completion summary.
-		if pp, _ := t.getPPStatus(ctx); pp == "" {
+		// A failed history read is not "no post-processing": fall through and
+		// let trackPostProcessing find out.
+		if pp, _, err := t.getPPStatus(ctx); pp == "" && err == nil {
 			slog.Warn("SABnzbd never started downloading, giving up")
 			// Nothing happened, so there is nothing to come back and read.
 			_ = t.send(ctx, 0.0, "No downloads", "checkmark.circle.fill", pushward.ColorGreen, nil, "", pushward.StateEnded, nil, dismissImmediately)
@@ -584,7 +590,12 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 	_ = t.send(ctx, 1.0, "Unpacking...", "archivebox", pushward.ColorOrange, nil, "", pushward.StateOngoing, nil)
 	ppStart := time.Now()
 
-	timer := time.NewTimer(t.cfg.Polling.Interval)
+	interval := t.cfg.Polling.Interval
+	maxBackoff := 5 * interval
+	consecutiveErrs := 0
+	var errSince time.Time
+
+	timer := time.NewTimer(interval)
 	defer timer.Stop()
 
 	for {
@@ -594,7 +605,25 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 		case <-timer.C:
 		}
 
-		ppStatus, ppName := t.getPPStatus(ctx)
+		ppStatus, ppName, err := t.getPPStatus(ctx)
+		if err != nil {
+			// Only a history that answers ends post-processing. A SABnzbd
+			// that stays unreachable for a whole stale timeout releases the
+			// session rather than holding it forever.
+			if consecutiveErrs == 0 {
+				errSince = time.Now()
+			}
+			consecutiveErrs++
+			if time.Since(errSince) >= t.historyGiveUp() {
+				slog.Warn("history unreachable for the stale timeout, ending post-processing", "since", errSince)
+				break
+			}
+			backoff := backoffDuration(consecutiveErrs, interval, maxBackoff)
+			slog.Warn("failed to fetch history", "error", err, "backoff", backoff)
+			timer.Reset(backoff)
+			continue
+		}
+		consecutiveErrs = 0
 		if ppStatus == "" {
 			break
 		}
@@ -609,7 +638,7 @@ func (t *Tracker) trackPostProcessing(ctx context.Context) time.Duration {
 				t.recordSent(1.0, 0, ppStatus, subtitle)
 			}
 		}
-		timer.Reset(t.cfg.Polling.Interval)
+		timer.Reset(interval)
 	}
 
 	elapsed := time.Since(ppStart)
@@ -765,20 +794,29 @@ func (t *Tracker) recordSent(progress, speedMB float64, mode, subtitle string) {
 	t.lastSendTime = time.Now()
 }
 
+// historyGiveUp is how long post-processing keeps waiting on a history that
+// does not answer: the stale timeout, or the shared default when it is unset.
+func (t *Tracker) historyGiveUp() time.Duration {
+	if d := t.cfg.PushWard.StaleTimeout; d > 0 {
+		return d
+	}
+	return sharedconfig.DefaultPushWardConfig().StaleTimeout
+}
+
 // getPPStatus checks history for active post-processing jobs.
-// Returns the status and name, or empty strings if none found.
-func (t *Tracker) getPPStatus(ctx context.Context) (string, string) {
+// Returns the status and name, or empty strings if none found. A failed
+// history read returns the error, never "none found".
+func (t *Tracker) getPPStatus(ctx context.Context) (string, string, error) {
 	history, err := t.sab.GetHistory(ctx, 0, 5)
 	if err != nil {
-		slog.Warn("failed to fetch history", "error", err)
-		return "", ""
+		return "", "", err
 	}
 	for _, slot := range history.Slots {
 		if ppStatuses[slot.Status] {
-			return slot.Status, slot.Name
+			return slot.Status, slot.Name, nil
 		}
 	}
-	return "", ""
+	return "", "", nil
 }
 
 // historyPageSize is the page size used when paginating the SABnzbd history to

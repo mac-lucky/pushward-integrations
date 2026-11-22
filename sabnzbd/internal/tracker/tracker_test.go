@@ -64,7 +64,7 @@ func mockSABnzbd(t *testing.T) (*httptest.Server, *sabMock) {
 			}
 			_ = json.NewEncoder(w).Encode(resp)
 		case "history":
-			if m.historyErr {
+			if m.historyErr || (m.historyErrFn != nil && m.historyErrFn()) {
 				w.WriteHeader(http.StatusInternalServerError)
 				return
 			}
@@ -120,6 +120,9 @@ type sabMock struct {
 	queueFn    func() sabnzbd.Queue
 	queueErr   bool
 	historyErr bool
+	// historyErrFn, when set, fails the history requests it returns true for.
+	// Same contract as historyFn: it runs under m.mu.
+	historyErrFn func() bool
 }
 
 func (m *sabMock) setQueue(q sabnzbd.Queue) {
@@ -2076,5 +2079,60 @@ func TestTrack_QueueIdleButPostProcessingActive_DoesNotGiveUp(t *testing.T) {
 	}
 	if !strings.Contains(lastReq.Content.State, "500 MB") {
 		t.Errorf("completion state should contain '500 MB', got %q", lastReq.Content.State)
+	}
+}
+
+// A history read that fails mid-unpack is not the end of post-processing: the
+// card must stay up until SABnzbd answers that nothing is processing.
+func TestTrackPostProcessing_HistoryErrorKeepsTracking(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	pwSrv, _, _ := testutil.MockPushWardServer(t)
+
+	var reads int
+	sabMk.mu.Lock()
+	sabMk.historyErrFn = func() bool {
+		reads++
+		return reads <= 3
+	}
+	sabMk.historyFn = func() sabnzbd.History {
+		if reads == 4 {
+			return sabnzbd.History{Slots: []sabnzbd.HistorySlot{{Status: "Extracting", Name: "file"}}}
+		}
+		return sabnzbd.History{Slots: []sabnzbd.HistorySlot{futureCompletedSlot("file")}}
+	}
+	sabMk.mu.Unlock()
+
+	tr := New(testConfig(), sabnzbd.NewClient(sabSrv.URL, "test-key"), pushward.NewClient(pwSrv.URL, "hlk_test"))
+	tr.trackPostProcessing(context.Background())
+
+	sabMk.mu.Lock()
+	defer sabMk.mu.Unlock()
+	if reads < 5 {
+		t.Fatalf("post-processing ended after %d history reads, want it to outlast the errors", reads)
+	}
+}
+
+// A SABnzbd that never answers again releases the session after the stale
+// timeout instead of holding it forever.
+func TestTrackPostProcessing_GivesUpOnAHistoryThatNeverAnswers(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	pwSrv, _, _ := testutil.MockPushWardServer(t)
+	sabMk.mu.Lock()
+	sabMk.historyErr = true
+	sabMk.mu.Unlock()
+
+	cfg := testConfig()
+	cfg.PushWard.StaleTimeout = 100 * time.Millisecond
+	tr := New(cfg, sabnzbd.NewClient(sabSrv.URL, "test-key"), pushward.NewClient(pwSrv.URL, "hlk_test"))
+
+	done := make(chan struct{})
+	go func() {
+		tr.trackPostProcessing(context.Background())
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("post-processing kept waiting on a history that never answers")
 	}
 }
