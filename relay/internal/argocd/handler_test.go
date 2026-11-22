@@ -1424,13 +1424,48 @@ func TestScheduleEnd_UpdateFails(t *testing.T) {
 
 // --- Test: graceExpired edge cases ---
 
+// fireGrace runs graceExpired as the app's armed timer would.
+func fireGrace(h *Handler, userKey, appName string) {
+	h.mu.Lock()
+	ge := h.armGrace(userKey, appName, time.Hour)
+	ge.timer.Stop()
+	h.mu.Unlock()
+	h.graceExpired(ge)
+}
+
+// A grace timer that fired while a webhook was re-arming the app must not act
+// on the pending state its replacement now owns.
+func TestGraceExpired_ReplacedTimerDoesNothing(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	_, h := setupHandler(t, testConfig(), srv.URL)
+	_ = h.saveApp(context.Background(), testKey, "rearmed", &trackedAppState{
+		Slug: "argocd-rearmed", Step: 1, Pending: true,
+	})
+
+	h.mu.Lock()
+	stale := h.armGrace(testKey, "rearmed", time.Hour)
+	stale.timer.Stop()
+	h.armGrace(testKey, "rearmed", time.Hour) // the next revision's sync
+	h.mu.Unlock()
+	h.graceExpired(stale)
+
+	if recorded := testutil.GetCalls(calls, mu); len(recorded) != 0 {
+		t.Fatalf("stale grace timer made %d API calls, want 0", len(recorded))
+	}
+	app, ok, _ := h.loadApp(context.Background(), testKey, "rearmed")
+	if !ok || !app.Pending {
+		t.Fatal("stale grace timer materialized the pending sync")
+	}
+	h.StopAll()
+}
+
 func TestGraceExpired_AppNotInStore(t *testing.T) {
 	srv, calls, mu := testutil.MockPushWardServer(t)
 	cfg := testConfig()
 	_, h := setupHandler(t, cfg, srv.URL)
 
 	// Call graceExpired for non-existent app - should return immediately
-	h.graceExpired(testKey, "non-existent")
+	fireGrace(h, testKey, "non-existent")
 
 	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
@@ -1451,7 +1486,7 @@ func TestGraceExpired_AppNotPending(t *testing.T) {
 		Pending: false,
 	})
 
-	h.graceExpired(testKey, "not-pending")
+	fireGrace(h, testKey, "not-pending")
 
 	recorded := testutil.GetCalls(calls, mu)
 	if len(recorded) != 0 {
@@ -1472,7 +1507,7 @@ func TestGraceExpired_DefaultStep(t *testing.T) {
 		Pending: true,
 	})
 
-	h.graceExpired(testKey, "weird-app")
+	fireGrace(h, testKey, "weird-app")
 
 	recorded := testutil.WaitForCalls(t, calls, mu, 2, 5*time.Second)
 	if len(recorded) != 2 {

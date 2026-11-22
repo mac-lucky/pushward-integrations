@@ -316,12 +316,23 @@ func (h *Handler) armBackstop(log *slog.Logger, userKey, appName string, app *tr
 	if _, ok := h.graceTimers[tk]; ok {
 		return
 	}
-	h.graceTimers[tk] = &graceEntry{
-		timer:   time.AfterFunc(delay, func() { h.graceExpired(userKey, appName) }),
-		userKey: userKey,
-		appName: appName,
-	}
+	h.armGrace(userKey, appName, delay)
 	log.Info("armed grace backstop", "app", appName, "delay", delay)
+}
+
+// armGrace installs a fresh grace entry for the app, stopping any timer it
+// replaces, and returns it. Each timer's callback carries its own entry, so a
+// replaced timer that already fired finds itself gone and does nothing.
+// Caller holds h.mu.
+func (h *Handler) armGrace(userKey, appName string, d time.Duration) *graceEntry {
+	tk := timerKey(userKey, appName)
+	if old, ok := h.graceTimers[tk]; ok {
+		old.timer.Stop()
+	}
+	ge := &graceEntry{userKey: userKey, appName: appName}
+	ge.timer = time.AfterFunc(d, func() { h.graceExpired(ge) })
+	h.graceTimers[tk] = ge
+	return ge
 }
 
 // materialize ends a pending app's grace period: it clears Pending and creates
@@ -478,16 +489,7 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 			log.Error("failed to save app state", "app", p.App, "error", err)
 		}
 		h.mu.Lock()
-		if ge, ok := h.graceTimers[tk]; ok {
-			ge.timer.Stop()
-		}
-		h.graceTimers[tk] = &graceEntry{
-			timer: time.AfterFunc(gracePeriod, func() {
-				h.graceExpired(userKey, p.App)
-			}),
-			userKey: userKey,
-			appName: p.App,
-		}
+		h.armGrace(userKey, p.App, gracePeriod)
 		h.mu.Unlock()
 		log.Info("sync started (grace period)", "slug", slug, "app", p.App, "grace", gracePeriod)
 		return nil
@@ -535,7 +537,6 @@ func (h *Handler) handleSyncRunning(ctx context.Context, userKey string, log *sl
 
 func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *slog.Logger, p *argocdPayload) error {
 	slug := slugForApp(p.App)
-	tk := timerKey(userKey, p.App)
 
 	unlock := h.lockApp(userKey, p.App)
 	defer unlock()
@@ -588,13 +589,7 @@ func (h *Handler) handleSyncSucceeded(ctx context.Context, userKey string, log *
 			log.Error("failed to save app state", "app", p.App, "error", err)
 		}
 		h.mu.Lock()
-		h.graceTimers[tk] = &graceEntry{
-			timer: time.AfterFunc(gracePeriod, func() {
-				h.graceExpired(userKey, p.App)
-			}),
-			userKey: userKey,
-			appName: p.App,
-		}
+		h.armGrace(userKey, p.App, gracePeriod)
 		h.mu.Unlock()
 		log.Info("sync succeeded (untracked, grace period)", "slug", slug, "app", p.App)
 		return nil
@@ -945,12 +940,22 @@ func (h *Handler) handleHealthDegraded(ctx context.Context, userKey string, log 
 
 // graceExpired is called when the sync grace period expires. It creates
 // the activity and sends an update for whatever step the sync is currently at.
-func (h *Handler) graceExpired(userKey, appName string) {
+func (h *Handler) graceExpired(ge *graceEntry) {
+	userKey, appName := ge.userKey, ge.appName
 	tk := timerKey(userKey, appName)
 	log := slog.With("tenant", auth.KeyHash(userKey))
 
 	unlock := h.lockApp(userKey, appName)
 	defer unlock()
+
+	// A timer replaced or stopped after it fired no longer speaks for the
+	// app: whoever replaced or removed it owns the pending sync now.
+	h.mu.Lock()
+	current := h.graceTimers[tk] == ge
+	h.mu.Unlock()
+	if !current {
+		return
+	}
 
 	// Bound every DB and API call so a slow or unreachable backend cannot hold
 	// the per-app lock indefinitely and wedge all concurrent webhooks for this
@@ -966,8 +971,8 @@ func (h *Handler) graceExpired(userKey, appName string) {
 		// only while the entry is still ours: a webhook that resolved the app,
 		// or StopAll on shutdown, removed it.
 		h.mu.Lock()
-		if ge, ok := h.graceTimers[tk]; ok {
-			ge.timer = time.AfterFunc(5*time.Second, func() { h.graceExpired(userKey, appName) })
+		if h.graceTimers[tk] == ge {
+			ge.timer = time.AfterFunc(5*time.Second, func() { h.graceExpired(ge) })
 		}
 		h.mu.Unlock()
 		return
@@ -975,7 +980,9 @@ func (h *Handler) graceExpired(userKey, appName string) {
 	if !ok || !app.Pending {
 		// No longer pending (a webhook resolved it); drop the dead timer entry.
 		h.mu.Lock()
-		delete(h.graceTimers, tk)
+		if h.graceTimers[tk] == ge {
+			delete(h.graceTimers, tk)
+		}
 		h.mu.Unlock()
 		return
 	}
