@@ -12,9 +12,9 @@ import (
 	"github.com/mac-lucky/pushward-integrations/shared/pushward"
 )
 
-// maxSeries is pushward-server's MaxTimelineSeries: a merge patch that leaves
+// MaxSeries is pushward-server's MaxTimelineSeries: a merge patch that leaves
 // more series keys on the card than this is refused.
-const maxSeries = 10
+const MaxSeries = 10
 
 // missGrace is how many successful ticks in a row a series may be missing
 // before the poller deletes it from the card (a JSON null in the merge patch),
@@ -46,7 +46,7 @@ func (s seriesKeys) next(values map[string]float64) (sent map[string]float64, pa
 		}
 	}
 	for _, k := range slices.Sorted(maps.Keys(values)) {
-		if _, ok := keys[k]; !ok && len(keys) >= maxSeries {
+		if _, ok := keys[k]; !ok && len(keys) >= MaxSeries {
 			continue
 		}
 		keys[k] = 0

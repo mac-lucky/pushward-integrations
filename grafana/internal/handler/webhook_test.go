@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -947,5 +949,112 @@ func TestWebhook_ResolveDuringCreateLeavesNoPoller(t *testing.T) {
 		if u.State == pushward.StateOngoing {
 			t.Errorf("the firing call reopened the resolved card: %+v", u)
 		}
+	}
+}
+
+// seriesCapServer is a PushWard stub that merges each activity PATCH's values
+// into the card as the server's merge-patch does, and refuses one that would
+// leave the timeline with no series or more than the server's 10.
+type seriesCapServer struct {
+	server *httptest.Server
+
+	mu    sync.Mutex
+	card  map[string]any
+	codes []int // status of each PATCH, in order
+}
+
+func newSeriesCapServer() *seriesCapServer {
+	s := &seriesCapServer{card: map[string]any{}}
+	s.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPatch {
+			w.WriteHeader(http.StatusCreated)
+			return
+		}
+		var req struct {
+			Content struct {
+				Value map[string]any `json:"value"`
+			} `json:"content"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		merged := maps.Clone(s.card)
+		for k, v := range req.Content.Value {
+			if v == nil {
+				delete(merged, k)
+			} else {
+				merged[k] = v
+			}
+		}
+		code := http.StatusOK
+		if len(merged) == 0 || len(merged) > 10 {
+			code = http.StatusUnprocessableEntity
+		} else {
+			s.card = merged
+		}
+		s.codes = append(s.codes, code)
+		w.WriteHeader(code)
+	}))
+	return s
+}
+
+// twelvePods answers every range and instant query with the twelve pods of one
+// deployment, whose joined labels share far more than the 32-rune key limit.
+func twelvePods() *httptest.Server {
+	series := make([]string, 0, 12)
+	for i := range 12 {
+		series = append(series, fmt.Sprintf(`{"metric":{"namespace":"monitoring","pod":"prometheus-agent-%02d"},"values":[[1700000000,"10"]],"value":[1700000000,"10"]}`, i))
+	}
+	body := `{"status":"success","data":{"resultType":"matrix","result":[` + strings.Join(series, ",") + `]}}`
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+}
+
+// More series than the card holds: the firing, a repeat and the resolve all
+// keep to the server's cap, so the card shows, is polled and ends.
+func TestWebhook_ManySeriesKeepToTheSeriesCap(t *testing.T) {
+	pw := newSeriesCapServer()
+	defer pw.server.Close()
+	prom := twelvePods()
+	defer prom.Close()
+	pwClient := pushward.NewClient(pw.server.URL, "test-key")
+	mc := metrics.NewClient(prom.URL)
+	p := poller.New(mc, pwClient, time.Hour)
+	defer p.StopAll()
+	h := NewHandler(pwClient, mc, nil, p, Config{})
+	h.endRetryDelays = nil // a refused ENDED shows in the codes below
+
+	alert := func(status string) string {
+		return `{"status":"` + status + `","alerts":[{"status":"` + status + `","labels":{"alertname":"PodMem"},"annotations":{"pushward_query":"mem"},"values":{"A":1},"startsAt":"2026-04-05T10:00:00Z","generatorURL":"","fingerprint":"f1"}]}`
+	}
+	fireWebhook(t, h, alert("firing"))
+	if n := p.ActiveCount(); n != 1 {
+		t.Errorf("pollers after the firing = %d, want 1", n)
+	}
+	fireWebhook(t, h, alert("firing"))
+	fireWebhook(t, h, alert("resolved"))
+
+	pw.mu.Lock()
+	defer pw.mu.Unlock()
+	for i, code := range pw.codes {
+		if code != http.StatusOK {
+			t.Errorf("PATCH %d of %d answered %d", i+1, len(pw.codes), code)
+		}
+	}
+	if len(pw.card) != 10 {
+		t.Errorf("card holds %d series, want 10", len(pw.card))
+	}
+}
+
+// With no series on record, the ENDED takes the fresh ones, no more than the
+// card holds.
+func TestFinalValuesCapsFreshSeries(t *testing.T) {
+	prom := twelvePods()
+	defer prom.Close()
+	h := NewHandler(nil, metrics.NewClient(prom.URL), nil, nil, Config{})
+	if got := h.finalValues(context.Background(), "mem", "", nil); len(got) != 10 {
+		t.Fatalf("ENDED values carry %d series, want 10", len(got))
 	}
 }

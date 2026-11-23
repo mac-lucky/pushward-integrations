@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"maps"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -516,7 +518,7 @@ func (h *Handler) finalValues(ctx context.Context, expr, seriesLabel string, las
 				}
 			}
 			if len(values) > 0 {
-				return values
+				return capSeries(values)
 			}
 		}
 	}
@@ -591,7 +593,21 @@ func (h *Handler) resolveValues(a alert, preferredRefID, seriesLabel string) map
 	for k, v := range a.Values {
 		result[k] = v
 	}
-	return result
+	return capSeries(result)
+}
+
+// capSeries keeps the first poller.MaxSeries keys in sorted order, the ones
+// the poller admits first: the server refuses a whole update that would leave
+// more series than that on the card.
+func capSeries[V any](m map[string]V) map[string]V {
+	if len(m) <= poller.MaxSeries {
+		return m
+	}
+	out := make(map[string]V, poller.MaxSeries)
+	for _, k := range slices.Sorted(maps.Keys(m))[:poller.MaxSeries] {
+		out[k] = m[k]
+	}
+	return out
 }
 
 func latestValues(history map[string][]pushward.HistoryPoint) map[string]float64 {
@@ -665,7 +681,7 @@ func (h *Handler) fetchHistoryAll(ctx context.Context, logger *slog.Logger, expr
 		key := metrics.SeriesKey(s.Labels, seriesLabel)
 		history[key] = s.Points
 	}
-	return history
+	return capSeries(history)
 }
 
 func makeSlug(alertname string) string {

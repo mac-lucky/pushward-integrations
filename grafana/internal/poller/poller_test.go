@@ -261,18 +261,18 @@ func TestSeriesKeys_NullsASeriesOnlyAfterTheGrace(t *testing.T) {
 	}
 }
 
-// A churning query never leaves more than maxSeries keys on the card: a new
+// A churning query never leaves more than MaxSeries keys on the card: a new
 // key waits for a slot, and the slots go to keys in sorted order.
 func TestSeriesKeys_CapsTheCardAtMaxSeries(t *testing.T) {
 	values := map[string]float64{}
-	for i := range maxSeries + 2 {
+	for i := range MaxSeries + 2 {
 		values[fmt.Sprintf("s%02d", i)] = float64(i)
 	}
 	sent, _, keys := seriesKeys{}.next(values)
-	if len(sent) != maxSeries || len(keys) != maxSeries {
-		t.Fatalf("sent %d series, tracking %d, want %d", len(sent), len(keys), maxSeries)
+	if len(sent) != MaxSeries || len(keys) != MaxSeries {
+		t.Fatalf("sent %d series, tracking %d, want %d", len(sent), len(keys), MaxSeries)
 	}
-	if _, ok := sent[fmt.Sprintf("s%02d", maxSeries)]; ok {
+	if _, ok := sent[fmt.Sprintf("s%02d", MaxSeries)]; ok {
 		t.Fatal("slots should go to the lowest keys first")
 	}
 
@@ -280,7 +280,7 @@ func TestSeriesKeys_CapsTheCardAtMaxSeries(t *testing.T) {
 	churned := map[string]float64{"z1": 1, "z2": 2}
 	for range missGrace - 1 {
 		sent, _, keys = keys.next(churned)
-		if len(sent) != 0 || len(keys) > maxSeries {
+		if len(sent) != 0 || len(keys) > MaxSeries {
 			t.Fatalf("during the grace sent %v with %d keys tracked", sent, len(keys))
 		}
 	}
@@ -306,7 +306,7 @@ func TestSeriesKeys_MissedMovesTheCountersOnly(t *testing.T) {
 
 // mergeCard is a PushWard mock that applies each PATCH's content.value as a
 // merge patch to one card and refuses, like the server, a result with more
-// than maxSeries keys.
+// than MaxSeries keys.
 type mergeCard struct {
 	mu      sync.Mutex
 	keys    map[string]bool
@@ -333,7 +333,7 @@ func (c *mergeCard) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			next[k] = true
 		}
 	}
-	if len(next) > maxSeries {
+	if len(next) > MaxSeries {
 		c.refused++
 		w.WriteHeader(http.StatusUnprocessableEntity)
 		return
