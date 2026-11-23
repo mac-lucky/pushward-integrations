@@ -441,6 +441,32 @@ func TestEndingIgnoresALocalEndCancelledElsewhere(t *testing.T) {
 	}
 }
 
+// The replica whose end another one cancelled keeps its timer until a phase
+// fires; a StopTimer there in the meantime must not report that end, or a
+// repeat of the alert that cancelled it is pushed as a new one.
+func TestStopTimerIgnoresALocalEndCancelledElsewhere(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	store := state.NewMemoryStore()
+	a := newTestEnder(client.NewPool(srv.URL, nil), store)
+	b := newTestEnder(client.NewPool(srv.URL, nil), store)
+	defer a.StopAll()
+	defer b.StopAll()
+
+	a.ScheduleEnd("hlk_test", "map-1", "slug-1", pushward.Content{State: "Resolved"})
+	if !b.StopTimer("hlk_test", "map-1") {
+		t.Fatal("StopTimer on the other replica should report the pending end")
+	}
+	if !a.Pending("hlk_test", "map-1") {
+		t.Fatal("precondition: the cancelled end's timer is still on its replica")
+	}
+	if a.StopTimer("hlk_test", "map-1") {
+		t.Fatal("StopTimer reports an end another replica cancelled")
+	}
+}
+
 // Without a readable token the local timer is the only answer left.
 func TestEndingCountsTheLocalEndWhenTheTokenCannotBeRead(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

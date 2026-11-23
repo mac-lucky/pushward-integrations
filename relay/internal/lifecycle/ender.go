@@ -435,7 +435,8 @@ func (e *Ender) StopTimer(userKey, mapKey string) bool {
 	if raw != nil {
 		e.deleteToken(ctx, userKey, mapKey)
 	}
-	return pending || raw != nil
+	// A local timer whose token is gone was cancelled elsewhere, as in Ending.
+	return raw != nil || (pending && tp.token == "")
 }
 
 // StopAll cancels all pending ender timers.
