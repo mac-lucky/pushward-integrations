@@ -2222,3 +2222,64 @@ func TestTrack_UnreachableAtStartGivesUp(t *testing.T) {
 		t.Errorf("updates %v ending %s, want an ENDED with no unpack", states, last)
 	}
 }
+
+// SABnzbd that stops right after an unpack (shutdown on queue finish) leaves
+// no history to read. The session must end while its card is still live:
+// waiting out the whole stale timeout lets the server stale-end the card
+// first, and the final ONGOING frame then opens it again.
+func TestTrack_HistoryOutageEndsBeforeTheStaleTimeout(t *testing.T) {
+	sabSrv, sabMk := mockSABnzbd(t)
+	var reads int
+	sabMk.mu.Lock()
+	sabMk.queueResp = sabnzbd.QueueResponse{Queue: sabnzbd.Queue{Status: sabnzbd.StatusIdle}}
+	sabMk.historyFn = func() sabnzbd.History {
+		return sabnzbd.History{Slots: []sabnzbd.HistorySlot{{Status: "Extracting", Name: "file"}}}
+	}
+	sabMk.historyErrFn = func() bool {
+		reads++
+		if reads > 2 { // SABnzbd is gone from here on
+			sabMk.queueErr = true
+			return true
+		}
+		return false
+	}
+	sabMk.mu.Unlock()
+
+	type frame struct {
+		at    time.Time
+		state string
+	}
+	var mu sync.Mutex
+	var frames []frame
+	pwSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			var req struct {
+				State string `json:"state"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			mu.Lock()
+			frames = append(frames, frame{time.Now(), req.State})
+			mu.Unlock()
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer pwSrv.Close()
+
+	cfg := testConfig()
+	cfg.PushWard.StaleTimeout = 3 * time.Second
+	tr := New(cfg, sabnzbd.NewClient(sabSrv.URL, "test-key"), pushward.NewClient(pwSrv.URL, "hlk_test"))
+	tr.track(context.Background(), false)
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(frames) == 0 || frames[len(frames)-1].state != pushward.StateEnded {
+		t.Fatalf("the session never ended: %v", frames)
+	}
+	var longest time.Duration
+	for i := 1; i < len(frames); i++ {
+		longest = max(longest, frames[i].at.Sub(frames[i-1].at))
+	}
+	if longest >= cfg.PushWard.StaleTimeout {
+		t.Fatalf("the card went %s without a frame, past its %s stale timeout", longest.Round(100*time.Millisecond), cfg.PushWard.StaleTimeout)
+	}
+}

@@ -49,6 +49,10 @@ const (
 	// poll it forever and, because it stays active, drop every later webhook
 	// until the process restarts.
 	maxPropagationHold = 2 * time.Hour
+
+	// A SABnzbd restart answers again within a minute; one gone for longer
+	// most likely shut itself down after its queue finished.
+	maxHistoryOutage = 5 * time.Minute
 )
 
 var ppStatuses = map[string]bool{
@@ -825,12 +829,16 @@ func (t *Tracker) recordSent(progress, speedMB float64, mode, subtitle string) {
 }
 
 // historyGiveUp is how long post-processing keeps waiting on a history that
-// does not answer: the stale timeout, or the shared default when it is unset.
+// does not answer: half the stale timeout (the shared default when it is
+// unset), at most maxHistoryOutage. Nothing is sent while it waits, so the
+// session must end before the server's stale_ttl does, or the final ONGOING
+// frame would open the stale-ended card again.
 func (t *Tracker) historyGiveUp() time.Duration {
-	if d := t.cfg.PushWard.StaleTimeout; d > 0 {
-		return d
+	stale := t.cfg.PushWard.StaleTimeout
+	if stale <= 0 {
+		stale = sharedconfig.DefaultPushWardConfig().StaleTimeout
 	}
-	return sharedconfig.DefaultPushWardConfig().StaleTimeout
+	return min(stale/2, maxHistoryOutage)
 }
 
 // getPPStatus checks history for active post-processing jobs.
