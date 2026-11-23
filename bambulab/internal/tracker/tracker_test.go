@@ -1089,6 +1089,7 @@ func TestProcess_HeartbeatKeepsALongPauseAlive(t *testing.T) {
 		t.Fatalf("identical frame inside the heartbeat: %d PATCHes, want %d", got, base)
 	}
 	tr.lastTickAt = time.Now().Add(-31 * time.Minute)
+	tr.lastReportAt = time.Now() // the paused printer still reports
 	tr.process(ctx)
 	if got := patches(); got != base+1 {
 		t.Fatalf("identical frame past the heartbeat: %d PATCHes, want %d", got, base+1)
@@ -1140,5 +1141,35 @@ func TestProcess_FailedStartBacksOff(t *testing.T) {
 	tr.process(ctx)
 	if !tr.tracking || tr.startFailures != 0 {
 		t.Fatalf("tracking=%v failures=%d after a successful start", tr.tracking, tr.startFailures)
+	}
+}
+
+// A printer switched off mid-print sends no more reports and State keeps its
+// last frame. The ticker alone must not heartbeat that frame, or the card would
+// chain for days instead of ending at the stale timeout.
+func TestProcess_NoHeartbeatWithoutAReport(t *testing.T) {
+	srv, calls, mu := testutil.MockPushWardServer(t)
+	cfg := testConfig() // stale_timeout 60m: heartbeat every 30m
+	printer := newMockPrinter()
+	tr := newTestTracker(printer, pushward.NewClient(srv.URL, "hlk_test"), cfg)
+	ctx := context.Background()
+	patches := func() int {
+		n := 0
+		for _, c := range testutil.GetCalls(calls, mu) {
+			if c.Method == "PATCH" {
+				n++
+			}
+		}
+		return n
+	}
+
+	printer.SetState(bambulab.MergedState{GcodeState: bambulab.StateRunning, SubtaskName: "Part.3mf", Percent: 40, LayerNum: 80, TotalLayerNum: 200})
+	tr.process(ctx)
+	base := patches()
+
+	tr.lastTickAt = time.Now().Add(-31 * time.Minute)
+	tr.process(ctx) // a ticker tick, no report since the last frame
+	if got := patches(); got != base {
+		t.Fatalf("heartbeat with no report since the last frame: %d PATCHes, want %d", got, base)
 	}
 }

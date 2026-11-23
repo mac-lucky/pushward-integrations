@@ -64,6 +64,10 @@ type Tracker struct {
 	lastState  string    // last gcode_state we acted on
 	lastTickAt time.Time // last progress PATCH; debounces same-state ticks driven by MQTT updates
 	lastFrame  frame     // last frame sent; suppresses re-pushing identical content
+	// lastReportAt is when the printer last sent a report. Only a printer heard
+	// from since the last frame gets the heartbeat: State keeps the last frame
+	// of one that went offline, and re-sending it would keep its card forever.
+	lastReportAt time.Time
 
 	// nextStartAttempt and startFailures back off a failing CreateActivity or
 	// seed, which would otherwise be retried on every MQTT report.
@@ -124,6 +128,7 @@ func (t *Tracker) Run(ctx context.Context) error {
 			// MQTT pushed new state - process immediately so transitions
 			// (finish/fail/cancel) are reported in real time. Same-state
 			// progress ticks are debounced in process() to the poll interval.
+			t.lastReportAt = time.Now()
 			t.process(ctx)
 
 		case <-ticker.C:
@@ -178,9 +183,11 @@ func (t *Tracker) process(ctx context.Context) {
 		// (deriveFrame ignores progress for PREPARE) instead of re-pushing
 		// byte-identical content every interval.
 		// The heartbeat re-sends an unchanged frame (a long pause) before the
-		// server's stale timeout ends the activity mid-print.
+		// server's stale timeout ends the activity mid-print, while the printer
+		// still reports.
 		sinceTick := time.Since(t.lastTickAt)
-		if state.GcodeState != t.lastState || (f != t.lastFrame && sinceTick >= t.cfg.Polling.UpdateInterval) || sinceTick >= t.heartbeat() {
+		heartbeat := sinceTick >= t.heartbeat() && t.lastReportAt.After(t.lastTickAt)
+		if state.GcodeState != t.lastState || (f != t.lastFrame && sinceTick >= t.cfg.Polling.UpdateInterval) || heartbeat {
 			t.lastTickAt = time.Now()
 			t.lastFrame = f
 			t.send(ctx, f, pushward.StateOngoing)
