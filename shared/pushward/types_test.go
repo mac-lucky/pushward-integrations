@@ -425,6 +425,30 @@ func sortedKeys(m map[string]bool) []string {
 	return out
 }
 
+// TestOpenURLOnTap_OnlyWhenSet: false stays off the wire, so existing senders
+// send the same body; true reaches both the send and the scheduled body.
+func TestOpenURLOnTap_OnlyWhenSet(t *testing.T) {
+	raw, err := json.Marshal(SendNotificationRequest{Title: "t", Body: "b", URL: "https://example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), `open_url_on_tap`) {
+		t.Errorf("unset: %s, want no open_url_on_tap", raw)
+	}
+	for name, body := range map[string]any{
+		"notify":   SendNotificationRequest{Title: "t", Body: "b", URL: "https://example.com", OpenURLOnTap: true},
+		"schedule": ScheduleNotificationRequest{SendNotificationRequest: SendNotificationRequest{Title: "t", Body: "b", URL: "https://example.com", OpenURLOnTap: true}},
+	} {
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(raw), `"open_url_on_tap":true`) {
+			t.Errorf("%s: %s, want open_url_on_tap true", name, raw)
+		}
+	}
+}
+
 // TestTarget_OmittedWhenNil: an unset target must stay off the wire on every
 // body that carries one; a null would clear an activity's stored target.
 func TestTarget_OmittedWhenNil(t *testing.T) {

@@ -438,6 +438,10 @@ const (
 	// actions) is a 422 with no code.
 	ErrCodeNotificationInvalid = "notification.invalid"
 
+	// ErrCodeNotificationOpenURLOnTapRequiresURL is the 422 for
+	// SendNotificationRequest.OpenURLOnTap without URL or Encrypted.
+	ErrCodeNotificationOpenURLOnTapRequiresURL = "notification.open_url_on_tap_requires_url"
+
 	ErrCodeNotificationAnswerURLUnavailable = "notification.answer_url_unavailable"
 	ErrCodeNotificationAnswerNotFound       = "notification_answer.not_found"
 	ErrCodeAnswerWaitLimit                  = "answer_wait.limit_exceeded"

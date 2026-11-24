@@ -472,6 +472,16 @@ func TestSealFitTooLong(t *testing.T) {
 	}
 }
 
+func TestSealRequest_OpenURLOnTapNeedsURL(t *testing.T) {
+	req := pushward.SendNotificationRequest{Title: "t", Body: "b", OpenURLOnTap: true}
+	if err := SealRequest(mustKey(t, testKey), &req); err == nil {
+		t.Fatal("sealing open_url_on_tap without url must fail")
+	}
+	if req.Encrypted != "" || req.Title != "t" {
+		t.Errorf("a refused request must stay as it was: %+v", req)
+	}
+}
+
 func TestSealRequest(t *testing.T) {
 	k := mustKey(t, testKey)
 	req := pushward.SendNotificationRequest{
@@ -486,6 +496,7 @@ func TestSealRequest(t *testing.T) {
 		Acknowledge: &pushward.NotificationAcknowledge{RepeatSeconds: 300},
 		Tags:        []string{"nas-disk"},
 	}
+	req.OpenURLOnTap = true // stays plaintext beside Encrypted
 	want := req
 	want.Title, want.Subtitle, want.Body, want.URL = "", "", "", ""
 

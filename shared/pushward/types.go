@@ -1092,6 +1092,13 @@ type SendNotificationRequest struct {
 	// without alerting any device. It is a pointer so that an unset field
 	// cannot silently mean "inbox only".
 	Push *bool `json:"push,omitempty"`
+	// OpenURLOnTap makes a plain tap open URL instead of the notification
+	// when the device trusts the link; other links open the notification
+	// first. Needs URL, or Encrypted with the url sealed inside: the server
+	// answers 422 ErrCodeNotificationOpenURLOnTapRequiresURL when neither is
+	// set, and e2e.SealRequest refuses it without URL. Stays plaintext beside
+	// Encrypted. Older app versions open the notification as before.
+	OpenURLOnTap bool `json:"open_url_on_tap,omitempty"`
 	// Target narrows which organization members get it (see
 	// OrgTargetRequest). A scheduled send resolves the names when scheduled,
 	// so a later rename does not change who gets it, and echoes the names on

@@ -263,14 +263,18 @@ func SealFit(k *Key, m Message) (string, error) {
 // SealRequest moves req's Title, Subtitle, Body and URL into req.Encrypted,
 // sealed under k and shortened as SealFit does, and clears the four fields.
 // The rest of the request stays readable (see Message). A request that
-// already carries Encrypted is refused, and on any error req is left as it
-// was.
+// already carries Encrypted, or sets OpenURLOnTap without URL, is refused,
+// and on any error req is left as it was.
 func SealRequest(k *Key, req *pushward.SendNotificationRequest) error {
 	if req == nil {
 		return errors.New("no notification to encrypt")
 	}
 	if req.Encrypted != "" {
 		return errors.New("notification is already encrypted")
+	}
+	// Sealed, the server cannot see a missing url and would not refuse it.
+	if req.OpenURLOnTap && req.URL == "" {
+		return errors.New("open_url_on_tap needs a url, the link a tap opens")
 	}
 	env, err := SealFit(k, Message{Title: req.Title, Subtitle: req.Subtitle, Body: req.Body, URL: req.URL})
 	if err != nil {
