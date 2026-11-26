@@ -825,6 +825,9 @@ type StatRow struct {
 	// Timer renders the row's trailing text as a live timer where the client
 	// supports it. Value stays required as the fallback on older builds.
 	Timer *TimerValue `json:"timer,omitempty"`
+	// Progress (0.0-1.0) draws a bar under the row where the client supports
+	// it; Value stays the text shown.
+	Progress *float64 `json:"progress,omitempty"`
 }
 
 // BatteryDevice is one ring of a battery widget (1-8 per widget), rendered in
